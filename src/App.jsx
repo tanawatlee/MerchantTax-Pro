@@ -4,7 +4,7 @@ import {
   AlertCircle, Download, Trash2, Edit, Menu, X, BrainCircuit, Printer, 
   CheckCircle, FileSpreadsheet, Camera, Sparkles, Loader, Filter, 
   Calendar, ChevronDown, BarChart3, Target, User, MapPin, Hash, DollarSign, Store,
-  CreditCard, Package, History, Search, FileCheck, FileDown, Phone, Mail, ArrowUpRight, ArrowDownRight
+  CreditCard, Package, History, Search, FileCheck, FileDown, Phone, Mail, ArrowUpRight, ArrowDownRight, Wand2
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -75,26 +75,47 @@ const thaiBahtText = (num) => {
   return result;
 };
 
-// Gemini API
+// Calculate Progressive Tax
+const calculateProgressiveTax = (netIncome) => {
+  let tax = 0;
+  if (netIncome > 150000) tax += Math.min(Math.max(netIncome - 150000, 0), 150000) * 0.05; // 5%
+  if (netIncome > 300000) tax += Math.min(Math.max(netIncome - 300000, 0), 200000) * 0.10; // 10%
+  if (netIncome > 500000) tax += Math.min(Math.max(netIncome - 500000, 0), 250000) * 0.15; // 15%
+  if (netIncome > 750000) tax += Math.min(Math.max(netIncome - 750000, 0), 250000) * 0.20; // 20%
+  if (netIncome > 1000000) tax += Math.min(Math.max(netIncome - 1000000, 0), 1000000) * 0.25; // 25%
+  return tax;
+};
+
+
+// --- Gemini API Helper ---
 const callGemini = async (prompt, imageBase64 = null) => {
-  const apiKey = "";
+  const apiKey = ""; // Provided by environment
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  
   const parts = [{ text: prompt }];
+  
   if (imageBase64) {
+    // Determine mime type roughly or default
     const mimeType = imageBase64.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
     const data = imageBase64.split(',')[1];
     parts.push({ inlineData: { mimeType, data } });
   }
+
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts }] })
     });
+    
     if (!response.ok) throw new Error('API Request Failed');
+    
     const data = await response.json();
     return data.candidates?.[0]?.content?.parts?.[0]?.text;
-  } catch (error) { return null; }
+  } catch (error) {
+    console.error("Gemini API Error:", error);
+    return null;
+  }
 };
 
 // --- Main App ---
@@ -239,11 +260,11 @@ export default function App() {
              </h2>
           </div>
           <div className="hidden sm:block text-xs text-slate-400 font-medium px-3 py-1 bg-slate-100 rounded-full border border-slate-200">
-             v18.0 Full Width
+             v21.0 AI Powered
           </div>
         </header>
 
-        {/* Content Scroll Area - Removed max-width constraints */}
+        {/* Content Scroll Area */}
         <div className="flex-1 overflow-auto p-2 lg:p-6 relative scroll-smooth w-full">
            {renderContent()}
         </div>
@@ -307,7 +328,7 @@ const Dashboard = ({ transactions }) => {
   const handleAnalyze = async () => {
     setIsAnalyzing(true);
     const summary = { income: analytics.income, growth: analytics.incomeGrowth.toFixed(1), topChannel: analytics.channels[0]?.name || 'None', topCost: analytics.costs[0]?.name || 'None' };
-    const prompt = `Act as a Business Analyst. Data: ${JSON.stringify(summary)}. Identify ONE critical insight and ONE actionable recommendation. Output in Thai. Concise.`;
+    const prompt = `Act as a Business Analyst. Data: ${JSON.stringify(summary)}. Identify ONE critical insight and ONE actionable recommendation for a Thai online merchant. Output in Thai. Concise.`;
     const result = await callGemini(prompt);
     setAiAdvice(result || "ไม่สามารถวิเคราะห์ได้ในขณะนี้");
     setIsAnalyzing(false);
@@ -400,13 +421,17 @@ const StatCard = ({ title, subtitle, value, trend, color, icon, subText }) => {
   );
 };
 
-// --- 2. Record Manager ---
+// --- 2. Record Manager (AI Enhanced) ---
 const RecordManager = ({ user, transactions }) => {
   const [formData, setFormData] = useState({ 
     type: 'income', date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0,
     channel: 'Shopee', orderId: '', category: 'สินค้าทั่วไป', taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000'
   });
   const [filterType, setFilterType] = useState('all');
+  const [magicPrompt, setMagicPrompt] = useState('');
+  const [isMagicLoading, setIsMagicLoading] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+
   const calculated = useMemo(() => {
     const amount = parseFloat(formData.amount) || 0;
     let net = 0, vat = 0;
@@ -423,16 +448,118 @@ const RecordManager = ({ user, transactions }) => {
   const handleDelete = async (id) => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', id));
   const filteredTransactions = transactions.filter(t => filterType === 'all' || t.type === filterType);
 
+  // AI Magic Fill Function
+  const handleMagicFill = async () => {
+    if (!magicPrompt) return;
+    setIsMagicLoading(true);
+    const prompt = `Extract transaction data from this Thai text: "${magicPrompt}".
+    Current Date: ${new Date().toISOString().split('T')[0]}.
+    Return ONLY a JSON object with these keys:
+    - type: "income" or "expense"
+    - amount: number (extract value)
+    - description: string (summary of item)
+    - category: choose best match from [สินค้าทั่วไป, บริการ, ค่าใช้จ่ายทั่วไป, ต้นทุนสินค้า, ค่าโฆษณา, ค่าขนส่ง, ค่าเช่า, เงินเดือน]
+    - channel: (if income) choose from [Shopee, Lazada, TikTok, หน้าร้าน] or infer
+    - date: YYYY-MM-DD
+    If specific fields are missing, make a best guess or leave empty.`;
+
+    try {
+      const result = await callGemini(prompt);
+      const jsonStr = result.replace(/```json/g, '').replace(/```/g, '').trim();
+      const data = JSON.parse(jsonStr);
+      setFormData(prev => ({
+        ...prev,
+        type: data.type || prev.type,
+        amount: data.amount || prev.amount,
+        description: data.description || prev.description,
+        category: data.category || prev.category,
+        channel: data.channel || prev.channel,
+        date: data.date || prev.date
+      }));
+      setMagicPrompt(''); // Clear input
+    } catch (error) {
+      console.error("Magic Fill Failed", error);
+      alert("AI ไม่สามารถอ่านข้อความได้ กรุณาลองใหม่");
+    } finally {
+      setIsMagicLoading(false);
+    }
+  };
+
+  // AI Receipt Scan Function
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setIsScanning(true);
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const base64String = reader.result;
+      const prompt = `Analyze this receipt image. Return ONLY a JSON object with:
+      - date: "YYYY-MM-DD"
+      - description: string (merchant name or items)
+      - amount: number (total)
+      - vatType: "included" or "excluded" or "none"
+      - taxInvoiceNo: string (if visible)
+      - vendorName: string (if visible)
+      - vendorTaxId: string (if visible)
+      `;
+      try {
+        const resultText = await callGemini(prompt, base64String);
+        const jsonStr = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+        const data = JSON.parse(jsonStr);
+        setFormData(prev => ({ ...prev, type: 'expense', date: data.date || prev.date, description: data.description || '', amount: data.amount || '', vatType: data.vatType || 'included', taxInvoiceNo: data.taxInvoiceNo || '', vendorName: data.vendorName || '', vendorTaxId: data.vendorTaxId || '', category: 'ค่าใช้จ่ายทั่วไป' }));
+      } catch (err) { console.error(err); alert("AI Scan Failed"); } finally { setIsScanning(false); }
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 w-full h-full lg:h-[calc(100vh-140px)]">
-      {/* Form: Scrollable on Desktop, Auto Height on Mobile */}
+      {/* Form */}
       <div className="lg:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-fit lg:h-full">
-        <h3 className="font-bold mb-6 flex gap-2 text-slate-800 text-lg items-center"><Edit className="text-indigo-500" size={24}/> New Transaction</h3>
+        {isScanning && <div className="absolute inset-0 bg-white/90 z-20 flex flex-col items-center justify-center rounded-3xl"><Loader className="animate-spin mb-2" size={32}/><p className="animate-pulse font-bold text-indigo-600">AI Reading Receipt...</p></div>}
+        
+        <h3 className="font-bold mb-4 flex gap-2 text-slate-800 text-lg items-center"><Edit className="text-indigo-500" size={24}/> New Transaction</h3>
+        
+        {/* Magic Fill Section */}
+        <div className="mb-6 bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-2xl border border-indigo-100 relative overflow-hidden">
+           <div className="absolute top-0 right-0 p-2 opacity-10"><Sparkles size={100} className="text-indigo-500" /></div>
+           <label className="text-sm font-bold text-indigo-800 mb-2 flex items-center gap-2 relative z-10"><Wand2 size={16} className="text-indigo-600"/> Magic Fill (กรอกข้อมูลอัจฉริยะ)</label>
+           <div className="flex gap-2 relative z-10">
+              <input 
+                type="text" 
+                className="flex-1 border-0 rounded-xl p-3 text-sm shadow-sm focus:ring-2 focus:ring-indigo-500 bg-white placeholder:text-slate-400" 
+                placeholder='เช่น "ขายเสื้อ 2 ตัว 500 บาท ทาง Shopee"'
+                value={magicPrompt}
+                onChange={(e) => setMagicPrompt(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleMagicFill()}
+              />
+              <button 
+                onClick={handleMagicFill}
+                disabled={isMagicLoading || !magicPrompt}
+                className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold shadow-md hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2 transition-all"
+              >
+                {isMagicLoading ? <Loader className="animate-spin" size={18}/> : <BrainCircuit size={18}/>}
+                <span className="hidden sm:inline">Auto</span>
+              </button>
+           </div>
+        </div>
+
         <div className="bg-slate-100 p-1.5 rounded-xl flex mb-6 shadow-inner">
             <button type="button" onClick={() => setFormData({...formData, type: 'income', category: 'สินค้าทั่วไป'})} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all shadow-sm ${formData.type === 'income' ? 'bg-white text-emerald-600 shadow-md' : 'text-slate-500 hover:text-slate-700 shadow-none'}`}>รายรับ</button>
             <button type="button" onClick={() => setFormData({...formData, type: 'expense', category: 'ค่าใช้จ่ายทั่วไป'})} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all shadow-sm ${formData.type === 'expense' ? 'bg-white text-rose-600 shadow-md' : 'text-slate-500 hover:text-slate-700 shadow-none'}`}>รายจ่าย</button>
         </div>
+        
         <form onSubmit={handleSubmit} className="space-y-4 flex-1 lg:overflow-y-auto pr-1 custom-scrollbar">
+          {/* AI Scan Button */}
+          <div className="mb-2">
+             <label className="flex items-center justify-center w-full p-3 border-2 border-dashed border-indigo-200 rounded-xl cursor-pointer bg-indigo-50/30 hover:bg-indigo-50 transition-colors group">
+                <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm">
+                   <Camera size={18} className="group-hover:scale-110 transition-transform" /> Scan Receipt with AI
+                </div>
+                <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+             </label>
+          </div>
+
           <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-slate-500 mb-1 block">Date</label><input type="date" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} required /></div><div><label className="text-xs font-bold text-slate-500 mb-1 block">Category</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>{formData.type === 'income' ? ['สินค้าทั่วไป','บริการ','อื่นๆ'].map(c=><option key={c} value={c}>{c}</option>) : ['ค่าใช้จ่ายทั่วไป','ต้นทุนสินค้า','ค่าโฆษณา','ค่าขนส่ง','ค่าเช่า','เงินเดือน','ภาษี'].map(c=><option key={c} value={c}>{c}</option>)}</select></div></div>
           {formData.type === 'income' ? (<div className="bg-emerald-50/50 p-4 rounded-xl border border-emerald-100 space-y-3"><div className="grid grid-cols-2 gap-3"><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Order ID" value={formData.orderId} onChange={e => setFormData({...formData, orderId: e.target.value})} /><select className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" value={formData.channel} onChange={e => setFormData({...formData, channel: e.target.value})}><option>Shopee</option><option>Lazada</option><option>TikTok</option><option>หน้าร้าน</option></select></div></div>) : (<div className="bg-rose-50/50 p-4 rounded-xl border border-rose-100 space-y-3"><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Vendor Name" value={formData.vendorName} onChange={e => setFormData({...formData, vendorName: e.target.value})} /><div className="grid grid-cols-2 gap-3"><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Tax ID" value={formData.vendorTaxId} onChange={e => setFormData({...formData, vendorTaxId: e.target.value})} /><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Branch" value={formData.vendorBranch} onChange={e => setFormData({...formData, vendorBranch: e.target.value})} /></div><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Tax Invoice No." value={formData.taxInvoiceNo} onChange={e => setFormData({...formData, taxInvoiceNo: e.target.value})} /></div>)}
           <div><label className="text-xs font-bold text-slate-500 mb-1 block">Description</label><input type="text" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} required /></div>
@@ -540,10 +667,38 @@ const InvoiceGenerator = ({ user, invoices }) => {
 
 // --- 4. Tax Report ---
 const TaxReport = ({ transactions }) => {
+  const [activeSubTab, setActiveSubTab] = useState('assessment');
   const [reportType, setReportType] = useState('vat'); 
   const [month, setMonth] = useState(new Date().getMonth());
   const [year, setYear] = useState(new Date().getFullYear());
   const [vatTab, setVatTab] = useState('sales');
+
+  const assessmentData = useMemo(() => {
+    const yearlyTrans = transactions.filter(t => new Date(t.date).getFullYear() === year);
+    const totalIncome = yearlyTrans.filter(t => t.type === 'income').reduce((sum, t) => sum + t.total, 0);
+    const actualExpense = yearlyTrans.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.total, 0); // Using total expense for calculation
+
+    const expenseStandard = totalIncome * 0.6;
+    const netIncomeStandard = totalIncome - expenseStandard;
+    const taxStandard = calculateProgressiveTax(netIncomeStandard);
+
+    const netIncomeActual = totalIncome - actualExpense;
+    const taxActual = calculateProgressiveTax(Math.max(0, netIncomeActual));
+
+    let recommendation = "";
+    let recommendedMethod = "";
+    if (taxStandard < taxActual) {
+      recommendation = "แนะนำให้เลือก 'หักเหมา 60%' เนื่องจากเสียภาษีน้อยกว่า และไม่ต้องใช้เอกสารบิลค่าใช้จ่ายจำนวนมาก";
+      recommendedMethod = "standard";
+    } else {
+      recommendation = "แนะนำให้เลือก 'หักตามจริง' เนื่องจากคุณมีต้นทุนสินค้า/ค่าใช้จ่ายสูงกว่า 60% ของรายรับ (ต้องมีใบกำกับภาษี/ใบเสร็จรับเงินที่ถูกต้องครบถ้วน)";
+      recommendedMethod = "actual";
+    }
+
+    return { totalIncome, actualExpense, expenseStandard, netIncomeStandard, netIncomeActual, taxStandard, taxActual, recommendation, recommendedMethod };
+  }, [transactions, year]);
+
+
   const monthlyData = useMemo(() => {
     const filtered = transactions.filter(t => { const d = new Date(t.date); return d.getFullYear() === year && d.getMonth() === month; });
     const salesTax = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + Number(t.vat), 0);
@@ -556,9 +711,72 @@ const TaxReport = ({ transactions }) => {
 
   return (
     <div className="w-full space-y-6">
-      <div className="flex gap-4 mb-6"><button onClick={() => setReportType('vat')} className={`px-4 py-2 rounded-lg font-bold ${reportType==='vat' ? 'bg-indigo-600 text-white shadow-lg':'bg-white text-slate-600 shadow-sm'}`}>รายงานภาษีมูลค่าเพิ่ม (VAT)</button><button onClick={() => setReportType('wht')} className={`px-4 py-2 rounded-lg font-bold ${reportType==='wht' ? 'bg-purple-600 text-white shadow-lg':'bg-white text-slate-600 shadow-sm'}`}>หัก ณ ที่จ่าย (50 ทวิ)</button></div>
-      {reportType === 'vat' && (<div className="space-y-6 animate-fadeIn"><div className="bg-white p-4 rounded-xl shadow-sm flex items-center gap-4"><span className="font-bold text-slate-700">เลือกเดือนภาษี:</span><select value={month} onChange={(e) => setMonth(Number(e.target.value))} className="border-0 bg-slate-100 p-2 rounded w-48 font-bold text-slate-700">{['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'].map((m, i) => <option key={i} value={i}>{m}</option>)}</select><select value={year} onChange={(e) => setYear(Number(e.target.value))} className="border-0 bg-slate-100 p-2 rounded w-32 font-bold text-slate-700"><option value={2024}>2024</option><option value={2025}>2025</option></select></div><div className="md:col-span-3 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 p-6 rounded-3xl flex flex-col md:flex-row justify-between items-center gap-4"><div><h3 className="font-bold text-indigo-900 text-lg">สรุปนำส่ง ภ.พ.30</h3><p className="text-indigo-600 text-sm">เดือน{['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][month]} {year}</p></div><div className="flex gap-10 text-center"><div><p className="text-xs text-slate-500 font-bold uppercase tracking-wider">ภาษีขาย</p><p className="font-bold text-emerald-600 text-xl">{formatCurrency(monthlyData.salesTax)}</p></div><div><p className="text-xs text-slate-500 font-bold uppercase tracking-wider">ภาษีซื้อ</p><p className="font-bold text-rose-600 text-xl">{formatCurrency(monthlyData.purchaseTax)}</p></div><div className="border-l border-indigo-200 pl-10"><p className="text-xs text-slate-500 font-bold uppercase tracking-wider">ต้องชำระ/ขอคืน</p><p className={`font-bold text-3xl ${monthlyData.vatRemit > 0 ? 'text-indigo-700' : 'text-emerald-600'}`}>{formatCurrency(monthlyData.vatRemit)}</p></div></div></div><div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden"><div className="flex border-b border-slate-100"><button onClick={() => setVatTab('sales')} className={`flex-1 py-4 font-bold text-sm transition-colors ${vatTab==='sales' ? 'bg-emerald-50/50 text-emerald-700 border-b-2 border-emerald-500' : 'text-slate-400 hover:bg-slate-50'}`}>ภาษีขาย (Sales Tax)</button><button onClick={() => setVatTab('purchase')} className={`flex-1 py-4 font-bold text-sm transition-colors ${vatTab==='purchase' ? 'bg-rose-50/50 text-rose-700 border-b-2 border-rose-500' : 'text-slate-400 hover:bg-slate-50'}`}>ภาษีซื้อ (Purchase Tax)</button></div><div className="p-6"><div className="flex justify-between items-center mb-6"><h4 className="font-bold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={20}/> รายการ{vatTab==='sales'?'ภาษีขาย':'ภาษีซื้อ'}</h4><button onClick={() => exportVATReport(vatTab)} className="px-4 py-2 rounded-lg text-white text-sm bg-indigo-600 hover:bg-indigo-700 flex items-center gap-2"><Download size={16}/> CSV</button></div><div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-slate-50 text-slate-500 font-bold"><tr><th className="p-4">วันที่</th><th className="p-4">เลขที่ใบกำกับ</th><th className="p-4">รายละเอียด</th><th className="p-4 text-right">มูลค่า</th><th className="p-4 text-right">VAT</th><th className="p-4 text-right">รวม</th></tr></thead><tbody className="divide-y divide-slate-50">{monthlyData.filtered.filter(t => t.type === (vatTab === 'sales' ? 'income' : 'expense') && t.vatType !== 'none').map(t => (<tr key={t.id}><td className="p-4">{formatDate(t.date)}</td><td className="p-4">{t.taxInvoiceNo || t.orderId || '-'}</td><td className="p-4">{t.vendorName || t.description}</td><td className="p-4 text-right">{formatCurrency(t.net)}</td><td className="p-4 text-right">{formatCurrency(t.vat)}</td><td className="p-4 text-right font-bold">{formatCurrency(t.total)}</td></tr>))}</tbody></table></div></div></div></div>)}
-      {reportType === 'wht' && (<div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-purple-800 flex items-center gap-2"><FileText/> รายการหัก ณ ที่จ่าย</h3></div><table className="w-full text-sm text-left"><thead className="bg-purple-50 text-purple-900 font-bold"><tr><th className="p-4">วันที่</th><th className="p-4">ผู้ถูกหักภาษี</th><th className="p-4 text-right">ยอดเงินได้</th><th className="p-4 text-right">ภาษีที่หัก</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-purple-50">{whtTransactions.map(t => (<tr key={t.id}><td className="p-4">{formatDate(t.date)}</td><td className="p-4">{t.vendorName} <span className="text-xs text-slate-400">({t.vendorTaxId})</span></td><td className="p-4 text-right">{formatCurrency(t.net)}</td><td className="p-4 text-right font-bold text-rose-500">{formatCurrency(t.wht)}</td><td className="p-4 text-center"><button onClick={() => print50Twi(t)} className="text-purple-600 hover:underline">Print 50 ทวิ</button></td></tr>))}</tbody></table></div>)}
+      <div className="flex gap-4 mb-6">
+        <button onClick={() => setActiveSubTab('assessment')} className={`px-4 py-2 rounded-lg font-bold ${activeSubTab === 'assessment' ? 'bg-emerald-600 text-white shadow-lg':'bg-white text-slate-600 shadow-sm'}`}>ประเมินภาษีเงินได้</button>
+        <button onClick={() => setActiveSubTab('vat')} className={`px-4 py-2 rounded-lg font-bold ${activeSubTab === 'vat' ? 'bg-indigo-600 text-white shadow-lg':'bg-white text-slate-600 shadow-sm'}`}>รายงานภาษีมูลค่าเพิ่ม (VAT)</button>
+        <button onClick={() => setActiveSubTab('wht')} className={`px-4 py-2 rounded-lg font-bold ${activeSubTab === 'wht' ? 'bg-purple-600 text-white shadow-lg':'bg-white text-slate-600 shadow-sm'}`}>หัก ณ ที่จ่าย (50 ทวิ)</button>
+      </div>
+
+      {activeSubTab === 'assessment' && (
+        <div className="space-y-6 animate-fadeIn">
+           <div className="bg-white p-4 rounded-xl shadow-sm flex items-center gap-4">
+             <span className="font-bold text-slate-700">เลือกปีภาษี:</span>
+             <select value={year} onChange={(e) => setYear(Number(e.target.value))} className="border-0 bg-slate-100 p-2 rounded w-32 font-bold text-slate-700"><option value={2024}>2024</option><option value={2025}>2025</option></select>
+           </div>
+           
+           <div className="bg-gradient-to-r from-gray-800 to-gray-900 rounded-xl p-6 text-white shadow-lg relative overflow-hidden">
+            <div className="relative z-10 flex items-start gap-4">
+              <div className="p-3 bg-white/10 rounded-full"><BrainCircuit className="text-yellow-400 w-8 h-8" /></div>
+              <div>
+                <h3 className="text-lg font-bold text-yellow-400 mb-1">AI Smart Recommendation</h3>
+                <p className="text-gray-100 text-lg leading-relaxed">{assessmentData.recommendation}</p>
+                <div className="mt-4 inline-block bg-white/20 px-4 py-1 rounded-full text-sm">
+                  ประหยัดภาษีได้ประมาณ: <span className="font-bold text-green-300">{formatCurrency(Math.abs(assessmentData.taxStandard - assessmentData.taxActual))}</span> ต่อปี
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Standard Method */}
+            <div className={`p-6 rounded-xl border-2 transition-all bg-white shadow-sm ${assessmentData.recommendedMethod === 'standard' ? 'border-emerald-500 ring-4 ring-emerald-50' : 'border-transparent'}`}>
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="font-bold text-lg text-slate-700 flex items-center gap-2"><Wallet className="text-emerald-500"/> แบบเหมา 60%</h3>
+                {assessmentData.recommendedMethod === 'standard' && <CheckCircle className="text-emerald-500 w-6 h-6" />}
+              </div>
+              <div className="space-y-4 text-sm">
+                <div className="flex justify-between p-3 bg-slate-50 rounded-lg"><span>รายได้ทั้งปี</span> <span className="font-bold">{formatCurrency(assessmentData.totalIncome)}</span></div>
+                <div className="flex justify-between p-3 bg-slate-50 rounded-lg"><span>หักค่าใช้จ่าย (60%)</span> <span className="font-bold text-rose-500">-{formatCurrency(assessmentData.expenseStandard)}</span></div>
+                <div className="flex justify-between p-3 bg-indigo-50 rounded-lg border border-indigo-100"><span className="font-bold text-indigo-700">เงินได้สุทธิ</span> <span className="font-bold text-indigo-700">{formatCurrency(assessmentData.netIncomeStandard)}</span></div>
+                <div className="mt-6 pt-6 border-t border-slate-100 text-center">
+                  <p className="text-slate-400 mb-1">ภาษีที่ต้องจ่ายโดยประมาณ</p>
+                  <p className={`text-4xl font-bold ${assessmentData.recommendedMethod === 'standard' ? 'text-emerald-600' : 'text-slate-700'}`}>{formatCurrency(assessmentData.taxStandard)}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Actual Method */}
+            <div className={`p-6 rounded-xl border-2 transition-all bg-white shadow-sm ${assessmentData.recommendedMethod === 'actual' ? 'border-emerald-500 ring-4 ring-emerald-50' : 'border-transparent'}`}>
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="font-bold text-lg text-slate-700 flex items-center gap-2"><FileText className="text-emerald-500"/> แบบตามจริง (ตามบิล)</h3>
+                {assessmentData.recommendedMethod === 'actual' && <CheckCircle className="text-emerald-500 w-6 h-6" />}
+              </div>
+              <div className="space-y-4 text-sm">
+                <div className="flex justify-between p-3 bg-slate-50 rounded-lg"><span>รายได้ทั้งปี</span> <span className="font-bold">{formatCurrency(assessmentData.totalIncome)}</span></div>
+                <div className="flex justify-between p-3 bg-slate-50 rounded-lg"><span>หักค่าใช้จ่ายจริง</span> <span className="font-bold text-rose-500">-{formatCurrency(assessmentData.actualExpense)}</span></div>
+                <div className="flex justify-between p-3 bg-indigo-50 rounded-lg border border-indigo-100"><span className="font-bold text-indigo-700">เงินได้สุทธิ</span> <span className="font-bold text-indigo-700">{formatCurrency(Math.max(0, assessmentData.netIncomeActual))}</span></div>
+                <div className="mt-6 pt-6 border-t border-slate-100 text-center">
+                  <p className="text-slate-400 mb-1">ภาษีที่ต้องจ่ายโดยประมาณ</p>
+                  <p className={`text-4xl font-bold ${assessmentData.recommendedMethod === 'actual' ? 'text-emerald-600' : 'text-slate-700'}`}>{formatCurrency(assessmentData.taxActual)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'vat' && (<div className="space-y-6 animate-fadeIn"><div className="bg-white p-4 rounded-xl shadow-sm flex items-center gap-4"><span className="font-bold text-slate-700">เลือกเดือนภาษี:</span><select value={month} onChange={(e) => setMonth(Number(e.target.value))} className="border-0 bg-slate-100 p-2 rounded w-48 font-bold text-slate-700">{['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'].map((m, i) => <option key={i} value={i}>{m}</option>)}</select><select value={year} onChange={(e) => setYear(Number(e.target.value))} className="border-0 bg-slate-100 p-2 rounded w-32 font-bold text-slate-700"><option value={2024}>2024</option><option value={2025}>2025</option></select></div><div className="md:col-span-3 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 p-6 rounded-3xl flex flex-col md:flex-row justify-between items-center gap-4"><div><h3 className="font-bold text-indigo-900 text-lg">สรุปนำส่ง ภ.พ.30</h3><p className="text-indigo-600 text-sm">เดือน{['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][month]} {year}</p></div><div className="flex gap-10 text-center"><div><p className="text-xs text-slate-500 font-bold uppercase tracking-wider">ภาษีขาย</p><p className="font-bold text-emerald-600 text-xl">{formatCurrency(monthlyData.salesTax)}</p></div><div><p className="text-xs text-slate-500 font-bold uppercase tracking-wider">ภาษีซื้อ</p><p className="font-bold text-rose-600 text-xl">{formatCurrency(monthlyData.purchaseTax)}</p></div><div className="border-l border-indigo-200 pl-10"><p className="text-xs text-slate-500 font-bold uppercase tracking-wider">ต้องชำระ/ขอคืน</p><p className={`font-bold text-3xl ${monthlyData.vatRemit > 0 ? 'text-indigo-700' : 'text-emerald-600'}`}>{formatCurrency(monthlyData.vatRemit)}</p></div></div></div><div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden"><div className="flex border-b border-slate-100"><button onClick={() => setVatTab('sales')} className={`flex-1 py-4 font-bold text-sm transition-colors ${vatTab==='sales' ? 'bg-emerald-50/50 text-emerald-700 border-b-2 border-emerald-500' : 'text-slate-400 hover:bg-slate-50'}`}>ภาษีขาย (Sales Tax)</button><button onClick={() => setVatTab('purchase')} className={`flex-1 py-4 font-bold text-sm transition-colors ${vatTab==='purchase' ? 'bg-rose-50/50 text-rose-700 border-b-2 border-rose-500' : 'text-slate-400 hover:bg-slate-50'}`}>ภาษีซื้อ (Purchase Tax)</button></div><div className="p-6"><div className="flex justify-between items-center mb-6"><h4 className="font-bold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={20}/> รายการ{vatTab==='sales'?'ภาษีขาย':'ภาษีซื้อ'}</h4><button onClick={() => exportVATReport(vatTab)} className="px-4 py-2 rounded-lg text-white text-sm bg-indigo-600 hover:bg-indigo-700 flex items-center gap-2"><Download size={16}/> CSV</button></div><div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-slate-50 text-slate-500 font-bold"><tr><th className="p-4">วันที่</th><th className="p-4">เลขที่ใบกำกับ</th><th className="p-4">รายละเอียด</th><th className="p-4 text-right">มูลค่า</th><th className="p-4 text-right">VAT</th><th className="p-4 text-right">รวม</th></tr></thead><tbody className="divide-y divide-slate-50">{monthlyData.filtered.filter(t => t.type === (vatTab === 'sales' ? 'income' : 'expense') && t.vatType !== 'none').map(t => (<tr key={t.id}><td className="p-4">{formatDate(t.date)}</td><td className="p-4">{t.taxInvoiceNo || t.orderId || '-'}</td><td className="p-4">{t.vendorName || t.description}</td><td className="p-4 text-right">{formatCurrency(t.net)}</td><td className="p-4 text-right">{formatCurrency(t.vat)}</td><td className="p-4 text-right font-bold">{formatCurrency(t.total)}</td></tr>))}</tbody></table></div></div></div></div>)}
+      {activeSubTab === 'wht' && (<div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-purple-800 flex items-center gap-2"><FileText/> รายการหัก ณ ที่จ่าย</h3></div><table className="w-full text-sm text-left"><thead className="bg-purple-50 text-purple-900 font-bold"><tr><th className="p-4">วันที่</th><th className="p-4">ผู้ถูกหักภาษี</th><th className="p-4 text-right">ยอดเงินได้</th><th className="p-4 text-right">ภาษีที่หัก</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-purple-50">{whtTransactions.map(t => (<tr key={t.id}><td className="p-4">{formatDate(t.date)}</td><td className="p-4">{t.vendorName} <span className="text-xs text-slate-400">({t.vendorTaxId})</span></td><td className="p-4 text-right">{formatCurrency(t.net)}</td><td className="p-4 text-right font-bold text-rose-500">{formatCurrency(t.wht)}</td><td className="p-4 text-center"><button onClick={() => print50Twi(t)} className="text-purple-600 hover:underline">Print 50 ทวิ</button></td></tr>))}</tbody></table></div>)}
     </div>
   );
 };
