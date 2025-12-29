@@ -106,7 +106,6 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // --- Fixed useEffect Logic ---
   useEffect(() => {
     let unsubTrans = () => {};
     let unsubInv = () => {};
@@ -119,8 +118,7 @@ export default function App() {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        // 1. Transactions Listener
-        const qTrans = query(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'transactions'));
+        const qTrans = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'));
         unsubTrans = onSnapshot(qTrans, (snapshot) => {
           const transData = snapshot.docs.map(doc => ({ 
             id: doc.id, 
@@ -131,8 +129,7 @@ export default function App() {
           setTransactions(transData);
         });
 
-        // 2. Invoices Listener
-        const qInv = query(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'invoices'));
+        const qInv = query(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'));
         unsubInv = onSnapshot(qInv, (snapshot) => {
           const invData = snapshot.docs.map(doc => ({ 
             id: doc.id, 
@@ -169,7 +166,7 @@ export default function App() {
   if (loading) return (
     <div className="flex flex-col items-center justify-center h-[100dvh] bg-slate-50 text-indigo-600 font-sarabun">
       <Loader className="animate-spin mb-4" size={40} />
-      <p className="text-sm font-medium animate-pulse">กำลังโหลดข้อมูล...</p>
+      <p className="text-sm font-medium animate-pulse">กำลังซิงค์ข้อมูลร้านค้า...</p>
     </div>
   );
 
@@ -218,11 +215,11 @@ export default function App() {
         <div className="p-6 bg-slate-900/50 backdrop-blur-sm border-t border-slate-800">
            <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold shadow-lg">
-                 {user?.uid?.slice(0,1).toUpperCase() || 'U'}
+                 {user?.uid?.slice(0,1).toUpperCase() || 'S'}
               </div>
               <div className="overflow-hidden">
-                 <p className="text-sm font-medium text-slate-200 truncate">Accountant ID</p>
-                 <p className="text-xs text-slate-500 truncate">{user?.uid?.slice(0,8)}...</p>
+                 <p className="text-sm font-medium text-slate-200 truncate">Shop ID: {appId}</p>
+                 <p className="text-xs text-green-400 truncate flex items-center gap-1"><span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Online Sync</p>
               </div>
            </div>
         </div>
@@ -242,12 +239,12 @@ export default function App() {
              </h2>
           </div>
           <div className="hidden sm:block text-xs text-slate-400 font-medium px-3 py-1 bg-slate-100 rounded-full border border-slate-200">
-             v16.0 Final
+             v18.0 Full Width
           </div>
         </header>
 
-        {/* Content Scroll Area */}
-        <div className="flex-1 overflow-auto p-4 lg:p-8 relative scroll-smooth">
+        {/* Content Scroll Area - Removed max-width constraints */}
+        <div className="flex-1 overflow-auto p-2 lg:p-6 relative scroll-smooth w-full">
            {renderContent()}
         </div>
       </main>
@@ -317,7 +314,7 @@ const Dashboard = ({ transactions }) => {
   };
 
   return (
-    <div className="space-y-6 md:space-y-8 max-w-7xl mx-auto pb-10">
+    <div className="space-y-6 w-full pb-10">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
         <StatCard title="Total Revenue" subtitle="ยอดขายเดือนนี้" value={analytics.income} trend={analytics.incomeGrowth} color="emerald" icon={<TrendingUp />} />
         <StatCard title="Total Expenses" subtitle="รายจ่ายเดือนนี้" value={analytics.expense} color="rose" icon={<TrendingDown />} />
@@ -417,23 +414,25 @@ const RecordManager = ({ user, transactions }) => {
     const wht = formData.type === 'expense' ? (net * formData.whtRate / 100) : 0;
     return { net, vat, total: formData.vatType === 'excluded' ? net + vat : amount, wht };
   }, [formData]);
+  
   const handleSubmit = async (e) => {
     e.preventDefault(); if (!user) return;
-    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'transactions'), { ...formData, ...calculated, date: new Date(formData.date), createdAt: serverTimestamp() });
+    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), { ...formData, ...calculated, date: new Date(formData.date), createdAt: serverTimestamp() });
     setFormData(prev => ({ ...prev, description: '', amount: '', orderId: '', taxInvoiceNo: '', vendorName: '', vendorTaxId: '' }));
   };
-  const handleDelete = async (id) => await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'transactions', id));
+  const handleDelete = async (id) => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', id));
   const filteredTransactions = transactions.filter(t => filterType === 'all' || t.type === filterType);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-7xl mx-auto h-[calc(100vh-140px)]">
-      <div className="lg:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 overflow-y-auto flex flex-col">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 w-full h-full lg:h-[calc(100vh-140px)]">
+      {/* Form: Scrollable on Desktop, Auto Height on Mobile */}
+      <div className="lg:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-fit lg:h-full">
         <h3 className="font-bold mb-6 flex gap-2 text-slate-800 text-lg items-center"><Edit className="text-indigo-500" size={24}/> New Transaction</h3>
         <div className="bg-slate-100 p-1.5 rounded-xl flex mb-6 shadow-inner">
             <button type="button" onClick={() => setFormData({...formData, type: 'income', category: 'สินค้าทั่วไป'})} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all shadow-sm ${formData.type === 'income' ? 'bg-white text-emerald-600 shadow-md' : 'text-slate-500 hover:text-slate-700 shadow-none'}`}>รายรับ</button>
             <button type="button" onClick={() => setFormData({...formData, type: 'expense', category: 'ค่าใช้จ่ายทั่วไป'})} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all shadow-sm ${formData.type === 'expense' ? 'bg-white text-rose-600 shadow-md' : 'text-slate-500 hover:text-slate-700 shadow-none'}`}>รายจ่าย</button>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4 flex-1 overflow-y-auto pr-1 custom-scrollbar">
+        <form onSubmit={handleSubmit} className="space-y-4 flex-1 lg:overflow-y-auto pr-1 custom-scrollbar">
           <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-slate-500 mb-1 block">Date</label><input type="date" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} required /></div><div><label className="text-xs font-bold text-slate-500 mb-1 block">Category</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>{formData.type === 'income' ? ['สินค้าทั่วไป','บริการ','อื่นๆ'].map(c=><option key={c} value={c}>{c}</option>) : ['ค่าใช้จ่ายทั่วไป','ต้นทุนสินค้า','ค่าโฆษณา','ค่าขนส่ง','ค่าเช่า','เงินเดือน','ภาษี'].map(c=><option key={c} value={c}>{c}</option>)}</select></div></div>
           {formData.type === 'income' ? (<div className="bg-emerald-50/50 p-4 rounded-xl border border-emerald-100 space-y-3"><div className="grid grid-cols-2 gap-3"><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Order ID" value={formData.orderId} onChange={e => setFormData({...formData, orderId: e.target.value})} /><select className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" value={formData.channel} onChange={e => setFormData({...formData, channel: e.target.value})}><option>Shopee</option><option>Lazada</option><option>TikTok</option><option>หน้าร้าน</option></select></div></div>) : (<div className="bg-rose-50/50 p-4 rounded-xl border border-rose-100 space-y-3"><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Vendor Name" value={formData.vendorName} onChange={e => setFormData({...formData, vendorName: e.target.value})} /><div className="grid grid-cols-2 gap-3"><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Tax ID" value={formData.vendorTaxId} onChange={e => setFormData({...formData, vendorTaxId: e.target.value})} /><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Branch" value={formData.vendorBranch} onChange={e => setFormData({...formData, vendorBranch: e.target.value})} /></div><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Tax Invoice No." value={formData.taxInvoiceNo} onChange={e => setFormData({...formData, taxInvoiceNo: e.target.value})} /></div>)}
           <div><label className="text-xs font-bold text-slate-500 mb-1 block">Description</label><input type="text" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} required /></div>
@@ -443,9 +442,30 @@ const RecordManager = ({ user, transactions }) => {
           <button type="submit" className="w-full bg-indigo-600 text-white py-3.5 rounded-xl hover:bg-indigo-700 font-bold shadow-lg transition-all flex items-center justify-center gap-2 mt-4"><Save size={20}/> บันทึกรายการ</button>
         </form>
       </div>
-      <div className="lg:col-span-7 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden">
+      
+      {/* List: Scrollable container */}
+      <div className="lg:col-span-7 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[500px] lg:h-full overflow-hidden">
         <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center"><h3 className="font-bold text-slate-700 flex items-center gap-2"><History className="text-slate-400"/> Recent</h3><div className="flex bg-white rounded-lg border border-slate-200 p-1 shadow-sm"><button onClick={()=>setFilterType('all')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${filterType==='all'?'bg-indigo-100 text-indigo-700':'text-slate-500'}`}>All</button><button onClick={()=>setFilterType('income')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${filterType==='income'?'bg-emerald-100 text-emerald-700':'text-slate-500'}`}>In</button><button onClick={()=>setFilterType('expense')} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${filterType==='expense'?'bg-rose-100 text-rose-700':'text-slate-500'}`}>Out</button></div></div>
-        <div className="flex-1 overflow-auto custom-scrollbar"><table className="w-full text-sm text-left"><thead className="bg-white sticky top-0 z-10 text-slate-400 text-xs uppercase tracking-wider font-semibold border-b border-slate-100"><tr><th className="p-4 bg-slate-50/80 backdrop-blur">Date</th><th className="p-4 bg-slate-50/80 backdrop-blur">Description</th><th className="p-4 bg-slate-50/80 backdrop-blur text-right">Amount</th><th className="p-4 bg-slate-50/80 backdrop-blur w-10"></th></tr></thead><tbody className="divide-y divide-slate-50">{filteredTransactions.map(t => (<tr key={t.id} className="hover:bg-slate-50 group transition-colors"><td className="p-4 text-slate-500 whitespace-nowrap font-mono text-xs">{formatDate(t.date)}</td><td className="p-4"><div className="font-bold text-slate-700">{t.description}</div><div className="flex flex-wrap gap-2 mt-1">{t.type === 'income' ? <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 font-medium">{t.channel}</span> : <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100 font-medium">{t.category}</span>}{t.taxInvoiceNo && <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">INV: {t.taxInvoiceNo}</span>}</div></td><td className={`p-4 text-right font-bold text-base ${t.type==='income'?'text-emerald-500': 'text-rose-500'}`}>{t.type==='income'?'+':'-'}{formatCurrency(t.total)}</td><td className="p-4 text-center"><button onClick={()=>handleDelete(t.id)} className="text-slate-300 hover:text-rose-500 p-2 rounded-lg transition-all opacity-0 group-hover:opacity-100"><Trash2 size={16}/></button></td></tr>))}</tbody></table></div>
+        <div className="flex-1 overflow-auto custom-scrollbar">
+          <table className="w-full text-sm text-left">
+            <thead className="bg-white sticky top-0 z-10 text-slate-400 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
+              <tr><th className="p-4 bg-slate-50/80 backdrop-blur w-24">Date</th><th className="p-4 bg-slate-50/80 backdrop-blur">Desc</th><th className="p-4 bg-slate-50/80 backdrop-blur text-right">Amt</th><th className="p-4 bg-slate-50/80 backdrop-blur w-10"></th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {filteredTransactions.map(t => (
+                <tr key={t.id} className="hover:bg-slate-50 group transition-colors">
+                  <td className="p-4 text-slate-500 font-mono text-xs">{formatDate(t.date)}</td>
+                  <td className="p-4">
+                    <div className="font-bold text-slate-700 text-sm">{t.description}</div>
+                    <div className="flex flex-wrap gap-2 mt-1">{t.type === 'income' ? <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 font-medium">{t.channel}</span> : <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100 font-medium">{t.category}</span>}</div>
+                  </td>
+                  <td className={`p-4 text-right font-bold text-sm ${t.type==='income'?'text-emerald-500': 'text-rose-500'}`}>{t.type==='income'?'+':'-'}{formatCurrency(t.total)}</td>
+                  <td className="p-4 text-center"><button onClick={()=>handleDelete(t.id)} className="text-slate-300 hover:text-rose-500 p-2 rounded-lg transition-all"><Trash2 size={16}/></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -472,11 +492,11 @@ const InvoiceGenerator = ({ user, invoices }) => {
   const addItem = () => setInvData({...invData, items: [...invData.items, { desc: '', qty: 1, unit: 'ชิ้น', price: 0 }]});
   const removeItem = (index) => setInvData({...invData, items: invData.items.filter((_, i) => i !== index)});
   const totals = useMemo(() => { const sub = invData.items.reduce((s, i) => s + (i.qty * i.price), 0); const afterDisc = sub - Number(invData.discount); const vat = afterDisc * 0.07; return { sub, afterDisc, vat, total: afterDisc + vat }; }, [invData.items, invData.discount]);
-  const handleSaveInvoice = async () => { if (!user) return; await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'invoices'), { ...invData, ...totals, date: new Date(invData.date), createdAt: serverTimestamp() }); alert(`บันทึกใบกำกับภาษีเลขที่ ${invData.invNo} เรียบร้อยแล้ว`); setMode('history'); };
+  const handleSaveInvoice = async () => { if (!user) return; await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'), { ...invData, ...totals, date: new Date(invData.date), createdAt: serverTimestamp() }); alert(`บันทึกใบกำกับภาษีเลขที่ ${invData.invNo} เรียบร้อยแล้ว`); setMode('history'); };
   const loadInvoice = (inv) => { setInvData({ ...inv, date: formatDateISO(new Date(inv.date)) }); setMode('create'); };
 
   return (
-    <div className="max-w-6xl mx-auto flex flex-col gap-8">
+    <div className="w-full flex flex-col gap-8">
       <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit border border-slate-200 print:hidden self-center">
          <button onClick={() => setMode('create')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${mode==='create'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700'}`}><FileText size={18}/> ออกใบกำกับภาษี</button>
          <button onClick={() => setMode('history')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${mode==='history'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700'}`}><History size={18}/> ประวัติเอกสาร</button>
@@ -535,7 +555,7 @@ const TaxReport = ({ transactions }) => {
   const print50Twi = (t) => { alert(`กำลังสร้างหนังสือรับรอง 50 ทวิ ให้แก่ ${t.vendorName}\n(ในระบบจริงจะดาวน์โหลดเป็น PDF)`); };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <div className="w-full space-y-6">
       <div className="flex gap-4 mb-6"><button onClick={() => setReportType('vat')} className={`px-4 py-2 rounded-lg font-bold ${reportType==='vat' ? 'bg-indigo-600 text-white shadow-lg':'bg-white text-slate-600 shadow-sm'}`}>รายงานภาษีมูลค่าเพิ่ม (VAT)</button><button onClick={() => setReportType('wht')} className={`px-4 py-2 rounded-lg font-bold ${reportType==='wht' ? 'bg-purple-600 text-white shadow-lg':'bg-white text-slate-600 shadow-sm'}`}>หัก ณ ที่จ่าย (50 ทวิ)</button></div>
       {reportType === 'vat' && (<div className="space-y-6 animate-fadeIn"><div className="bg-white p-4 rounded-xl shadow-sm flex items-center gap-4"><span className="font-bold text-slate-700">เลือกเดือนภาษี:</span><select value={month} onChange={(e) => setMonth(Number(e.target.value))} className="border-0 bg-slate-100 p-2 rounded w-48 font-bold text-slate-700">{['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'].map((m, i) => <option key={i} value={i}>{m}</option>)}</select><select value={year} onChange={(e) => setYear(Number(e.target.value))} className="border-0 bg-slate-100 p-2 rounded w-32 font-bold text-slate-700"><option value={2024}>2024</option><option value={2025}>2025</option></select></div><div className="md:col-span-3 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 p-6 rounded-3xl flex flex-col md:flex-row justify-between items-center gap-4"><div><h3 className="font-bold text-indigo-900 text-lg">สรุปนำส่ง ภ.พ.30</h3><p className="text-indigo-600 text-sm">เดือน{['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][month]} {year}</p></div><div className="flex gap-10 text-center"><div><p className="text-xs text-slate-500 font-bold uppercase tracking-wider">ภาษีขาย</p><p className="font-bold text-emerald-600 text-xl">{formatCurrency(monthlyData.salesTax)}</p></div><div><p className="text-xs text-slate-500 font-bold uppercase tracking-wider">ภาษีซื้อ</p><p className="font-bold text-rose-600 text-xl">{formatCurrency(monthlyData.purchaseTax)}</p></div><div className="border-l border-indigo-200 pl-10"><p className="text-xs text-slate-500 font-bold uppercase tracking-wider">ต้องชำระ/ขอคืน</p><p className={`font-bold text-3xl ${monthlyData.vatRemit > 0 ? 'text-indigo-700' : 'text-emerald-600'}`}>{formatCurrency(monthlyData.vatRemit)}</p></div></div></div><div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden"><div className="flex border-b border-slate-100"><button onClick={() => setVatTab('sales')} className={`flex-1 py-4 font-bold text-sm transition-colors ${vatTab==='sales' ? 'bg-emerald-50/50 text-emerald-700 border-b-2 border-emerald-500' : 'text-slate-400 hover:bg-slate-50'}`}>ภาษีขาย (Sales Tax)</button><button onClick={() => setVatTab('purchase')} className={`flex-1 py-4 font-bold text-sm transition-colors ${vatTab==='purchase' ? 'bg-rose-50/50 text-rose-700 border-b-2 border-rose-500' : 'text-slate-400 hover:bg-slate-50'}`}>ภาษีซื้อ (Purchase Tax)</button></div><div className="p-6"><div className="flex justify-between items-center mb-6"><h4 className="font-bold text-slate-700 flex items-center gap-2"><FileSpreadsheet size={20}/> รายการ{vatTab==='sales'?'ภาษีขาย':'ภาษีซื้อ'}</h4><button onClick={() => exportVATReport(vatTab)} className="px-4 py-2 rounded-lg text-white text-sm bg-indigo-600 hover:bg-indigo-700 flex items-center gap-2"><Download size={16}/> CSV</button></div><div className="overflow-x-auto"><table className="w-full text-sm text-left"><thead className="bg-slate-50 text-slate-500 font-bold"><tr><th className="p-4">วันที่</th><th className="p-4">เลขที่ใบกำกับ</th><th className="p-4">รายละเอียด</th><th className="p-4 text-right">มูลค่า</th><th className="p-4 text-right">VAT</th><th className="p-4 text-right">รวม</th></tr></thead><tbody className="divide-y divide-slate-50">{monthlyData.filtered.filter(t => t.type === (vatTab === 'sales' ? 'income' : 'expense') && t.vatType !== 'none').map(t => (<tr key={t.id}><td className="p-4">{formatDate(t.date)}</td><td className="p-4">{t.taxInvoiceNo || t.orderId || '-'}</td><td className="p-4">{t.vendorName || t.description}</td><td className="p-4 text-right">{formatCurrency(t.net)}</td><td className="p-4 text-right">{formatCurrency(t.vat)}</td><td className="p-4 text-right font-bold">{formatCurrency(t.total)}</td></tr>))}</tbody></table></div></div></div></div>)}
       {reportType === 'wht' && (<div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-purple-800 flex items-center gap-2"><FileText/> รายการหัก ณ ที่จ่าย</h3></div><table className="w-full text-sm text-left"><thead className="bg-purple-50 text-purple-900 font-bold"><tr><th className="p-4">วันที่</th><th className="p-4">ผู้ถูกหักภาษี</th><th className="p-4 text-right">ยอดเงินได้</th><th className="p-4 text-right">ภาษีที่หัก</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-purple-50">{whtTransactions.map(t => (<tr key={t.id}><td className="p-4">{formatDate(t.date)}</td><td className="p-4">{t.vendorName} <span className="text-xs text-slate-400">({t.vendorTaxId})</span></td><td className="p-4 text-right">{formatCurrency(t.net)}</td><td className="p-4 text-right font-bold text-rose-500">{formatCurrency(t.wht)}</td><td className="p-4 text-center"><button onClick={() => print50Twi(t)} className="text-purple-600 hover:underline">Print 50 ทวิ</button></td></tr>))}</tbody></table></div>)}
