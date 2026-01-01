@@ -4,7 +4,7 @@ import {
   AlertCircle, Download, Trash2, Edit, Menu, X, BrainCircuit, Printer, 
   CheckCircle, FileSpreadsheet, Camera, Sparkles, Loader, Filter, 
   Calendar, ChevronDown, BarChart3, Target, User, MapPin, Hash, DollarSign, Store,
-  CreditCard, Package, History, Search, FileCheck, FileDown, Phone, Mail, ArrowUpRight, ArrowDownRight, Wand2, Landmark, MessageSquare, Send, Copy, Boxes, AlertTriangle, Info, Users, Clock, List, BookOpen, Settings
+  CreditCard, Package, History, Search, FileCheck, FileDown, Phone, Mail, ArrowUpRight, ArrowDownRight, Wand2, Landmark, MessageSquare, Send, Copy, AlertTriangle, Info, Users, Clock, List, BookOpen, Settings
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -260,25 +260,38 @@ const Dashboard = ({ transactions }) => {
   };
 
   return (
-    <div className="space-y-6 w-full pb-10 animate-fadeIn">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+    <div className="space-y-6 w-full max-w-[2400px] mx-auto pb-10 animate-fadeIn">
+      {/* 2xl:grid-cols-4 for extra large screens */}
+      <div className="grid grid-cols-1 md:grid-cols-3 2xl:grid-cols-4 gap-4 md:gap-6">
         <StatCard title="Total Revenue" subtitle="ยอดขายเดือนนี้" value={analytics.income} trend={analytics.incomeGrowth} color="emerald" icon={<TrendingUp />} />
         <StatCard title="Total Expenses" subtitle="รายจ่ายเดือนนี้" value={analytics.expense} color="rose" icon={<TrendingDown />} />
         <StatCard title="Net Profit" subtitle="กำไรสุทธิ" value={analytics.profit} color="indigo" icon={<Wallet />} subText={`Margin: ${analytics.income > 0 ? ((analytics.profit/analytics.income)*100).toFixed(1) : 0}%`} />
+        {/* Extra Card for 2xl screens, maybe Average Daily Sales or something else in future */}
+        <div className="hidden 2xl:block bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
+            <div className="relative z-10 h-full flex flex-col justify-between">
+                <div>
+                   <p className="text-indigo-200 text-xs font-bold uppercase tracking-wider mb-1">AI INSIGHT</p>
+                   <p className="text-sm leading-snug">{aiAdvice || "กดปุ่ม AI เพื่อวิเคราะห์ข้อมูล"}</p>
+                </div>
+                <button onClick={handleAnalyze} disabled={isAnalyzing} className="mt-4 w-full bg-white/20 hover:bg-white/30 text-white text-xs py-2 rounded-lg backdrop-blur-sm transition-all flex items-center justify-center gap-2">
+                   {isAnalyzing ? <Loader size={12} className="animate-spin"/> : <BrainCircuit size={14}/>} วิเคราะห์
+                </button>
+            </div>
+            <Sparkles className="absolute -bottom-4 -right-4 text-white/10 w-24 h-24" />
+        </div>
       </div>
 
-      {/* Changed lg:grid-cols-3 to xl:grid-cols-3 to stack on iPad */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
-        <div className="xl:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+        <div className="xl:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full">
           <div className="flex justify-between items-center mb-8"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><BarChart3 className="text-indigo-500"/> Financial Trend</h3></div>
-          <div className="h-56 md:h-64 flex items-end justify-between gap-3 px-2">
+          <div className="h-64 flex items-end justify-between gap-3 px-2">
             {analytics.trend.map((t, i) => {
               const maxVal = Math.max(...analytics.trend.map(d => Math.max(d.income, d.expense))) || 1;
               return (
                 <div key={i} className="flex flex-col items-center gap-2 flex-1 group relative">
                    <div className="flex gap-1 items-end h-full w-full justify-center">
-                      <div className="w-2.5 md:w-5 bg-emerald-400 rounded-t-lg relative hover:bg-emerald-500 transition-all duration-300" style={{ height: `${Math.max(t.income / maxVal * 100, 2)}%` }}></div>
-                      <div className="w-2.5 md:w-5 bg-rose-400 rounded-t-lg relative hover:bg-rose-500 transition-all duration-300" style={{ height: `${Math.max(t.expense / maxVal * 100, 2)}%` }}></div>
+                      <div className="w-full md:w-8 bg-emerald-400 rounded-t-lg relative hover:bg-emerald-500 transition-all duration-300" style={{ height: `${Math.max(t.income / maxVal * 100, 2)}%` }}></div>
+                      <div className="w-full md:w-8 bg-rose-400 rounded-t-lg relative hover:bg-rose-500 transition-all duration-300" style={{ height: `${Math.max(t.expense / maxVal * 100, 2)}%` }}></div>
                    </div>
                    <span className="text-[10px] md:text-xs font-medium text-slate-400">{t.label}</span>
                 </div>
@@ -286,7 +299,7 @@ const Dashboard = ({ transactions }) => {
             })}
           </div>
         </div>
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col">
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col h-full">
           <h3 className="font-bold text-slate-700 mb-6 flex items-center gap-2 text-lg"><Target className="text-purple-500"/> Top Channels</h3>
           <div className="flex-1 space-y-5 overflow-y-auto pr-2 custom-scrollbar">
              {analytics.channels.map((ch, i) => (
@@ -299,9 +312,8 @@ const Dashboard = ({ transactions }) => {
         </div>
       </div>
       
-      {/* Changed lg:grid-cols-3 to xl:grid-cols-3 */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
-         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full">
             <h3 className="font-bold text-slate-700 mb-6 flex items-center gap-2 text-lg"><PieChart className="text-orange-500"/> Top Expenses</h3>
             <div className="space-y-4">
                {analytics.costs.map((c, i) => (
@@ -312,7 +324,8 @@ const Dashboard = ({ transactions }) => {
                ))}
             </div>
          </div>
-         <div className="xl:col-span-2 bg-gradient-to-br from-indigo-900 via-slate-800 to-slate-900 rounded-3xl p-8 text-white relative overflow-hidden shadow-xl shadow-indigo-900/20 group">
+         {/* Hide this on 2xl since we moved it to top row, or keep it differently */}
+         <div className="xl:col-span-2 bg-gradient-to-br from-indigo-900 via-slate-800 to-slate-900 rounded-3xl p-8 text-white relative overflow-hidden shadow-xl shadow-indigo-900/20 group 2xl:hidden">
             <div className="relative z-10 h-full flex flex-col justify-between">
                <div><div className="flex items-center gap-3 mb-4"><div className="p-2 bg-white/10 rounded-lg backdrop-blur-sm"><Sparkles className="text-yellow-300" /></div><h3 className="text-xl font-bold tracking-tight">AI Financial Analyst</h3></div>{aiAdvice ? <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl border border-white/10 text-slate-200 leading-relaxed animate-fadeIn shadow-inner">{aiAdvice}</div> : <p className="text-indigo-200 text-sm leading-relaxed max-w-md">ให้ AI ช่วยวิเคราะห์ข้อมูลเชิงลึก หาความผิดปกติ และแนะนำกลยุทธ์จากข้อมูลจริงใน Dashboard ของคุณเพื่อเพิ่มผลกำไรสูงสุด</p>}</div>
                <button onClick={handleAnalyze} disabled={isAnalyzing} className="mt-8 w-fit bg-white text-indigo-900 px-6 py-3 rounded-xl font-bold shadow-lg hover:shadow-white/20 transition-all flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed">{isAnalyzing ? <Loader className="animate-spin" size={18}/> : <BrainCircuit size={18}/>} {isAnalyzing ? "Analyzing..." : "Generate AI Insight"}</button>
@@ -615,9 +628,9 @@ const RecordManager = ({ user, transactions }) => {
       </div>
 
       {subTab === 'new' ? (
-        // Changed lg:grid-cols-12 to xl:grid-cols-12 for better responsiveness on iPad
+        // Changed lg:grid-cols-12 to xl:grid-cols-12 and made height flexible
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 w-full h-full overflow-hidden">
-          <div className="xl:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-fit lg:h-full">
+          <div className="xl:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-full">
             {isScanning && <div className="absolute inset-0 bg-white/90 z-20 flex flex-col items-center justify-center rounded-3xl"><Loader className="animate-spin mb-2" size={32}/><p className="animate-pulse font-bold text-indigo-600">AI Reading Receipt...</p></div>}
             <h3 className="font-bold mb-4 flex gap-2 text-slate-800 text-lg items-center"><Edit className="text-indigo-500" size={24}/> New Transaction</h3>
             <div className="mb-6 bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-2xl border border-indigo-100 relative overflow-hidden">
@@ -1268,7 +1281,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
   );
 };
 
-// ... (TaxReport Updated to include Export) ...
+// ... (Rest of the components: StockManager, TaxReport, App remain unchanged) ...
 const TaxReport = ({ transactions }) => {
   const [activeSubTab, setActiveSubTab] = useState('assessment');
   const [year, setYear] = useState(new Date().getFullYear());
@@ -1477,7 +1490,7 @@ export default function App() {
         <nav className="p-4 space-y-1 mt-2 flex-1 overflow-y-auto">
           <NavButton active={activeTab === 'dashboard'} onClick={() => {setActiveTab('dashboard'); setSidebarOpen(false);}} icon={<BarChart3 size={20} />} label="ภาพรวมธุรกิจ (Dashboard)" />
           <NavButton active={activeTab === 'records'} onClick={() => {setActiveTab('records'); setSidebarOpen(false);}} icon={<FileText size={20} />} label="บันทึกรายรับ-รายจ่าย" />
-          <NavButton active={activeTab === 'stock'} onClick={() => {setActiveTab('stock'); setSidebarOpen(false);}} icon={<Boxes size={20} />} label="Stock (รายงานสินค้า)" />
+          <NavButton active={activeTab === 'stock'} onClick={() => {setActiveTab('stock'); setSidebarOpen(false);}} icon={<Package size={20} />} label="Stock (รายงานสินค้า)" />
           <NavButton active={activeTab === 'invoice'} onClick={() => {setActiveTab('invoice'); setSidebarOpen(false);}} icon={<Printer size={20} />} label="ออกใบกำกับภาษี" />
           <NavButton active={activeTab === 'taxes'} onClick={() => {setActiveTab('taxes'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="ภาษีและ 50 ทวิ" />
         </nav>
@@ -1485,7 +1498,7 @@ export default function App() {
       </aside>
       <main className="flex-1 flex flex-col h-full overflow-hidden relative w-full">
         <header className="bg-white/90 backdrop-blur-md shadow-sm border-b border-slate-200 p-4 lg:px-8 flex justify-between items-center z-10 sticky top-0">
-          <div className="flex items-center gap-3"><button onClick={() => setSidebarOpen(true)} className="lg:hidden text-slate-500 hover:text-indigo-600 p-1 rounded-md hover:bg-slate-100 transition-colors"><Menu size={24} /></button><h2 className="font-semibold text-slate-800 text-lg flex items-center gap-2 truncate">{activeTab === 'dashboard' && <><BarChart3 className="text-indigo-500 hidden sm:block" size={20}/> Business Intelligence</>}{activeTab === 'records' && <><FileText className="text-emerald-500 hidden sm:block" size={20}/> Accounting Records</>}{activeTab === 'stock' && <><Boxes className="text-orange-500 hidden sm:block" size={20}/> Inventory & Stock</>}{activeTab === 'invoice' && <><Printer className="text-blue-500 hidden sm:block" size={20}/> Invoice Generator</>}{activeTab === 'taxes' && <><Calculator className="text-rose-500 hidden sm:block" size={20}/> Tax & Reporting</>}</h2></div>
+          <div className="flex items-center gap-3"><button onClick={() => setSidebarOpen(true)} className="lg:hidden text-slate-500 hover:text-indigo-600 p-1 rounded-md hover:bg-slate-100 transition-colors"><Menu size={24} /></button><h2 className="font-semibold text-slate-800 text-lg flex items-center gap-2 truncate">{activeTab === 'dashboard' && <><BarChart3 className="text-indigo-500 hidden sm:block" size={20}/> Business Intelligence</>}{activeTab === 'records' && <><FileText className="text-emerald-500 hidden sm:block" size={20}/> Accounting Records</>}{activeTab === 'stock' && <><Package className="text-orange-500 hidden sm:block" size={20}/> Inventory & Stock</>}{activeTab === 'invoice' && <><Printer className="text-blue-500 hidden sm:block" size={20}/> Invoice Generator</>}{activeTab === 'taxes' && <><Calculator className="text-rose-500 hidden sm:block" size={20}/> Tax & Reporting</>}</h2></div>
           <div className="hidden sm:block text-xs text-slate-400 font-medium px-3 py-1 bg-slate-100 rounded-full border border-slate-200">v3.4.0 Tax Report Ready</div>
         </header>
         <div className="flex-1 overflow-auto p-2 lg:p-6 relative scroll-smooth w-full">{renderContent()}</div>
