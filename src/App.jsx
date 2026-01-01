@@ -4,7 +4,7 @@ import {
   AlertCircle, Download, Trash2, Edit, Menu, X, BrainCircuit, Printer, 
   CheckCircle, FileSpreadsheet, Camera, Sparkles, Loader, Filter, 
   Calendar, ChevronDown, BarChart3, Target, User, MapPin, Hash, DollarSign, Store,
-  CreditCard, Package, History, Search, FileCheck, FileDown, Phone, Mail, ArrowUpRight, ArrowDownRight, Wand2, Landmark, MessageSquare, Send, Copy, Boxes, AlertTriangle, Info, Users, Clock, List, BookOpen, Settings
+  CreditCard, Package, History, Search, FileCheck, FileDown, Phone, Mail, ArrowUpRight, ArrowDownRight, Wand2, Landmark, MessageSquare, Send, Copy, AlertTriangle, Info, Users, Clock, List, BookOpen, Settings
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -116,14 +116,18 @@ const calculateProgressiveTax = (netIncome) => {
   return tax;
 };
 
-// --- Service Layer: API Calls ---
-const GeminiService = {
-  call: async (prompt, imageBase64 = null) => {
-    const apiKey = ""; // API Key handled by environment
-    if (!apiKey) { console.warn("Gemini API Key missing"); return null; }
-    
+// --- NEW AI ENGINE: SmartTaxAI ---
+const SmartTaxAI = {
+  // Core generator function
+  async generate(prompt, imageBase64 = null, expectJSON = false) {
+    const apiKey = ""; // Injected by environment
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-    const parts = [{ text: prompt }];
+    
+    // Enrich prompt with context
+    const systemContext = "You are a specialized Thai Tax & Accounting Assistant. You understand Thai Revenue Code (สรรพากร), VAT, Withholding Tax, and e-commerce accounting. Respond in Thai unless asked otherwise.";
+    const fullPrompt = `${systemContext}\n\nTask: ${prompt}\n\n${expectJSON ? 'IMPORTANT: Return ONLY a valid JSON object. No markdown formatting.' : ''}`;
+
+    const parts = [{ text: fullPrompt }];
     if (imageBase64) {
       const mimeType = imageBase64.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
       const data = imageBase64.split(',')[1];
@@ -133,11 +137,32 @@ const GeminiService = {
     const maxRetries = 3;
     for (let i = 0; i < maxRetries; i++) {
       try {
-        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts }] }) });
-        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        const response = await fetch(url, { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ contents: [{ parts }] }) 
+        });
+        
+        if (!response.ok) throw new Error(`AI Error: ${response.status}`);
+        
         const data = await response.json();
-        return data.candidates?.[0]?.content?.parts?.[0]?.text;
+        let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        
+        if (expectJSON && text) {
+            // Clean markdown code blocks if present
+            text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                console.error("JSON Parse Error:", e);
+                // Simple fallback/retry logic could go here
+                throw new Error("Failed to parse AI response as JSON");
+            }
+        }
+        
+        return text;
       } catch (error) {
+        console.warn(`Attempt ${i+1} failed:`, error);
         if (i === maxRetries - 1) return null;
         await new Promise(res => setTimeout(res, 1000 * Math.pow(2, i)));
       }
@@ -254,30 +279,46 @@ const Dashboard = ({ transactions }) => {
     setIsAnalyzing(true);
     const summary = { income: analytics.income, growth: analytics.incomeGrowth.toFixed(1), topChannel: analytics.channels[0]?.name || 'None', topCost: analytics.costs[0]?.name || 'None' };
     const prompt = `Act as a Business Analyst for a Thai SME. Data: ${JSON.stringify(summary)}. Identify ONE critical insight and ONE actionable recommendation. Output in Thai language only. Keep it short.`;
-    const result = await GeminiService.call(prompt);
+    
+    // Use New AI Engine
+    const result = await SmartTaxAI.generate(prompt);
     setAiAdvice(result || "ระบบไม่สามารถวิเคราะห์ได้ในขณะนี้ กรุณาลองใหม่ภายหลัง");
     setIsAnalyzing(false);
   };
 
   return (
-    <div className="space-y-6 w-full pb-10 animate-fadeIn">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+    <div className="space-y-6 w-full max-w-[2400px] mx-auto pb-10 animate-fadeIn p-4 md:p-6">
+      {/* 2xl:grid-cols-4 for extra large screens */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
         <StatCard title="Total Revenue" subtitle="ยอดขายเดือนนี้" value={analytics.income} trend={analytics.incomeGrowth} color="emerald" icon={<TrendingUp />} />
         <StatCard title="Total Expenses" subtitle="รายจ่ายเดือนนี้" value={analytics.expense} color="rose" icon={<TrendingDown />} />
         <StatCard title="Net Profit" subtitle="กำไรสุทธิ" value={analytics.profit} color="indigo" icon={<Wallet />} subText={`Margin: ${analytics.income > 0 ? ((analytics.profit/analytics.income)*100).toFixed(1) : 0}%`} />
+        {/* Extra Card for 2xl screens, maybe Average Daily Sales or something else in future */}
+        <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden sm:col-span-2 lg:col-span-1">
+            <div className="relative z-10 h-full flex flex-col justify-between">
+                <div>
+                   <p className="text-indigo-200 text-xs font-bold uppercase tracking-wider mb-1">AI INSIGHT</p>
+                   <p className="text-sm leading-snug line-clamp-3">{aiAdvice || "กดปุ่ม AI เพื่อวิเคราะห์ข้อมูล"}</p>
+                </div>
+                <button onClick={handleAnalyze} disabled={isAnalyzing} className="mt-4 w-full bg-white/20 hover:bg-white/30 text-white text-xs py-2 rounded-lg backdrop-blur-sm transition-all flex items-center justify-center gap-2">
+                   {isAnalyzing ? <Loader size={12} className="animate-spin"/> : <BrainCircuit size={14}/>} วิเคราะห์
+                </button>
+            </div>
+            <Sparkles className="absolute -bottom-4 -right-4 text-white/10 w-24 h-24" />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
-        <div className="lg:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
+        <div className="xl:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full">
           <div className="flex justify-between items-center mb-8"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><BarChart3 className="text-indigo-500"/> Financial Trend</h3></div>
-          <div className="h-56 md:h-64 flex items-end justify-between gap-3 px-2">
+          <div className="h-64 flex items-end justify-between gap-3 px-2">
             {analytics.trend.map((t, i) => {
               const maxVal = Math.max(...analytics.trend.map(d => Math.max(d.income, d.expense))) || 1;
               return (
                 <div key={i} className="flex flex-col items-center gap-2 flex-1 group relative">
                    <div className="flex gap-1 items-end h-full w-full justify-center">
-                      <div className="w-2.5 md:w-5 bg-emerald-400 rounded-t-lg relative hover:bg-emerald-500 transition-all duration-300" style={{ height: `${Math.max(t.income / maxVal * 100, 2)}%` }}></div>
-                      <div className="w-2.5 md:w-5 bg-rose-400 rounded-t-lg relative hover:bg-rose-500 transition-all duration-300" style={{ height: `${Math.max(t.expense / maxVal * 100, 2)}%` }}></div>
+                      <div className="w-full md:w-8 bg-emerald-400 rounded-t-lg relative hover:bg-emerald-500 transition-all duration-300" style={{ height: `${Math.max(t.income / maxVal * 100, 2)}%` }}></div>
+                      <div className="w-full md:w-8 bg-rose-400 rounded-t-lg relative hover:bg-rose-500 transition-all duration-300" style={{ height: `${Math.max(t.expense / maxVal * 100, 2)}%` }}></div>
                    </div>
                    <span className="text-[10px] md:text-xs font-medium text-slate-400">{t.label}</span>
                 </div>
@@ -285,7 +326,7 @@ const Dashboard = ({ transactions }) => {
             })}
           </div>
         </div>
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col">
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col h-full">
           <h3 className="font-bold text-slate-700 mb-6 flex items-center gap-2 text-lg"><Target className="text-purple-500"/> Top Channels</h3>
           <div className="flex-1 space-y-5 overflow-y-auto pr-2 custom-scrollbar">
              {analytics.channels.map((ch, i) => (
@@ -298,8 +339,8 @@ const Dashboard = ({ transactions }) => {
         </div>
       </div>
       
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
-         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
+         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full">
             <h3 className="font-bold text-slate-700 mb-6 flex items-center gap-2 text-lg"><PieChart className="text-orange-500"/> Top Expenses</h3>
             <div className="space-y-4">
                {analytics.costs.map((c, i) => (
@@ -308,12 +349,6 @@ const Dashboard = ({ transactions }) => {
                      <span className="font-bold text-slate-700">{formatCurrency(c.value)}</span>
                   </div>
                ))}
-            </div>
-         </div>
-         <div className="lg:col-span-2 bg-gradient-to-br from-indigo-900 via-slate-800 to-slate-900 rounded-3xl p-8 text-white relative overflow-hidden shadow-xl shadow-indigo-900/20 group">
-            <div className="relative z-10 h-full flex flex-col justify-between">
-               <div><div className="flex items-center gap-3 mb-4"><div className="p-2 bg-white/10 rounded-lg backdrop-blur-sm"><Sparkles className="text-yellow-300" /></div><h3 className="text-xl font-bold tracking-tight">AI Financial Analyst</h3></div>{aiAdvice ? <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl border border-white/10 text-slate-200 leading-relaxed animate-fadeIn shadow-inner">{aiAdvice}</div> : <p className="text-indigo-200 text-sm leading-relaxed max-w-md">ให้ AI ช่วยวิเคราะห์ข้อมูลเชิงลึก หาความผิดปกติ และแนะนำกลยุทธ์จากข้อมูลจริงใน Dashboard ของคุณเพื่อเพิ่มผลกำไรสูงสุด</p>}</div>
-               <button onClick={handleAnalyze} disabled={isAnalyzing} className="mt-8 w-fit bg-white text-indigo-900 px-6 py-3 rounded-xl font-bold shadow-lg hover:shadow-white/20 transition-all flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed">{isAnalyzing ? <Loader className="animate-spin" size={18}/> : <BrainCircuit size={18}/>} {isAnalyzing ? "Analyzing..." : "Generate AI Insight"}</button>
             </div>
          </div>
       </div>
@@ -511,12 +546,13 @@ const RecordManager = ({ user, transactions }) => {
     if (!magicPrompt) return;
     setIsMagicLoading(true);
     const prompt = `Extract transaction data from Thai text: "${magicPrompt}". Date: ${new Date().toISOString().split('T')[0]}. Return JSON: { type: "income"|"expense", amount: number, description: string, category: string, channel: string, date: "YYYY-MM-DD" }. Use best guess for missing fields.`;
+    
+    // Use New AI Engine
     try {
-      const result = await GeminiService.call(prompt);
-      const jsonStr = result.replace(/```json/g, '').replace(/```/g, '').trim();
-      const data = JSON.parse(jsonStr);
-      setFormData(prev => ({ ...prev, ...data }));
-      setMagicPrompt('');
+      const data = await SmartTaxAI.generate(prompt, null, true); // true for JSON
+      if (data) {
+          setFormData(prev => ({ ...prev, ...data }));
+      }
     } catch (error) { console.error(error); alert("AI Processing Failed"); } 
     finally { setIsMagicLoading(false); }
   };
@@ -529,16 +565,17 @@ const RecordManager = ({ user, transactions }) => {
     reader.onloadend = async () => {
       const prompt = `Analyze receipt. Return JSON: { date: "YYYY-MM-DD", description: string, amount: number, vatType: "included"|"excluded"|"none", taxInvoiceNo: string, vendorName: string, vendorTaxId: string }.`;
       try {
-        const result = await GeminiService.call(prompt, reader.result);
-        const data = JSON.parse(result.replace(/```json/g, '').replace(/```/g, '').trim());
-        setFormData(prev => ({ ...prev, type: 'expense', category: 'ค่าใช้จ่ายทั่วไป', ...data }));
+        const data = await SmartTaxAI.generate(prompt, reader.result, true); // true for JSON
+        if (data) {
+            setFormData(prev => ({ ...prev, type: 'expense', category: 'ค่าใช้จ่ายทั่วไป', ...data }));
+        }
       } catch (err) { alert("Scan Failed"); } finally { setIsScanning(false); }
     };
     reader.readAsDataURL(file);
   };
 
   return (
-    <div className="flex flex-col h-full relative">
+    <div className="flex flex-col h-full lg:h-[calc(100vh-140px)] relative">
       {/* VENDOR SELECTION MODAL */}
       {showVendorModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -569,7 +606,7 @@ const RecordManager = ({ user, transactions }) => {
         </div>
       )}
       
-      {/* VENDOR DELETE MODAL (Z-Index 60 to appear above Selection Modal) */}
+      {/* VENDOR DELETE MODAL */}
       {deleteVendorId && (
         <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm animate-fadeIn text-center">
@@ -613,8 +650,9 @@ const RecordManager = ({ user, transactions }) => {
       </div>
 
       {subTab === 'new' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 w-full h-full overflow-hidden">
-          <div className="lg:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-fit lg:h-full">
+        // Changed lg:grid-cols-12 to xl:grid-cols-12 and made height flexible
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 w-full h-full overflow-hidden">
+          <div className="xl:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-full">
             {isScanning && <div className="absolute inset-0 bg-white/90 z-20 flex flex-col items-center justify-center rounded-3xl"><Loader className="animate-spin mb-2" size={32}/><p className="animate-pulse font-bold text-indigo-600">AI Reading Receipt...</p></div>}
             <h3 className="font-bold mb-4 flex gap-2 text-slate-800 text-lg items-center"><Edit className="text-indigo-500" size={24}/> New Transaction</h3>
             <div className="mb-6 bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-2xl border border-indigo-100 relative overflow-hidden">
@@ -643,7 +681,7 @@ const RecordManager = ({ user, transactions }) => {
             </form>
           </div>
           
-          <div className="lg:col-span-7 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[500px] lg:h-full overflow-hidden">
+          <div className="xl:col-span-7 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[500px] lg:h-full overflow-hidden">
              {/* Header with Search */}
              <div className="p-4 border-b border-slate-100 bg-slate-50/50 space-y-3">
                 <div className="flex justify-between items-center">
@@ -883,7 +921,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
     if (!window.html2pdf && !document.getElementById('html2pdf-script')) {
        const script = document.createElement('script');
        script.id = 'html2pdf-script';
-       script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
+       script.src = "[https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js](https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js)";
        document.body.appendChild(script);
     }
   }, []);
@@ -1361,7 +1399,7 @@ const TaxReport = ({ transactions }) => {
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-2 bg-slate-100 p-1 rounded-lg w-fit">{['assessment', 'vat', 'consult'].map(tab => (<button key={tab} onClick={()=>setActiveSubTab(tab)} className={`px-4 py-2 rounded-md text-sm font-bold capitalize transition-all ${activeSubTab===tab ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>{tab}</button>))}</div>
+      <div className="flex gap-2 bg-slate-100 p-1 rounded-lg w-fit">{['assessment', 'vat', 'wht', 'consult'].map(tab => (<button key={tab} onClick={()=>setActiveSubTab(tab)} className={`px-4 py-2 rounded-md text-sm font-bold capitalize transition-all ${activeSubTab===tab ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>{tab === 'wht' ? '50 ทวิ' : tab}</button>))}</div>
       {activeSubTab === 'consult' && (
          <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-3xl p-8 text-white shadow-xl"><h3 className="text-2xl font-bold mb-2 flex items-center gap-2"><MessageSquare/> AI Tax Consultant</h3><p className="mb-6 opacity-90">สอบถามปัญหาภาษีกับ AI ผู้เชี่ยวชาญ</p><div className="flex gap-2 mb-6"><input className="flex-1 rounded-xl px-4 py-3 text-slate-800 border-0 focus:ring-2 focus:ring-orange-300" placeholder="พิมพ์คำถามที่นี่..." value={taxQuestion} onChange={e=>setTaxQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter' && handleAskTax()} /><button onClick={handleAskTax} disabled={isTaxLoading} className="bg-white text-orange-600 px-6 rounded-xl font-bold hover:bg-orange-50 disabled:opacity-50">{isTaxLoading ? <Loader className="animate-spin"/> : <Send/>}</button></div>{taxAnswer && <div className="bg-white/10 backdrop-blur rounded-xl p-6 border border-white/20 animate-fadeIn leading-relaxed">{taxAnswer}</div>}</div>
       )}
@@ -1373,6 +1411,48 @@ const TaxReport = ({ transactions }) => {
                <div className={`p-6 rounded-2xl border-2 bg-white ${assessmentData.recommendedMethod === 'actual' ? 'border-emerald-500 ring-4 ring-emerald-50' : 'border-transparent'}`}><h4 className="font-bold text-slate-700 mb-4 flex justify-between">แบบตามจริง {assessmentData.recommendedMethod === 'actual' && <CheckCircle className="text-emerald-500"/>}</h4><div className="space-y-3 text-sm"><div className="flex justify-between"><span>รายได้</span><span className="font-bold">{formatCurrency(assessmentData.totalIncome)}</span></div><div className="flex justify-between text-rose-500"><span>หักค่าใช้จ่ายจริง</span><span>-{formatCurrency(assessmentData.actualExpense)}</span></div><div className="flex justify-between border-t pt-2 mt-2"><span>ภาษีที่ต้องจ่าย</span><span className="text-2xl font-bold text-slate-800">{formatCurrency(assessmentData.taxActual)}</span></div></div></div>
             </div>
          </div>
+      )}
+      {activeSubTab === 'wht' && (
+        <div className="space-y-6 animate-fadeIn">
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <h3 className="font-bold text-slate-700 text-xl mb-4 flex items-center gap-2">
+                    <FileText className="text-purple-500"/> รายการหัก ณ ที่จ่าย (50 ทวิ)
+                </h3>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-purple-50 text-purple-700 font-bold uppercase text-xs">
+                            <tr>
+                                <th className="p-4 rounded-l-xl">วันที่</th>
+                                <th className="p-4">ผู้ถูกหักภาษี</th>
+                                <th className="p-4 text-right">ยอดเงินได้</th>
+                                <th className="p-4 text-right">ภาษีที่หัก</th>
+                                <th className="p-4 text-center rounded-r-xl">เอกสาร</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-purple-50">
+                            {transactions.filter(t => t.type === 'expense' && t.wht > 0).map(t => (
+                                <tr key={t.id} className="hover:bg-purple-50/50 transition-colors">
+                                    <td className="p-4">{formatDate(t.date)}</td>
+                                    <td className="p-4 font-medium text-slate-700">
+                                        {t.vendorName} <span className="text-xs text-slate-400 ml-1">({t.vendorTaxId || '-'})</span>
+                                    </td>
+                                    <td className="p-4 text-right">{formatCurrency(t.net)}</td>
+                                    <td className="p-4 text-right font-bold text-purple-600">{formatCurrency(t.wht)}</td>
+                                    <td className="p-4 text-center">
+                                        <button className="text-xs bg-white border border-purple-200 text-purple-600 px-3 py-1 rounded-lg hover:bg-purple-50 font-bold shadow-sm transition-all" onClick={() => alert("ระบบสร้าง PDF 50 ทวิ กำลังพัฒนา")}>Print 50 ทวิ</button>
+                                    </td>
+                                </tr>
+                            ))}
+                            {transactions.filter(t => t.type === 'expense' && t.wht > 0).length === 0 && (
+                                <tr>
+                                    <td colSpan="5" className="p-8 text-center text-slate-400">ไม่พบรายการหัก ณ ที่จ่าย</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
       )}
       {activeSubTab === 'vat' && (
          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 animate-fadeIn">
@@ -1474,7 +1554,7 @@ export default function App() {
         <nav className="p-4 space-y-1 mt-2 flex-1 overflow-y-auto">
           <NavButton active={activeTab === 'dashboard'} onClick={() => {setActiveTab('dashboard'); setSidebarOpen(false);}} icon={<BarChart3 size={20} />} label="ภาพรวมธุรกิจ (Dashboard)" />
           <NavButton active={activeTab === 'records'} onClick={() => {setActiveTab('records'); setSidebarOpen(false);}} icon={<FileText size={20} />} label="บันทึกรายรับ-รายจ่าย" />
-          <NavButton active={activeTab === 'stock'} onClick={() => {setActiveTab('stock'); setSidebarOpen(false);}} icon={<Boxes size={20} />} label="Stock (รายงานสินค้า)" />
+          <NavButton active={activeTab === 'stock'} onClick={() => {setActiveTab('stock'); setSidebarOpen(false);}} icon={<Package size={20} />} label="Stock (รายงานสินค้า)" />
           <NavButton active={activeTab === 'invoice'} onClick={() => {setActiveTab('invoice'); setSidebarOpen(false);}} icon={<Printer size={20} />} label="ออกใบกำกับภาษี" />
           <NavButton active={activeTab === 'taxes'} onClick={() => {setActiveTab('taxes'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="ภาษีและ 50 ทวิ" />
         </nav>
@@ -1482,7 +1562,7 @@ export default function App() {
       </aside>
       <main className="flex-1 flex flex-col h-full overflow-hidden relative w-full">
         <header className="bg-white/90 backdrop-blur-md shadow-sm border-b border-slate-200 p-4 lg:px-8 flex justify-between items-center z-10 sticky top-0">
-          <div className="flex items-center gap-3"><button onClick={() => setSidebarOpen(true)} className="lg:hidden text-slate-500 hover:text-indigo-600 p-1 rounded-md hover:bg-slate-100 transition-colors"><Menu size={24} /></button><h2 className="font-semibold text-slate-800 text-lg flex items-center gap-2 truncate">{activeTab === 'dashboard' && <><BarChart3 className="text-indigo-500 hidden sm:block" size={20}/> Business Intelligence</>}{activeTab === 'records' && <><FileText className="text-emerald-500 hidden sm:block" size={20}/> Accounting Records</>}{activeTab === 'stock' && <><Boxes className="text-orange-500 hidden sm:block" size={20}/> Inventory & Stock</>}{activeTab === 'invoice' && <><Printer className="text-blue-500 hidden sm:block" size={20}/> Invoice Generator</>}{activeTab === 'taxes' && <><Calculator className="text-rose-500 hidden sm:block" size={20}/> Tax & Reporting</>}</h2></div>
+          <div className="flex items-center gap-3"><button onClick={() => setSidebarOpen(true)} className="lg:hidden text-slate-500 hover:text-indigo-600 p-1 rounded-md hover:bg-slate-100 transition-colors"><Menu size={24} /></button><h2 className="font-semibold text-slate-800 text-lg flex items-center gap-2 truncate">{activeTab === 'dashboard' && <><BarChart3 className="text-indigo-500 hidden sm:block" size={20}/> Business Intelligence</>}{activeTab === 'records' && <><FileText className="text-emerald-500 hidden sm:block" size={20}/> Accounting Records</>}{activeTab === 'stock' && <><Package className="text-orange-500 hidden sm:block" size={20}/> Inventory & Stock</>}{activeTab === 'invoice' && <><Printer className="text-blue-500 hidden sm:block" size={20}/> Invoice Generator</>}{activeTab === 'taxes' && <><Calculator className="text-rose-500 hidden sm:block" size={20}/> Tax & Reporting</>}</h2></div>
           <div className="hidden sm:block text-xs text-slate-400 font-medium px-3 py-1 bg-slate-100 rounded-full border border-slate-200">v3.4.0 Tax Report Ready</div>
         </header>
         <div className="flex-1 overflow-auto p-2 lg:p-6 relative scroll-smooth w-full">{renderContent()}</div>
