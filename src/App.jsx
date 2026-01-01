@@ -533,6 +533,11 @@ const RecordManager = ({ user, transactions }) => {
   const confirmDelete = (id) => { setDeleteId(id); };
   const executeDelete = async () => { if (!deleteId) return; setIsDeleting(true); try { await deleteDoc(doc(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions', deleteId)); setDeleteId(null); } catch (err) { console.error("Error deleting record:", err); alert("เกิดข้อผิดพลาดในการลบ"); } finally { setIsDeleting(false); } };
   
+  // --- RESTORED: Recent Transactions List ---
+  const recentTransactions = useMemo(() => transactions.filter(t => (filterType === 'all' || t.type === filterType) && (t.description?.toLowerCase().includes(recentSearch.toLowerCase()) || (t.amount && t.amount.toString().includes(recentSearch)))).sort((a,b) => b.date - a.date).slice(0, 50), [transactions, filterType, recentSearch]);
+  const groupedRecent = useMemo(() => { const groups = {}; recentTransactions.forEach(t => { const dateKey = formatDate(t.date); if (!groups[dateKey]) groups[dateKey] = []; groups[dateKey].push(t); }); return groups; }, [recentTransactions]);
+  // ------------------------------------------
+
   const historyData = useMemo(() => transactions.filter(t => { if (histPeriod === 'all') return true; const tDate = normalizeDate(t.date); const filterD = new Date(histDate); if (histPeriod === 'day') return tDate.toDateString() === filterD.toDateString(); if (histPeriod === 'month') return tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear(); if (histPeriod === 'year') return tDate.getFullYear() === filterD.getFullYear(); return true; }).sort((a,b) => b.date - a.date), [transactions, histPeriod, histDate]);
   const historySummary = useMemo(() => { const inc = historyData.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.total),0); const exp = historyData.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.total),0); return { inc, exp, bal: inc - exp }; }, [historyData]);
   
@@ -672,7 +677,45 @@ const RecordManager = ({ user, transactions }) => {
                        <input className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100" placeholder="ค้นหาตามชื่อ, จำนวนเงิน..." value={recentSearch} onChange={e=>setRecentSearch(e.target.value)}/>
                    </div>
                </div>
-               {/* Recent List Content Placeholder - Same logic as history but compact */}
+               
+               <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                  {Object.entries(groupedRecent).length === 0 ? <div className="text-center py-20 text-slate-300">ไม่มีรายการ</div> : 
+                   Object.entries(groupedRecent).map(([date, items]) => (
+                      <div key={date}>
+                          <div className="sticky top-0 bg-white/95 backdrop-blur py-2 mb-2 z-10 w-fit px-3 rounded-lg border border-slate-100 text-xs font-bold text-slate-500 uppercase tracking-wider shadow-sm">{date}</div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {items.map(t => (
+                                  <div key={t.id} className="bg-white border border-slate-100 p-4 rounded-2xl hover:border-indigo-200 hover:shadow-md transition-all group relative">
+                                          <div className="flex justify-between items-start mb-2">
+                                              <div className="flex items-center gap-3">
+                                                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${t.type==='income'?'bg-emerald-100 text-emerald-600':'bg-rose-100 text-rose-600'}`}>
+                                                      {t.type==='income' ? <TrendingUp size={18}/> : <TrendingDown size={18}/>}
+                                                  </div>
+                                                  <div>
+                                                      <p className="font-bold text-slate-700 text-sm line-clamp-1">{t.description}</p>
+                                                      <div className="flex gap-2 text-[10px] mt-0.5">
+                                                          <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{t.category}</span>
+                                                          {t.channel && <span className="border border-slate-200 px-1.5 py-0.5 rounded text-slate-400">{t.channel}</span>}
+                                                      </div>
+                                                  </div>
+                                              </div>
+                                              <p className={`font-bold text-sm ${t.type==='income'?'text-emerald-600':'text-slate-800'}`}>{t.type==='income'?'+':'-'}{formatCurrency(t.total)}</p>
+                                          </div>
+                                          {(t.orderId || t.taxInvoiceNo) && (
+                                              <div className="text-[10px] text-slate-400 pl-[52px] mb-1">
+                                                  Ref: {t.orderId || t.taxInvoiceNo}
+                                              </div>
+                                          )}
+                                          <div className="absolute bottom-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button onClick={()=>handleEdit(t)} className="p-1.5 bg-slate-50 text-slate-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"><Edit size={14}/></button>
+                                            <button onClick={()=>confirmDelete(t.id)} className="p-1.5 bg-slate-50 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"><Trash2 size={14}/></button>
+                                          </div>
+                                  </div>
+                              ))}
+                          </div>
+                      </div>
+                  ))}
+               </div>
             </div>
          </div>
       ) : (
