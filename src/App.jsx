@@ -116,14 +116,12 @@ const calculateProgressiveTax = (netIncome) => {
   return tax;
 };
 
-// --- NEW AI ENGINE: SmartTaxAI ---
+// --- Service Layer: API Calls ---
 const SmartTaxAI = {
-  // Core generator function
   async generate(prompt, imageBase64 = null, expectJSON = false) {
-    const apiKey = ""; // Injected by environment
+    const apiKey = ""; // API Key
+    if (!apiKey) console.warn("SmartTaxAI: No API Key provided.");
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-    
-    // Enrich prompt with context
     const systemContext = "You are a specialized Thai Tax & Accounting Assistant. You understand Thai Revenue Code (สรรพากร), VAT, Withholding Tax, and e-commerce accounting. Respond in Thai unless asked otherwise.";
     const fullPrompt = `${systemContext}\n\nTask: ${prompt}\n\n${expectJSON ? 'IMPORTANT: Return ONLY a valid JSON object. No markdown formatting.' : ''}`;
 
@@ -137,35 +135,16 @@ const SmartTaxAI = {
     const maxRetries = 3;
     for (let i = 0; i < maxRetries; i++) {
       try {
-        const response = await fetch(url, { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ contents: [{ parts }] }) 
-        });
-        
-        if (!response.ok) throw new Error(`AI Error: ${response.status}`);
-        
+        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts }] }) });
+        if (!response.ok) throw new Error(`API Error: ${response.status}`);
         const data = await response.json();
         let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        
         if (expectJSON && text) {
-            // Clean markdown code blocks if present
             text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-            try {
-                return JSON.parse(text);
-            } catch (e) {
-                console.error("JSON Parse Error:", e);
-                // Simple fallback/retry logic could go here
-                throw new Error("Failed to parse AI response as JSON");
-            }
+            try { return JSON.parse(text); } catch (e) { console.error("JSON Parse Error:", e); throw new Error("Failed to parse AI response"); }
         }
-        
         return text;
-      } catch (error) {
-        console.warn(`Attempt ${i+1} failed:`, error);
-        if (i === maxRetries - 1) return null;
-        await new Promise(res => setTimeout(res, 1000 * Math.pow(2, i)));
-      }
+      } catch (error) { if (i === maxRetries - 1) return null; await new Promise(res => setTimeout(res, 1000 * Math.pow(2, i))); }
     }
   }
 };
@@ -181,26 +160,25 @@ const LoadingScreen = () => (
 
 const StatCard = ({ title, subtitle, value, trend, color, icon, subText }) => {
   const styles = {
-    emerald: { bg: "bg-emerald-50", text: "text-emerald-600", trendBg: "bg-emerald-100", trendText: "text-emerald-700" },
-    rose: { bg: "bg-rose-50", text: "text-rose-600", trendBg: "bg-rose-100", trendText: "text-rose-700" },
-    indigo: { bg: "bg-indigo-50", text: "text-indigo-600", trendBg: "bg-indigo-100", trendText: "text-indigo-700" }
+    emerald: { bg: "bg-emerald-50", text: "text-emerald-600", trendBg: "bg-emerald-100", trendText: "text-emerald-700", softBg: "bg-emerald-50/50" },
+    rose: { bg: "bg-rose-50", text: "text-rose-600", trendBg: "bg-rose-100", trendText: "text-rose-700", softBg: "bg-rose-50/50" },
+    indigo: { bg: "bg-indigo-50", text: "text-indigo-600", trendBg: "bg-indigo-100", trendText: "text-indigo-700", softBg: "bg-indigo-50/50" }
   };
   const currentStyle = styles[color] || styles.indigo;
 
   return (
-    <div className="bg-white rounded-3xl shadow-sm p-6 border border-slate-100 relative overflow-hidden hover:shadow-lg transition-all duration-300">
-      <div className="flex justify-between items-start mb-4">
+    <div className={`rounded-3xl p-6 relative overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-lg border border-slate-100 ${currentStyle.softBg}`}>
+      <div className="flex justify-between items-start mb-4 relative z-10">
          <div>
-            <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">{title}</p>
-            <p className="text-slate-600 text-sm font-medium">{subtitle}</p>
+            <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1 opacity-80">{title}</p>
+            <h3 className={`text-3xl font-bold tracking-tight ${currentStyle.text}`}>{formatCurrency(value)}</h3>
          </div>
-         <div className={`p-3 rounded-2xl ${currentStyle.bg} ${currentStyle.text}`}>{icon}</div>
+         <div className={`p-3 rounded-2xl ${currentStyle.bg} ${currentStyle.text} shadow-sm`}>{icon}</div>
       </div>
-      <h3 className={`text-3xl md:text-4xl font-bold ${currentStyle.text} mb-2 tracking-tight`}>{formatCurrency(value)}</h3>
-      <div className="flex items-center gap-2 text-xs font-medium">
+      <div className="flex items-center gap-3 text-xs font-medium relative z-10">
         {trend !== undefined && (
-          <span className={`px-2 py-1 rounded-lg flex items-center gap-1 ${trend >= 0 ? styles.emerald.trendBg + ' ' + styles.emerald.trendText : styles.rose.trendBg + ' ' + styles.rose.trendText}`}>
-            {trend >= 0 ? <ArrowUpRight size={12}/> : <ArrowDownRight size={12}/>}
+          <span className={`px-2 py-1 rounded-lg flex items-center gap-1 ${trend >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+            {trend >= 0 ? <ArrowUpRight size={14}/> : <ArrowDownRight size={14}/>}
             {Math.abs(trend).toFixed(1)}%
           </span>
         )}
@@ -218,8 +196,6 @@ const NavButton = ({ active, onClick, icon, label }) => (
   </button>
 );
 
-// --- Features ---
-
 // Feature 1: Dashboard
 const Dashboard = ({ transactions }) => {
   const [aiAdvice, setAiAdvice] = useState("");
@@ -229,58 +205,25 @@ const Dashboard = ({ transactions }) => {
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
-    const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
-    const prevMonthYear = currentMonth === 0 ? currentYear - 1 : currentYear;
-
-    const filterByDate = (items, m, y) => items.filter(t => {
-      const d = normalizeDate(t.date);
-      return d.getMonth() === m && d.getFullYear() === y;
-    });
-
+    const filterByDate = (items, m, y) => items.filter(t => { const d = normalizeDate(t.date); return d.getMonth() === m && d.getFullYear() === y; });
     const currentTrans = filterByDate(transactions, currentMonth, currentYear);
     const income = currentTrans.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0);
     const expense = currentTrans.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0);
-    
-    const prevTrans = filterByDate(transactions, prevMonth, prevMonthYear);
+    const prevTrans = filterByDate(transactions, currentMonth === 0 ? 11 : currentMonth - 1, currentMonth === 0 ? currentYear - 1 : currentYear);
     const prevIncome = prevTrans.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0);
     const incomeGrowth = prevIncome === 0 ? 100 : ((income - prevIncome) / prevIncome) * 100;
-
-    const channelMap = {}; 
-    currentTrans.filter(t => t.type === 'income').forEach(t => { 
-      const ch = t.channel || 'อื่นๆ'; 
-      channelMap[ch] = (channelMap[ch] || 0) + Number(t.total); 
-    });
+    const channelMap = {}; currentTrans.filter(t => t.type === 'income').forEach(t => { const ch = t.channel || 'อื่นๆ'; channelMap[ch] = (channelMap[ch] || 0) + Number(t.total); });
     const channels = Object.entries(channelMap).map(([name, value]) => ({ name, value, percent: income ? (value / income) * 100 : 0 })).sort((a, b) => b.value - a.value);
-
-    const costMap = {}; 
-    currentTrans.filter(t => t.type === 'expense').forEach(t => { 
-      const cat = t.category || 'อื่นๆ'; 
-      costMap[cat] = (costMap[cat] || 0) + Number(t.total); 
-    });
+    const costMap = {}; currentTrans.filter(t => t.type === 'expense').forEach(t => { const cat = t.category || 'อื่นๆ'; costMap[cat] = (costMap[cat] || 0) + Number(t.total); });
     const costs = Object.entries(costMap).map(([name, value]) => ({ name, value, percent: expense ? (value / expense) * 100 : 0 })).sort((a, b) => b.value - a.value).slice(0, 5);
-
-    const trend = [];
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const m = d.getMonth();
-      const y = d.getFullYear();
-      const monthTrans = filterByDate(transactions, m, y);
-      trend.push({
-        label: d.toLocaleDateString('th-TH', { month: 'short' }),
-        income: monthTrans.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0),
-        expense: monthTrans.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0)
-      });
-    }
-
+    const trend = []; for (let i = 5; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); const monthTrans = filterByDate(transactions, d.getMonth(), d.getFullYear()); trend.push({ label: d.toLocaleDateString('th-TH', { month: 'short' }), income: monthTrans.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0), expense: monthTrans.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0) }); }
     return { income, expense, profit: income - expense, incomeGrowth, channels, costs, trend };
   }, [transactions]);
 
   const handleAnalyze = async () => {
     setIsAnalyzing(true);
     const summary = { income: analytics.income, growth: analytics.incomeGrowth.toFixed(1), topChannel: analytics.channels[0]?.name || 'None', topCost: analytics.costs[0]?.name || 'None' };
-    const prompt = `Act as a Business Analyst for a Thai SME. Data: ${JSON.stringify(summary)}. Identify ONE critical insight and ONE actionable recommendation. Output in Thai language only. Keep it short.`;
-    
-    // Use New AI Engine
+    const prompt = `Act as a Business Analyst. Data: ${JSON.stringify(summary)}. Give 1 detailed insight in Thai about financial health and what to do next.`;
     const result = await SmartTaxAI.generate(prompt);
     setAiAdvice(result || "ระบบไม่สามารถวิเคราะห์ได้ในขณะนี้ กรุณาลองใหม่ภายหลัง");
     setIsAnalyzing(false);
@@ -288,21 +231,20 @@ const Dashboard = ({ transactions }) => {
 
   return (
     <div className="space-y-6 w-full max-w-[2400px] mx-auto pb-10 animate-fadeIn p-4 md:p-6">
-      {/* 2xl:grid-cols-4 for extra large screens */}
+      <div className="flex flex-col md:flex-row justify-between items-end gap-4 mb-2">
+        <div><h2 className="text-3xl font-bold text-slate-800 tracking-tight">Dashboard ภาพรวม</h2><p className="text-slate-500 mt-1">สรุปข้อมูลการเงินประจำเดือน {new Date().toLocaleDateString('th-TH', { month: 'long', year: 'numeric' })}</p></div>
+        <div className="flex gap-2"><button onClick={handleAnalyze} disabled={isAnalyzing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all flex items-center gap-2">{isAnalyzing ? <Loader size={18} className="animate-spin"/> : <Sparkles size={18}/>} {isAnalyzing ? 'กำลังวิเคราะห์...' : 'วิเคราะห์ข้อมูล AI'}</button></div>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
         <StatCard title="Total Revenue" subtitle="ยอดขายเดือนนี้" value={analytics.income} trend={analytics.incomeGrowth} color="emerald" icon={<TrendingUp />} />
         <StatCard title="Total Expenses" subtitle="รายจ่ายเดือนนี้" value={analytics.expense} color="rose" icon={<TrendingDown />} />
         <StatCard title="Net Profit" subtitle="กำไรสุทธิ" value={analytics.profit} color="indigo" icon={<Wallet />} subText={`Margin: ${analytics.income > 0 ? ((analytics.profit/analytics.income)*100).toFixed(1) : 0}%`} />
-        {/* Extra Card for 2xl screens, maybe Average Daily Sales or something else in future */}
+        
         <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden sm:col-span-2 lg:col-span-1">
             <div className="relative z-10 h-full flex flex-col justify-between">
-                <div>
-                   <p className="text-indigo-200 text-xs font-bold uppercase tracking-wider mb-1">AI INSIGHT</p>
-                   <p className="text-sm leading-snug line-clamp-3">{aiAdvice || "กดปุ่ม AI เพื่อวิเคราะห์ข้อมูล"}</p>
-                </div>
-                <button onClick={handleAnalyze} disabled={isAnalyzing} className="mt-4 w-full bg-white/20 hover:bg-white/30 text-white text-xs py-2 rounded-lg backdrop-blur-sm transition-all flex items-center justify-center gap-2">
-                   {isAnalyzing ? <Loader size={12} className="animate-spin"/> : <BrainCircuit size={14}/>} วิเคราะห์
-                </button>
+                <div><p className="text-indigo-200 text-xs font-bold uppercase tracking-wider mb-1">AI INSIGHT</p><p className="text-sm leading-snug line-clamp-3">{aiAdvice || "กดปุ่ม AI เพื่อวิเคราะห์ข้อมูล"}</p></div>
+                <button onClick={handleAnalyze} disabled={isAnalyzing} className="mt-4 w-full bg-white/20 hover:bg-white/30 text-white text-xs py-2 rounded-lg backdrop-blur-sm transition-all flex items-center justify-center gap-2">{isAnalyzing ? <Loader size={12} className="animate-spin"/> : <BrainCircuit size={14}/>} วิเคราะห์</button>
             </div>
             <Sparkles className="absolute -bottom-4 -right-4 text-white/10 w-24 h-24" />
         </div>
@@ -351,6 +293,23 @@ const Dashboard = ({ transactions }) => {
                ))}
             </div>
          </div>
+         <div className="xl:col-span-2 bg-gradient-to-br from-indigo-600 to-purple-700 rounded-[32px] p-8 text-white shadow-xl shadow-indigo-200 relative overflow-hidden group min-h-[200px]">
+            <div className="relative z-10 h-full flex flex-col justify-between">
+                <div className="flex flex-col md:flex-row justify-between items-start gap-4">
+                    <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="p-2 bg-white/20 rounded-xl backdrop-blur-sm"><Sparkles size={24} className="text-yellow-300 animate-pulse"/></div>
+                            <h3 className="text-2xl font-bold uppercase tracking-wider text-white">AI Financial Analyst</h3>
+                        </div>
+                        <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/10">
+                            <p className="text-lg leading-relaxed text-indigo-50 font-medium">{aiAdvice || "ระบบพร้อมวิเคราะห์ข้อมูลสุขภาพทางการเงินของคุณ กดปุ่ม 'วิเคราะห์ข้อมูล AI' ด้านบนเพื่อเริ่มการวิเคราะห์..."}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div className="absolute top-0 right-0 -mr-20 -mt-20 w-96 h-96 bg-white/10 rounded-full blur-3xl group-hover:bg-white/15 transition-all duration-1000"></div>
+            <div className="absolute bottom-0 left-0 -ml-10 -mb-10 w-60 h-60 bg-purple-500/30 rounded-full blur-3xl"></div>
+        </div>
       </div>
     </div>
   );
@@ -369,464 +328,217 @@ const RecordManager = ({ user, transactions }) => {
   const [showVendorModal, setShowVendorModal] = useState(false);
   const [deleteVendorId, setDeleteVendorId] = useState(null); 
 
-  const initialForm = { 
-    type: 'income', date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0,
-    channel: CONSTANTS.CHANNELS[0], orderId: '', category: CONSTANTS.CATEGORIES.INCOME[0], taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000',
-    grossAmount: '', platformFee: ''
-  };
+  const initialForm = { type: 'income', date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0, channel: CONSTANTS.CHANNELS[0], orderId: '', category: CONSTANTS.CATEGORIES.INCOME[0], taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000', grossAmount: '', platformFee: '' };
   
   const [formData, setFormData] = useState(initialForm);
   const [filterType, setFilterType] = useState('all');
   const [magicPrompt, setMagicPrompt] = useState('');
   const [isMagicLoading, setIsMagicLoading] = useState(false);
-  const [isScanning, setIsScanning] = useState(false);
   const [isEcommerceMode, setIsEcommerceMode] = useState(false);
 
-  useEffect(() => {
-    if (user) {
-      const q = query(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'vendors'));
-      const unsub = onSnapshot(q, (snap) => {
-        setVendors(snap.docs.map(d => ({id: d.id, ...d.data()})));
-      });
-      return () => unsub();
-    }
-  }, [user]);
+  useEffect(() => { if (user) { const q = query(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'vendors')); const unsub = onSnapshot(q, (snap) => { setVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))); }); return () => unsub(); } }, [user]);
+  useEffect(() => { setIsEcommerceMode(formData.type === 'income' && ['Shopee', 'Lazada', 'TikTok'].includes(formData.channel)); }, [formData.channel, formData.type]);
+  useEffect(() => { if (isEcommerceMode && formData.grossAmount && formData.platformFee) { const net = parseFloat(formData.grossAmount) - parseFloat(formData.platformFee); setFormData(prev => ({ ...prev, amount: net })); } }, [formData.grossAmount, formData.platformFee, isEcommerceMode]);
 
-  useEffect(() => {
-     if (formData.type === 'income' && ['Shopee', 'Lazada', 'TikTok'].includes(formData.channel)) {
-        setIsEcommerceMode(true);
-     } else {
-        setIsEcommerceMode(false);
-     }
-  }, [formData.channel, formData.type]);
-
-  useEffect(() => {
-    if (isEcommerceMode && formData.grossAmount && formData.platformFee) {
-        const net = parseFloat(formData.grossAmount) - parseFloat(formData.platformFee);
-        setFormData(prev => ({ ...prev, amount: net }));
-    }
-  }, [formData.grossAmount, formData.platformFee, isEcommerceMode]);
-
-  const calculated = useMemo(() => {
-    const baseAmount = (isEcommerceMode && formData.grossAmount) ? parseFloat(formData.grossAmount) : (parseFloat(formData.amount) || 0);
-    let net = 0, vat = 0;
-    if (formData.vatType === 'included') { net = baseAmount * 100 / 107; vat = baseAmount - net; } 
-    else if (formData.vatType === 'excluded') { net = baseAmount; vat = baseAmount * 0.07; } 
-    else { net = baseAmount; vat = 0; }
-    const wht = formData.type === 'expense' ? (net * formData.whtRate / 100) : 0;
-    return { net, vat, total: formData.vatType === 'excluded' ? net + vat : baseAmount, wht, baseAmount };
-  }, [formData.amount, formData.vatType, formData.whtRate, formData.type, formData.grossAmount, isEcommerceMode]);
+  const calculated = useMemo(() => { const baseAmount = (isEcommerceMode && formData.grossAmount) ? parseFloat(formData.grossAmount) : (parseFloat(formData.amount) || 0); let net = 0, vat = 0; if (formData.vatType === 'included') { net = baseAmount * 100 / 107; vat = baseAmount - net; } else if (formData.vatType === 'excluded') { net = baseAmount; vat = baseAmount * 0.07; } else { net = baseAmount; vat = 0; } const wht = formData.type === 'expense' ? (net * formData.whtRate / 100) : 0; return { net, vat, total: formData.vatType === 'excluded' ? net + vat : baseAmount, wht, baseAmount }; }, [formData.amount, formData.vatType, formData.whtRate, formData.type, formData.grossAmount, isEcommerceMode]);
   
-  const handleSubmit = async (e) => {
-    e.preventDefault(); 
-    if (!user) return;
-    const dataToSave = { ...formData, ...calculated, total: parseFloat(formData.amount), date: new Date(formData.date), createdAt: serverTimestamp(), userId: user.uid };
-    try {
-      await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions'), dataToSave);
-      if (isEcommerceMode && formData.platformFee > 0) {
-         await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions'), {
-            type: 'expense', date: new Date(formData.date), category: 'ค่าธรรมเนียม Platform', description: `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`, amount: parseFloat(formData.platformFee), vatType: 'included', total: parseFloat(formData.platformFee), net: parseFloat(formData.platformFee) * 100 / 107, vat: parseFloat(formData.platformFee) - (parseFloat(formData.platformFee) * 100 / 107), wht: 0, createdAt: serverTimestamp(), userId: user.uid
-         });
-      }
-      setFormData(prev => ({ ...initialForm, type: prev.type, category: prev.category })); 
-      alert(isEcommerceMode ? "บันทึกรายรับ (Gross) และค่าธรรมเนียม (Expense) เรียบร้อยแล้ว" : "บันทึกรายการสำเร็จ");
-    } catch (error) { console.error("Save failed:", error); alert("บันทึกไม่สำเร็จ"); }
-  };
-
-  const handleSaveVendor = async () => {
-    if (!formData.vendorName) return alert("กรุณาระบุชื่อผู้ขาย");
-    const vendorData = {
-        vendorName: formData.vendorName,
-        vendorTaxId: formData.vendorTaxId,
-        vendorBranch: formData.vendorBranch,
-        updatedAt: serverTimestamp()
-    };
-    try {
-        await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'vendors'), vendorData);
-        alert("บันทึกข้อมูลผู้ขายเรียบร้อย");
-    } catch (e) { console.error(e); alert("บันทึกไม่สำเร็จ"); }
-  };
-
-  const handleDeleteVendorClick = (id, e) => {
-    e.stopPropagation();
-    setDeleteVendorId(id);
-  };
-
-  const executeDeleteVendor = async () => {
-      if (!deleteVendorId) return;
-      setIsDeleting(true);
-      try {
-          await deleteDoc(doc(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'vendors', deleteVendorId));
-          setDeleteVendorId(null);
-      } catch (err) { console.error(err); alert("ลบไม่สำเร็จ"); } finally { setIsDeleting(false); }
-  };
-
-  const selectVendor = (vendor) => {
-      setFormData(prev => ({
-          ...prev,
-          vendorName: vendor.vendorName || '',
-          vendorTaxId: vendor.vendorTaxId || '',
-          vendorBranch: vendor.vendorBranch || ''
-      }));
-      setShowVendorModal(false);
-  };
-
-  const confirmDelete = (id) => {
-    setDeleteId(id);
-  };
-
-  const executeDelete = async () => {
-    if (!deleteId) return;
-    setIsDeleting(true);
-    try {
-        await deleteDoc(doc(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions', deleteId));
-        setDeleteId(null);
-    } catch (err) {
-        console.error("Error deleting record:", err);
-        alert("เกิดข้อผิดพลาดในการลบ");
-    } finally {
-        setIsDeleting(false);
-    }
-  };
-
+  const handleSubmit = async (e) => { e.preventDefault(); if (!user) return; const dataToSave = { ...formData, ...calculated, total: parseFloat(formData.amount), date: new Date(formData.date), createdAt: serverTimestamp(), userId: user.uid }; try { await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions'), dataToSave); if (isEcommerceMode && formData.platformFee > 0) { await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions'), { type: 'expense', date: new Date(formData.date), category: 'ค่าธรรมเนียม Platform', description: `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`, amount: parseFloat(formData.platformFee), vatType: 'included', total: parseFloat(formData.platformFee), net: parseFloat(formData.platformFee) * 100 / 107, vat: parseFloat(formData.platformFee) - (parseFloat(formData.platformFee) * 100 / 107), wht: 0, createdAt: serverTimestamp(), userId: user.uid }); } setFormData(prev => ({ ...initialForm, type: prev.type, category: prev.category })); alert("บันทึกสำเร็จ"); } catch (error) { console.error("Save failed:", error); alert("บันทึกไม่สำเร็จ"); } };
+  const handleSaveVendor = async () => { if (!formData.vendorName) return alert("กรุณาระบุชื่อผู้ขาย"); const vendorData = { vendorName: formData.vendorName, vendorTaxId: formData.vendorTaxId, vendorBranch: formData.vendorBranch, updatedAt: serverTimestamp() }; try { await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'vendors'), vendorData); alert("บันทึกผู้ขายเรียบร้อย"); } catch (e) { console.error(e); } };
+  const handleDeleteVendorClick = (id, e) => { e.stopPropagation(); setDeleteVendorId(id); };
+  const executeDeleteVendor = async () => { if (!deleteVendorId) return; setIsDeleting(true); try { await deleteDoc(doc(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'vendors', deleteVendorId)); setDeleteVendorId(null); } catch (err) { console.error(err); } finally { setIsDeleting(false); } };
+  const selectVendor = (vendor) => { setFormData(prev => ({ ...prev, vendorName: vendor.vendorName || '', vendorTaxId: vendor.vendorTaxId || '', vendorBranch: vendor.vendorBranch || '' })); setShowVendorModal(false); };
+  const confirmDelete = (id) => { setDeleteId(id); };
+  const executeDelete = async () => { if (!deleteId) return; setIsDeleting(true); try { await deleteDoc(doc(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions', deleteId)); setDeleteId(null); } catch (err) { console.error("Error deleting record:", err); alert("เกิดข้อผิดพลาดในการลบ"); } finally { setIsDeleting(false); } };
   const filteredTransactions = transactions.filter(t => filterType === 'all' || t.type === filterType);
-
-  const recentTransactions = useMemo(() => {
-    return transactions
-      .filter(t => {
-        const matchesType = filterType === 'all' || t.type === filterType;
-        const matchesSearch = t.description?.toLowerCase().includes(recentSearch.toLowerCase()) || 
-                              (t.amount && t.amount.toString().includes(recentSearch));
-        return matchesType && matchesSearch;
-      })
-      .sort((a,b) => b.date - a.date)
-      .slice(0, 50);
-  }, [transactions, filterType, recentSearch]);
-
-  const groupedRecent = useMemo(() => {
-    const groups = {};
-    recentTransactions.forEach(t => {
-        const dateKey = formatDate(t.date);
-        if (!groups[dateKey]) groups[dateKey] = [];
-        groups[dateKey].push(t);
-    });
-    return groups;
-  }, [recentTransactions]);
-
-  const historyData = useMemo(() => {
-    return transactions.filter(t => {
-      if (histPeriod === 'all') return true;
-      const tDate = normalizeDate(t.date);
-      const filterD = new Date(histDate);
-      if (histPeriod === 'day') return tDate.toDateString() === filterD.toDateString();
-      if (histPeriod === 'month') return tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear();
-      if (histPeriod === 'year') return tDate.getFullYear() === filterD.getFullYear();
-      return true;
-    }).sort((a,b) => b.date - a.date);
-  }, [transactions, histPeriod, histDate]);
-
-  const historySummary = useMemo(() => {
-    const inc = historyData.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.total),0);
-    const exp = historyData.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.total),0);
-    return { inc, exp, bal: inc - exp };
-  }, [historyData]);
-
-  const exportHistoryCSV = () => {
-    let csv = "\uFEFFวันที่,ประเภท,หมวดหมู่,รายละเอียด,จำนวนเงิน\n";
-    historyData.forEach(t => {
-      csv += `${formatDate(t.date)},${t.type},${t.category},"${t.description}",${t.total}\n`;
-    });
-    const link = document.createElement('a');
-    link.href = encodeURI('data:text/csv;charset=utf-8,' + csv);
-    link.download = `History_${histPeriod}_${histDate}.csv`;
-    link.click();
-  };
-
-  const handleMagicFill = async () => {
-    if (!magicPrompt) return;
-    setIsMagicLoading(true);
-    const prompt = `Extract transaction data from Thai text: "${magicPrompt}". Date: ${new Date().toISOString().split('T')[0]}. Return JSON: { type: "income"|"expense", amount: number, description: string, category: string, channel: string, date: "YYYY-MM-DD" }. Use best guess for missing fields.`;
-    
-    // Use New AI Engine
-    try {
-      const data = await SmartTaxAI.generate(prompt, null, true); // true for JSON
-      if (data) {
-          setFormData(prev => ({ ...prev, ...data }));
-      }
-    } catch (error) { console.error(error); alert("AI Processing Failed"); } 
-    finally { setIsMagicLoading(false); }
-  };
-
-  const handleImageUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setIsScanning(true);
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      const prompt = `Analyze receipt. Return JSON: { date: "YYYY-MM-DD", description: string, amount: number, vatType: "included"|"excluded"|"none", taxInvoiceNo: string, vendorName: string, vendorTaxId: string }.`;
-      try {
-        const data = await SmartTaxAI.generate(prompt, reader.result, true); // true for JSON
-        if (data) {
-            setFormData(prev => ({ ...prev, type: 'expense', category: 'ค่าใช้จ่ายทั่วไป', ...data }));
-        }
-      } catch (err) { alert("Scan Failed"); } finally { setIsScanning(false); }
-    };
-    reader.readAsDataURL(file);
-  };
+  const recentTransactions = useMemo(() => transactions.filter(t => (filterType === 'all' || t.type === filterType) && (t.description?.toLowerCase().includes(recentSearch.toLowerCase()) || (t.amount && t.amount.toString().includes(recentSearch)))).sort((a,b) => b.date - a.date).slice(0, 50), [transactions, filterType, recentSearch]);
+  const groupedRecent = useMemo(() => { const groups = {}; recentTransactions.forEach(t => { const dateKey = formatDate(t.date); if (!groups[dateKey]) groups[dateKey] = []; groups[dateKey].push(t); }); return groups; }, [recentTransactions]);
+  const historyData = useMemo(() => transactions.filter(t => { if (histPeriod === 'all') return true; const tDate = normalizeDate(t.date); const filterD = new Date(histDate); if (histPeriod === 'day') return tDate.toDateString() === filterD.toDateString(); if (histPeriod === 'month') return tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear(); if (histPeriod === 'year') return tDate.getFullYear() === filterD.getFullYear(); return true; }).sort((a,b) => b.date - a.date), [transactions, histPeriod, histDate]);
+  const historySummary = useMemo(() => { const inc = historyData.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.total),0); const exp = historyData.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.total),0); return { inc, exp, bal: inc - exp }; }, [historyData]);
+  const exportHistoryCSV = () => { let csv = "\uFEFFวันที่,ประเภท,หมวดหมู่,รายละเอียด,จำนวนเงิน\n"; historyData.forEach(t => { csv += `${formatDate(t.date)},${t.type},${t.category},"${t.description}",${t.total}\n`; }); const link = document.createElement('a'); link.href = encodeURI('data:text/csv;charset=utf-8,' + csv); link.download = `History_${histPeriod}_${histDate}.csv`; link.click(); };
+  const handleMagicFill = async () => { if (!magicPrompt) return; setIsMagicLoading(true); const prompt = `Extract transaction data from Thai text: "${magicPrompt}". Date: ${new Date().toISOString().split('T')[0]}. Return JSON: { type: "income"|"expense", amount: number, description: string, category: string, channel: string, date: "YYYY-MM-DD" }. Use best guess for missing fields.`; try { const data = await SmartTaxAI.generate(prompt, null, true); if (data) setFormData(prev => ({ ...prev, ...data })); } catch (error) { console.error(error); alert("AI Failed"); } finally { setIsMagicLoading(false); } };
+  const handleImageUpload = async (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onloadend = async () => { const prompt = `Analyze receipt. Return JSON: { date: "YYYY-MM-DD", description: string, amount: number, vatType: "included"|"excluded"|"none", taxInvoiceNo: string, vendorName: string, vendorTaxId: string }.`; try { const data = await SmartTaxAI.generate(prompt, reader.result, true); if (data) setFormData(prev => ({ ...prev, type: 'expense', category: 'ค่าใช้จ่ายทั่วไป', ...data })); } catch (err) { alert("Scan Failed"); } }; reader.readAsDataURL(file); };
 
   return (
-    <div className="flex flex-col h-full lg:h-[calc(100vh-140px)] relative">
-      {/* VENDOR SELECTION MODAL */}
-      {showVendorModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md animate-fadeIn flex flex-col h-[70vh]">
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2"><BookOpen className="text-rose-500"/> เลือกผู้ขายเก่า</h3>
-                    <button onClick={() => setShowVendorModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
-                </div>
-                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2">
-                    {vendors.length === 0 ? (
-                        <p className="text-center text-slate-400 py-10">ยังไม่มีรายชื่อผู้ขายที่บันทึกไว้</p>
-                    ) : (
-                        vendors.map(v => (
-                            <div key={v.id} className="p-3 border border-slate-100 rounded-xl hover:bg-rose-50 cursor-pointer flex justify-between items-center group transition-colors" onClick={() => selectVendor(v)}>
-                                <div className="flex-1">
-                                    <p className="font-bold text-slate-700">{v.vendorName}</p>
-                                    <p className="text-xs text-slate-400">TAX: {v.vendorTaxId} | Branch: {v.vendorBranch}</p>
-                                </div>
-                                <div className="flex gap-2 items-center">
-                                    <button onClick={(e) => handleDeleteVendorClick(v.id, e)} className="p-2 text-slate-300 hover:text-rose-500 hover:bg-white rounded-full transition-all" title="ลบ"><Trash2 size={16}/></button>
-                                    <div className="bg-rose-100 text-rose-600 px-3 py-1 rounded-lg text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity">เลือก</div>
-                                </div>
-                            </div>
-                        ))
-                    )}
-                </div>
-            </div>
-        </div>
-      )}
-      
-      {/* VENDOR DELETE MODAL */}
-      {deleteVendorId && (
-        <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm animate-fadeIn text-center">
-                <div className="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Trash2 className="text-rose-600" size={24} />
-                </div>
-                <h3 className="font-bold text-lg text-slate-800 mb-2">ยืนยันการลบผู้ขาย?</h3>
-                <p className="text-slate-500 text-sm mb-6">ข้อมูลนี้จะถูกลบถาวร</p>
-                <div className="flex gap-3">
-                    <button onClick={() => setDeleteVendorId(null)} className="flex-1 py-2.5 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200">ยกเลิก</button>
-                    <button onClick={executeDeleteVendor} disabled={isDeleting} className="flex-1 py-2.5 rounded-xl font-bold text-white bg-rose-600 hover:bg-rose-700 flex justify-center items-center gap-2">
-                        {isDeleting ? <Loader className="animate-spin" size={18}/> : 'ยืนยันลบ'}
-                    </button>
-                </div>
-            </div>
-        </div>
-      )}
+    <div className="flex flex-col h-full lg:h-[calc(100vh-88px)] relative">
+       {/* Modals */}
+       {deleteId && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl scale-100 animate-fadeIn"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold text-slate-800 mb-2">ยืนยันการลบ?</h3><p className="text-slate-500 mb-6">ข้อมูลนี้จะหายไปถาวร</p><div className="flex gap-3"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-slate-600 hover:bg-slate-200">ยกเลิก</button><button onClick={executeDelete} disabled={isDeleting} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold hover:bg-rose-700 shadow-lg shadow-rose-200">{isDeleting?<Loader className="animate-spin mx-auto"/>:'ลบรายการ'}</button></div></div></div>}
+       {showVendorModal && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn"><div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><BookOpen className="text-rose-500"/> เลือกผู้ขายเก่า</h3><button onClick={()=>setShowVendorModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button></div><div className="flex-1 overflow-y-auto p-4 space-y-2">{vendors.map(v=><div key={v.id} onClick={()=>selectVendor(v)} className="p-4 rounded-xl border border-slate-100 hover:border-rose-200 hover:bg-rose-50 cursor-pointer transition-all group"><div className="flex justify-between items-start"><div><p className="font-bold text-slate-700">{v.vendorName}</p><p className="text-xs text-slate-400 mt-1">TAX: {v.vendorTaxId}</p></div><div className="flex gap-2"><button onClick={(e)=>handleDeleteVendorClick(v.id,e)} className="p-2 text-slate-300 hover:text-rose-500 bg-white rounded-full border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14}/></button></div></div></div>)}</div></div></div>}
+       {deleteVendorId && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold text-slate-800 mb-2">ลบผู้ขาย?</h3><div className="flex gap-3 mt-6"><button onClick={()=>setDeleteVendorId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-slate-600">ยกเลิก</button><button onClick={executeDeleteVendor} disabled={isDeleting} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">{isDeleting?<Loader className="animate-spin mx-auto"/>:'ยืนยัน'}</button></div></div></div>}
 
-      {deleteId && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm animate-fadeIn text-center transform transition-all scale-100">
-                <div className="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Trash2 className="text-rose-600" size={24} />
+       <div className="flex gap-1 p-1 bg-slate-100/80 backdrop-blur-sm rounded-2xl w-fit mb-6 self-center md:self-start border border-slate-200">
+           <button onClick={()=>setSubTab('new')} className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${subTab==='new'?'bg-white text-indigo-600 shadow-sm':'text-slate-500 hover:text-slate-700'}`}><Edit size={16}/> บันทึกรายการ</button>
+           <button onClick={()=>setSubTab('history')} className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${subTab==='history'?'bg-white text-indigo-600 shadow-sm':'text-slate-500 hover:text-slate-700'}`}><List size={16}/> รวมรายการ</button>
+       </div>
+
+       {subTab === 'new' ? (
+         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full overflow-hidden">
+            {/* LEFT: FORM INPUT */}
+            <div className="lg:col-span-4 xl:col-span-5 bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 h-full overflow-y-auto custom-scrollbar flex flex-col">
+                <h3 className="font-bold text-xl text-slate-800 mb-6 flex items-center gap-3"><div className="p-2 bg-indigo-50 rounded-xl text-indigo-600"><Edit size={20}/></div> New Transaction</h3>
+                <div className="mb-8 relative group">
+                    <div className="absolute -inset-0.5 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl opacity-20 group-hover:opacity-40 transition duration-500 blur"></div>
+                    <div className="relative bg-white rounded-xl p-1 flex items-center gap-2 border border-slate-100">
+                        <div className="pl-3 text-indigo-500"><Sparkles size={18}/></div>
+                        <input className="flex-1 bg-transparent border-none text-sm p-3 focus:ring-0 placeholder:text-slate-400" placeholder="พิมพ์เช่น 'ขายเสื้อ 2 ตัว 500 บาท'" value={magicPrompt} onChange={e=>setMagicPrompt(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleMagicFill()}/>
+                        <button onClick={handleMagicFill} disabled={isMagicLoading} className="bg-indigo-600 text-white p-2.5 rounded-lg shadow-md hover:bg-indigo-700 transition-all">{isMagicLoading?<Loader size={16} className="animate-spin"/>:<ArrowUpRight size={16}/>}</button>
+                    </div>
                 </div>
-                <h3 className="font-bold text-lg text-slate-800 mb-2">ยืนยันการลบรายการ?</h3>
-                <p className="text-slate-500 text-sm mb-6">รายการนี้จะถูกลบถาวร</p>
-                <div className="flex gap-3">
-                    <button onClick={() => setDeleteId(null)} className="flex-1 py-2.5 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors">ยกเลิก</button>
-                    <button onClick={executeDelete} disabled={isDeleting} className="flex-1 py-2.5 rounded-xl font-bold text-white bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-2 transition-colors shadow-lg shadow-rose-200">
-                        {isDeleting ? <Loader className="animate-spin" size={18}/> : 'ยืนยันลบ'}
-                    </button>
+                <div className="flex gap-2 p-1 bg-slate-50 rounded-xl mb-6">
+                    <button onClick={()=>setFormData({...formData, type:'income', category:CONSTANTS.CATEGORIES.INCOME[0]})} className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${formData.type==='income'?'bg-white text-emerald-600 shadow-sm':'text-slate-400'}`}>รายรับ</button>
+                    <button onClick={()=>setFormData({...formData, type:'expense', category:CONSTANTS.CATEGORIES.EXPENSE[0]})} className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${formData.type==='expense'?'bg-white text-rose-600 shadow-sm':'text-slate-400'}`}>รายจ่าย</button>
                 </div>
+                <form onSubmit={handleSubmit} className="space-y-5 flex-1">
+                   <div className="grid grid-cols-2 gap-4">
+                       <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">วันที่</label><input type="date" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500" value={formData.date} onChange={e=>setFormData({...formData,date:e.target.value})}/></div>
+                       <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">หมวดหมู่</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500" value={formData.category} onChange={e=>setFormData({...formData,category:e.target.value})}>{(formData.type==='income'?CONSTANTS.CATEGORIES.INCOME:CONSTANTS.CATEGORIES.EXPENSE).map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+                   </div>
+                   {formData.type === 'income' ? (
+                       <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-4">
+                           <div className="flex justify-between items-center text-emerald-700 text-xs font-bold uppercase tracking-wider mb-1"><span className="flex items-center gap-1"><Store size={14}/> E-Commerce</span></div>
+                           <div className="grid grid-cols-2 gap-4">
+                               <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="Order ID" value={formData.orderId} onChange={e=>setFormData({...formData,orderId:e.target.value})}/>
+                               <select className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" value={formData.channel} onChange={e=>setFormData({...formData,channel:e.target.value})}>{CONSTANTS.CHANNELS.map(c=><option key={c} value={c}>{c}</option>)}</select>
+                           </div>
+                           {isEcommerceMode && (
+                               <div className="bg-white p-4 rounded-xl shadow-sm border border-emerald-100">
+                                   <div className="flex items-center gap-2 mb-3 text-xs font-bold text-emerald-600"><Calculator size={14}/> Calculator (Gross vs Net)</div>
+                                   <div className="grid grid-cols-2 gap-4">
+                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ยอดขายเต็ม (Gross)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-emerald-600" placeholder="0.00" value={formData.grossAmount} onChange={e=>setFormData({...formData,grossAmount:e.target.value})}/></div>
+                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าธรรมเนียม</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData,platformFee:e.target.value})}/></div>
+                                   </div>
+                               </div>
+                           )}
+                       </div>
+                   ) : (
+                       <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 space-y-4">
+                           <div className="flex justify-between items-center mb-1">
+                               <span className="text-rose-700 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><User size={14}/> Vendor</span>
+                               <div className="flex gap-1">
+                                   <button type="button" onClick={()=>setShowVendorModal(true)} className="bg-white border border-rose-200 text-rose-600 text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-50">เลือกเก่า</button>
+                                   <button type="button" onClick={handleSaveVendor} className="bg-rose-600 text-white text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-700">บันทึกใหม่</button>
+                               </div>
+                           </div>
+                           <input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ชื่อร้านค้า / ผู้รับเงิน" value={formData.vendorName} onChange={e=>setFormData({...formData,vendorName:e.target.value})}/>
+                           <div className="grid grid-cols-2 gap-4">
+                               <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="เลขผู้เสียภาษี" value={formData.vendorTaxId} onChange={e=>setFormData({...formData,vendorTaxId:e.target.value})}/>
+                               <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="สาขา" value={formData.vendorBranch} onChange={e=>setFormData({...formData,vendorBranch:e.target.value})}/>
+                           </div>
+                           <input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="เลขที่ใบกำกับภาษี (Tax Invoice No.)" value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData,taxInvoiceNo:e.target.value})}/>
+                       </div>
+                   )}
+                   <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">รายละเอียด</label><input className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" placeholder="..." value={formData.description} onChange={e=>setFormData({...formData,description:e.target.value})}/></div>
+                   <div className="grid grid-cols-2 gap-4">
+                       <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">{isEcommerceMode ? "เงินเข้าจริง (Net)" : "จำนวนเงิน"}</label><input type="number" className={`w-full bg-slate-50 border-0 rounded-xl p-3 text-lg font-bold text-right ${isEcommerceMode?'text-emerald-500':'text-slate-800'}`} value={formData.amount} onChange={e=>setFormData({...formData,amount:e.target.value})} readOnly={isEcommerceMode}/></div>
+                       <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">VAT</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm" value={formData.vatType} onChange={e=>setFormData({...formData,vatType:e.target.value})}><option value="included">รวม VAT</option><option value="excluded">แยก VAT</option><option value="none">ไม่มี VAT</option></select></div>
+                   </div>
+                   {formData.type === 'expense' && (
+                       <div className="p-3 bg-yellow-50 rounded-xl border border-yellow-100 flex items-center gap-3">
+                           <div className="text-yellow-600 font-bold text-xs whitespace-nowrap">หัก ณ ที่จ่าย (WHT)</div>
+                           <select className="w-full bg-white border-0 rounded-lg p-2 text-sm text-slate-700" value={formData.whtRate} onChange={e=>setFormData({...formData,whtRate:Number(e.target.value)})}>
+                               <option value={0}>ไม่หัก (0%)</option><option value={1}>1% - ขนส่ง</option><option value={3}>3% - บริการ</option><option value={5}>5% - ค่าเช่า</option>
+                           </select>
+                       </div>
+                   )}
+                   <div className="bg-slate-800 text-white p-5 rounded-2xl shadow-lg mt-auto">
+                        <div className="flex justify-between text-sm opacity-80 mb-1"><span>Base:</span><span>{formatCurrency(calculated.baseAmount)}</span></div>
+                        <div className="flex justify-between text-sm opacity-80 mb-2"><span>VAT 7%:</span><span>{formatCurrency(calculated.vat)}</span></div>
+                        <div className="flex justify-between text-xl font-bold pt-2 border-t border-white/20"><span>Total:</span><span>{formatCurrency(calculated.baseAmount)}</span></div>
+                   </div>
+                   <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-4 rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all flex justify-center items-center gap-2">
+                       <Save size={20}/> บันทึกรายการ
+                   </button>
+                   <div className="flex justify-center"><button type="button" className="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1"><Camera size={14}/> Scan Receipt</button></div>
+                </form>
             </div>
-        </div>
-      )}
-
-      {/* Sub Tab Navigation */}
-      <div className="flex gap-2 mb-4 bg-slate-100 p-1.5 rounded-xl w-fit self-start shadow-inner">
-         <button onClick={()=>setSubTab('new')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all flex items-center gap-2 ${subTab==='new' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><Edit size={16}/> บันทึกรายการใหม่</button>
-         <button onClick={()=>setSubTab('history')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-all flex items-center gap-2 ${subTab==='history' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}><List size={16}/> รวมรายการที่บันทึก</button>
-      </div>
-
-      {subTab === 'new' ? (
-        // Changed lg:grid-cols-12 to xl:grid-cols-12 and made height flexible
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 w-full h-full overflow-hidden">
-          <div className="xl:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-full">
-            {isScanning && <div className="absolute inset-0 bg-white/90 z-20 flex flex-col items-center justify-center rounded-3xl"><Loader className="animate-spin mb-2" size={32}/><p className="animate-pulse font-bold text-indigo-600">AI Reading Receipt...</p></div>}
-            <h3 className="font-bold mb-4 flex gap-2 text-slate-800 text-lg items-center"><Edit className="text-indigo-500" size={24}/> New Transaction</h3>
-            <div className="mb-6 bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-2xl border border-indigo-100 relative overflow-hidden">
-               <div className="absolute top-0 right-0 p-2 opacity-10"><Sparkles size={100} className="text-indigo-500" /></div>
-               <label className="text-sm font-bold text-indigo-800 mb-2 flex items-center gap-2 relative z-10"><Wand2 size={16} className="text-indigo-600"/> Magic Fill</label>
-               <div className="flex gap-2 relative z-10">
-                  <input type="text" className="flex-1 border-0 rounded-xl p-3 text-sm shadow-sm focus:ring-2 focus:ring-indigo-500 bg-white placeholder:text-slate-400" placeholder='เช่น "ขายเสื้อ 2 ตัว 500 บาท"' value={magicPrompt} onChange={(e) => setMagicPrompt(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleMagicFill()} />
-                  <button onClick={handleMagicFill} disabled={isMagicLoading || !magicPrompt} className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold shadow-md hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2 transition-all">{isMagicLoading ? <Loader className="animate-spin" size={18}/> : <BrainCircuit size={18}/>}</button>
+            {/* RIGHT: RECENT LIST (Expanded on Desktop) */}
+            <div className="lg:col-span-8 xl:col-span-7 bg-white rounded-[32px] shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden">
+               <div className="p-6 border-b border-slate-100 bg-white/80 backdrop-blur-md sticky top-0 z-20">
+                   <div className="flex justify-between items-center mb-4">
+                       <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2"><Clock className="text-indigo-500"/> รายการล่าสุด</h3>
+                       <div className="flex bg-slate-100 p-1 rounded-lg">
+                           {['all', 'income', 'expense'].map(t => <button key={t} onClick={()=>setFilterType(t)} className={`px-4 py-1.5 text-xs font-bold rounded-md capitalize transition-all ${filterType===t?'bg-white shadow text-indigo-600':'text-slate-500'}`}>{t}</button>)}
+                       </div>
+                   </div>
+                   <div className="relative">
+                       <Search className="absolute left-3 top-2.5 text-slate-400" size={18}/>
+                       <input className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100" placeholder="ค้นหาตามชื่อ, จำนวนเงิน..." value={recentSearch} onChange={e=>setRecentSearch(e.target.value)}/>
+                   </div>
+               </div>
+               <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                   {Object.entries(groupedRecent).length === 0 ? <div className="text-center py-20 text-slate-300">ไม่มีรายการ</div> : 
+                    Object.entries(groupedRecent).map(([date, items]) => (
+                       <div key={date}>
+                           <div className="sticky top-0 bg-white/95 backdrop-blur py-2 mb-2 z-10 w-fit px-3 rounded-lg border border-slate-100 text-xs font-bold text-slate-500 uppercase tracking-wider shadow-sm">{date}</div>
+                           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                               {items.map(t => (
+                                   <div key={t.id} className="bg-white border border-slate-100 p-4 rounded-2xl hover:border-indigo-200 hover:shadow-md transition-all group relative">
+                                       <div className="flex justify-between items-start mb-2">
+                                           <div className="flex items-center gap-3">
+                                               <div className={`w-10 h-10 rounded-full flex items-center justify-center ${t.type==='income'?'bg-emerald-100 text-emerald-600':'bg-rose-100 text-rose-600'}`}>
+                                                   {t.type==='income' ? <TrendingUp size={18}/> : <TrendingDown size={18}/>}
+                                               </div>
+                                               <div>
+                                                   <p className="font-bold text-slate-700 text-sm line-clamp-1">{t.description}</p>
+                                                   <div className="flex gap-2 text-[10px] mt-0.5">
+                                                       <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{t.category}</span>
+                                                       {t.channel && <span className="border border-slate-200 px-1.5 py-0.5 rounded text-slate-400">{t.channel}</span>}
+                                                   </div>
+                                               </div>
+                                           </div>
+                                           <p className={`font-bold text-sm ${t.type==='income'?'text-emerald-600':'text-slate-800'}`}>{t.type==='income'?'+':'-'}{formatCurrency(t.total)}</p>
+                                       </div>
+                                       <button onClick={()=>confirmDelete(t.id)} className="absolute bottom-3 right-3 text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
+                                   </div>
+                               ))}
+                           </div>
+                       </div>
+                   ))}
                </div>
             </div>
-            <div className="bg-slate-100 p-1.5 rounded-xl flex mb-6 shadow-inner">
-               <button type="button" onClick={() => setFormData({...formData, type: 'income', category: CONSTANTS.CATEGORIES.INCOME[0]})} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all shadow-sm ${formData.type === 'income' ? 'bg-white text-emerald-600 shadow-md' : 'text-slate-500 hover:text-slate-700 shadow-none'}`}>รายรับ</button>
-               <button type="button" onClick={() => setFormData({...formData, type: 'expense', category: CONSTANTS.CATEGORIES.EXPENSE[0]})} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all shadow-sm ${formData.type === 'expense' ? 'bg-white text-rose-600 shadow-md' : 'text-slate-500 hover:text-slate-700 shadow-none'}`}>รายจ่าย</button>
-            </div>
-            <form onSubmit={handleSubmit} className="space-y-4 flex-1 lg:overflow-y-auto pr-1 custom-scrollbar">
-              <div className="mb-2"><label className="flex items-center justify-center w-full p-3 border-2 border-dashed border-indigo-200 rounded-xl cursor-pointer bg-indigo-50/30 hover:bg-indigo-50 transition-colors group"><div className="flex items-center gap-2 text-indigo-600 font-bold text-sm"><Camera size={18} className="group-hover:scale-110 transition-transform" /> Scan Receipt with AI</div><input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} /></label></div>
-              <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-slate-500 mb-1 block">Date</label><input type="date" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} required /></div><div><label className="text-xs font-bold text-slate-500 mb-1 block">Category</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>{(formData.type === 'income' ? CONSTANTS.CATEGORIES.INCOME : CONSTANTS.CATEGORIES.EXPENSE).map(c=><option key={c} value={c}>{c}</option>)}</select></div></div>
-              {formData.type === 'income' ? (
-                 <div className="bg-emerald-50/50 p-4 rounded-xl border border-emerald-100 space-y-3"><div className="grid grid-cols-2 gap-3"><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Order ID" value={formData.orderId} onChange={e => setFormData({...formData, orderId: e.target.value})} /><select className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" value={formData.channel} onChange={e => setFormData({...formData, channel: e.target.value})}>{CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>{isEcommerceMode && (<div className="bg-white p-3 rounded-lg border border-emerald-200 shadow-sm animate-fadeIn"><div className="flex items-center gap-2 mb-2 text-xs font-bold text-emerald-700"><Calculator size={14}/> E-Commerce Gross Revenue Calculator (สรรพากร)</div><div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] font-bold text-slate-500">ยอดขายเต็ม (Gross)</label><input type="number" className="w-full border-b border-slate-200 text-sm p-1 focus:outline-none focus:border-emerald-500 font-bold" placeholder="0.00" value={formData.grossAmount} onChange={e => setFormData({...formData, grossAmount: e.target.value})} /></div><div><label className="text-[10px] font-bold text-rose-500">หัก ค่าธรรมเนียม/ขนส่ง</label><input type="number" className="w-full border-b border-slate-200 text-sm p-1 focus:outline-none focus:border-rose-500 text-rose-600" placeholder="0.00" value={formData.platformFee} onChange={e => setFormData({...formData, platformFee: e.target.value})} /></div></div><p className="text-[10px] text-slate-400 mt-2">*ระบบจะบันทึกรายได้ยอดเต็ม และสร้างรายการรายจ่ายค่าธรรมเนียมให้อัตโนมัติ</p></div>)}</div>
-              ) : (<div className="bg-rose-50/50 p-4 rounded-xl border border-rose-100 space-y-3"><div className="flex justify-between items-center mb-1"><label className="text-xs font-bold text-rose-700">Vendor Info (ข้อมูลคู่ค้า)</label><div className="flex gap-1"><button type="button" onClick={() => setShowVendorModal(true)} className="text-[10px] bg-white border border-rose-200 text-rose-600 px-2 py-0.5 rounded hover:bg-rose-50 flex items-center gap-1"><List size={10}/> เลือกผู้ขายเก่า</button><button type="button" onClick={handleSaveVendor} className="text-[10px] bg-rose-600 text-white px-2 py-0.5 rounded hover:bg-rose-700 flex items-center gap-1"><Save size={10}/> บันทึก</button></div></div><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Vendor Name" value={formData.vendorName} onChange={e => setFormData({...formData, vendorName: e.target.value})} /><div className="grid grid-cols-2 gap-3"><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Tax ID" value={formData.vendorTaxId} onChange={e => setFormData({...formData, vendorTaxId: e.target.value})} /><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Branch" value={formData.vendorBranch} onChange={e => setFormData({...formData, vendorBranch: e.target.value})} /></div><input type="text" className="w-full bg-white border-0 rounded-lg p-2.5 text-sm shadow-sm" placeholder="Tax Invoice No." value={formData.taxInvoiceNo} onChange={e => setFormData({...formData, taxInvoiceNo: e.target.value})} /></div>)}
-              <div><label className="text-xs font-bold text-slate-500 mb-1 block">Description</label><input type="text" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} required /></div>
-              <div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-slate-500 mb-1 block">{isEcommerceMode ? "Net Received (เงินเข้าบัญชี)" : "Total Amount"}</label><input type="number" className={`w-full bg-slate-50 border-0 rounded-xl p-3 text-lg font-bold text-right ${isEcommerceMode ? 'text-emerald-600' : 'text-slate-700'}`} value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} required readOnly={isEcommerceMode} /></div><div><label className="text-xs font-bold text-slate-500 mb-1 block">VAT Type</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm" value={formData.vatType} onChange={e => setFormData({...formData, vatType: e.target.value})}><option value="included">รวม VAT</option><option value="excluded">แยก VAT</option><option value="none">ไม่มี VAT</option></select></div></div>
-              {formData.type === 'expense' && (<div><label className="text-xs font-bold text-slate-500 mb-1 block">WHT (หัก ณ ที่จ่าย)</label><select className="w-full bg-yellow-50 border-0 rounded-xl p-3 text-sm text-yellow-800" value={formData.whtRate} onChange={e => setFormData({...formData, whtRate: Number(e.target.value)})}> <option value={0}>ไม่หัก (0%)</option><option value={1}>1% - ขนส่ง</option><option value={3}>3% - บริการ</option><option value={5}>5% - เช่า</option></select></div>)}
-              <div className="bg-slate-800 p-4 rounded-xl text-slate-300 text-sm space-y-1 mt-2 shadow-lg"><div className="flex justify-between"><span>Base/Gross:</span><span>{formatCurrency(calculated.baseAmount)}</span></div><div className="flex justify-between"><span>VAT 7%:</span><span>{formatCurrency(calculated.vat)}</span></div><div className="flex justify-between font-bold text-lg text-white border-t border-slate-600 pt-2 mt-1"><span>Recorded Total:</span><span>{formatCurrency(calculated.baseAmount)}</span></div>{isEcommerceMode && <div className="text-[10px] text-emerald-400 mt-1">*บันทึกยอด Gross เป็นรายได้เพื่อคำนวณภาษี</div>}</div>
-              <button type="submit" className="w-full bg-indigo-600 text-white py-3.5 rounded-xl hover:bg-indigo-700 font-bold shadow-lg transition-all flex items-center justify-center gap-2 mt-4"><Save size={20}/> บันทึกรายการ</button>
-            </form>
-          </div>
-          
-          <div className="xl:col-span-7 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[500px] lg:h-full overflow-hidden">
-             {/* Header with Search */}
-             <div className="p-4 border-b border-slate-100 bg-slate-50/50 space-y-3">
-                <div className="flex justify-between items-center">
-                    <h3 className="font-bold text-slate-700 flex items-center gap-2"><Clock size={20} className="text-indigo-500"/> รายการล่าสุด</h3>
-                    <div className="flex bg-white rounded-lg border border-slate-200 p-1 shadow-sm">
-                        {['all', 'income', 'expense'].map(type => (<button key={type} onClick={()=>setFilterType(type)} className={`px-3 py-1 text-[10px] font-bold rounded transition-all capitalize ${filterType===type ? (type==='income'?'bg-emerald-100 text-emerald-700':type==='expense'?'bg-rose-100 text-rose-700':'bg-indigo-100 text-indigo-700') : 'text-slate-500'}`}>{type}</button>))}
-                    </div>
-                </div>
-                <div className="relative">
-                    <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
-                    <input 
-                      type="text" 
-                      className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none placeholder:text-slate-400"
-                      placeholder="ค้นหารายการ..."
-                      value={recentSearch}
-                      onChange={e => setRecentSearch(e.target.value)}
-                    />
-                </div>
-             </div>
-
-             {/* Recent List Content */}
-             <div className="flex-1 overflow-auto custom-scrollbar p-4 space-y-6">
-                {Object.keys(groupedRecent).length === 0 ? (
-                    <div className="text-center py-10 text-slate-400 flex flex-col items-center">
-                        <div className="bg-slate-100 p-4 rounded-full mb-3"><FileText size={24}/></div>
-                        <p>ไม่มีรายการที่ค้นหา</p>
-                    </div>
-                ) : (
-                    Object.entries(groupedRecent).map(([date, items]) => (
-                        <div key={date}>
-                            <h4 className="text-xs font-bold text-slate-400 uppercase mb-3 ml-1 sticky top-0 bg-white/90 backdrop-blur-sm py-1 z-10 w-fit px-2 rounded-md border border-slate-100">{date}</h4>
-                            <div className="space-y-3">
-                                {items.map(t => (
-                                    <div key={t.id} className="bg-white border border-slate-100 rounded-2xl p-3 flex items-center gap-3 hover:shadow-md transition-all group relative">
-                                        {/* Icon */}
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${t.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
-                                            {t.type === 'income' ? <TrendingUp size={18}/> : <TrendingDown size={18}/>}
-                                        </div>
-                                        {/* Content */}
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex justify-between items-start">
-                                                <p className="font-bold text-slate-700 text-sm truncate">{t.description}</p>
-                                                <p className={`font-bold text-sm whitespace-nowrap ${t.type === 'income' ? 'text-emerald-600' : 'text-slate-700'}`}>
-                                                    {t.type === 'income' ? '+' : '-'}{formatCurrency(t.total)}
-                                                </p>
-                                            </div>
-                                            <div className="flex justify-between items-center mt-1">
-                                                <div className="flex gap-2 text-xs">
-                                                    <span className="bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">{t.category}</span>
-                                                    {t.channel && <span className="border border-slate-200 text-slate-400 px-1.5 py-0.5 rounded">{t.channel}</span>}
-                                                </div>
-                                                {/* Action */}
-                                                <button onClick={() => confirmDelete(t.id)} className="text-slate-300 hover:text-rose-500 transition-colors p-1" title="ลบ"><Trash2 size={14}/></button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    ))
-                )}
-             </div>
-          </div>
-        </div>
+         </div>
       ) : (
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden animate-fadeIn">
-           {/* HISTORY HEADER & FILTER */}
-           <div className="p-6 border-b border-slate-100">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-                 <h3 className="font-bold text-slate-700 text-xl flex items-center gap-2"><Clock className="text-indigo-500"/> รวมรายการที่บันทึก (All Records)</h3>
-                 <div className="flex gap-2 bg-slate-100 p-1 rounded-lg">
-                    <button onClick={()=>setHistPeriod('all')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${histPeriod==='all' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>ทั้งหมด</button>
-                    <button onClick={()=>setHistPeriod('day')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${histPeriod==='day' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>รายวัน</button>
-                    <button onClick={()=>setHistPeriod('month')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${histPeriod==='month' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>รายเดือน</button>
-                    <button onClick={()=>setHistPeriod('year')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${histPeriod==='year' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>รายปี</button>
-                 </div>
-              </div>
-              
-              <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
-                 <div className="flex items-center gap-4 w-full md:w-auto">
-                    {histPeriod !== 'all' && <label className="text-sm font-bold text-slate-500 whitespace-nowrap">เลือกช่วงเวลา:</label>}
-                    {histPeriod === 'day' && <input type="date" className="border-0 bg-slate-50 rounded-lg px-4 py-2 font-bold text-slate-700 w-full md:w-auto" value={histDate} onChange={e=>setHistDate(e.target.value)} />}
-                    {histPeriod === 'month' && <input type="month" className="border-0 bg-slate-50 rounded-lg px-4 py-2 font-bold text-slate-700 w-full md:w-auto" value={histDate.slice(0,7)} onChange={e=>setHistDate(e.target.value + '-01')} />}
-                    {histPeriod === 'year' && (
-                       <select className="border-0 bg-slate-50 rounded-lg px-4 py-2 font-bold text-slate-700 w-full md:w-auto" value={new Date(histDate).getFullYear()} onChange={e=>setHistDate(`${e.target.value}-01-01`)}>
-                          {[2023,2024,2025,2026].map(y => <option key={y} value={y}>{y}</option>)}
-                       </select>
-                    )}
-                 </div>
-                 
-                 <div className="flex gap-4 w-full md:w-auto">
-                    <div className="bg-emerald-50 px-4 py-2 rounded-xl border border-emerald-100 flex-1 md:flex-none text-center">
-                       <p className="text-[10px] text-emerald-500 font-bold uppercase">รายรับรวม</p>
-                       <p className="text-lg font-bold text-emerald-600">{formatCurrency(historySummary.inc)}</p>
-                    </div>
-                    <div className="bg-rose-50 px-4 py-2 rounded-xl border border-rose-100 flex-1 md:flex-none text-center">
-                       <p className="text-[10px] text-rose-500 font-bold uppercase">รายจ่ายรวม</p>
-                       <p className="text-lg font-bold text-rose-600">{formatCurrency(historySummary.exp)}</p>
-                    </div>
-                    <div className="bg-indigo-50 px-4 py-2 rounded-xl border border-indigo-100 flex-1 md:flex-none text-center">
-                       <p className="text-[10px] text-indigo-500 font-bold uppercase">คงเหลือ</p>
-                       <p className="text-lg font-bold text-indigo-600">{formatCurrency(historySummary.bal)}</p>
-                    </div>
-                 </div>
-              </div>
-           </div>
-
-           {/* HISTORY TABLE */}
-           <div className="flex-1 overflow-auto p-4 custom-scrollbar">
-              <div className="flex justify-end mb-2">
-                 <button onClick={exportHistoryCSV} className="text-xs flex items-center gap-1 text-slate-500 hover:text-indigo-600"><Download size={14}/> Export CSV</button>
-              </div>
-              <table className="w-full text-sm text-left border-collapse">
-                 <thead className="bg-slate-50 text-slate-500 font-bold sticky top-0 z-10">
-                    <tr>
-                       <th className="p-4 rounded-l-lg">Date</th>
-                       <th className="p-4">Category</th>
-                       <th className="p-4">Description</th>
-                       <th className="p-4 text-right">Amount</th>
-                       <th className="p-4 text-center rounded-r-lg">Action</th>
-                    </tr>
-                 </thead>
-                 <tbody className="divide-y divide-slate-50">
-                    {historyData.map(t => (
-                       <tr key={t.id} className="hover:bg-slate-50">
-                          <td className="p-4 text-slate-500">{formatDate(t.date)}</td>
-                          <td className="p-4">
-                             <span className={`px-2 py-1 rounded-md text-xs font-bold ${t.type==='income'?'bg-emerald-50 text-emerald-600':'bg-rose-50 text-rose-600'}`}>{t.category}</span>
-                          </td>
-                          <td className="p-4 text-slate-700">{t.description} <span className="text-slate-400 text-xs ml-1">({t.channel || '-'})</span></td>
-                          <td className={`p-4 text-right font-bold ${t.type==='income'?'text-emerald-600':'text-rose-600'}`}>{t.type==='income'?'+':'-'}{formatCurrency(t.total)}</td>
-                          <td className="p-4 text-center"><button onClick={()=>confirmDelete(t.id)} className="text-slate-300 hover:text-rose-500 p-2 rounded hover:bg-rose-50 transition-all"><Trash2 size={16}/></button></td>
-                       </tr>
-                    ))}
-                    {historyData.length === 0 && <tr><td colSpan="5" className="p-10 text-center text-slate-300">ไม่พบรายการในช่วงเวลานี้</td></tr>}
-                 </tbody>
-              </table>
-           </div>
-        </div>
+         /* HISTORY TAB (FULL TABLE VIEW) */
+         <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden animate-fadeIn">
+            {/* Same History Table logic but with improved styling */}
+            <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
+                <h3 className="font-bold text-slate-700 flex items-center gap-2 text-lg"><Clock className="text-indigo-500"/> Transaction History</h3>
+                <div className="flex items-center gap-2">
+                    <select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histPeriod} onChange={e=>setHistPeriod(e.target.value)}>
+                        <option value="month">รายเดือน</option><option value="year">รายปี</option><option value="all">ทั้งหมด</option>
+                    </select>
+                    {histPeriod !== 'all' && <input type={histPeriod==='month'?'month':'number'} className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histDate} onChange={e=>setHistDate(e.target.value)}/>}
+                    <button onClick={exportHistoryCSV} className="bg-indigo-50 text-indigo-600 p-2 rounded-xl hover:bg-indigo-100"><Download size={20}/></button>
+                </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4 p-6 bg-slate-50/50">
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-emerald-100 text-center"><p className="text-xs text-emerald-500 font-bold uppercase mb-1">รายรับ</p><p className="text-lg font-bold text-emerald-600">{formatCurrency(historySummary.inc)}</p></div>
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-rose-100 text-center"><p className="text-xs text-rose-500 font-bold uppercase mb-1">รายจ่าย</p><p className="text-lg font-bold text-rose-600">{formatCurrency(historySummary.exp)}</p></div>
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-indigo-100 text-center"><p className="text-xs text-indigo-500 font-bold uppercase mb-1">คงเหลือ</p><p className="text-lg font-bold text-indigo-600">{formatCurrency(historySummary.bal)}</p></div>
+            </div>
+            <div className="flex-1 overflow-auto custom-scrollbar">
+                <table className="w-full text-left text-sm">
+                    <thead className="bg-white text-slate-400 font-bold sticky top-0 z-10 border-b border-slate-100">
+                        <tr><th className="p-4">Date</th><th className="p-4">Category</th><th className="p-4">Description</th><th className="p-4 text-right">Amount</th><th className="p-4 text-center">Action</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                        {historyData.map(t => (
+                            <tr key={t.id} className="hover:bg-slate-50/80 transition-colors">
+                                <td className="p-4 text-slate-500">{formatDate(t.date)}</td>
+                                <td className="p-4"><span className={`px-2 py-1 rounded-lg text-xs font-bold ${t.type==='income'?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}`}>{t.category}</span></td>
+                                <td className="p-4 font-medium text-slate-700">{t.description}</td>
+                                <td className={`p-4 text-right font-bold ${t.type==='income'?'text-emerald-600':'text-slate-800'}`}>{t.type==='income'?'+':'-'}{formatCurrency(t.total)}</td>
+                                <td className="p-4 text-center"><button onClick={()=>confirmDelete(t.id)} className="text-slate-300 hover:text-rose-500 transition-colors"><Trash2 size={16}/></button></td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+         </div>
       )}
     </div>
   );
 };
 
-// ... (Rest of the components: StockManager, TaxReport, App remain unchanged) ...
 const StockManager = ({ user }) => {
    const [products, setProducts] = useState([]);
    const [newItem, setNewItem] = useState({ name: '', sku: '', qty: 0, unit: 'ชิ้น' });
@@ -852,7 +564,7 @@ const StockManager = ({ user }) => {
    };
 
    return (
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full flex flex-col">
+      <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 h-full flex flex-col">
          <div className="flex justify-between items-center mb-6">
             <div>
                <h3 className="font-bold text-slate-700 text-xl flex items-center gap-2"><Package className="text-orange-500"/> Stock Report (รายงานสินค้าและวัตถุดิบ)</h3>
@@ -900,7 +612,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
   const [deleteId, setDeleteId] = useState(null); 
   const [isDeleting, setIsDeleting] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
-  const [deleteCustomerId, setDeleteCustomerId] = useState(null); // New state for customer delete
+  const [deleteCustomerId, setDeleteCustomerId] = useState(null); 
 
   const initialInvData = {
     docType: 'ใบกำกับภาษี / ใบเสร็จรับเงิน',
@@ -921,7 +633,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
     if (!window.html2pdf && !document.getElementById('html2pdf-script')) {
        const script = document.createElement('script');
        script.id = 'html2pdf-script';
-       script.src = "[https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js](https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js)";
+       script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
        document.body.appendChild(script);
     }
   }, []);
@@ -1070,7 +782,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
   };
 
   return (
-    <div className="w-full flex flex-col gap-8 relative">
+    <div className="w-full flex flex-col gap-8 relative h-full">
       {/* CUSTOMER SELECTION MODAL */}
       {showCustomerModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -1168,7 +880,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
                         <td className="p-4 text-right font-bold">{formatCurrency(inv.total)}</td>
                         <td className="p-4 text-center">
                             <div className="flex justify-center gap-2">
-                                <button onClick={() => { setInvData({...inv, date: formatDateISO(inv.date)}); setMode('create'); }} className="text-indigo-600 hover:bg-indigo-100 px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-100 bg-white transition-all shadow-sm">Edit/Print</button>
+                                <button onClick={() => { setInvData({...inv, date: formatDateISO(inv.date)}); setMode('create'); }} className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-100 transition-all">Edit/Print</button>
                                 <button type="button" onClick={() => confirmDelete(inv.id)} className="text-white bg-rose-500 hover:bg-rose-600 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-all flex items-center gap-1" title="ลบเอกสาร"><Trash2 size={14}/> ลบ</button>
                             </div>
                         </td>
@@ -1303,7 +1015,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
   );
 };
 
-// ... (TaxReport Updated to include Export) ...
+// ... (Rest of TaxReport, App - UI also updated to match) ...
 const TaxReport = ({ transactions }) => {
   const [activeSubTab, setActiveSubTab] = useState('assessment');
   const [year, setYear] = useState(new Date().getFullYear());
