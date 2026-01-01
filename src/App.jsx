@@ -538,7 +538,7 @@ const RecordManager = ({ user, transactions }) => {
   };
 
   return (
-    <div className="flex flex-col h-full lg:h-[calc(100vh-140px)] relative">
+    <div className="flex flex-col h-full relative">
       {/* VENDOR SELECTION MODAL */}
       {showVendorModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
