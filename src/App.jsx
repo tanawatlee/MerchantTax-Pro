@@ -260,24 +260,38 @@ const Dashboard = ({ transactions }) => {
   };
 
   return (
-    <div className="space-y-6 w-full pb-10 animate-fadeIn">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+    <div className="space-y-6 w-full max-w-[2400px] mx-auto pb-10 animate-fadeIn p-4 md:p-6">
+      {/* 2xl:grid-cols-4 for extra large screens */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
         <StatCard title="Total Revenue" subtitle="ยอดขายเดือนนี้" value={analytics.income} trend={analytics.incomeGrowth} color="emerald" icon={<TrendingUp />} />
         <StatCard title="Total Expenses" subtitle="รายจ่ายเดือนนี้" value={analytics.expense} color="rose" icon={<TrendingDown />} />
         <StatCard title="Net Profit" subtitle="กำไรสุทธิ" value={analytics.profit} color="indigo" icon={<Wallet />} subText={`Margin: ${analytics.income > 0 ? ((analytics.profit/analytics.income)*100).toFixed(1) : 0}%`} />
+        {/* Extra Card for 2xl screens, maybe Average Daily Sales or something else in future */}
+        <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden sm:col-span-2 lg:col-span-1">
+            <div className="relative z-10 h-full flex flex-col justify-between">
+                <div>
+                   <p className="text-indigo-200 text-xs font-bold uppercase tracking-wider mb-1">AI INSIGHT</p>
+                   <p className="text-sm leading-snug line-clamp-3">{aiAdvice || "กดปุ่ม AI เพื่อวิเคราะห์ข้อมูล"}</p>
+                </div>
+                <button onClick={handleAnalyze} disabled={isAnalyzing} className="mt-4 w-full bg-white/20 hover:bg-white/30 text-white text-xs py-2 rounded-lg backdrop-blur-sm transition-all flex items-center justify-center gap-2">
+                   {isAnalyzing ? <Loader size={12} className="animate-spin"/> : <BrainCircuit size={14}/>} วิเคราะห์
+                </button>
+            </div>
+            <Sparkles className="absolute -bottom-4 -right-4 text-white/10 w-24 h-24" />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
-        <div className="lg:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
+        <div className="xl:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full">
           <div className="flex justify-between items-center mb-8"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><BarChart3 className="text-indigo-500"/> Financial Trend</h3></div>
-          <div className="h-56 md:h-64 flex items-end justify-between gap-3 px-2">
+          <div className="h-64 flex items-end justify-between gap-3 px-2">
             {analytics.trend.map((t, i) => {
               const maxVal = Math.max(...analytics.trend.map(d => Math.max(d.income, d.expense))) || 1;
               return (
                 <div key={i} className="flex flex-col items-center gap-2 flex-1 group relative">
                    <div className="flex gap-1 items-end h-full w-full justify-center">
-                      <div className="w-2.5 md:w-5 bg-emerald-400 rounded-t-lg relative hover:bg-emerald-500 transition-all duration-300" style={{ height: `${Math.max(t.income / maxVal * 100, 2)}%` }}></div>
-                      <div className="w-2.5 md:w-5 bg-rose-400 rounded-t-lg relative hover:bg-rose-500 transition-all duration-300" style={{ height: `${Math.max(t.expense / maxVal * 100, 2)}%` }}></div>
+                      <div className="w-full md:w-8 bg-emerald-400 rounded-t-lg relative hover:bg-emerald-500 transition-all duration-300" style={{ height: `${Math.max(t.income / maxVal * 100, 2)}%` }}></div>
+                      <div className="w-full md:w-8 bg-rose-400 rounded-t-lg relative hover:bg-rose-500 transition-all duration-300" style={{ height: `${Math.max(t.expense / maxVal * 100, 2)}%` }}></div>
                    </div>
                    <span className="text-[10px] md:text-xs font-medium text-slate-400">{t.label}</span>
                 </div>
@@ -285,7 +299,7 @@ const Dashboard = ({ transactions }) => {
             })}
           </div>
         </div>
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col">
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col h-full">
           <h3 className="font-bold text-slate-700 mb-6 flex items-center gap-2 text-lg"><Target className="text-purple-500"/> Top Channels</h3>
           <div className="flex-1 space-y-5 overflow-y-auto pr-2 custom-scrollbar">
              {analytics.channels.map((ch, i) => (
@@ -298,8 +312,8 @@ const Dashboard = ({ transactions }) => {
         </div>
       </div>
       
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
-         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
+         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full">
             <h3 className="font-bold text-slate-700 mb-6 flex items-center gap-2 text-lg"><PieChart className="text-orange-500"/> Top Expenses</h3>
             <div className="space-y-4">
                {analytics.costs.map((c, i) => (
@@ -308,12 +322,6 @@ const Dashboard = ({ transactions }) => {
                      <span className="font-bold text-slate-700">{formatCurrency(c.value)}</span>
                   </div>
                ))}
-            </div>
-         </div>
-         <div className="lg:col-span-2 bg-gradient-to-br from-indigo-900 via-slate-800 to-slate-900 rounded-3xl p-8 text-white relative overflow-hidden shadow-xl shadow-indigo-900/20 group">
-            <div className="relative z-10 h-full flex flex-col justify-between">
-               <div><div className="flex items-center gap-3 mb-4"><div className="p-2 bg-white/10 rounded-lg backdrop-blur-sm"><Sparkles className="text-yellow-300" /></div><h3 className="text-xl font-bold tracking-tight">AI Financial Analyst</h3></div>{aiAdvice ? <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl border border-white/10 text-slate-200 leading-relaxed animate-fadeIn shadow-inner">{aiAdvice}</div> : <p className="text-indigo-200 text-sm leading-relaxed max-w-md">ให้ AI ช่วยวิเคราะห์ข้อมูลเชิงลึก หาความผิดปกติ และแนะนำกลยุทธ์จากข้อมูลจริงใน Dashboard ของคุณเพื่อเพิ่มผลกำไรสูงสุด</p>}</div>
-               <button onClick={handleAnalyze} disabled={isAnalyzing} className="mt-8 w-fit bg-white text-indigo-900 px-6 py-3 rounded-xl font-bold shadow-lg hover:shadow-white/20 transition-all flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed">{isAnalyzing ? <Loader className="animate-spin" size={18}/> : <BrainCircuit size={18}/>} {isAnalyzing ? "Analyzing..." : "Generate AI Insight"}</button>
             </div>
          </div>
       </div>
@@ -538,7 +546,7 @@ const RecordManager = ({ user, transactions }) => {
   };
 
   return (
-    <div className="flex flex-col h-full relative">
+    <div className="flex flex-col h-full lg:h-[calc(100vh-140px)] relative">
       {/* VENDOR SELECTION MODAL */}
       {showVendorModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -613,8 +621,8 @@ const RecordManager = ({ user, transactions }) => {
       </div>
 
       {subTab === 'new' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 w-full h-full overflow-hidden">
-          <div className="lg:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-fit lg:h-full">
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 w-full h-full overflow-hidden">
+          <div className="xl:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-full">
             {isScanning && <div className="absolute inset-0 bg-white/90 z-20 flex flex-col items-center justify-center rounded-3xl"><Loader className="animate-spin mb-2" size={32}/><p className="animate-pulse font-bold text-indigo-600">AI Reading Receipt...</p></div>}
             <h3 className="font-bold mb-4 flex gap-2 text-slate-800 text-lg items-center"><Edit className="text-indigo-500" size={24}/> New Transaction</h3>
             <div className="mb-6 bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-2xl border border-indigo-100 relative overflow-hidden">
@@ -643,7 +651,7 @@ const RecordManager = ({ user, transactions }) => {
             </form>
           </div>
           
-          <div className="lg:col-span-7 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[500px] lg:h-full overflow-hidden">
+          <div className="xl:col-span-7 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[500px] lg:h-full overflow-hidden">
              {/* Header with Search */}
              <div className="p-4 border-b border-slate-100 bg-slate-50/50 space-y-3">
                 <div className="flex justify-between items-center">
@@ -1361,19 +1369,152 @@ const TaxReport = ({ transactions }) => {
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-2 bg-slate-100 p-1 rounded-lg w-fit">{['assessment', 'vat', 'consult'].map(tab => (<button key={tab} onClick={()=>setActiveSubTab(tab)} className={`px-4 py-2 rounded-md text-sm font-bold capitalize transition-all ${activeSubTab===tab ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>{tab}</button>))}</div>
+      <div className="flex gap-2 bg-slate-100 p-1 rounded-lg w-fit">
+        {['assessment', 'vat', 'wht', 'consult'].map(tab => (
+           <button key={tab} onClick={()=>setActiveSubTab(tab)} className={`px-4 py-2 rounded-md text-sm font-bold capitalize transition-all ${activeSubTab===tab ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>
+             {tab === 'wht' ? '50 ทวิ' : tab}
+           </button>
+        ))}
+      </div>
+
       {activeSubTab === 'consult' && (
          <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-3xl p-8 text-white shadow-xl"><h3 className="text-2xl font-bold mb-2 flex items-center gap-2"><MessageSquare/> AI Tax Consultant</h3><p className="mb-6 opacity-90">สอบถามปัญหาภาษีกับ AI ผู้เชี่ยวชาญ</p><div className="flex gap-2 mb-6"><input className="flex-1 rounded-xl px-4 py-3 text-slate-800 border-0 focus:ring-2 focus:ring-orange-300" placeholder="พิมพ์คำถามที่นี่..." value={taxQuestion} onChange={e=>setTaxQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter' && handleAskTax()} /><button onClick={handleAskTax} disabled={isTaxLoading} className="bg-white text-orange-600 px-6 rounded-xl font-bold hover:bg-orange-50 disabled:opacity-50">{isTaxLoading ? <Loader className="animate-spin"/> : <Send/>}</button></div>{taxAnswer && <div className="bg-white/10 backdrop-blur rounded-xl p-6 border border-white/20 animate-fadeIn leading-relaxed">{taxAnswer}</div>}</div>
       )}
+
       {activeSubTab === 'assessment' && (
          <div className="space-y-6 animate-fadeIn">
-            <div className="bg-slate-800 text-white p-6 rounded-2xl shadow-lg flex items-center justify-between"><div><h3 className="text-yellow-400 font-bold text-lg mb-1">AI Recommendation</h3><p>{assessmentData.recommendation}</p></div><BrainCircuit size={32} className="text-yellow-400 opacity-50"/></div>
+            {/* Header / Summary */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <h3 className="font-bold text-slate-700 text-xl mb-4 flex items-center gap-2">
+                    <Calculator className="text-indigo-500" /> ประเมินภาษีเงินได้บุคคลธรรมดา (P.N.D. 90/91)
+                </h3>
+                <div className="flex flex-col sm:flex-row gap-4 items-center bg-slate-50 p-4 rounded-2xl">
+                     <div className="flex-1 text-center sm:text-left">
+                        <p className="text-slate-500 text-sm">รายได้รวมทั้งปี {year}</p>
+                        <p className="text-3xl font-bold text-slate-800">{formatCurrency(assessmentData.totalIncome)}</p>
+                     </div>
+                     <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-slate-500">ปีภาษี:</span>
+                        <select value={year} onChange={e=>setYear(Number(e.target.value))} className="bg-white border border-slate-200 rounded-lg px-3 py-1 text-slate-700 font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value={2023}>2023</option>
+                            <option value={2024}>2024</option>
+                            <option value={2025}>2025</option>
+                        </select>
+                     </div>
+                </div>
+            </div>
+
+            {/* AI Recommendation Card */}
+            <div className="bg-gradient-to-r from-indigo-600 to-violet-600 p-1 rounded-3xl shadow-lg">
+                <div className="bg-white/10 backdrop-blur-sm p-6 rounded-[20px] text-white flex flex-col md:flex-row items-center gap-6">
+                    <div className="p-4 bg-white/20 rounded-full">
+                        <Sparkles size={32} className="text-yellow-300 animate-pulse"/>
+                    </div>
+                    <div className="flex-1 text-center md:text-left">
+                        <h4 className="text-lg font-bold text-yellow-300 mb-1">AI Tax Insight</h4>
+                        <p className="text-indigo-50 leading-relaxed">{assessmentData.recommendation}</p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Comparison Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-               <div className={`p-6 rounded-2xl border-2 bg-white ${assessmentData.recommendedMethod === 'standard' ? 'border-emerald-500 ring-4 ring-emerald-50' : 'border-transparent'}`}><h4 className="font-bold text-slate-700 mb-4 flex justify-between">แบบเหมา 60% {assessmentData.recommendedMethod === 'standard' && <CheckCircle className="text-emerald-500"/>}</h4><div className="space-y-3 text-sm"><div className="flex justify-between"><span>รายได้</span><span className="font-bold">{formatCurrency(assessmentData.totalIncome)}</span></div><div className="flex justify-between text-rose-500"><span>หักค่าใช้จ่าย</span><span>-{formatCurrency(assessmentData.expenseStandard)}</span></div><div className="flex justify-between border-t pt-2 mt-2"><span>ภาษีที่ต้องจ่าย</span><span className="text-2xl font-bold text-slate-800">{formatCurrency(assessmentData.taxStandard)}</span></div></div></div>
-               <div className={`p-6 rounded-2xl border-2 bg-white ${assessmentData.recommendedMethod === 'actual' ? 'border-emerald-500 ring-4 ring-emerald-50' : 'border-transparent'}`}><h4 className="font-bold text-slate-700 mb-4 flex justify-between">แบบตามจริง {assessmentData.recommendedMethod === 'actual' && <CheckCircle className="text-emerald-500"/>}</h4><div className="space-y-3 text-sm"><div className="flex justify-between"><span>รายได้</span><span className="font-bold">{formatCurrency(assessmentData.totalIncome)}</span></div><div className="flex justify-between text-rose-500"><span>หักค่าใช้จ่ายจริง</span><span>-{formatCurrency(assessmentData.actualExpense)}</span></div><div className="flex justify-between border-t pt-2 mt-2"><span>ภาษีที่ต้องจ่าย</span><span className="text-2xl font-bold text-slate-800">{formatCurrency(assessmentData.taxActual)}</span></div></div></div>
+                {/* Standard Deduction Card */}
+                <div className={`relative p-6 rounded-3xl border-2 transition-all duration-300 ${assessmentData.recommendedMethod === 'standard' ? 'border-emerald-500 bg-emerald-50/30 ring-4 ring-emerald-50/50' : 'border-slate-100 bg-white hover:border-slate-200'}`}>
+                    {assessmentData.recommendedMethod === 'standard' && (
+                        <div className="absolute top-4 right-4 bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1">
+                            <CheckCircle size={14}/> แนะนำ
+                        </div>
+                    )}
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="p-3 bg-blue-100 text-blue-600 rounded-xl"><FileText size={24}/></div>
+                        <div>
+                            <h4 className="font-bold text-slate-800 text-lg">หักเหมา 60%</h4>
+                            <p className="text-xs text-slate-500">ไม่ต้องใช้เอกสาร</p>
+                        </div>
+                    </div>
+                    <div className="space-y-3">
+                        <div className="flex justify-between text-sm text-slate-600"><span>รายได้</span><span className="font-medium">{formatCurrency(assessmentData.totalIncome)}</span></div>
+                        <div className="flex justify-between text-sm text-rose-500"><span>หักค่าใช้จ่าย (60%)</span><span>-{formatCurrency(assessmentData.expenseStandard)}</span></div>
+                        <div className="flex justify-between text-sm text-indigo-600 font-bold pt-2 border-t border-slate-200"><span>เงินได้สุทธิ</span><span>{formatCurrency(assessmentData.netIncomeStandard)}</span></div>
+                    </div>
+                    <div className="mt-6 pt-4 border-t border-slate-200 text-center">
+                        <p className="text-xs text-slate-400 mb-1">ภาษีที่ต้องจ่ายโดยประมาณ</p>
+                        <p className="text-3xl font-bold text-slate-800">{formatCurrency(assessmentData.taxStandard)}</p>
+                    </div>
+                </div>
+
+                {/* Actual Expense Card */}
+                <div className={`relative p-6 rounded-3xl border-2 transition-all duration-300 ${assessmentData.recommendedMethod === 'actual' ? 'border-emerald-500 bg-emerald-50/30 ring-4 ring-emerald-50/50' : 'border-slate-100 bg-white hover:border-slate-200'}`}>
+                     {assessmentData.recommendedMethod === 'actual' && (
+                        <div className="absolute top-4 right-4 bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1">
+                            <CheckCircle size={14}/> แนะนำ
+                        </div>
+                    )}
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="p-3 bg-orange-100 text-orange-600 rounded-xl"><Wallet size={24}/></div>
+                        <div>
+                            <h4 className="font-bold text-slate-800 text-lg">หักตามจริง</h4>
+                            <p className="text-xs text-slate-500">ต้องมีใบกำกับภาษีครบถ้วน</p>
+                        </div>
+                    </div>
+                    <div className="space-y-3">
+                        <div className="flex justify-between text-sm text-slate-600"><span>รายได้</span><span className="font-medium">{formatCurrency(assessmentData.totalIncome)}</span></div>
+                        <div className="flex justify-between text-sm text-rose-500"><span>หักค่าใช้จ่ายจริง</span><span>-{formatCurrency(assessmentData.actualExpense)}</span></div>
+                        <div className="flex justify-between text-sm text-indigo-600 font-bold pt-2 border-t border-slate-200"><span>เงินได้สุทธิ</span><span>{formatCurrency(assessmentData.netIncomeActual)}</span></div>
+                    </div>
+                    <div className="mt-6 pt-4 border-t border-slate-200 text-center">
+                        <p className="text-xs text-slate-400 mb-1">ภาษีที่ต้องจ่ายโดยประมาณ</p>
+                        <p className="text-3xl font-bold text-slate-800">{formatCurrency(assessmentData.taxActual)}</p>
+                    </div>
+                </div>
             </div>
          </div>
       )}
+
+      {activeSubTab === 'wht' && (
+        <div className="space-y-6 animate-fadeIn">
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <h3 className="font-bold text-slate-700 text-xl mb-4 flex items-center gap-2">
+                    <FileText className="text-purple-500"/> รายการหัก ณ ที่จ่าย (50 ทวิ)
+                </h3>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-purple-50 text-purple-700 font-bold uppercase text-xs">
+                            <tr>
+                                <th className="p-4 rounded-l-xl">วันที่</th>
+                                <th className="p-4">ผู้ถูกหักภาษี</th>
+                                <th className="p-4 text-right">ยอดเงินได้</th>
+                                <th className="p-4 text-right">ภาษีที่หัก</th>
+                                <th className="p-4 text-center rounded-r-xl">เอกสาร</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-purple-50">
+                            {transactions.filter(t => t.type === 'expense' && t.wht > 0).map(t => (
+                                <tr key={t.id} className="hover:bg-purple-50/50 transition-colors">
+                                    <td className="p-4">{formatDate(t.date)}</td>
+                                    <td className="p-4 font-medium text-slate-700">
+                                        {t.vendorName} <span className="text-xs text-slate-400 ml-1">({t.vendorTaxId || '-'})</span>
+                                    </td>
+                                    <td className="p-4 text-right">{formatCurrency(t.net)}</td>
+                                    <td className="p-4 text-right font-bold text-purple-600">{formatCurrency(t.wht)}</td>
+                                    <td className="p-4 text-center">
+                                        <button className="text-xs bg-white border border-purple-200 text-purple-600 px-3 py-1 rounded-lg hover:bg-purple-50 font-bold shadow-sm transition-all" onClick={() => alert("ระบบสร้าง PDF 50 ทวิ กำลังพัฒนา")}>Print 50 ทวิ</button>
+                                    </td>
+                                </tr>
+                            ))}
+                            {transactions.filter(t => t.type === 'expense' && t.wht > 0).length === 0 && (
+                                <tr>
+                                    <td colSpan="5" className="p-8 text-center text-slate-400">ไม่พบรายการหัก ณ ที่จ่าย</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+      )}
+
       {activeSubTab === 'vat' && (
          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 animate-fadeIn">
             <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-slate-700">VAT Summary (ภ.พ.30)</h3><div className="flex gap-2"><select value={month} onChange={e=>setMonth(Number(e.target.value))} className="bg-slate-50 border-0 rounded p-2 text-sm font-bold">{['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'].map((m,i)=><option key={i} value={i}>{m}</option>)}</select><select value={year} onChange={e=>setYear(Number(e.target.value))} className="bg-slate-50 border-0 rounded p-2 text-sm font-bold"><option value={2024}>2024</option><option value={2025}>2025</option></select></div></div>
