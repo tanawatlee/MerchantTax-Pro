@@ -119,7 +119,7 @@ const calculateProgressiveTax = (netIncome) => {
 // --- Service Layer: API Calls ---
 const SmartTaxAI = {
   async generate(prompt, imageBase64 = null, expectJSON = false) {
-    const apiKey = ""; // API Key
+    const apiKey = "AIzaSyDHldGBh5-XUBIX9Ru9tffi6nNg7ZY7H1A"; // API Key
     if (!apiKey) console.warn("SmartTaxAI: No API Key provided.");
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
     const systemContext = "You are a specialized Thai Tax & Accounting Assistant. You understand Thai Revenue Code (สรรพากร), VAT, Withholding Tax, and e-commerce accounting. Respond in Thai unless asked otherwise.";
