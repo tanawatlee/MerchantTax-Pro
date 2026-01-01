@@ -267,8 +267,9 @@ const Dashboard = ({ transactions }) => {
         <StatCard title="Net Profit" subtitle="กำไรสุทธิ" value={analytics.profit} color="indigo" icon={<Wallet />} subText={`Margin: ${analytics.income > 0 ? ((analytics.profit/analytics.income)*100).toFixed(1) : 0}%`} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
-        <div className="lg:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+      {/* Changed lg:grid-cols-3 to xl:grid-cols-3 to stack on iPad */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
+        <div className="xl:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
           <div className="flex justify-between items-center mb-8"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><BarChart3 className="text-indigo-500"/> Financial Trend</h3></div>
           <div className="h-56 md:h-64 flex items-end justify-between gap-3 px-2">
             {analytics.trend.map((t, i) => {
@@ -298,7 +299,8 @@ const Dashboard = ({ transactions }) => {
         </div>
       </div>
       
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
+      {/* Changed lg:grid-cols-3 to xl:grid-cols-3 */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
             <h3 className="font-bold text-slate-700 mb-6 flex items-center gap-2 text-lg"><PieChart className="text-orange-500"/> Top Expenses</h3>
             <div className="space-y-4">
@@ -310,7 +312,7 @@ const Dashboard = ({ transactions }) => {
                ))}
             </div>
          </div>
-         <div className="lg:col-span-2 bg-gradient-to-br from-indigo-900 via-slate-800 to-slate-900 rounded-3xl p-8 text-white relative overflow-hidden shadow-xl shadow-indigo-900/20 group">
+         <div className="xl:col-span-2 bg-gradient-to-br from-indigo-900 via-slate-800 to-slate-900 rounded-3xl p-8 text-white relative overflow-hidden shadow-xl shadow-indigo-900/20 group">
             <div className="relative z-10 h-full flex flex-col justify-between">
                <div><div className="flex items-center gap-3 mb-4"><div className="p-2 bg-white/10 rounded-lg backdrop-blur-sm"><Sparkles className="text-yellow-300" /></div><h3 className="text-xl font-bold tracking-tight">AI Financial Analyst</h3></div>{aiAdvice ? <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl border border-white/10 text-slate-200 leading-relaxed animate-fadeIn shadow-inner">{aiAdvice}</div> : <p className="text-indigo-200 text-sm leading-relaxed max-w-md">ให้ AI ช่วยวิเคราะห์ข้อมูลเชิงลึก หาความผิดปกติ และแนะนำกลยุทธ์จากข้อมูลจริงใน Dashboard ของคุณเพื่อเพิ่มผลกำไรสูงสุด</p>}</div>
                <button onClick={handleAnalyze} disabled={isAnalyzing} className="mt-8 w-fit bg-white text-indigo-900 px-6 py-3 rounded-xl font-bold shadow-lg hover:shadow-white/20 transition-all flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed">{isAnalyzing ? <Loader className="animate-spin" size={18}/> : <BrainCircuit size={18}/>} {isAnalyzing ? "Analyzing..." : "Generate AI Insight"}</button>
@@ -538,7 +540,7 @@ const RecordManager = ({ user, transactions }) => {
   };
 
   return (
-    <div className="flex flex-col h-full relative">
+    <div className="flex flex-col h-full lg:h-[calc(100vh-140px)] relative">
       {/* VENDOR SELECTION MODAL */}
       {showVendorModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -613,8 +615,9 @@ const RecordManager = ({ user, transactions }) => {
       </div>
 
       {subTab === 'new' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 w-full h-full overflow-hidden">
-          <div className="lg:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-fit lg:h-full">
+        // Changed lg:grid-cols-12 to xl:grid-cols-12 for better responsiveness on iPad
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 w-full h-full overflow-hidden">
+          <div className="xl:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 lg:overflow-y-auto flex flex-col h-fit lg:h-full">
             {isScanning && <div className="absolute inset-0 bg-white/90 z-20 flex flex-col items-center justify-center rounded-3xl"><Loader className="animate-spin mb-2" size={32}/><p className="animate-pulse font-bold text-indigo-600">AI Reading Receipt...</p></div>}
             <h3 className="font-bold mb-4 flex gap-2 text-slate-800 text-lg items-center"><Edit className="text-indigo-500" size={24}/> New Transaction</h3>
             <div className="mb-6 bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-2xl border border-indigo-100 relative overflow-hidden">
@@ -643,7 +646,7 @@ const RecordManager = ({ user, transactions }) => {
             </form>
           </div>
           
-          <div className="lg:col-span-7 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[500px] lg:h-full overflow-hidden">
+          <div className="xl:col-span-7 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[500px] lg:h-full overflow-hidden">
              {/* Header with Search */}
              <div className="p-4 border-b border-slate-100 bg-slate-50/50 space-y-3">
                 <div className="flex justify-between items-center">
