@@ -394,14 +394,37 @@ const RecordManager = ({ user, transactions }) => {
   const [deleteId, setDeleteId] = useState(null); 
   const [isDeleting, setIsDeleting] = useState(false);
   const [recentSearch, setRecentSearch] = useState('');
-  const [historySearch, setHistorySearch] = useState(''); // NEW STATE FOR HISTORY SEARCH
+  const [historySearch, setHistorySearch] = useState(''); 
   
   const [vendors, setVendors] = useState([]);
   const [showVendorModal, setShowVendorModal] = useState(false);
   const [deleteVendorId, setDeleteVendorId] = useState(null); 
   const [editingId, setEditingId] = useState(null);
 
-  const initialForm = { type: 'income', date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0, channel: CONSTANTS.CHANNELS[0], orderId: '', category: CONSTANTS.CATEGORIES.INCOME[0], taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000', grossAmount: '', platformFee: '', shippingFee: '', shippingPayer: 'customer' };
+  const initialForm = { 
+    type: 'income', 
+    date: new Date().toISOString().split('T')[0], 
+    description: '', 
+    amount: '', 
+    vatType: 'included', 
+    whtRate: 0, 
+    channel: CONSTANTS.CHANNELS[0], 
+    orderId: '', 
+    category: CONSTANTS.CATEGORIES.INCOME[0], 
+    taxInvoiceNo: '', 
+    vendorName: '', 
+    vendorTaxId: '', 
+    vendorBranch: '00000', 
+    
+    // New E-commerce specific fields
+    itemAmount: '',      // ค่าสินค้า (Item Price)
+    customerShippingFee: '', // ค่าส่งที่ลูกค้าจ่าย (Cust. Ship)
+    platformFee: '',     // ค่าธรรมเนียม (Platform Fee)
+    shippingFee: '',     // ค่าขนส่งที่ถูกหัก (System Deduction)
+    
+    shippingPayer: 'customer', // 'customer' or 'shop'
+    grossAmount: '' // Keeping for compatibility, but recalculated
+  };
   
   const [formData, setFormData] = useState(initialForm);
   const [filterType, setFilterType] = useState('all');
@@ -423,16 +446,55 @@ const RecordManager = ({ user, transactions }) => {
   }, [transactions]);
 
   useEffect(() => { if (user) { const q = query(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'vendors')); const unsub = onSnapshot(q, (snap) => { setVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))); }); return () => unsub(); } }, [user]);
+  
   useEffect(() => { setIsEcommerceMode(formData.type === 'income' && ['Shopee', 'Lazada', 'TikTok'].includes(formData.channel)); }, [formData.channel, formData.type]);
+  
+  // Real-time calculation for E-Commerce Mode
   useEffect(() => { 
-      if (isEcommerceMode && formData.grossAmount) { 
-          // Net = Gross - Platform Fee - Shipping Fee
-          const net = parseFloat(formData.grossAmount || 0) - parseFloat(formData.platformFee || 0) - parseFloat(formData.shippingFee || 0); 
-          setFormData(prev => ({ ...prev, amount: net })); 
-      } 
-  }, [formData.grossAmount, formData.platformFee, formData.shippingFee, isEcommerceMode]);
+      if (isEcommerceMode) { 
+          const itemPrice = parseFloat(formData.itemAmount || 0);
+          const custShip = parseFloat(formData.customerShippingFee || 0);
+          const fee = parseFloat(formData.platformFee || 0);
+          const actualShip = parseFloat(formData.shippingFee || 0);
 
-  const calculated = useMemo(() => { const baseAmount = (isEcommerceMode && formData.grossAmount) ? parseFloat(formData.grossAmount) : (parseFloat(formData.amount) || 0); let net = 0, vat = 0; if (formData.vatType === 'included') { net = baseAmount * 100 / 107; vat = baseAmount - net; } else if (formData.vatType === 'excluded') { net = baseAmount; vat = baseAmount * 0.07; } else { net = baseAmount; vat = 0; } const wht = formData.type === 'expense' ? (net * formData.whtRate / 100) : 0; return { net, vat, total: formData.vatType === 'excluded' ? net + vat : baseAmount, wht, baseAmount }; }, [formData.amount, formData.vatType, formData.whtRate, formData.type, formData.grossAmount, isEcommerceMode]);
+          const gross = itemPrice + custShip;
+          const net = gross - fee - actualShip;
+
+          setFormData(prev => ({ 
+              ...prev, 
+              grossAmount: gross,
+              amount: net 
+          })); 
+      } 
+  }, [formData.itemAmount, formData.customerShippingFee, formData.platformFee, formData.shippingFee, isEcommerceMode]);
+
+  const calculated = useMemo(() => { 
+      // Base Amount for VAT
+      // If E-Commerce: Gross = Item + Cust.Ship
+      const baseAmount = isEcommerceMode ? (parseFloat(formData.grossAmount) || 0) : (parseFloat(formData.amount) || 0);
+      
+      let net = 0, vat = 0; 
+      if (formData.vatType === 'included') { 
+          net = baseAmount * 100 / 107; 
+          vat = baseAmount - net; 
+      } else if (formData.vatType === 'excluded') { 
+          net = baseAmount; 
+          vat = baseAmount * 0.07; 
+      } else { 
+          net = baseAmount; 
+          vat = 0; 
+      } 
+      
+      const wht = formData.type === 'expense' ? (net * formData.whtRate / 100) : 0; 
+      
+      return { 
+          net, 
+          vat, 
+          total: formData.vatType === 'excluded' ? net + vat : baseAmount, 
+          wht, 
+          baseAmount 
+      }; 
+  }, [formData.amount, formData.vatType, formData.whtRate, formData.type, formData.grossAmount, isEcommerceMode]);
   
   const manageRelatedExpense = async (category, amount, baseDescription) => {
     if (amount <= 0 || !formData.orderId) return;
@@ -483,8 +545,7 @@ const RecordManager = ({ user, transactions }) => {
           mainTransactionAmount = parseFloat(formData.grossAmount || 0);
       }
 
-      // --- FIX: Add Time to Date ---
-      // User picks YYYY-MM-DD. We want to add current time so it sorts correctly at the top.
+      // Time Fix
       const dateObj = new Date(formData.date);
       const now = new Date();
       dateObj.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
@@ -492,14 +553,11 @@ const RecordManager = ({ user, transactions }) => {
       // Base Data
       const dataToSave = { 
           ...formData, 
-          // Recalculate based on GROSS for E-Commerce main transaction
           amount: mainTransactionAmount,
           total: mainTransactionAmount,
-          // Calculate Net/Vat for Gross
           net: (formData.vatType === 'included' ? mainTransactionAmount * 100 / 107 : mainTransactionAmount),
           vat: (formData.vatType === 'included' ? mainTransactionAmount - (mainTransactionAmount * 100 / 107) : 0),
-          
-          date: dateObj, // Use date with time
+          date: dateObj, 
           userId: user.uid 
       }; 
       
@@ -522,6 +580,7 @@ const RecordManager = ({ user, transactions }) => {
 
             alert("แก้ไขรายการเรียบร้อย (และอัปเดตค่าใช้จ่ายที่เกี่ยวข้อง)");
             setEditingId(null);
+            setFormData(initialForm); // Reset form after edit
           } else {
             // Create New Transaction
             await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions'), dataToSave); 
@@ -700,18 +759,22 @@ const RecordManager = ({ user, transactions }) => {
                                           </label>
                                       </div>
                                    </div>
-                                   <div className="grid grid-cols-3 gap-3">
-                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ยอดขายเต็ม (Gross)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-emerald-600" placeholder="0.00" value={formData.grossAmount} onChange={e=>setFormData({...formData,grossAmount:e.target.value})}/></div>
-                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าธรรมเนียม</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData,platformFee:e.target.value})}/></div>
-                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าขนส่ง</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-indigo-500" placeholder="0.00" value={formData.shippingFee} onChange={e=>setFormData({...formData,shippingFee:e.target.value})}/></div>
+                                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าสินค้า (Item Price)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.itemAmount} onChange={e=>setFormData({...formData,itemAmount:e.target.value})}/></div>
+                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งที่ลูกค้าจ่าย (Cust. Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.customerShippingFee} onChange={e=>setFormData({...formData,customerShippingFee:e.target.value})}/></div>
+                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าธรรมเนียม (Fee)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData,platformFee:e.target.value})}/></div>
+                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งที่ระบบหักจริง (Actual)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.shippingFee} onChange={e=>setFormData({...formData,shippingFee:e.target.value})}/></div>
                                    </div>
-                                   {/* Info Box */}
-                                   <div className="mt-2 text-[10px] text-slate-400 bg-slate-50 p-2 rounded border border-slate-100 flex gap-2">
-                                       <Info size={14} className="min-w-[14px]"/>
-                                       {formData.shippingPayer === 'customer' ? 
-                                          "กรณีลูกค้าจ่าย: ยอด Gross คือยอดรวม (สินค้า+ส่ง) ระบบจะบันทึกเป็นรายรับ และหักค่าส่งเป็นรายจ่ายให้" :
-                                          "กรณีร้านจ่าย (Free Shipping): ยอด Gross คือค่าสินค้า ระบบจะบันทึกค่าส่งเป็นรายจ่ายเพิ่มเติม"
-                                       }
+                                   {/* Summary Box */}
+                                   <div className="mt-3 grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-lg border border-emerald-100">
+                                       <div className="text-center border-r border-slate-200">
+                                            <p className="text-[10px] text-slate-400 uppercase font-bold">ยอดขาย (Gross)</p>
+                                            <p className="text-lg font-bold text-emerald-600">{formatCurrency(parseFloat(formData.grossAmount) || 0)}</p>
+                                       </div>
+                                       <div className="text-center">
+                                            <p className="text-[10px] text-slate-400 uppercase font-bold">เงินเข้าจริง (Net)</p>
+                                            <p className="text-lg font-bold text-indigo-600">{formatCurrency(parseFloat(formData.amount) || 0)}</p>
+                                       </div>
                                    </div>
                                </div>
                            )}
@@ -893,6 +956,7 @@ const RecordManager = ({ user, transactions }) => {
   );
 };
 
+// ... StockManager (Standard, No Changes) ...
 const StockManager = ({ user }) => {
    const [products, setProducts] = useState([]);
    const [showAddProductModal, setShowAddProductModal] = useState(false);
