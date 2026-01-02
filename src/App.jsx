@@ -10,7 +10,7 @@ import {
 // --- Import Firebase ---
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, onSnapshot, deleteDoc, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, onSnapshot, deleteDoc, doc, serverTimestamp, updateDoc, getDocs, where } from 'firebase/firestore';
 
 // --- Configuration & Constants ---
 const FIREBASE_CONFIG = {
@@ -386,7 +386,7 @@ const Dashboard = ({ transactions }) => {
   );
 };
 
-// ... RecordManager (Update: Add Shipping Fee) ...
+// ... RecordManager (Update: Sync Split Expenses on Edit) ...
 const RecordManager = ({ user, transactions }) => {
   const [subTab, setSubTab] = useState('new'); 
   const [histPeriod, setHistPeriod] = useState('month'); 
@@ -411,7 +411,14 @@ const RecordManager = ({ user, transactions }) => {
 
   // Extract unique descriptions for autocomplete
   const descriptionSuggestions = useMemo(() => {
-    const descriptions = transactions.map(t => t.description).filter(d => d && d.trim().length > 0);
+    const descriptions = transactions
+      .map(t => t.description)
+      .filter(d => 
+        d && 
+        d.trim().length > 0 && 
+        !d.includes('ค่าธรรมเนียม') && // Exclude fees
+        !d.includes('ค่าขนส่ง')       // Exclude shipping logic
+      );
     return [...new Set(descriptions)];
   }, [transactions]);
 
@@ -427,6 +434,45 @@ const RecordManager = ({ user, transactions }) => {
 
   const calculated = useMemo(() => { const baseAmount = (isEcommerceMode && formData.grossAmount) ? parseFloat(formData.grossAmount) : (parseFloat(formData.amount) || 0); let net = 0, vat = 0; if (formData.vatType === 'included') { net = baseAmount * 100 / 107; vat = baseAmount - net; } else if (formData.vatType === 'excluded') { net = baseAmount; vat = baseAmount * 0.07; } else { net = baseAmount; vat = 0; } const wht = formData.type === 'expense' ? (net * formData.whtRate / 100) : 0; return { net, vat, total: formData.vatType === 'excluded' ? net + vat : baseAmount, wht, baseAmount }; }, [formData.amount, formData.vatType, formData.whtRate, formData.type, formData.grossAmount, isEcommerceMode]);
   
+  const manageRelatedExpense = async (category, amount, baseDescription) => {
+    if (amount <= 0 || !formData.orderId) return;
+
+    // Check if expense already exists
+    const q = query(
+      collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions'),
+      where('orderId', '==', formData.orderId),
+      where('category', '==', category),
+      where('type', '==', 'expense')
+    );
+    const snap = await getDocs(q);
+
+    const expenseData = {
+        type: 'expense', 
+        date: new Date(formData.date), 
+        category: category, 
+        description: baseDescription, 
+        amount: parseFloat(amount), 
+        vatType: 'included', 
+        total: parseFloat(amount), 
+        net: parseFloat(amount) * 100 / 107, 
+        vat: parseFloat(amount) - (parseFloat(amount) * 100 / 107), 
+        wht: 0, 
+        orderId: formData.orderId,
+        userId: user.uid 
+    };
+
+    if (!snap.empty) {
+        // Update existing expense
+        const docRef = snap.docs[0].ref;
+        await updateDoc(docRef, { ...expenseData, updatedAt: serverTimestamp() });
+        console.log(`Updated related expense: ${category}`);
+    } else {
+        // Create new expense
+        await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions'), { ...expenseData, createdAt: serverTimestamp() });
+        console.log(`Created related expense: ${category}`);
+    }
+  };
+
   const handleSubmit = async (e) => { 
       e.preventDefault(); 
       if (!user) return; 
@@ -465,10 +511,19 @@ const RecordManager = ({ user, transactions }) => {
 
       try { 
           if (editingId) {
+            // Update Main Transaction
             await updateDoc(doc(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions', editingId), dataToSave);
-            alert("แก้ไขรายการเรียบร้อย");
+            
+            // Sync Related Expenses (Platform Fee & Shipping Fee)
+            if (isEcommerceMode) {
+                await manageRelatedExpense('ค่าธรรมเนียม Platform', formData.platformFee, `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`);
+                await manageRelatedExpense('ค่าขนส่ง', formData.shippingFee, `ค่าขนส่ง ${formData.channel} (Order: ${formData.orderId}) - ${formData.shippingPayer === 'customer' ? 'ลูกค้าจ่าย' : 'ร้านค้าจ่าย'}`);
+            }
+
+            alert("แก้ไขรายการเรียบร้อย (และอัปเดตค่าใช้จ่ายที่เกี่ยวข้อง)");
             setEditingId(null);
           } else {
+            // Create New Transaction
             await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions'), dataToSave); 
             if (isEcommerceMode) {
                 // Auto create expense transaction for Platform Fee
@@ -485,6 +540,7 @@ const RecordManager = ({ user, transactions }) => {
                         vat: parseFloat(formData.platformFee) - (parseFloat(formData.platformFee) * 100 / 107), 
                         wht: 0, 
                         createdAt: serverTimestamp(), 
+                        orderId: formData.orderId,
                         userId: user.uid 
                     }); 
                 }
@@ -502,6 +558,7 @@ const RecordManager = ({ user, transactions }) => {
                         vat: parseFloat(formData.shippingFee) - (parseFloat(formData.shippingFee) * 100 / 107), 
                         wht: 0, 
                         createdAt: serverTimestamp(), 
+                        orderId: formData.orderId,
                         userId: user.uid 
                     });
                 }
@@ -836,7 +893,6 @@ const RecordManager = ({ user, transactions }) => {
   );
 };
 
-// ... StockManager (Standard, No Changes) ...
 const StockManager = ({ user }) => {
    const [products, setProducts] = useState([]);
    const [showAddProductModal, setShowAddProductModal] = useState(false);
