@@ -409,6 +409,12 @@ const RecordManager = ({ user, transactions }) => {
   const [isMagicLoading, setIsMagicLoading] = useState(false);
   const [isEcommerceMode, setIsEcommerceMode] = useState(false);
 
+  // Extract unique descriptions for autocomplete
+  const descriptionSuggestions = useMemo(() => {
+    const descriptions = transactions.map(t => t.description).filter(d => d && d.trim().length > 0);
+    return [...new Set(descriptions)];
+  }, [transactions]);
+
   useEffect(() => { if (user) { const q = query(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'vendors')); const unsub = onSnapshot(q, (snap) => { setVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))); }); return () => unsub(); } }, [user]);
   useEffect(() => { setIsEcommerceMode(formData.type === 'income' && ['Shopee', 'Lazada', 'TikTok'].includes(formData.channel)); }, [formData.channel, formData.type]);
   useEffect(() => { 
@@ -670,7 +676,21 @@ const RecordManager = ({ user, transactions }) => {
                            <input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="เลขที่ใบกำกับภาษี (Tax Invoice No.)" value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData,taxInvoiceNo:e.target.value})}/>
                        </div>
                    )}
-                   <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">รายละเอียด</label><input className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" placeholder="..." value={formData.description} onChange={e=>setFormData({...formData,description:e.target.value})}/></div>
+                   <div className="space-y-1">
+                       <label className="text-xs font-bold text-slate-500 ml-1">รายละเอียด</label>
+                       <input 
+                           list="desc-suggestions"
+                           className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" 
+                           placeholder="..." 
+                           value={formData.description} 
+                           onChange={e=>setFormData({...formData,description:e.target.value})}
+                       />
+                       <datalist id="desc-suggestions">
+                           {descriptionSuggestions.map((desc, i) => (
+                               <option key={i} value={desc} />
+                           ))}
+                       </datalist>
+                   </div>
                    <div className="grid grid-cols-2 gap-4">
                        <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">{isEcommerceMode ? "เงินเข้าจริง (Net)" : "จำนวนเงิน"}</label><input type="number" className={`w-full bg-slate-50 border-0 rounded-xl p-3 text-lg font-bold text-right ${isEcommerceMode?'text-emerald-500':'text-slate-800'}`} value={formData.amount} onChange={e=>setFormData({...formData,amount:e.target.value})} readOnly={isEcommerceMode}/></div>
                        <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">VAT</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm" value={formData.vatType} onChange={e=>setFormData({...formData,vatType:e.target.value})}><option value="included">รวม VAT</option><option value="excluded">แยก VAT</option><option value="none">ไม่มี VAT</option></select></div>
@@ -1404,7 +1424,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
   );
 };
 
-// ... TaxReport (Standard, No Changes) ...
+// Feature 4: TaxReport (UPGRADED)
 const TaxReport = ({ transactions }) => {
   const [activeSubTab, setActiveSubTab] = useState('assessment');
   const [year, setYear] = useState(new Date().getFullYear());
