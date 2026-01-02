@@ -394,6 +394,7 @@ const RecordManager = ({ user, transactions }) => {
   const [deleteId, setDeleteId] = useState(null); 
   const [isDeleting, setIsDeleting] = useState(false);
   const [recentSearch, setRecentSearch] = useState('');
+  const [historySearch, setHistorySearch] = useState(''); // NEW STATE FOR HISTORY SEARCH
   
   const [vendors, setVendors] = useState([]);
   const [showVendorModal, setShowVendorModal] = useState(false);
@@ -430,6 +431,12 @@ const RecordManager = ({ user, transactions }) => {
           mainTransactionAmount = parseFloat(formData.grossAmount || 0);
       }
 
+      // --- FIX: Add Time to Date ---
+      // User picks YYYY-MM-DD. We want to add current time so it sorts correctly at the top.
+      const dateObj = new Date(formData.date);
+      const now = new Date();
+      dateObj.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
+
       // Base Data
       const dataToSave = { 
           ...formData, 
@@ -440,7 +447,7 @@ const RecordManager = ({ user, transactions }) => {
           net: (formData.vatType === 'included' ? mainTransactionAmount * 100 / 107 : mainTransactionAmount),
           vat: (formData.vatType === 'included' ? mainTransactionAmount - (mainTransactionAmount * 100 / 107) : 0),
           
-          date: new Date(formData.date), 
+          date: dateObj, // Use date with time
           userId: user.uid 
       }; 
       
@@ -525,10 +532,37 @@ const RecordManager = ({ user, transactions }) => {
   const confirmDelete = (id) => { setDeleteId(id); };
   const executeDelete = async () => { if (!deleteId) return; setIsDeleting(true); try { await deleteDoc(doc(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions', deleteId)); setDeleteId(null); } catch (err) { console.error("Error deleting record:", err); alert("เกิดข้อผิดพลาดในการลบ"); } finally { setIsDeleting(false); } };
   
-  const recentTransactions = useMemo(() => transactions.filter(t => (filterType === 'all' || t.type === filterType) && (t.description?.toLowerCase().includes(recentSearch.toLowerCase()) || (t.amount && t.amount.toString().includes(recentSearch)))).sort((a,b) => b.date - a.date).slice(0, 50), [transactions, filterType, recentSearch]);
+  const recentTransactions = useMemo(() => transactions.filter(t => (filterType === 'all' || t.type === filterType) && (
+      t.description?.toLowerCase().includes(recentSearch.toLowerCase()) || 
+      (t.amount && t.amount.toString().includes(recentSearch)) || 
+      (t.orderId && t.orderId.toString().toLowerCase().includes(recentSearch.toLowerCase()))
+    )).sort((a,b) => b.date - a.date).slice(0, 50), [transactions, filterType, recentSearch]);
   const groupedRecent = useMemo(() => { const groups = {}; recentTransactions.forEach(t => { const dateKey = formatDate(t.date); if (!groups[dateKey]) groups[dateKey] = []; groups[dateKey].push(t); }); return groups; }, [recentTransactions]);
 
-  const historyData = useMemo(() => transactions.filter(t => { if (histPeriod === 'all') return true; const tDate = normalizeDate(t.date); const filterD = new Date(histDate); if (histPeriod === 'day') return tDate.toDateString() === filterD.toDateString(); if (histPeriod === 'month') return tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear(); if (histPeriod === 'year') return tDate.getFullYear() === filterD.getFullYear(); return true; }).sort((a,b) => b.date - a.date), [transactions, histPeriod, histDate]);
+  const historyData = useMemo(() => transactions.filter(t => { 
+      // 1. Period Filter
+      let matchesPeriod = true;
+      if (histPeriod !== 'all') {
+          const tDate = normalizeDate(t.date); 
+          const filterD = new Date(histDate); 
+          if (histPeriod === 'day') matchesPeriod = tDate.toDateString() === filterD.toDateString(); 
+          else if (histPeriod === 'month') matchesPeriod = tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear(); 
+          else if (histPeriod === 'year') matchesPeriod = tDate.getFullYear() === filterD.getFullYear(); 
+      }
+
+      // 2. Search Filter (NEW Logic)
+      const searchLower = historySearch.toLowerCase();
+      const matchesSearch = !historySearch || 
+          t.description?.toLowerCase().includes(searchLower) ||
+          t.amount?.toString().includes(searchLower) || 
+          t.category?.toLowerCase().includes(searchLower) ||
+          (t.orderId && t.orderId.toString().toLowerCase().includes(searchLower)) ||
+          (t.taxInvoiceNo && t.taxInvoiceNo.toString().toLowerCase().includes(searchLower)) ||
+          (t.vendorName && t.vendorName.toLowerCase().includes(searchLower));
+
+      return matchesPeriod && matchesSearch;
+  }).sort((a,b) => b.date - a.date), [transactions, histPeriod, histDate, historySearch]);
+
   const historySummary = useMemo(() => { const inc = historyData.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.total),0); const exp = historyData.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.total),0); return { inc, exp, bal: inc - exp }; }, [historyData]);
   
   const exportHistoryExcel = () => {
@@ -540,7 +574,7 @@ const RecordManager = ({ user, transactions }) => {
 
   return (
     <div className="flex flex-col h-full lg:h-[calc(100vh-88px)] relative">
-       {deleteId && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl scale-100 animate-fadeIn"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold text-slate-800 mb-2">ยืนยันการลบ?</h3><p className="text-slate-500 mb-6">ข้อมูลนี้จะหายไปถาวร</p><div className="flex gap-3"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-slate-600 hover:bg-slate-200">ยกเลิก</button><button onClick={executeDelete} disabled={isDeleting} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold hover:bg-rose-700 shadow-lg shadow-rose-200">{isDeleting?<Loader className="animate-spin mx-auto"/>:'ลบรายการ'}</button></div></div></div>}
+       {deleteId && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl scale-100 animate-fadeIn"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold text-slate-800 mb-2">ยืนยันการลบ?</h3><p className="text-slate-500 mb-6">ข้อมูลนี้จะหายไปถาวร</p><div className="flex gap-3"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-slate-600 hover:bg-slate-200">ยกเลิก</button><button onClick={executeDelete} disabled={isDeleting} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">{isDeleting?<Loader className="animate-spin mx-auto"/>:'ลบรายการ'}</button></div></div></div>}
        {showVendorModal && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn"><div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><BookOpen className="text-rose-500"/> เลือกผู้ขายเก่า</h3><button onClick={()=>setShowVendorModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button></div><div className="flex-1 overflow-y-auto p-4 space-y-2">{vendors.map(v=><div key={v.id} onClick={()=>selectVendor(v)} className="p-4 rounded-xl border border-slate-100 hover:border-rose-200 hover:bg-rose-50 cursor-pointer transition-all group"><div className="flex justify-between items-start"><div><p className="font-bold text-slate-700">{v.vendorName}</p><p className="text-xs text-slate-400 mt-1">TAX: {v.vendorTaxId}</p></div><div className="flex gap-2"><button onClick={(e)=>handleDeleteVendorClick(v.id,e)} className="p-2 text-slate-300 hover:text-rose-500 bg-white rounded-full border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14}/></button></div></div></div>)}</div></div></div>}
        {deleteVendorId && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold text-slate-800 mb-2">ลบผู้ขาย?</h3><div className="flex gap-3 mt-6"><button onClick={()=>setDeleteVendorId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-slate-600">ยกเลิก</button><button onClick={executeDeleteVendor} disabled={isDeleting} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">{isDeleting?<Loader className="animate-spin mx-auto"/>:'ยืนยัน'}</button></div></div></div>}
 
@@ -671,7 +705,7 @@ const RecordManager = ({ user, transactions }) => {
                    </div>
                    <div className="relative">
                        <Search className="absolute left-3 top-2.5 text-slate-400" size={18}/>
-                       <input className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100" placeholder="ค้นหาตามชื่อ, จำนวนเงิน..." value={recentSearch} onChange={e=>setRecentSearch(e.target.value)}/>
+                       <input className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100" placeholder="ค้นหาตามชื่อ, จำนวนเงิน, Order ID..." value={recentSearch} onChange={e=>setRecentSearch(e.target.value)}/>
                    </div>
                </div>
                
@@ -721,7 +755,18 @@ const RecordManager = ({ user, transactions }) => {
             {/* Same History Table logic but with improved styling */}
             <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
                 <h3 className="font-bold text-slate-700 flex items-center gap-2 text-lg"><Clock className="text-indigo-500"/> Transaction History</h3>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                    {/* Search Input */}
+                    <div className="relative">
+                        <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
+                        <input 
+                            className="bg-slate-50 border-none rounded-xl text-sm py-2 pl-9 pr-4 text-slate-600 focus:ring-2 focus:ring-indigo-100 w-48" 
+                            placeholder="ค้นหา..." 
+                            value={historySearch} 
+                            onChange={e=>setHistorySearch(e.target.value)}
+                        />
+                    </div>
+                    
                     <select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histPeriod} onChange={e=>setHistPeriod(e.target.value)}>
                         <option value="month">รายเดือน</option><option value="year">รายปี</option><option value="all">ทั้งหมด</option>
                     </select>
@@ -1359,7 +1404,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
   );
 };
 
-// Feature 4: TaxReport (UPGRADED)
+// ... TaxReport (Standard, No Changes) ...
 const TaxReport = ({ transactions }) => {
   const [activeSubTab, setActiveSubTab] = useState('assessment');
   const [year, setYear] = useState(new Date().getFullYear());
