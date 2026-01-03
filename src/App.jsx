@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   PieChart, Wallet, FileText, Calculator, Save, TrendingUp, TrendingDown, 
   Download, Trash2, Edit, Menu, X, Printer, 
-  CheckCircle, Loader, Target, User, Package, Search, Send, Clock, List, Settings, PlusCircle, Tag 
+  CheckCircle, Loader, Target, User, Package, Search, Send, Clock, List, Settings, PlusCircle, Tag,
+  MessageCircle // Added missing import
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -40,13 +41,16 @@ const app = getApps().length > 0 ? getApp() : initializeApp(FIREBASE_CONFIG);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// --- Utility Functions ---
+// --- Utility Functions (Standardized) ---
+
+// 1. ตัวกลางแปลงข้อมูลเป็น Date Object เสมอ (รองรับ Timestamp จาก Firebase)
 const normalizeDate = (dateInput) => {
   if (!dateInput) return new Date();
-  if (dateInput.toDate) return dateInput.toDate();
+  if (typeof dateInput.toDate === 'function') return dateInput.toDate(); // Firebase Timestamp
   return new Date(dateInput);
 };
 
+// 2. จัดรูปแบบเงินบาท
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('th-TH', { 
     style: 'decimal', 
@@ -55,23 +59,33 @@ const formatCurrency = (amount) => {
   }).format(amount || 0);
 };
 
-const formatDate = (dateString) => {
-  if (!dateString) return '';
-  const date = normalizeDate(dateString);
+// 3. จัดรูปแบบวันที่สำหรับแสดงผล (ไทย: 1 ม.ค. 2024)
+const formatDate = (dateInput) => {
+  if (!dateInput) return '';
+  const date = normalizeDate(dateInput);
+  // ป้องกัน Error กรณีวันที่ไม่ถูกต้อง
+  if (isNaN(date.getTime())) return '';
+  
   return new Intl.DateTimeFormat('th-TH', { 
-    year: 'numeric', month: 'short', day: 'numeric' 
+    year: 'numeric', 
+    month: 'short', 
+    day: 'numeric' 
   }).format(date);
 };
 
-// FIX: Use local time components to prevent date shifting on edit
-const formatDateISO = (date) => {
-  const d = normalizeDate(date);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+// 4. จัดรูปแบบวันที่สำหรับ Input HTML (YYYY-MM-DD) ตามเวลาท้องถิ่นเท่านั้น
+// แก้ปัญหาวันที่เลื่อนเมื่อเปิดแก้ไข (Date Shifting Fix)
+const formatDateISO = (dateInput) => {
+  const date = normalizeDate(dateInput);
+  if (isNaN(date.getTime())) return new Date().toISOString().split('T')[0];
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
 
+// 5. แปลงตัวเลขเป็นคำอ่านภาษาไทย (บาท)
 const thaiBahtText = (num) => {
   if (!num && num !== 0) return '';
   num = parseFloat(num).toFixed(2);
@@ -391,7 +405,7 @@ const Dashboard = ({ transactions }) => {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
         <div className="xl:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full">
-          <div className="flex justify-between items-center mb-8"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><TrendingUp className="text-indigo-500"/> Financial Trend</h3></div>
+          <div className="flex justify-between items-center mb-8"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><PieChart className="text-indigo-500"/> Financial Trend</h3></div>
           <div className="overflow-x-auto custom-scrollbar pb-4">
             <div className="h-64 flex items-end gap-3 px-2 min-w-full w-max">
               {analytics.trend.map((t, i) => {
@@ -1450,7 +1464,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
               <div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn">
                   <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                      <h3 className="font-bold text-lg flex items-center gap-2"><Package className="text-indigo-500"/> จัดการข้อมูลผู้ขาย</h3>
+                      <h3 className="font-bold text-lg flex items-center gap-2"><Settings className="text-indigo-500"/> จัดการข้อมูลผู้ขาย</h3>
                       <button onClick={()=>setShowSellerModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button>
                   </div>
                   <div className="p-4 border-b border-slate-100 bg-slate-50">
@@ -1844,7 +1858,7 @@ const TaxReport = ({ transactions }) => {
       <div className="flex gap-2 bg-slate-100 p-1 rounded-lg w-fit">{['assessment', 'vat', 'wht', 'consult'].map(tab => (<button key={tab} onClick={()=>setActiveSubTab(tab)} className={`px-4 py-2 rounded-md text-sm font-bold capitalize transition-all ${activeSubTab===tab ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>{tab === 'wht' ? '50 ทวิ' : tab}</button>))}</div>
       
       {activeSubTab === 'consult' && (
-         <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-3xl p-8 text-white shadow-xl"><h3 className="text-2xl font-bold mb-2 flex items-center gap-2"><FileText/> AI Tax Consultant</h3><p className="mb-6 opacity-90">สอบถามปัญหาภาษีกับ AI ผู้เชี่ยวชาญ</p><div className="flex gap-2 mb-6"><input className="flex-1 rounded-xl px-4 py-3 text-slate-800 border-0 focus:ring-2 focus:ring-orange-300" placeholder="พิมพ์คำถามที่นี่..." value={taxQuestion} onChange={e=>setTaxQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter' && handleAskTax()} /><button onClick={handleAskTax} disabled={isTaxLoading} className="bg-white text-orange-600 px-6 rounded-xl font-bold hover:bg-orange-50 disabled:opacity-50">{isTaxLoading ? <Loader className="animate-spin"/> : <Send/>}</button></div>{taxAnswer && <div className="bg-white/10 backdrop-blur rounded-xl p-6 border border-white/20 animate-fadeIn leading-relaxed">{taxAnswer}</div>}</div>
+         <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-3xl p-8 text-white shadow-xl"><h3 className="text-2xl font-bold mb-2 flex items-center gap-2"><MessageCircle/> AI Tax Consultant</h3><p className="mb-6 opacity-90">สอบถามปัญหาภาษีกับ AI ผู้เชี่ยวชาญ</p><div className="flex gap-2 mb-6"><input className="flex-1 rounded-xl px-4 py-3 text-slate-800 border-0 focus:ring-2 focus:ring-orange-300" placeholder="พิมพ์คำถามที่นี่..." value={taxQuestion} onChange={e=>setTaxQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter' && handleAskTax()} /><button onClick={handleAskTax} disabled={isTaxLoading} className="bg-white text-orange-600 px-6 rounded-xl font-bold hover:bg-orange-50 disabled:opacity-50">{isTaxLoading ? <Loader className="animate-spin"/> : <Send/>}</button></div>{taxAnswer && <div className="bg-white/10 backdrop-blur rounded-xl p-6 border border-white/20 animate-fadeIn leading-relaxed">{taxAnswer}</div>}</div>
       )}
       
       {activeSubTab === 'assessment' && (
