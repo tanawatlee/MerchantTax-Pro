@@ -2,10 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   PieChart, Wallet, FileText, Calculator, Save, TrendingUp, TrendingDown, 
   Download, Trash2, Edit, Menu, X, Printer, 
-  CheckCircle, Sparkles, Loader, 
-  BarChart3, Target, User, Store,
-  Package, History, Search, MessageSquare, Send, Copy, Info, Clock, List, BookOpen, Settings, PlusCircle, Calendar as CalendarIcon,
-  Tag, TicketPercent // New Icons
+  CheckCircle, Loader, Target, User, Package, Search, Send, Clock, List, Settings, PlusCircle, Tag 
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -66,7 +63,14 @@ const formatDate = (dateString) => {
   }).format(date);
 };
 
-const formatDateISO = (date) => normalizeDate(date).toISOString().split('T')[0];
+// FIX: Use local time components to prevent date shifting on edit
+const formatDateISO = (date) => {
+  const d = normalizeDate(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const thaiBahtText = (num) => {
   if (!num && num !== 0) return '';
@@ -224,41 +228,105 @@ const Dashboard = ({ transactions }) => {
 
   const analytics = useMemo(() => {
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    // Start of Today (00:00:00) Local Time
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    // End of Today (23:59:59) Local Time
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
     
     let filteredTrans = [];
     let prevTrans = [];
     let trendData = [];
     
-    const isSameDay = (d1, d2) => d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+    // Helper to filter by range strictly using Timestamps
+    const isInRange = (date, start, end) => {
+        if (!date) return false;
+        return date.getTime() >= start.getTime() && date.getTime() <= end.getTime();
+    };
 
     if (period === 'day') {
-        filteredTrans = transactions.filter(t => isSameDay(t.date, today));
-        const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
-        prevTrans = transactions.filter(t => isSameDay(t.date, yesterday));
+        filteredTrans = transactions.filter(t => isInRange(t.date, todayStart, todayEnd));
+        
+        // Prev: Yesterday
+        const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(todayStart.getDate() - 1);
+        const yesterdayEnd = new Date(todayEnd); yesterdayEnd.setDate(todayEnd.getDate() - 1);
+        prevTrans = transactions.filter(t => isInRange(t.date, yesterdayStart, yesterdayEnd));
+        
+        // Trend: Last 7 Days (Rolling)
         for (let i = 6; i >= 0; i--) {
-            const d = new Date(today); d.setDate(d.getDate() - i);
-            const daily = transactions.filter(t => isSameDay(t.date, d));
-            trendData.push({ label: d.toLocaleDateString('th-TH', { weekday: 'short' }), income: daily.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0), expense: daily.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0) });
+            const dStart = new Date(todayStart); dStart.setDate(todayStart.getDate() - i);
+            const dEnd = new Date(todayEnd); dEnd.setDate(todayEnd.getDate() - i);
+            const daily = transactions.filter(t => isInRange(t.date, dStart, dEnd));
+            trendData.push({ 
+                label: dStart.toLocaleDateString('th-TH', { weekday: 'short' }), 
+                income: daily.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0), 
+                expense: daily.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0) 
+            });
         }
     } else if (period === 'week') {
-        const day = today.getDay(); const startOfWeek = new Date(today); startOfWeek.setHours(0,0,0,0); startOfWeek.setDate(today.getDate() - day);
-        const endOfWeek = new Date(startOfWeek); endOfWeek.setDate(startOfWeek.getDate() + 6); endOfWeek.setHours(23,59,59,999);
-        filteredTrans = transactions.filter(t => t.date >= startOfWeek && t.date <= endOfWeek);
+        // Current Week (Sunday to Saturday)
+        const dayOfWeek = todayStart.getDay(); // 0 = Sun
+        const startOfWeek = new Date(todayStart); startOfWeek.setDate(todayStart.getDate() - dayOfWeek);
+        const endOfWeek = new Date(todayEnd); endOfWeek.setDate(todayEnd.getDate() + (6 - dayOfWeek));
+        
+        filteredTrans = transactions.filter(t => isInRange(t.date, startOfWeek, endOfWeek));
+        
+        // Prev Week
         const startPrev = new Date(startOfWeek); startPrev.setDate(startPrev.getDate() - 7);
         const endPrev = new Date(endOfWeek); endPrev.setDate(endPrev.getDate() - 7);
-        prevTrans = transactions.filter(t => t.date >= startPrev && t.date <= endPrev);
-        for (let i = 0; i < 7; i++) { const d = new Date(startOfWeek); d.setDate(d.getDate() + i); const daily = transactions.filter(t => isSameDay(t.date, d)); trendData.push({ label: d.toLocaleDateString('th-TH', { weekday: 'short' }), income: daily.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0), expense: daily.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0) }); }
+        prevTrans = transactions.filter(t => isInRange(t.date, startPrev, endPrev));
+        
+        // Trend: Daily breakdown of this week
+        for (let i = 0; i < 7; i++) {
+            const dStart = new Date(startOfWeek); dStart.setDate(startOfWeek.getDate() + i);
+            const dEnd = new Date(dStart); dEnd.setHours(23,59,59,999);
+            const daily = transactions.filter(t => isInRange(t.date, dStart, dEnd));
+            trendData.push({ 
+                label: dStart.toLocaleDateString('th-TH', { weekday: 'short' }), 
+                income: daily.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0), 
+                expense: daily.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0) 
+            });
+        }
     } else if (period === 'month') {
-        filteredTrans = transactions.filter(t => t.date.getMonth() === today.getMonth() && t.date.getFullYear() === today.getFullYear());
-        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        prevTrans = transactions.filter(t => t.date.getMonth() === lastMonth.getMonth() && t.date.getFullYear() === lastMonth.getFullYear());
-        const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-        for (let i = 1; i <= daysInMonth; i++) { const d = new Date(today.getFullYear(), today.getMonth(), i); const daily = transactions.filter(t => isSameDay(t.date, d)); trendData.push({ label: `${i}`, income: daily.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0), expense: daily.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0) }); }
+        const startOfMonth = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+        const endOfMonth = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 0, 23, 59, 59, 999);
+        
+        filteredTrans = transactions.filter(t => isInRange(t.date, startOfMonth, endOfMonth));
+        
+        const startPrev = new Date(todayStart.getFullYear(), todayStart.getMonth() - 1, 1);
+        const endPrev = new Date(todayStart.getFullYear(), todayStart.getMonth(), 0, 23, 59, 59, 999);
+        prevTrans = transactions.filter(t => isInRange(t.date, startPrev, endPrev));
+        
+        const daysInMonth = endOfMonth.getDate();
+        for (let i = 1; i <= daysInMonth; i++) { 
+            const dStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), i, 0, 0, 0);
+            const dEnd = new Date(todayStart.getFullYear(), todayStart.getMonth(), i, 23, 59, 59);
+            const daily = transactions.filter(t => isInRange(t.date, dStart, dEnd));
+            trendData.push({ 
+                label: `${i}`, 
+                income: daily.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0), 
+                expense: daily.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0) 
+            }); 
+        }
     } else if (period === 'year') {
-        filteredTrans = transactions.filter(t => t.date.getFullYear() === today.getFullYear());
-        prevTrans = transactions.filter(t => t.date.getFullYear() === today.getFullYear() - 1);
-        for (let i = 0; i < 12; i++) { const d = new Date(today.getFullYear(), i, 1); const monthly = transactions.filter(t => t.date.getMonth() === i && t.date.getFullYear() === today.getFullYear()); trendData.push({ label: d.toLocaleDateString('th-TH', { month: 'short' }), income: monthly.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0), expense: monthly.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0) }); }
+        const startOfYear = new Date(todayStart.getFullYear(), 0, 1);
+        const endOfYear = new Date(todayStart.getFullYear(), 11, 31, 23, 59, 59);
+        
+        filteredTrans = transactions.filter(t => isInRange(t.date, startOfYear, endOfYear));
+        
+        const startPrev = new Date(todayStart.getFullYear() - 1, 0, 1);
+        const endPrev = new Date(todayStart.getFullYear() - 1, 11, 31, 23, 59, 59);
+        prevTrans = transactions.filter(t => isInRange(t.date, startPrev, endPrev));
+        
+        for (let i = 0; i < 12; i++) { 
+            const dStart = new Date(todayStart.getFullYear(), i, 1);
+            const dEnd = new Date(todayStart.getFullYear(), i + 1, 0, 23, 59, 59);
+            const monthly = transactions.filter(t => isInRange(t.date, dStart, dEnd));
+            trendData.push({ 
+                label: dStart.toLocaleDateString('th-TH', { month: 'short' }), 
+                income: monthly.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0), 
+                expense: monthly.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total)||0), 0) 
+            }); 
+        }
     }
 
     const income = filteredTrans.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total)||0), 0);
@@ -274,8 +342,8 @@ const Dashboard = ({ transactions }) => {
     const costMap = {}; filteredTrans.filter(t => t.type === 'expense').forEach(t => { const cat = t.category || 'อื่นๆ'; costMap[cat] = (costMap[cat] || 0) + Number(t.total); });
     const costs = Object.entries(costMap).map(([name, value]) => ({ name, value, percent: expense ? (value / expense) * 100 : 0 })).sort((a, b) => b.value - a.value).slice(0, 5);
 
-    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-    const currentDay = today.getDate();
+    const daysInMonth = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 0).getDate();
+    const currentDay = todayStart.getDate();
     
     const avgDailyIncome = currentDay > 0 ? income / currentDay : 0;
     const projectedIncome = period === 'month' ? avgDailyIncome * daysInMonth : income;
@@ -310,7 +378,7 @@ const Dashboard = ({ transactions }) => {
                     </button>
                 ))}
             </div>
-            <button onClick={handleAnalyze} disabled={isAnalyzing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all flex items-center gap-2">{isAnalyzing ? <Loader size={18} className="animate-spin"/> : <Sparkles size={18}/>} {isAnalyzing ? '...' : 'AI วิเคราะห์'}</button>
+            <button onClick={handleAnalyze} disabled={isAnalyzing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all flex items-center gap-2">{isAnalyzing ? <Loader size={18} className="animate-spin"/> : <Target size={18}/>} {isAnalyzing ? '...' : 'AI วิเคราะห์'}</button>
         </div>
       </div>
 
@@ -323,7 +391,7 @@ const Dashboard = ({ transactions }) => {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
         <div className="xl:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full">
-          <div className="flex justify-between items-center mb-8"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><BarChart3 className="text-indigo-500"/> Financial Trend</h3></div>
+          <div className="flex justify-between items-center mb-8"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><TrendingUp className="text-indigo-500"/> Financial Trend</h3></div>
           <div className="overflow-x-auto custom-scrollbar pb-4">
             <div className="h-64 flex items-end gap-3 px-2 min-w-full w-max">
               {analytics.trend.map((t, i) => {
@@ -371,7 +439,7 @@ const Dashboard = ({ transactions }) => {
                 <div className="relative z-10 h-full flex flex-col justify-between">
                     <div className="flex flex-col gap-4">
                         <div className="flex items-center gap-3 mb-2">
-                            <div className="p-2 bg-white/20 rounded-xl backdrop-blur-sm"><Sparkles size={24} className="text-yellow-300 animate-pulse"/></div>
+                            <div className="p-2 bg-white/20 rounded-xl backdrop-blur-sm"><Target size={24} className="text-yellow-300 animate-pulse"/></div>
                             <h3 className="text-2xl font-bold uppercase tracking-wider text-white">AI Financial Analyst</h3>
                         </div>
                         <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/10">
@@ -392,6 +460,7 @@ const RecordManager = ({ user, transactions }) => {
   const [subTab, setSubTab] = useState('new'); 
   const [histPeriod, setHistPeriod] = useState('month'); 
   const [histDate, setHistDate] = useState(new Date().toISOString().split('T')[0]);
+  const [histFilterType, setHistFilterType] = useState('all'); // NEW: Income/Expense Filter
   const [deleteId, setDeleteId] = useState(null); 
   const [isDeleting, setIsDeleting] = useState(false);
   const [recentSearch, setRecentSearch] = useState('');
@@ -722,13 +791,36 @@ const RecordManager = ({ user, transactions }) => {
       let matchesPeriod = true;
       if (histPeriod !== 'all') {
           const tDate = normalizeDate(t.date); 
-          const filterD = new Date(histDate); 
-          if (histPeriod === 'day') matchesPeriod = tDate.toDateString() === filterD.toDateString(); 
+          const [y, m, d] = histDate.split('-').map(Number);
+          const filterD = new Date(y, m - 1, d); // Construct Local Date
+          
+          if (histPeriod === 'day') {
+              // Compare Year, Month, Day
+              matchesPeriod = tDate.getDate() === filterD.getDate() && 
+                              tDate.getMonth() === filterD.getMonth() && 
+                              tDate.getFullYear() === filterD.getFullYear();
+          }
+          else if (histPeriod === 'week') {
+              // Calculate start and end of week based on selected histDate
+              const day = filterD.getDay(); 
+              const startOfWeek = new Date(filterD);
+              startOfWeek.setDate(filterD.getDate() - day);
+              startOfWeek.setHours(0,0,0,0);
+              
+              const endOfWeek = new Date(startOfWeek);
+              endOfWeek.setDate(startOfWeek.getDate() + 6);
+              endOfWeek.setHours(23,59,59,999);
+              
+              matchesPeriod = tDate >= startOfWeek && tDate <= endOfWeek;
+          }
           else if (histPeriod === 'month') matchesPeriod = tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear(); 
           else if (histPeriod === 'year') matchesPeriod = tDate.getFullYear() === filterD.getFullYear(); 
       }
 
-      // 2. Search Filter (NEW Logic)
+      // 2. Type Filter (NEW)
+      const matchesType = histFilterType === 'all' || t.type === histFilterType;
+
+      // 3. Search Filter
       const searchLower = historySearch.toLowerCase();
       const matchesSearch = !historySearch || 
           t.description?.toLowerCase().includes(searchLower) ||
@@ -738,13 +830,40 @@ const RecordManager = ({ user, transactions }) => {
           (t.taxInvoiceNo && t.taxInvoiceNo.toString().toLowerCase().includes(searchLower)) ||
           (t.vendorName && t.vendorName.toLowerCase().includes(searchLower));
 
-      return matchesPeriod && matchesSearch;
-  }).sort((a,b) => b.date - a.date), [transactions, histPeriod, histDate, historySearch]);
+      return matchesPeriod && matchesType && matchesSearch;
+  }).sort((a,b) => b.date - a.date), [transactions, histPeriod, histDate, historySearch, histFilterType]);
 
   const historySummary = useMemo(() => { const inc = historyData.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.total),0); const exp = historyData.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.total),0); return { inc, exp, bal: inc - exp }; }, [historyData]);
   
   const exportHistoryExcel = () => {
-    const data = [['วันที่', 'ประเภท', 'หมวดหมู่', 'รายละเอียด', 'รายการ', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขที่ใบกำกับภาษี/Order ID', 'ช่องทาง', 'จำนวนเงิน'], ...historyData.map(t => [formatDate(t.date), t.type, t.category, t.description, t.description || '', t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'), t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0,8)) : '-'), t.channel || '', t.total])];
+    // 1. Calculate Totals
+    const totalIncome = historyData.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total) || 0), 0);
+    const totalExpense = historyData.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total) || 0), 0);
+
+    // 2. Prepare Data with separated columns
+    const data = [
+      ['วันที่', 'ประเภท', 'หมวดหมู่', 'รายละเอียด', 'รายการ', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขที่ใบกำกับภาษี/Order ID', 'ช่องทาง', 'รายรับ', 'รายจ่าย'],
+      ...historyData.map(t => {
+        const isIncome = t.type === 'income';
+        const amount = Number(t.total) || 0;
+        return [
+          formatDate(t.date),
+          t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
+          t.category,
+          t.description,
+          t.description || '',
+          t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'),
+          t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0, 8)) : '-'),
+          t.channel || '',
+          isIncome ? amount : 0,  // รายรับ
+          !isIncome ? amount : 0  // รายจ่าย
+        ];
+      }),
+      [], // เว้นวรรค 1 บรรทัด
+      ['', '', '', '', '', '', '', 'รวมสุทธิ', totalIncome, totalExpense],
+      ['', '', '', '', '', '', '', 'คงเหลือ', totalIncome - totalExpense, '']
+    ];
+
     exportToExcel(`History_${histPeriod}_${histDate}.xlsx`, data);
   };
 
@@ -753,7 +872,7 @@ const RecordManager = ({ user, transactions }) => {
   return (
     <div className="flex flex-col h-full lg:h-[calc(100vh-88px)] relative">
        {deleteId && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl scale-100 animate-fadeIn"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold text-slate-800 mb-2">ยืนยันการลบ?</h3><p className="text-slate-500 mb-6">ข้อมูลนี้จะหายไปถาวร</p><div className="flex gap-3"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-slate-600 hover:bg-slate-200">ยกเลิก</button><button onClick={executeDelete} disabled={isDeleting} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">{isDeleting?<Loader className="animate-spin mx-auto"/>:'ลบรายการ'}</button></div></div></div>}
-       {showVendorModal && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn"><div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><BookOpen className="text-rose-500"/> เลือกผู้ขายเก่า</h3><button onClick={()=>setShowVendorModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button></div><div className="flex-1 overflow-y-auto p-4 space-y-2">{vendors.map(v=><div key={v.id} onClick={()=>selectVendor(v)} className="p-4 rounded-xl border border-slate-100 hover:border-rose-200 hover:bg-rose-50 cursor-pointer transition-all group"><div className="flex justify-between items-start"><div><p className="font-bold text-slate-700">{v.vendorName}</p><p className="text-xs text-slate-400 mt-1">TAX: {v.vendorTaxId}</p></div><div className="flex gap-2"><button onClick={(e)=>handleDeleteVendorClick(v.id,e)} className="p-2 text-slate-300 hover:text-rose-500 bg-white rounded-full border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14}/></button></div></div></div>)}</div></div></div>}
+       {showVendorModal && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn"><div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><List className="text-rose-500"/> เลือกผู้ขายเก่า</h3><button onClick={()=>setShowVendorModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button></div><div className="flex-1 overflow-y-auto p-4 space-y-2">{vendors.map(v=><div key={v.id} onClick={()=>selectVendor(v)} className="p-4 rounded-xl border border-slate-100 hover:border-rose-200 hover:bg-rose-50 cursor-pointer transition-all group"><div className="flex justify-between items-start"><div><p className="font-bold text-slate-700">{v.vendorName}</p><p className="text-xs text-slate-400 mt-1">TAX: {v.vendorTaxId}</p></div><div className="flex gap-2"><button onClick={(e)=>handleDeleteVendorClick(v.id,e)} className="p-2 text-slate-300 hover:text-rose-500 bg-white rounded-full border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14}/></button></div></div></div>)}</div></div></div>}
        {deleteVendorId && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold text-slate-800 mb-2">ลบผู้ขาย?</h3><div className="flex gap-3 mt-6"><button onClick={()=>setDeleteVendorId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-slate-600">ยกเลิก</button><button onClick={executeDeleteVendor} disabled={isDeleting} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">{isDeleting?<Loader className="animate-spin mx-auto"/>:'ยืนยัน'}</button></div></div></div>}
 
        <div className="flex gap-1 p-1 bg-slate-100/80 backdrop-blur-sm rounded-2xl w-fit mb-6 self-center md:self-start border border-slate-200">
@@ -779,7 +898,7 @@ const RecordManager = ({ user, transactions }) => {
                 <div className="mb-8 relative group">
                     <div className="absolute -inset-0.5 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl opacity-20 group-hover:opacity-40 transition duration-500 blur"></div>
                     <div className="relative bg-white rounded-xl p-1 flex items-center gap-2 border border-slate-100">
-                        <div className="pl-3 text-indigo-500"><Sparkles size={18}/></div>
+                        <div className="pl-3 text-indigo-500"><Target size={18}/></div>
                         <input className="flex-1 bg-transparent border-none text-sm p-3 focus:ring-0 placeholder:text-slate-400" placeholder="พิมพ์เช่น 'ขายเสื้อ 2 ตัว 500 บาท'" value={magicPrompt} onChange={e=>setMagicPrompt(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleMagicFill()}/>
                         <button onClick={handleMagicFill} disabled={isMagicLoading} className="bg-indigo-600 text-white p-2.5 rounded-lg shadow-md hover:bg-indigo-700 transition-all">{isMagicLoading?<Loader size={16} className="animate-spin"/>:<Send size={16}/>}</button>
                     </div>
@@ -795,7 +914,7 @@ const RecordManager = ({ user, transactions }) => {
                    </div>
                    {formData.type === 'income' ? (
                        <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-4">
-                           <div className="flex justify-between items-center text-emerald-700 text-xs font-bold uppercase tracking-wider mb-1"><span className="flex items-center gap-1"><Store size={14}/> E-Commerce</span></div>
+                           <div className="flex justify-between items-center text-emerald-700 text-xs font-bold uppercase tracking-wider mb-1"><span className="flex items-center gap-1"><Package size={14}/> E-Commerce</span></div>
                            <div className="grid grid-cols-2 gap-4">
                                <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="Order ID" value={formData.orderId} onChange={e=>setFormData({...formData,orderId:e.target.value})}/>
                                <select className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" value={formData.channel} onChange={e=>setFormData({...formData,channel:e.target.value})}>{CONSTANTS.CHANNELS.map(c=><option key={c} value={c}>{c}</option>)}</select>
@@ -883,7 +1002,7 @@ const RecordManager = ({ user, transactions }) => {
                    {formData.type === 'expense' && (
                        <div className="flex gap-4">
                            <div className="flex-1 space-y-1">
-                               <label className="text-xs font-bold text-slate-500 ml-1 flex items-center gap-1"><TicketPercent size={12}/> ส่วนลด / Voucher</label>
+                               <label className="text-xs font-bold text-slate-500 ml-1 flex items-center gap-1"><Tag size={12}/> ส่วนลด / Voucher</label>
                                <input type="number" className="w-full bg-orange-50/50 border border-orange-100 rounded-xl p-3 text-sm font-bold text-orange-600 text-right focus:ring-orange-200" placeholder="0.00" value={formData.expenseDiscount} onChange={e=>setFormData({...formData,expenseDiscount:e.target.value})}/>
                            </div>
                            <div className="flex-1 space-y-1 opacity-50">
@@ -959,7 +1078,7 @@ const RecordManager = ({ user, transactions }) => {
                                           )}
                                           {t.expenseNetPaid && (
                                               <div className="text-[10px] text-orange-400 pl-[52px] flex items-center gap-1">
-                                                  <TicketPercent size={10}/> จ่ายจริง: {formatCurrency(t.expenseNetPaid)} (ใช้ Voucher)
+                                                  <Tag size={10}/> จ่ายจริง: {formatCurrency(t.expenseNetPaid)} (ใช้ Voucher)
                                               </div>
                                           )}
                                           <div className="absolute bottom-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -993,9 +1112,13 @@ const RecordManager = ({ user, transactions }) => {
                     </div>
                     
                     <select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histPeriod} onChange={e=>setHistPeriod(e.target.value)}>
-                        <option value="month">รายเดือน</option><option value="year">รายปี</option><option value="all">ทั้งหมด</option>
+                        <option value="day">รายวัน</option>
+                        <option value="week">รายสัปดาห์</option>
+                        <option value="month">รายเดือน</option>
+                        <option value="year">รายปี</option>
+                        <option value="all">ทั้งหมด</option>
                     </select>
-                    {histPeriod !== 'all' && <input type={histPeriod==='month'?'month':'number'} className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histDate} onChange={e=>setHistDate(e.target.value)}/>}
+                    {histPeriod !== 'all' && <input type={histPeriod==='month'?'month': (histPeriod==='day' || histPeriod==='week')?'date':'number'} className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histDate} onChange={e=>setHistDate(e.target.value)}/>}
                     <button onClick={exportHistoryExcel} className="bg-indigo-50 text-indigo-600 p-2 rounded-xl hover:bg-indigo-100 flex items-center gap-2"><FileText size={20}/> Excel</button>
                 </div>
             </div>
@@ -1041,7 +1164,7 @@ const RecordManager = ({ user, transactions }) => {
   );
 };
 
-// ... StockManager (Standard, No Changes) ...
+// ... (StockManager, InvoiceGenerator, TaxReport remain unchanged) ...
 const StockManager = ({ user }) => {
    const [products, setProducts] = useState([]);
    const [showAddProductModal, setShowAddProductModal] = useState(false);
@@ -1327,7 +1450,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
               <div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn">
                   <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                      <h3 className="font-bold text-lg flex items-center gap-2"><Store className="text-indigo-500"/> จัดการข้อมูลผู้ขาย</h3>
+                      <h3 className="font-bold text-lg flex items-center gap-2"><Package className="text-indigo-500"/> จัดการข้อมูลผู้ขาย</h3>
                       <button onClick={()=>setShowSellerModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button>
                   </div>
                   <div className="p-4 border-b border-slate-100 bg-slate-50">
@@ -1392,7 +1515,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
 
       <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit print:hidden self-center">
          <button onClick={() => setMode('create')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${mode==='create'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700'}`}><FileText size={18}/> ออกใบกำกับภาษี</button>
-         <button onClick={() => setMode('history')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${mode==='history'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700'}`}><History size={18}/> ประวัติเอกสาร</button>
+         <button onClick={() => setMode('history')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${mode==='history'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700'}`}><Clock size={18}/> ประวัติเอกสาร</button>
       </div>
 
       {mode === 'history' ? (
@@ -1721,7 +1844,7 @@ const TaxReport = ({ transactions }) => {
       <div className="flex gap-2 bg-slate-100 p-1 rounded-lg w-fit">{['assessment', 'vat', 'wht', 'consult'].map(tab => (<button key={tab} onClick={()=>setActiveSubTab(tab)} className={`px-4 py-2 rounded-md text-sm font-bold capitalize transition-all ${activeSubTab===tab ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>{tab === 'wht' ? '50 ทวิ' : tab}</button>))}</div>
       
       {activeSubTab === 'consult' && (
-         <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-3xl p-8 text-white shadow-xl"><h3 className="text-2xl font-bold mb-2 flex items-center gap-2"><MessageSquare/> AI Tax Consultant</h3><p className="mb-6 opacity-90">สอบถามปัญหาภาษีกับ AI ผู้เชี่ยวชาญ</p><div className="flex gap-2 mb-6"><input className="flex-1 rounded-xl px-4 py-3 text-slate-800 border-0 focus:ring-2 focus:ring-orange-300" placeholder="พิมพ์คำถามที่นี่..." value={taxQuestion} onChange={e=>setTaxQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter' && handleAskTax()} /><button onClick={handleAskTax} disabled={isTaxLoading} className="bg-white text-orange-600 px-6 rounded-xl font-bold hover:bg-orange-50 disabled:opacity-50">{isTaxLoading ? <Loader className="animate-spin"/> : <Send/>}</button></div>{taxAnswer && <div className="bg-white/10 backdrop-blur rounded-xl p-6 border border-white/20 animate-fadeIn leading-relaxed">{taxAnswer}</div>}</div>
+         <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-3xl p-8 text-white shadow-xl"><h3 className="text-2xl font-bold mb-2 flex items-center gap-2"><FileText/> AI Tax Consultant</h3><p className="mb-6 opacity-90">สอบถามปัญหาภาษีกับ AI ผู้เชี่ยวชาญ</p><div className="flex gap-2 mb-6"><input className="flex-1 rounded-xl px-4 py-3 text-slate-800 border-0 focus:ring-2 focus:ring-orange-300" placeholder="พิมพ์คำถามที่นี่..." value={taxQuestion} onChange={e=>setTaxQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter' && handleAskTax()} /><button onClick={handleAskTax} disabled={isTaxLoading} className="bg-white text-orange-600 px-6 rounded-xl font-bold hover:bg-orange-50 disabled:opacity-50">{isTaxLoading ? <Loader className="animate-spin"/> : <Send/>}</button></div>{taxAnswer && <div className="bg-white/10 backdrop-blur rounded-xl p-6 border border-white/20 animate-fadeIn leading-relaxed">{taxAnswer}</div>}</div>
       )}
       
       {activeSubTab === 'assessment' && (
@@ -1729,7 +1852,7 @@ const TaxReport = ({ transactions }) => {
             {/* AI Recommendation Box */}
             <div className="bg-slate-800 text-white p-6 rounded-2xl shadow-lg flex flex-col md:flex-row items-center justify-between gap-4">
                 <div>
-                    <h3 className="text-yellow-400 font-bold text-lg mb-1 flex items-center gap-2"><Sparkles size={20}/> AI Tax Recommendation</h3>
+                    <h3 className="text-yellow-400 font-bold text-lg mb-1 flex items-center gap-2"><Target size={20}/> AI Tax Recommendation</h3>
                     <p className="opacity-90">
                         ปี {year} นี้ ควรยื่นแบบ <strong>{assessmentData.recommendedMethod === 'standard' ? 'เหมา 60%' : 'ตามจริง (Itemized)'}</strong> 
                         <br/>ประหยัดภาษีได้ประมาณ <span className="text-green-400 font-bold underline">{formatCurrency(assessmentData.savedAmount)} บาท</span>
@@ -1924,7 +2047,7 @@ export default function App() {
       <aside className={`fixed lg:static inset-y-0 left-0 z-30 w-72 bg-slate-900 text-white shadow-2xl transform transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} flex flex-col`}>
         <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-gradient-to-r from-slate-900 to-slate-800"><div><h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400 flex items-center gap-2"><Wallet className="text-indigo-400"/> MerchantTax</h1><p className="text-[10px] text-slate-400 mt-1 tracking-wider uppercase">Pro Accounting System</p></div><button onClick={() => setSidebarOpen(false)} className="lg:hidden text-slate-400 hover:text-white"><X size={20} /></button></div>
         <nav className="p-4 space-y-1 mt-2 flex-1 overflow-y-auto">
-          <NavButton active={activeTab === 'dashboard'} onClick={() => {setActiveTab('dashboard'); setSidebarOpen(false);}} icon={<BarChart3 size={20} />} label="ภาพรวมธุรกิจ (Dashboard)" />
+          <NavButton active={activeTab === 'dashboard'} onClick={() => {setActiveTab('dashboard'); setSidebarOpen(false);}} icon={<PieChart size={20} />} label="ภาพรวมธุรกิจ (Dashboard)" />
           <NavButton active={activeTab === 'records'} onClick={() => {setActiveTab('records'); setSidebarOpen(false);}} icon={<FileText size={20} />} label="บันทึกรายรับ-รายจ่าย" />
           <NavButton active={activeTab === 'stock'} onClick={() => {setActiveTab('stock'); setSidebarOpen(false);}} icon={<Package size={20} />} label="Stock (รายงานสินค้า)" />
           <NavButton active={activeTab === 'invoice'} onClick={() => {setActiveTab('invoice'); setSidebarOpen(false);}} icon={<Printer size={20} />} label="ออกใบกำกับภาษี" />
@@ -1934,7 +2057,7 @@ export default function App() {
       </aside>
       <main className="flex-1 flex flex-col h-full overflow-hidden relative w-full">
         <header className="bg-white/90 backdrop-blur-md shadow-sm border-b border-slate-200 p-4 lg:px-8 flex justify-between items-center z-10 sticky top-0">
-          <div className="flex items-center gap-3"><button onClick={() => setSidebarOpen(true)} className="lg:hidden text-slate-500 hover:text-indigo-600 p-1 rounded-md hover:bg-slate-100 transition-colors"><Menu size={24} /></button><h2 className="font-semibold text-slate-800 text-lg flex items-center gap-2 truncate">{activeTab === 'dashboard' && <><BarChart3 className="text-indigo-500 hidden sm:block" size={20}/> Business Intelligence</>}{activeTab === 'records' && <><FileText className="text-emerald-500 hidden sm:block" size={20}/> Accounting Records</>}{activeTab === 'stock' && <><Package className="text-orange-500 hidden sm:block" size={20}/> Inventory & Stock</>}{activeTab === 'invoice' && <><Printer className="text-blue-500 hidden sm:block" size={20}/> Invoice Generator</>}{activeTab === 'taxes' && <><Calculator className="text-rose-500 hidden sm:block" size={20}/> Tax & Reporting</>}</h2></div>
+          <div className="flex items-center gap-3"><button onClick={() => setSidebarOpen(true)} className="lg:hidden text-slate-500 hover:text-indigo-600 p-1 rounded-md hover:bg-slate-100 transition-colors"><Menu size={24} /></button><h2 className="font-semibold text-slate-800 text-lg flex items-center gap-2 truncate">{activeTab === 'dashboard' && <><PieChart className="text-indigo-500 hidden sm:block" size={20}/> Business Intelligence</>}{activeTab === 'records' && <><FileText className="text-emerald-500 hidden sm:block" size={20}/> Accounting Records</>}{activeTab === 'stock' && <><Package className="text-orange-500 hidden sm:block" size={20}/> Inventory & Stock</>}{activeTab === 'invoice' && <><Printer className="text-blue-500 hidden sm:block" size={20}/> Invoice Generator</>}{activeTab === 'taxes' && <><Calculator className="text-rose-500 hidden sm:block" size={20}/> Tax & Reporting</>}</h2></div>
           <div className="hidden sm:block text-xs text-slate-400 font-medium px-3 py-1 bg-slate-100 rounded-full border border-slate-200">v3.5.0 (Pro)</div>
         </header>
         <div className="flex-1 overflow-auto p-2 lg:p-6 relative scroll-smooth w-full">{renderContent()}</div>
