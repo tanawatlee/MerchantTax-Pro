@@ -4,7 +4,8 @@ import {
   Download, Trash2, Edit, Menu, X, Printer, 
   CheckCircle, Sparkles, Loader, 
   BarChart3, Target, User, Store,
-  Package, History, Search, MessageSquare, Send, Copy, Info, Clock, List, BookOpen, Settings, PlusCircle, Calendar as CalendarIcon
+  Package, History, Search, MessageSquare, Send, Copy, Info, Clock, List, BookOpen, Settings, PlusCircle, Calendar as CalendarIcon,
+  Tag, TicketPercent // New Icons
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -27,7 +28,7 @@ const CONSTANTS = {
   APP_ID: 'eatsanduse',
   CATEGORIES: {
     INCOME: ['สินค้าทั่วไป', 'บริการ', 'อาหาร/เครื่องดื่ม', 'อื่นๆ'],
-    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าขนส่ง', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ']
+    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าขนส่ง', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า']
   },
   CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
   VAT_RATES: {
@@ -137,7 +138,7 @@ const exportToExcel = (fileName, data, headerInfo = []) => {
 // --- Service Layer: API Calls ---
 const SmartTaxAI = {
   async generate(prompt, imageBase64 = null, expectJSON = false) {
-    const apiKey = ""; // API Key provided by execution environment
+    const apiKey = "AIzaSyDHldGBh5-XUBIX9Ru9tffi6nNg7ZY7H1A"; // API Key provided by execution environment
     if (!apiKey) return null;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
@@ -421,6 +422,10 @@ const RecordManager = ({ user, transactions }) => {
     customerShippingFee: '', // ค่าส่งที่ลูกค้าจ่าย (Cust. Ship)
     platformFee: '',     // ค่าธรรมเนียม (Platform Fee)
     shippingFee: '',     // ค่าขนส่งที่ถูกหัก (System Deduction)
+    shopVoucher: '',     // ส่วนลดร้านค้า (Shop Voucher)
+    
+    // New General Expense fields
+    expenseDiscount: '', // ส่วนลด (Voucher) for general expense
     
     shippingPayer: 'customer', // 'customer' or 'shop'
     grossAmount: '' // Keeping for compatibility, but recalculated
@@ -456,21 +461,29 @@ const RecordManager = ({ user, transactions }) => {
           const custShip = parseFloat(formData.customerShippingFee || 0);
           const fee = parseFloat(formData.platformFee || 0);
           const actualShip = parseFloat(formData.shippingFee || 0);
+          const voucher = parseFloat(formData.shopVoucher || 0);
 
           const gross = itemPrice + custShip;
-          const net = gross - fee - actualShip;
+          const net = gross - fee - actualShip - voucher;
 
           setFormData(prev => ({ 
               ...prev, 
               grossAmount: gross,
               amount: net 
           })); 
-      } 
-  }, [formData.itemAmount, formData.customerShippingFee, formData.platformFee, formData.shippingFee, isEcommerceMode]);
+      } else if (formData.type === 'expense') {
+          // Real-time calc for General Expense (Net = Input - Voucher)
+          // We don't overwrite 'amount' here because the user types into 'amount' directly as 'Bill Amount'
+          // But we can update a visual 'Net Paid' if needed.
+          // For now, let's just keep the state so the render can calculate 'Net Paid'.
+      }
+  }, [formData.itemAmount, formData.customerShippingFee, formData.platformFee, formData.shippingFee, formData.shopVoucher, isEcommerceMode, formData.expenseDiscount, formData.type]);
 
   const calculated = useMemo(() => { 
       // Base Amount for VAT
       // If E-Commerce: Gross = Item + Cust.Ship
+      // If Expense with Voucher: Typically VAT is on the FULL Bill Amount, not Net Paid.
+      
       const baseAmount = isEcommerceMode ? (parseFloat(formData.grossAmount) || 0) : (parseFloat(formData.amount) || 0);
       
       let net = 0, vat = 0; 
@@ -486,15 +499,17 @@ const RecordManager = ({ user, transactions }) => {
       } 
       
       const wht = formData.type === 'expense' ? (net * formData.whtRate / 100) : 0; 
-      
+      const expenseNetPaid = formData.type === 'expense' ? ((parseFloat(formData.amount) || 0) - (parseFloat(formData.expenseDiscount) || 0)) : 0;
+
       return { 
           net, 
           vat, 
           total: formData.vatType === 'excluded' ? net + vat : baseAmount, 
           wht, 
-          baseAmount 
+          baseAmount,
+          expenseNetPaid
       }; 
-  }, [formData.amount, formData.vatType, formData.whtRate, formData.type, formData.grossAmount, isEcommerceMode]);
+  }, [formData.amount, formData.vatType, formData.whtRate, formData.type, formData.grossAmount, isEcommerceMode, formData.expenseDiscount]);
   
   const manageRelatedExpense = async (category, amount, baseDescription) => {
     if (amount <= 0 || !formData.orderId) return;
@@ -539,28 +554,50 @@ const RecordManager = ({ user, transactions }) => {
       e.preventDefault(); 
       if (!user) return; 
       
-      let mainTransactionAmount = parseFloat(formData.amount);
+      let mainTransactionAmount = parseFloat(formData.amount); // For Expense, this is Bill Amount. For Income E-com, this is Net Receive.
+      let dataToSave = {};
+
       if (isEcommerceMode) {
           // If E-Commerce, record GROSS as income, then record separate expenses
           mainTransactionAmount = parseFloat(formData.grossAmount || 0);
+          dataToSave = { 
+             ...formData, 
+             amount: mainTransactionAmount,
+             total: mainTransactionAmount,
+             net: (formData.vatType === 'included' ? mainTransactionAmount * 100 / 107 : mainTransactionAmount),
+             vat: (formData.vatType === 'included' ? mainTransactionAmount - (mainTransactionAmount * 100 / 107) : 0),
+          };
+      } else if (formData.type === 'expense') {
+          // For General Expense, we save the BILL Amount as the transaction amount (for VAT purposes)
+          // But we also save 'expenseDiscount' so we know the Net Paid.
+          // Note: If user wants to record NET as the expense amount, they should input NET.
+          // Assumption: User inputs BILL Amount.
+          dataToSave = {
+              ...formData,
+              amount: mainTransactionAmount,
+              total: formData.vatType === 'excluded' ? mainTransactionAmount + (mainTransactionAmount * 0.07) : mainTransactionAmount,
+              net: (formData.vatType === 'included' ? mainTransactionAmount * 100 / 107 : mainTransactionAmount),
+              vat: (formData.vatType === 'included' ? mainTransactionAmount - (mainTransactionAmount * 100 / 107) : (formData.vatType === 'excluded' ? mainTransactionAmount * 0.07 : 0)),
+              expenseNetPaid: mainTransactionAmount - (parseFloat(formData.expenseDiscount) || 0)
+          };
+      } else {
+          // General Income
+           dataToSave = {
+              ...formData,
+              amount: mainTransactionAmount,
+              total: formData.vatType === 'excluded' ? mainTransactionAmount + (mainTransactionAmount * 0.07) : mainTransactionAmount,
+              net: (formData.vatType === 'included' ? mainTransactionAmount * 100 / 107 : mainTransactionAmount),
+              vat: (formData.vatType === 'included' ? mainTransactionAmount - (mainTransactionAmount * 100 / 107) : (formData.vatType === 'excluded' ? mainTransactionAmount * 0.07 : 0)),
+          };
       }
 
       // Time Fix
       const dateObj = new Date(formData.date);
       const now = new Date();
       dateObj.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
+      dataToSave.date = dateObj;
+      dataToSave.userId = user.uid;
 
-      // Base Data
-      const dataToSave = { 
-          ...formData, 
-          amount: mainTransactionAmount,
-          total: mainTransactionAmount,
-          net: (formData.vatType === 'included' ? mainTransactionAmount * 100 / 107 : mainTransactionAmount),
-          vat: (formData.vatType === 'included' ? mainTransactionAmount - (mainTransactionAmount * 100 / 107) : 0),
-          date: dateObj, 
-          userId: user.uid 
-      }; 
-      
       if (!editingId) {
           dataToSave.createdAt = serverTimestamp();
       } else {
@@ -572,13 +609,14 @@ const RecordManager = ({ user, transactions }) => {
             // Update Main Transaction
             await updateDoc(doc(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions', editingId), dataToSave);
             
-            // Sync Related Expenses (Platform Fee & Shipping Fee)
+            // Sync Related Expenses (Platform Fee & Shipping Fee & Voucher)
             if (isEcommerceMode) {
                 await manageRelatedExpense('ค่าธรรมเนียม Platform', formData.platformFee, `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`);
                 await manageRelatedExpense('ค่าขนส่ง', formData.shippingFee, `ค่าขนส่ง ${formData.channel} (Order: ${formData.orderId}) - ${formData.shippingPayer === 'customer' ? 'ลูกค้าจ่าย' : 'ร้านค้าจ่าย'}`);
+                await manageRelatedExpense('ส่วนลดร้านค้า', formData.shopVoucher, `ส่วนลดร้านค้า ${formData.channel} (Order: ${formData.orderId})`);
             }
 
-            alert("แก้ไขรายการเรียบร้อย (และอัปเดตค่าใช้จ่ายที่เกี่ยวข้อง)");
+            alert("แก้ไขรายการเรียบร้อย (และอัปเดตค่าใช้จ่าย/ส่วนลดที่เกี่ยวข้อง)");
             setEditingId(null);
             setFormData(initialForm); // Reset form after edit
           } else {
@@ -621,8 +659,26 @@ const RecordManager = ({ user, transactions }) => {
                         userId: user.uid 
                     });
                 }
+                // Auto create expense for Shop Voucher
+                if (formData.shopVoucher > 0) {
+                    await addDoc(collection(db, 'artifacts', CONSTANTS.APP_ID, 'public', 'data', 'transactions'), { 
+                        type: 'expense', 
+                        date: new Date(formData.date), 
+                        category: 'ส่วนลดร้านค้า', 
+                        description: `ส่วนลดร้านค้า ${formData.channel} (Order: ${formData.orderId})`, 
+                        amount: parseFloat(formData.shopVoucher), 
+                        vatType: 'included', 
+                        total: parseFloat(formData.shopVoucher), 
+                        net: parseFloat(formData.shopVoucher) * 100 / 107, 
+                        vat: parseFloat(formData.shopVoucher) - (parseFloat(formData.shopVoucher) * 100 / 107), 
+                        wht: 0, 
+                        createdAt: serverTimestamp(), 
+                        orderId: formData.orderId,
+                        userId: user.uid 
+                    });
+                }
             } 
-            alert("บันทึกสำเร็จ (บันทึกรายรับยอดเต็ม และแยกรายจ่ายให้อัตโนมัติ)"); 
+            alert("บันทึกสำเร็จ (แยกรายจ่าย/ส่วนลดให้อัตโนมัติ)"); 
           }
           setFormData(prev => ({ ...initialForm, type: prev.type, category: prev.category })); 
       } catch (error) { 
@@ -760,21 +816,28 @@ const RecordManager = ({ user, transactions }) => {
                                       </div>
                                    </div>
                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าสินค้า (Item Price)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.itemAmount} onChange={e=>setFormData({...formData,itemAmount:e.target.value})}/></div>
-                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งที่ลูกค้าจ่าย (Cust. Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.customerShippingFee} onChange={e=>setFormData({...formData,customerShippingFee:e.target.value})}/></div>
-                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าธรรมเนียม (Fee)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData,platformFee:e.target.value})}/></div>
-                                       <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งที่ระบบหักจริง (Actual)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.shippingFee} onChange={e=>setFormData({...formData,shippingFee:e.target.value})}/></div>
+                                        <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าสินค้า (Item)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.itemAmount} onChange={e=>setFormData({...formData,itemAmount:e.target.value})}/></div>
+                                        <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งลูกค้าจ่าย (Cust.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.customerShippingFee} onChange={e=>setFormData({...formData,customerShippingFee:e.target.value})}/></div>
+                                        <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าธรรมเนียม (Fee)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData,platformFee:e.target.value})}/></div>
+                                        <div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งระบบหัก (Act.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.shippingFee} onChange={e=>setFormData({...formData,shippingFee:e.target.value})}/></div>
+                                   </div>
+                                   <div className="mt-2 p-2 bg-orange-50 rounded-lg border border-orange-100 flex items-center gap-2">
+                                        <div className="p-1.5 bg-white rounded-full text-orange-500"><Tag size={12}/></div>
+                                        <div className="flex-1">
+                                            <label className="text-[10px] text-orange-500 font-bold block mb-0.5">ส่วนลดร้านค้า (Shop Voucher)</label>
+                                            <input type="number" className="w-full bg-white border-0 rounded-md p-1.5 text-sm font-bold text-orange-600 placeholder:text-orange-200" placeholder="0.00" value={formData.shopVoucher} onChange={e=>setFormData({...formData,shopVoucher:e.target.value})}/>
+                                        </div>
                                    </div>
                                    {/* Summary Box */}
                                    <div className="mt-3 grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-lg border border-emerald-100">
-                                       <div className="text-center border-r border-slate-200">
-                                            <p className="text-[10px] text-slate-400 uppercase font-bold">ยอดขาย (Gross)</p>
-                                            <p className="text-lg font-bold text-emerald-600">{formatCurrency(parseFloat(formData.grossAmount) || 0)}</p>
-                                       </div>
-                                       <div className="text-center">
-                                            <p className="text-[10px] text-slate-400 uppercase font-bold">เงินเข้าจริง (Net)</p>
-                                            <p className="text-lg font-bold text-indigo-600">{formatCurrency(parseFloat(formData.amount) || 0)}</p>
-                                       </div>
+                                        <div className="text-center border-r border-slate-200">
+                                             <p className="text-[10px] text-slate-400 uppercase font-bold">ยอดขาย (Gross)</p>
+                                             <p className="text-lg font-bold text-emerald-600">{formatCurrency(parseFloat(formData.grossAmount) || 0)}</p>
+                                        </div>
+                                        <div className="text-center">
+                                             <p className="text-[10px] text-slate-400 uppercase font-bold">เงินเข้าจริง (Net)</p>
+                                             <p className="text-lg font-bold text-indigo-600">{formatCurrency(parseFloat(formData.amount) || 0)}</p>
+                                        </div>
                                    </div>
                                </div>
                            )}
@@ -812,9 +875,26 @@ const RecordManager = ({ user, transactions }) => {
                        </datalist>
                    </div>
                    <div className="grid grid-cols-2 gap-4">
-                       <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">{isEcommerceMode ? "เงินเข้าจริง (Net)" : "จำนวนเงิน"}</label><input type="number" className={`w-full bg-slate-50 border-0 rounded-xl p-3 text-lg font-bold text-right ${isEcommerceMode?'text-emerald-500':'text-slate-800'}`} value={formData.amount} onChange={e=>setFormData({...formData,amount:e.target.value})} readOnly={isEcommerceMode}/></div>
+                       <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">{isEcommerceMode ? "เงินเข้าจริง (Net)" : "ยอดตามบิล (Total)"}</label><input type="number" className={`w-full bg-slate-50 border-0 rounded-xl p-3 text-lg font-bold text-right ${isEcommerceMode?'text-emerald-500':'text-slate-800'}`} value={formData.amount} onChange={e=>setFormData({...formData,amount:e.target.value})} readOnly={isEcommerceMode}/></div>
                        <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">VAT</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm" value={formData.vatType} onChange={e=>setFormData({...formData,vatType:e.target.value})}><option value="included">รวม VAT</option><option value="excluded">แยก VAT</option><option value="none">ไม่มี VAT</option></select></div>
                    </div>
+                   
+                   {/* General Expense Voucher Field */}
+                   {formData.type === 'expense' && (
+                       <div className="flex gap-4">
+                           <div className="flex-1 space-y-1">
+                               <label className="text-xs font-bold text-slate-500 ml-1 flex items-center gap-1"><TicketPercent size={12}/> ส่วนลด / Voucher</label>
+                               <input type="number" className="w-full bg-orange-50/50 border border-orange-100 rounded-xl p-3 text-sm font-bold text-orange-600 text-right focus:ring-orange-200" placeholder="0.00" value={formData.expenseDiscount} onChange={e=>setFormData({...formData,expenseDiscount:e.target.value})}/>
+                           </div>
+                           <div className="flex-1 space-y-1 opacity-50">
+                               <label className="text-xs font-bold text-slate-500 ml-1">ยอดจ่ายจริง (Net Paid)</label>
+                               <div className="w-full bg-slate-100 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-600 text-right cursor-not-allowed">
+                                   {formatCurrency(calculated.expenseNetPaid)}
+                               </div>
+                           </div>
+                       </div>
+                   )}
+
                    {formData.type === 'expense' && (
                        <div className="p-3 bg-yellow-50 rounded-xl border border-yellow-100 flex items-center gap-3">
                            <div className="text-yellow-600 font-bold text-xs whitespace-nowrap">หัก ณ ที่จ่าย (WHT)</div>
@@ -877,6 +957,11 @@ const RecordManager = ({ user, transactions }) => {
                                                   Ref: {t.orderId || t.taxInvoiceNo}
                                               </div>
                                           )}
+                                          {t.expenseNetPaid && (
+                                              <div className="text-[10px] text-orange-400 pl-[52px] flex items-center gap-1">
+                                                  <TicketPercent size={10}/> จ่ายจริง: {formatCurrency(t.expenseNetPaid)} (ใช้ Voucher)
+                                              </div>
+                                          )}
                                           <div className="absolute bottom-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                             <button onClick={()=>handleEdit(t)} className="p-1.5 bg-slate-50 text-slate-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"><Edit size={14}/></button>
                                             <button onClick={()=>confirmDelete(t.id)} className="p-1.5 bg-slate-50 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"><Trash2 size={14}/></button>
@@ -889,9 +974,9 @@ const RecordManager = ({ user, transactions }) => {
                </div>
             </div>
          </div>
-       ) : (
-         /* HISTORY TAB (FULL TABLE VIEW) */
-         <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden animate-fadeIn">
+        ) : (
+          /* HISTORY TAB (FULL TABLE VIEW) */
+          <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden animate-fadeIn">
             {/* Same History Table logic but with improved styling */}
             <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4">
                 <h3 className="font-bold text-slate-700 flex items-center gap-2 text-lg"><Clock className="text-indigo-500"/> Transaction History</h3>
@@ -951,7 +1036,7 @@ const RecordManager = ({ user, transactions }) => {
                 </table>
             </div>
          </div>
-       )}
+        )}
     </div>
   );
 };
@@ -1020,14 +1105,14 @@ const StockManager = ({ user }) => {
                <tbody className="divide-y divide-slate-50">
                   {products.map(p => (
                       <tr key={p.id} className="hover:bg-orange-50/30">
-                         <td className="p-4 font-bold text-slate-700">{p.name} <span className="text-xs text-slate-400 font-normal">({p.unit})</span></td>
-                         <td className="p-4 text-center font-bold text-lg">{p.qty}</td>
-                         <td className="p-4 flex justify-center gap-2">
-                            <button onClick={()=>updateStock(p.id, p.qty, 1)} className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">+</button>
-                            <button onClick={()=>updateStock(p.id, p.qty, -1)} className="w-8 h-8 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center">-</button>
-                            <button onClick={()=>{setNewItem(p); setEditingId(p.id); setShowAddProductModal(true);}} className="p-2 text-indigo-500"><Edit size={16}/></button>
-                         </td>
-                      </tr>
+                          <td className="p-4 font-bold text-slate-700">{p.name} <span className="text-xs text-slate-400 font-normal">({p.unit})</span></td>
+                          <td className="p-4 text-center font-bold text-lg">{p.qty}</td>
+                          <td className="p-4 flex justify-center gap-2">
+                             <button onClick={()=>updateStock(p.id, p.qty, 1)} className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">+</button>
+                             <button onClick={()=>updateStock(p.id, p.qty, -1)} className="w-8 h-8 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center">-</button>
+                             <button onClick={()=>{setNewItem(p); setEditingId(p.id); setShowAddProductModal(true);}} className="p-2 text-indigo-500"><Edit size={16}/></button>
+                          </td>
+                       </tr>
                   ))}
                </tbody>
             </table>
@@ -1526,7 +1611,7 @@ const InvoiceGenerator = ({ user, invoices }) => {
                     <div className="text-center w-[40%]">
                         <div className="border-b border-dotted border-slate-400 h-8 mb-2"></div>
                         <p className="text-xs font-bold">ผู้รับวางบิล / ผู้รับของ</p>
-                        <p className="text-[10px] text-slate-400 uppercase">(Receiver Signature)</p>
+                        <p className="text-xs font-bold text-slate-400 uppercase">(Receiver Signature)</p>
                         <p className="text-xs mt-4">วันที่ ______/______/______</p>
                     </div>
                     <div className="text-center w-[40%]">
