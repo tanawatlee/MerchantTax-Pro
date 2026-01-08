@@ -3,7 +3,7 @@ import {
   PieChart, Wallet, FileText, Calculator, Save, TrendingUp, TrendingDown, 
   Download, Trash2, Edit, Menu, X, Printer, 
   CheckCircle, Loader, Target, User, Package, Search, Send, Clock, List, Settings, PlusCircle, Tag,
-  MessageCircle, Store, Code, Database, Image as ImageIcon, ChevronRight, Layout, File, BarChart2, DollarSign, Activity, MapPin, FileCheck, CheckSquare, XSquare, ArrowUpRight, ArrowDownRight, ShoppingBag, Eye, EyeOff, Inbox, XCircle, CreditCard, AlertTriangle
+  MessageCircle, Store, Code, Database, Image as ImageIcon, ChevronRight, Layout, File, BarChart2, DollarSign, Activity, MapPin, FileCheck, CheckSquare, XSquare, ArrowUpRight, ArrowDownRight, ShoppingBag, Eye, EyeOff, Inbox, XCircle, CreditCard, AlertTriangle, FileInput
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -30,7 +30,7 @@ const CONSTANTS = {
   SHOPS: ['eats and use', 'bubee bubee'],
   CATEGORIES: {
     INCOME: ['สินค้าทั่วไป', 'บริการ', 'อาหาร/เครื่องดื่ม', 'อื่นๆ'],
-    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'สินค้าเสียหาย/หมดอายุ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าขนส่ง', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า']
+    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าขนส่ง', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า']
   },
   CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
   VAT_RATES: {
@@ -152,7 +152,7 @@ const exportToExcel = (fileName, data, headerInfo = []) => {
 // --- Service Layer: API Calls ---
 const SmartTaxAI = {
   async generate(prompt, imageBase64 = null, expectJSON = false) {
-    const apiKey = ""; 
+    const apiKey = ""; // API Key provided by execution environment
     if (!apiKey) return null;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
@@ -183,7 +183,7 @@ const SmartTaxAI = {
   }
 };
 
-// --- Components ---
+// --- Helper Components ---
 
 const LoadingScreen = () => (
   <div className="flex flex-col items-center justify-center h-[100dvh] bg-slate-50 text-indigo-600 font-sarabun">
@@ -225,6 +225,7 @@ const StatCard = ({ title, subtitle, value, trend, color, icon, subText }) => {
   };
   const currentStyle = styles[color] || styles.indigo;
 
+  // Render trend indicator
   const renderTrend = () => {
       if (trend === undefined || trend === null) return null;
       const isPositive = trend > 0;
@@ -276,100 +277,267 @@ const Dashboard = ({ transactions, invoices }) => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     
+    // Helper to determine start/end dates based on period
     const getRange = (p, offset = 0) => {
         const d = new Date(today);
         let start, end;
+        
         if (p === 'day') {
-            d.setDate(d.getDate() - offset); start = new Date(d); end = new Date(d);
+            d.setDate(d.getDate() - offset);
+            start = new Date(d); end = new Date(d);
         } else if (p === 'week') {
-            d.setDate(d.getDate() - (offset * 7)); const day = d.getDay(); start = new Date(d); start.setDate(d.getDate() - day); end = new Date(start); end.setDate(start.getDate() + 6);
+            d.setDate(d.getDate() - (offset * 7));
+            const day = d.getDay();
+            start = new Date(d); start.setDate(d.getDate() - day);
+            end = new Date(start); end.setDate(start.getDate() + 6);
         } else if (p === 'month') {
-            d.setMonth(d.getMonth() - offset); start = new Date(d.getFullYear(), d.getMonth(), 1); end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+            d.setMonth(d.getMonth() - offset);
+            start = new Date(d.getFullYear(), d.getMonth(), 1);
+            end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
         } else if (p === 'year') {
-            d.setFullYear(d.getFullYear() - offset); start = new Date(d.getFullYear(), 0, 1); end = new Date(d.getFullYear(), 11, 31);
-        } else { return { start: new Date(0), end: new Date() }; }
-        start.setHours(0,0,0,0); end.setHours(23,59,59,999);
+            d.setFullYear(d.getFullYear() - offset);
+            start = new Date(d.getFullYear(), 0, 1);
+            end = new Date(d.getFullYear(), 11, 31);
+        } else {
+             return { start: new Date(0), end: new Date() };
+        }
+        
+        start.setHours(0,0,0,0);
+        end.setHours(23,59,59,999);
         return { start, end };
     };
 
     const currentRange = getRange(period, 0);
     const prevRange = getRange(period, 1);
+
     const filterTrans = (range) => transactions.filter(t => t.date >= range.start && t.date <= range.end);
+    
     const currentTrans = filterTrans(currentRange);
     const prevTrans = filterTrans(prevRange);
+
     const sumTotal = (arr, type) => arr.filter(t => t.type === type).reduce((sum, t) => sum + (Number(t.total) || 0), 0);
     
+    // Current Period Metrics
     const totalIncome = sumTotal(currentTrans, 'income');
     const totalExpense = sumTotal(currentTrans, 'expense');
     const netProfit = totalIncome - totalExpense;
     const profitMargin = totalIncome > 0 ? (netProfit / totalIncome) * 100 : 0;
     const operatingRatio = totalIncome > 0 ? (totalExpense / totalIncome) * 100 : 0;
 
+    // Previous Period Metrics
     const prevIncome = sumTotal(prevTrans, 'income');
     const prevExpense = sumTotal(prevTrans, 'expense');
     const prevProfit = prevIncome - prevExpense;
 
+    // Trends (% Change)
     const incomeTrend = prevIncome === 0 ? (totalIncome > 0 ? 100 : 0) : ((totalIncome - prevIncome) / prevIncome) * 100;
     const expenseTrend = prevExpense === 0 ? (totalExpense > 0 ? 100 : 0) : ((totalExpense - prevExpense) / prevExpense) * 100;
     const profitTrend = prevProfit === 0 ? (netProfit > 0 ? 100 : 0) : ((netProfit - prevProfit) / Math.abs(prevProfit)) * 100;
 
-    const expenseByCategory = {}; currentTrans.filter(t => t.type === 'expense').forEach(t => { expenseByCategory[t.category] = (expenseByCategory[t.category] || 0) + Number(t.total); });
-    const expenseData = Object.entries(expenseByCategory).map(([name, value]) => ({ name, value, percent: totalExpense > 0 ? (value / totalExpense) * 100 : 0 })).sort((a, b) => b.value - a.value);
+    // --- Expense Breakdown ---
+    const expenseByCategory = {};
+    currentTrans.filter(t => t.type === 'expense').forEach(t => {
+        expenseByCategory[t.category] = (expenseByCategory[t.category] || 0) + Number(t.total);
+    });
+    const expenseData = Object.entries(expenseByCategory)
+        .map(([name, value]) => ({ name, value, percent: totalExpense > 0 ? (value / totalExpense) * 100 : 0 }))
+        .sort((a, b) => b.value - a.value);
 
-    const incomeByChannel = {}; currentTrans.filter(t => t.type === 'income').forEach(t => { const ch = t.channel || 'อื่นๆ'; incomeByChannel[ch] = (incomeByChannel[ch] || 0) + Number(t.total); });
-    const incomeData = Object.entries(incomeByChannel).map(([name, value]) => ({ name, value, percent: totalIncome > 0 ? (value / totalIncome) * 100 : 0 })).sort((a, b) => b.value - a.value);
+    // --- Revenue by Channel (Income Composition) ---
+    const incomeByChannel = {};
+    currentTrans.filter(t => t.type === 'income').forEach(t => {
+        const ch = t.channel || 'อื่นๆ';
+        incomeByChannel[ch] = (incomeByChannel[ch] || 0) + Number(t.total);
+    });
+    const incomeData = Object.entries(incomeByChannel)
+        .map(([name, value]) => ({ name, value, percent: totalIncome > 0 ? (value / totalIncome) * 100 : 0 }))
+        .sort((a, b) => b.value - a.value);
 
-    const trendMap = {}; currentTrans.forEach(t => { const key = period === 'year' ? t.date.toLocaleDateString('th-TH', { month: 'short' }) : t.date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }); if (!trendMap[key]) trendMap[key] = { income: 0, expense: 0 }; if (t.type === 'income') trendMap[key].income += Number(t.total); else trendMap[key].expense += Number(t.total); });
+    // --- Trend Data for Chart ---
+    const trendMap = {};
+    currentTrans.forEach(t => {
+        const key = period === 'year' 
+            ? t.date.toLocaleDateString('th-TH', { month: 'short' }) 
+            : t.date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+        if (!trendMap[key]) trendMap[key] = { income: 0, expense: 0 };
+        if (t.type === 'income') trendMap[key].income += Number(t.total);
+        else trendMap[key].expense += Number(t.total);
+    });
     const trendData = Object.entries(trendMap).map(([label, data]) => ({ label, ...data })); 
 
     const estimatedTaxIncome = totalIncome * 0.4; 
     const estimatedTax = calculateProgressiveTax(estimatedTaxIncome); 
 
+    // --- Invoices Stats ---
     const issuedInvoices = invoices.filter(inv => inv.type === 'invoice' && inv.date >= currentRange.start && inv.date <= currentRange.end);
     const totalInvoiced = issuedInvoices.reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
     const unpaidInvoices = invoices.filter(inv => inv.type === 'invoice' && inv.status !== 'paid');
     const unpaidTotal = unpaidInvoices.reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
     
+    // Average Transaction Value
     const incomeCount = currentTrans.filter(t => t.type === 'income').length;
     const avgTicket = incomeCount > 0 ? totalIncome / incomeCount : 0;
 
-    return { totalIncome, totalExpense, netProfit, profitMargin, operatingRatio, incomeTrend, expenseTrend, profitTrend, expenseData, incomeData, trendData, estimatedTax, totalInvoiced, unpaidTotal, avgTicket, transCount: currentTrans.length, startDate: currentRange.start };
+    return { 
+        totalIncome, totalExpense, netProfit, profitMargin, operatingRatio,
+        incomeTrend, expenseTrend, profitTrend,
+        expenseData, incomeData, trendData, estimatedTax, totalInvoiced, unpaidTotal, avgTicket,
+        transCount: currentTrans.length,
+        startDate: currentRange.start
+    };
   }, [transactions, invoices, period]);
 
   return (
     <div className="space-y-6 w-full max-w-[2400px] mx-auto pb-10 animate-fadeIn p-4 md:p-6 bg-slate-50/50">
         <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-            <div><h2 className="text-2xl font-bold text-slate-800 tracking-tight">Business Dashboard</h2><p className="text-slate-500 text-sm">วิเคราะห์ผลประกอบการแบบ Real-time</p></div>
-            <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200">{['day', 'week', 'month', 'year', 'all'].map(p => (<button key={p} onClick={() => setPeriod(p)} className={`px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all ${period === p ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>{p === 'day' ? 'วันนี้' : p === 'week' ? 'สัปดาห์นี้' : p === 'month' ? 'เดือนนี้' : p === 'year' ? 'ปีนี้' : 'ทั้งหมด'}</button>))}</div>
+            <div>
+                <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Business Dashboard</h2>
+                <p className="text-slate-500 text-sm">วิเคราะห์ผลประกอบการแบบ Real-time</p>
+            </div>
+            <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200">
+                {['day', 'week', 'month', 'year', 'all'].map(p => (
+                    <button key={p} onClick={() => setPeriod(p)} className={`px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all ${period === p ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
+                        {p === 'day' ? 'วันนี้' : p === 'week' ? 'สัปดาห์นี้' : p === 'month' ? 'เดือนนี้' : p === 'year' ? 'ปีนี้' : 'ทั้งหมด'}
+                    </button>
+                ))}
+            </div>
         </div>
+
+        {/* --- ROW 1: Key Metrics --- */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard title="รายรับรวม (Income)" value={analytics.totalIncome} trend={analytics.incomeTrend} color="emerald" icon={<TrendingUp />} subText="เทียบกับช่วงก่อนหน้า" />
             <StatCard title="รายจ่ายรวม (Expense)" value={analytics.totalExpense} trend={analytics.expenseTrend} color="rose" icon={<TrendingDown />} subText="เทียบกับช่วงก่อนหน้า" />
             <StatCard title="กำไรสุทธิ (Net Profit)" value={analytics.netProfit} trend={analytics.profitTrend} color="indigo" icon={<Wallet />} subText={`Margin: ${analytics.profitMargin.toFixed(1)}%`} />
             <StatCard title="ลูกหนี้การค้า (Unpaid)" value={analytics.unpaidTotal} color="amber" icon={<Clock />} subText="ยอดรอเรียกเก็บ" />
         </div>
+        
+        {/* --- ROW 2: Financial Health & Estimates --- */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col justify-center">
-                <div className="flex justify-between items-end mb-4"><div><h3 className="font-bold text-slate-700 flex items-center gap-2"><Activity className="text-rose-500"/> Financial Health (Operating Ratio)</h3><p className="text-xs text-slate-400">สัดส่วนรายจ่ายต่อรายได้ (ยิ่งน้อยยิ่งดี)</p></div><span className={`text-2xl font-bold ${analytics.operatingRatio > 80 ? 'text-rose-500' : analytics.operatingRatio > 50 ? 'text-amber-500' : 'text-emerald-500'}`}>{analytics.operatingRatio.toFixed(1)}%</span></div>
-                <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden relative"><div className={`h-full rounded-full transition-all duration-1000 ${analytics.operatingRatio > 80 ? 'bg-rose-500' : analytics.operatingRatio > 50 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{width: `${Math.min(analytics.operatingRatio, 100)}%`}}></div></div>
-                <div className="flex justify-between mt-2 text-[10px] text-slate-400 font-bold uppercase"><span>Healthy (0-50%)</span><span>Warning (51-80%)</span><span>Critical ({'>'}80%)</span></div>
-            </div>
-            <div className="bg-gradient-to-br from-slate-800 to-slate-900 text-white p-6 rounded-3xl shadow-lg flex items-center justify-between relative overflow-hidden"><div className="relative z-10"><p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">ประมาณการภาษี (Est. Tax)</p><h3 className="text-3xl font-bold tracking-tight">{formatCurrency(analytics.estimatedTax)}</h3><p className="text-xs text-slate-500 mt-2">คำนวณแบบเหมาจ่ายเบื้องต้น (60%)</p></div><div className="p-4 rounded-full bg-white/10 text-white relative z-10"><Calculator size={32}/></div><div className="absolute -right-10 -bottom-10 w-40 h-40 bg-white/5 rounded-full blur-3xl"></div></div>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[400px]">
-                <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><BarChart2 className="text-indigo-500"/> แนวโน้มรายรับ-รายจ่าย</h3><button onClick={() => setShowValues(!showValues)} className={`text-xs px-3 py-1.5 rounded-lg font-bold border flex items-center gap-2 transition-all ${showValues ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'bg-white text-slate-500 border-slate-200'}`}>{showValues ? <Eye size={14}/> : <EyeOff size={14}/>} {showValues ? 'ซ่อนตัวเลข' : 'แสดงตัวเลข'}</button></div>
-                <div className="flex-1 flex items-end gap-2 overflow-x-auto pb-4 custom-scrollbar px-2 pt-6 relative">
-                    <div className="absolute inset-0 pointer-events-none flex flex-col justify-between pb-8 pt-6 px-2 opacity-10"><div className="border-b border-slate-900 w-full h-0"></div><div className="border-b border-slate-900 w-full h-0"></div><div className="border-b border-slate-900 w-full h-0"></div><div className="border-b border-slate-900 w-full h-0"></div><div className="border-b border-slate-900 w-full h-0"></div></div>
-                    {analytics.trendData.length > 0 ? analytics.trendData.map((d, i) => { const maxVal = Math.max(...analytics.trendData.map(x => Math.max(x.income, x.expense))) || 1; return ( <div key={i} className="flex-1 min-w-[50px] flex flex-col items-center gap-2 h-full justify-end group relative z-10">{showValues && (<div className="absolute bottom-[87%] flex flex-col items-center text-[9px] font-bold w-full opacity-80 gap-0.5 pointer-events-none">{d.income > 0 && <span className="text-emerald-600 bg-emerald-50 px-1 rounded">+{formatCompactNumber(d.income)}</span>}{d.expense > 0 && <span className="text-rose-500 bg-rose-50 px-1 rounded">-{formatCompactNumber(d.expense)}</span>}</div>)}<div className={`absolute bottom-full mb-2 bg-slate-900 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 pointer-events-none shadow-xl ${showValues ? 'hidden' : ''}`}><div className="text-emerald-300 font-bold mb-0.5">รายรับ: {formatCurrency(d.income)}</div><div className="text-rose-300 font-bold">รายจ่าย: {formatCurrency(d.expense)}</div></div><div className="flex gap-1 items-end w-full justify-center h-[85%] relative"><div className="w-4 md:w-8 bg-emerald-400 rounded-t-md hover:bg-emerald-500 transition-all relative group-hover:shadow-lg hover:-translate-y-1 duration-300" style={{height: `${(d.income/maxVal)*100}%`}}></div><div className="w-4 md:w-8 bg-rose-400 rounded-t-md hover:bg-rose-500 transition-all relative group-hover:shadow-lg hover:-translate-y-1 duration-300" style={{height: `${(d.expense/maxVal)*100}%`}}></div></div><span className="text-[10px] font-bold text-slate-500 whitespace-nowrap overflow-hidden text-ellipsis w-full text-center">{d.label}</span></div> ) }) : <div className="w-full h-full flex items-center justify-center text-slate-300">ไม่มีข้อมูลในช่วงเวลานี้</div>}
+                <div className="flex justify-between items-end mb-4">
+                    <div>
+                        <h3 className="font-bold text-slate-700 flex items-center gap-2"><Activity className="text-rose-500"/> Financial Health (Operating Ratio)</h3>
+                        <p className="text-xs text-slate-400">สัดส่วนรายจ่ายต่อรายได้ (ยิ่งน้อยยิ่งดี)</p>
+                    </div>
+                    <span className={`text-2xl font-bold ${analytics.operatingRatio > 80 ? 'text-rose-500' : analytics.operatingRatio > 50 ? 'text-amber-500' : 'text-emerald-500'}`}>{analytics.operatingRatio.toFixed(1)}%</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden relative">
+                    <div className={`h-full rounded-full transition-all duration-1000 ${analytics.operatingRatio > 80 ? 'bg-rose-500' : analytics.operatingRatio > 50 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{width: `${Math.min(analytics.operatingRatio, 100)}%`}}></div>
+                </div>
+                <div className="flex justify-between mt-2 text-[10px] text-slate-400 font-bold uppercase">
+                    <span>Healthy (0-50%)</span>
+                    <span>Warning (51-80%)</span>
+                    <span>Critical ({'>'}80%)</span>
                 </div>
             </div>
-            <div className="flex flex-col gap-6">
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex-1 flex flex-col"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2 mb-4"><ShoppingBag className="text-emerald-500"/> 5 อันดับรายได้สูงสุด</h3><div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">{analytics.incomeData.length > 0 ? analytics.incomeData.map((e, i) => (<div key={i} className="relative"><div className="flex justify-between text-sm mb-1 font-medium"><span className="text-slate-600">{e.name}</span><span className="text-slate-800">{e.percent.toFixed(1)}%</span></div><div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-teal-400" style={{width: `${e.percent}%`}}></div></div><p className="text-xs text-right text-slate-400 mt-1">{formatCurrency(e.value)}</p></div>)) : <div className="text-center py-4 text-slate-300 text-sm">ไม่มีรายรับ</div>}</div></div>
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex-1 flex flex-col"><h3 className="font-bold text-slate-700 text-lg flex items-center gap-2 mb-4"><PieChart className="text-rose-500"/> 5 อันดับค่าใช้จ่ายสูงสุด</h3><div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">{analytics.expenseData.length > 0 ? analytics.expenseData.map((e, i) => (<div key={i} className="relative"><div className="flex justify-between text-sm mb-1 font-medium"><span className="text-slate-600">{e.name}</span><span className="text-slate-800">{e.percent.toFixed(1)}%</span></div><div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-rose-400 to-orange-400" style={{width: `${e.percent}%`}}></div></div><p className="text-xs text-right text-slate-400 mt-1">{formatCurrency(e.value)}</p></div>)) : <div className="text-center py-4 text-slate-300 text-sm">ไม่มีรายจ่าย</div>}</div></div>
+            
+            <div className="bg-gradient-to-br from-slate-800 to-slate-900 text-white p-6 rounded-3xl shadow-lg flex items-center justify-between relative overflow-hidden">
+                 <div className="relative z-10">
+                     <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">ประมาณการภาษี (Est. Tax)</p>
+                     <h3 className="text-3xl font-bold tracking-tight">{formatCurrency(analytics.estimatedTax)}</h3>
+                     <p className="text-xs text-slate-500 mt-2">คำนวณแบบเหมาจ่ายเบื้องต้น (60%)</p>
+                 </div>
+                 <div className="p-4 rounded-full bg-white/10 text-white relative z-10"><Calculator size={32}/></div>
+                 <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-white/5 rounded-full blur-3xl"></div>
             </div>
         </div>
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-wrap gap-6 items-center"><div className="flex items-center gap-4 border-r border-slate-100 pr-6"><div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><DollarSign size={24}/></div><div><p className="text-xs font-bold text-slate-400 uppercase">ยอดขายเฉลี่ย (Ticket Size)</p><p className="text-xl font-bold text-slate-700">{formatCurrency(analytics.avgTicket)} <span className="text-xs text-slate-400 font-normal">/ รายการ</span></p></div></div><div className="flex items-center gap-4"><div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><FileText size={24}/></div><div><p className="text-xs font-bold text-slate-400 uppercase">เปิดบิลไปแล้ว (Invoiced)</p><p className="text-xl font-bold text-slate-700">{formatCurrency(analytics.totalInvoiced)}</p></div></div></div>
+
+        {/* --- ROW 3: Charts --- */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[400px]">
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><BarChart2 className="text-indigo-500"/> แนวโน้มรายรับ-รายจ่าย</h3>
+                    <button onClick={() => setShowValues(!showValues)} className={`text-xs px-3 py-1.5 rounded-lg font-bold border flex items-center gap-2 transition-all ${showValues ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'bg-white text-slate-500 border-slate-200'}`}>
+                        {showValues ? <Eye size={14}/> : <EyeOff size={14}/>} {showValues ? 'ซ่อนตัวเลข' : 'แสดงตัวเลข'}
+                    </button>
+                </div>
+                <div className="flex-1 flex items-end gap-2 overflow-x-auto pb-4 custom-scrollbar px-2 pt-6 relative">
+                    {/* Background Grid Lines */}
+                    <div className="absolute inset-0 pointer-events-none flex flex-col justify-between pb-8 pt-6 px-2 opacity-10">
+                        <div className="border-b border-slate-900 w-full h-0"></div>
+                        <div className="border-b border-slate-900 w-full h-0"></div>
+                        <div className="border-b border-slate-900 w-full h-0"></div>
+                        <div className="border-b border-slate-900 w-full h-0"></div>
+                        <div className="border-b border-slate-900 w-full h-0"></div>
+                    </div>
+
+                    {analytics.trendData.length > 0 ? analytics.trendData.map((d, i) => {
+                        const maxVal = Math.max(...analytics.trendData.map(x => Math.max(x.income, x.expense))) || 1;
+                        return (
+                            <div key={i} className="flex-1 min-w-[50px] flex flex-col items-center gap-2 h-full justify-end group relative z-10">
+                                {/* Always visible value if showValues is true */}
+                                {showValues && (
+                                    <div className="absolute bottom-[87%] flex flex-col items-center text-[9px] font-bold w-full opacity-80 gap-0.5 pointer-events-none">
+                                        {d.income > 0 && <span className="text-emerald-600 bg-emerald-50 px-1 rounded">+{formatCompactNumber(d.income)}</span>}
+                                        {d.expense > 0 && <span className="text-rose-500 bg-rose-50 px-1 rounded">-{formatCompactNumber(d.expense)}</span>}
+                                    </div>
+                                )}
+                                
+                                {/* Tooltip on Hover (Detailed) */}
+                                <div className={`absolute bottom-full mb-2 bg-slate-900 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 pointer-events-none shadow-xl ${showValues ? 'hidden' : ''}`}>
+                                    <div className="text-emerald-300 font-bold mb-0.5">รายรับ: {formatCurrency(d.income)}</div>
+                                    <div className="text-rose-300 font-bold">รายจ่าย: {formatCurrency(d.expense)}</div>
+                                </div>
+
+                                <div className="flex gap-1 items-end w-full justify-center h-[85%] relative">
+                                    <div className="w-4 md:w-8 bg-emerald-400 rounded-t-md hover:bg-emerald-500 transition-all relative group-hover:shadow-lg hover:-translate-y-1 duration-300" style={{height: `${(d.income/maxVal)*100}%`}}></div>
+                                    <div className="w-4 md:w-8 bg-rose-400 rounded-t-md hover:bg-rose-500 transition-all relative group-hover:shadow-lg hover:-translate-y-1 duration-300" style={{height: `${(d.expense/maxVal)*100}%`}}></div>
+                                </div>
+                                <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap overflow-hidden text-ellipsis w-full text-center">{d.label}</span>
+                            </div>
+                        )
+                    }) : <div className="w-full h-full flex items-center justify-center text-slate-300">ไม่มีข้อมูลในช่วงเวลานี้</div>}
+                </div>
+            </div>
+
+            <div className="flex flex-col gap-6">
+                 {/* Top Income Sources */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex-1 flex flex-col">
+                    <h3 className="font-bold text-slate-700 text-lg flex items-center gap-2 mb-4"><ShoppingBag className="text-emerald-500"/> 5 อันดับรายได้สูงสุด</h3>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
+                        {analytics.incomeData.length > 0 ? analytics.incomeData.map((e, i) => (
+                            <div key={i} className="relative">
+                                <div className="flex justify-between text-sm mb-1 font-medium"><span className="text-slate-600">{e.name}</span><span className="text-slate-800">{e.percent.toFixed(1)}%</span></div>
+                                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-teal-400" style={{width: `${e.percent}%`}}></div></div>
+                                <p className="text-xs text-right text-slate-400 mt-1">{formatCurrency(e.value)}</p>
+                            </div>
+                        )) : <div className="text-center py-4 text-slate-300 text-sm">ไม่มีข้อมูล</div>}
+                    </div>
+                </div>
+
+                {/* Top Expenses */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex-1 flex flex-col">
+                    <h3 className="font-bold text-slate-700 text-lg flex items-center gap-2 mb-4"><PieChart className="text-rose-500"/> 5 อันดับค่าใช้จ่ายสูงสุด</h3>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
+                        {analytics.expenseData.length > 0 ? analytics.expenseData.map((e, i) => (
+                            <div key={i} className="relative">
+                                <div className="flex justify-between text-sm mb-1 font-medium"><span className="text-slate-600">{e.name}</span><span className="text-slate-800">{e.percent.toFixed(1)}%</span></div>
+                                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-rose-400 to-orange-400" style={{width: `${e.percent}%`}}></div></div>
+                                <p className="text-xs text-right text-slate-400 mt-1">{formatCurrency(e.value)}</p>
+                            </div>
+                        )) : <div className="text-center py-4 text-slate-300 text-sm">ไม่มีข้อมูล</div>}
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        {/* Additional Stats Row */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-wrap gap-6 items-center">
+            <div className="flex items-center gap-4 border-r border-slate-100 pr-6">
+                <div className="p-3 bg-blue-50 text-blue-600 rounded-xl"><DollarSign size={24}/></div>
+                <div>
+                    <p className="text-xs font-bold text-slate-400 uppercase">ยอดขายเฉลี่ย (Ticket Size)</p>
+                    <p className="text-xl font-bold text-slate-700">{formatCurrency(analytics.avgTicket)} <span className="text-xs text-slate-400 font-normal">/ รายการ</span></p>
+                </div>
+            </div>
+             <div className="flex items-center gap-4">
+                <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><FileText size={24}/></div>
+                <div>
+                    <p className="text-xs font-bold text-slate-400 uppercase">เปิดบิลไปแล้ว (Invoiced)</p>
+                    <p className="text-xl font-bold text-slate-700">{formatCurrency(analytics.totalInvoiced)}</p>
+                </div>
+            </div>
+        </div>
     </div>
   );
 };
@@ -420,6 +588,20 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
           setFormData(prev => ({ ...prev, grossAmount: gross, amount: net })); 
       }
   }, [formData.itemAmount, formData.customerShippingFee, formData.platformFee, formData.shippingFee, formData.shopVoucher, isEcommerceMode, formData.expenseDiscount, formData.type]);
+
+  // Auto-set WHT Rate based on Category
+  useEffect(() => {
+    if (formData.type === 'expense') {
+      const c = formData.category;
+      let r = 0;
+      if (c === 'ค่าขนส่ง') r = 1;
+      else if (c.includes('ค่าโฆษณา')) r = 2;
+      else if (c === 'ค่าบริการ/จ้างทำของ') r = 3;
+      else if (c === 'ค่าเช่า') r = 5;
+      
+      setFormData(prev => ({ ...prev, whtRate: r }));
+    }
+  }, [formData.category, formData.type]);
 
   const calculated = useMemo(() => { 
       const baseAmount = isEcommerceMode ? (parseFloat(formData.grossAmount) || 0) : (parseFloat(formData.amount) || 0);
@@ -935,84 +1117,121 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
 };
 
 const TaxReport = ({ transactions }) => {
-    // ... [Previous logic from TaxReport Component - Restored and Fixed]
-    const [activeSubTab, setActiveSubTab] = useState('assessment');
-    const [year, setYear] = useState(new Date().getFullYear());
-    const [month, setMonth] = useState(new Date().getMonth());
-    const [taxQuestion, setTaxQuestion] = useState("");
-    const [taxAnswer, setTaxAnswer] = useState("");
-    const [isTaxLoading, setIsTaxLoading] = useState(false);
-    const [vatTab, setVatTab] = useState('sales');
-    const [viewingWhtCert, setViewingWhtCert] = useState(null); 
+  const [activeSubTab, setActiveSubTab] = useState('assessment');
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [month, setMonth] = useState(new Date().getMonth());
+  const [taxQuestion, setTaxQuestion] = useState("");
+  const [taxAnswer, setTaxAnswer] = useState("");
+  const [isTaxLoading, setIsTaxLoading] = useState(false);
+  const [vatTab, setVatTab] = useState('sales');
+  const [viewingWhtCert, setViewingWhtCert] = useState(null); 
 
-    const [bizName, setBizName] = useState('');
-    const [bizTaxId, setBizTaxId] = useState('');
-    const [bizBranch, setBizBranch] = useState('00000');
-    const [bizAddress, setBizAddress] = useState('');
+  const [bizName, setBizName] = useState('');
+  const [bizTaxId, setBizTaxId] = useState('');
+  const [bizBranch, setBizBranch] = useState('00000');
+  const [bizAddress, setBizAddress] = useState('');
 
-    const [closingStock, setClosingStock] = useState(0);
-    const [vatCreditForward, setVatCreditForward] = useState(0);
-    const [deductions, setDeductions] = useState({ 
-        personal: 60000, 
-        socialSecurity: 0, 
-        lifeInsurance: 0, 
-        family: 0, 
-        shopAndPay: 0, 
-        rmf_ssf: 0,
-        donation_general: 0,
-        donation_education: 0,
-        home_loan_interest: 0 
-    });
-    const [showDeductionModal, setShowDeductionModal] = useState(false);
-    const savedSeller = useMemo(() => { try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } catch (e) { return {}; } }, []);
+  // --- NEW STATES FOR ACCOUNTING ---
+  const [closingStock, setClosingStock] = useState(0);
+  const [vatCreditForward, setVatCreditForward] = useState(0);
+  const [deductions, setDeductions] = useState({ 
+      personal: 60000, 
+      socialSecurity: 0, 
+      lifeInsurance: 0, 
+      family: 0, 
+      shopAndPay: 0, 
+      rmf_ssf: 0,
+      donation_general: 0,
+      donation_education: 0,
+      home_loan_interest: 0 
+  });
+  const [showDeductionModal, setShowDeductionModal] = useState(false);
 
-    // ... (All calculation logic from previous versions included here)
-    const assessmentData = useMemo(() => {
-        const yearlyTrans = transactions.filter(t => normalizeDate(t.date).getFullYear() === year);
-        const totalIncome = yearlyTrans.filter(t => t.type === 'income').reduce((sum, t) => sum + (Number(t.total)||0), 0);
-        const totalPurchase = yearlyTrans.filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.total)||0), 0);
-        const actualExpense = Math.max(0, totalPurchase - closingStock); 
-        const generalDonation = Number(deductions.donation_general);
-        const educationDonation = Number(deductions.donation_education) * 2;
-        const totalDeductions = Object.entries(deductions).reduce((acc, [k, v]) => (!k.includes('donation') ? acc + Number(v) : acc), 0);
-        const expenseStandard = totalIncome * 0.6;
-        let netIncomeStandard = Math.max(0, totalIncome - expenseStandard - totalDeductions);
-        netIncomeStandard -= Math.min(netIncomeStandard * 0.1, educationDonation + generalDonation);
-        const taxStandard = calculateProgressiveTax(netIncomeStandard);
-        let netIncomeActual = Math.max(0, totalIncome - actualExpense - totalDeductions);
-        netIncomeActual -= Math.min(netIncomeActual * 0.1, educationDonation + generalDonation);
-        const taxActual = calculateProgressiveTax(netIncomeActual);
-        const recommendedMethod = taxStandard < taxActual ? 'standard' : 'actual';
-        const savedAmount = Math.abs(taxStandard - taxActual);
-        return { totalIncome, totalPurchase, actualExpense, expenseStandard, netIncomeStandard, netIncomeActual, taxStandard, taxActual, recommendedMethod, savedAmount, totalDeductions };
-    }, [transactions, year, deductions, closingStock]);
+  // Load Saved Seller Info for WHT Payer
+  const savedSeller = useMemo(() => { try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } catch (e) { return {}; } }, []);
 
-    const monthlyVat = useMemo(() => {
-        const filtered = transactions.filter(t => { const d = normalizeDate(t.date); return d.getFullYear() === year && d.getMonth() === month; });
-        const salesTax = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + (Number(t.vat)||0), 0);
-        const purchaseTax = filtered.filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.vat)||0), 0);
-        return { filtered, salesTax, purchaseTax, remit: Math.max(0, salesTax - (purchaseTax + vatCreditForward)), excess: Math.max(0, (purchaseTax + vatCreditForward) - salesTax) };
-    }, [transactions, year, month, vatCreditForward]);
+  const assessmentData = useMemo(() => {
+    const yearlyTrans = transactions.filter(t => normalizeDate(t.date).getFullYear() === year);
+    const totalIncome = yearlyTrans.filter(t => t.type === 'income').reduce((sum, t) => sum + (Number(t.total)||0), 0);
+    
+    // --- ACTUAL METHOD ADJUSTMENT ---
+    // Cost of Goods Sold = Opening (Assume 0 or included in Purchase) + Purchases - Closing Stock
+    const totalPurchase = yearlyTrans.filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.total)||0), 0);
+    const actualExpense = Math.max(0, totalPurchase - closingStock); 
 
-    const exportVATReport = (type) => {
-        const isSales = type === 'sales';
-        const relevantTrans = monthlyVat.filtered.filter(t => t.type === (isSales ? 'income' : 'expense') && t.vatType !== 'none');
-        const monthName = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'][month];
-        const data = [[`รายงานภาษี${isSales ? 'ขาย' : 'ซื้อ'}`], [`เดือนภาษี ${monthName} ปีภาษี ${year}`], [`ชื่อผู้ประกอบการ: ${bizName || '-'}`, `เลขประจำตัวผู้เสียภาษี: ${bizTaxId || '-'}`], [`ชื่อสถานประกอบการ/ที่อยู่: ${bizAddress || '-'}`], [`สำนักงานใหญ่/สาขาที่: ${bizBranch || '00000'}`], [], ['ลำดับ', 'วันเดือนปี', 'เลขที่ใบกำกับภาษี', 'รายการ', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขประจำตัวผู้เสียภาษี', 'สาขา', 'มูลค่าสินค้า/บริการ', 'จำนวนภาษีมูลค่าเพิ่ม'], ...relevantTrans.map((t, index) => [index + 1, formatDate(t.date), t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0,8)) : '-'), t.description || '', t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'), t.type === 'expense' ? (t.vendorTaxId || '') : '', t.type === 'expense' ? (t.vendorBranch || '00000') : '00000', (t.net || 0), (t.vat || 0)]), [], ['', '', '', '', '', '', 'รวม', relevantTrans.reduce((s,t) => s + (t.net||0), 0), relevantTrans.reduce((s,t) => s + (t.vat||0), 0)]];
-        if (!isSales) { data.push(['', '', '', '', '', '', 'เครดิตยกมา', '', vatCreditForward]); data.push(['', '', '', '', '', '', 'รวมภาษีซื้อสุทธิ', '', monthlyVat.purchaseTax + vatCreditForward]); }
-        exportToExcel(`รายงาน${isSales ? 'ภาษีขาย' : 'ภาษีซื้อ'}_${month+1}_${year}.xlsx`, data);
-    };
+    const generalDonation = Number(deductions.donation_general);
+    const educationDonation = Number(deductions.donation_education) * 2;
+    const totalDeductions = Object.entries(deductions).reduce((acc, [k, v]) => (!k.includes('donation') ? acc + Number(v) : acc), 0);
 
-    const exportWHTList = () => {
-        const whtTrans = transactions.filter(t => t.type === 'expense' && t.wht > 0);
-        const data = [['ลำดับ', 'วันที่จ่าย', 'ชื่อผู้ถูกหักภาษี', 'เลขประจำตัวผู้เสียภาษี', 'ที่อยู่', 'ประเภทเงินได้', 'อัตราภาษี', 'จำนวนเงินที่จ่าย', 'ภาษีที่หัก'], ...whtTrans.map((t, i) => [i + 1, formatDate(t.date), t.vendorName, t.vendorTaxId || '-', t.vendorAddress || '-', t.description, `${t.whtRate}%`, t.net, t.wht]), [], ['', '', '', '', '', 'รวมทั้งสิ้น', '', whtTrans.reduce((s,t)=>s+t.net,0), whtTrans.reduce((s,t)=>s+t.wht,0)]];
-        exportToExcel(`รายงานหักณที่จ่าย_50ทวิ_All.xlsx`, data);
-    };
+    // Standard Method
+    const expenseStandard = totalIncome * 0.6;
+    let netIncomeStandard = Math.max(0, totalIncome - expenseStandard - totalDeductions);
+    netIncomeStandard -= Math.min(netIncomeStandard * 0.1, educationDonation + generalDonation); // Donation cap 10%
+    const taxStandard = calculateProgressiveTax(netIncomeStandard);
 
-    const handleAskTax = async () => { if (!taxQuestion.trim()) return; setIsTaxLoading(true); await new Promise(r => setTimeout(r, 1500)); setTaxAnswer("สามารถนำใบกำกับภาษีเต็มรูปมาลดหย่อนได้ครับ หากมีการระบุชื่อและที่อยู่ครบถ้วน"); setIsTaxLoading(false); };
-    const handlePrintWht = () => { const element = document.getElementById('wht-cert-preview'); const opt = { margin: 5, filename: `50Tavi-${viewingWhtCert.id}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }; if (!window.html2pdf) { const script = document.createElement('script'); script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"; script.onload = () => { window.html2pdf().set(opt).from(element).save(); }; document.body.appendChild(script); } else { window.html2pdf().set(opt).from(element).save(); } };
+    // Actual Method
+    let netIncomeActual = Math.max(0, totalIncome - actualExpense - totalDeductions);
+    netIncomeActual -= Math.min(netIncomeActual * 0.1, educationDonation + generalDonation);
+    const taxActual = calculateProgressiveTax(netIncomeActual);
 
-    return (
+    const recommendedMethod = taxStandard < taxActual ? 'standard' : 'actual';
+    const savedAmount = Math.abs(taxStandard - taxActual);
+    
+    return { totalIncome, totalPurchase, actualExpense, expenseStandard, netIncomeStandard, netIncomeActual, taxStandard, taxActual, recommendedMethod, savedAmount, totalDeductions };
+  }, [transactions, year, deductions, closingStock]);
+
+  const monthlyVat = useMemo(() => {
+    const filtered = transactions.filter(t => { const d = normalizeDate(t.date); return d.getFullYear() === year && d.getMonth() === month; });
+    const salesTax = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + (Number(t.vat)||0), 0);
+    const purchaseTax = filtered.filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.vat)||0), 0);
+    // Remit = Sales - (Purchase + Credit Forward)
+    return { filtered, salesTax, purchaseTax, remit: Math.max(0, salesTax - (purchaseTax + vatCreditForward)), excess: Math.max(0, (purchaseTax + vatCreditForward) - salesTax) };
+  }, [transactions, year, month, vatCreditForward]);
+
+  const exportVATReport = (type) => {
+    const isSales = type === 'sales';
+    const relevantTrans = monthlyVat.filtered.filter(t => t.type === (isSales ? 'income' : 'expense') && t.vatType !== 'none');
+    const monthNames = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    const monthName = monthNames[month];
+    const data = [[`รายงานภาษี${isSales ? 'ขาย' : 'ซื้อ'}`], [`เดือนภาษี ${monthName} ปีภาษี ${year}`], [`ชื่อผู้ประกอบการ: ${bizName || '-'}`, `เลขประจำตัวผู้เสียภาษี: ${bizTaxId || '-'}`], [`ชื่อสถานประกอบการ/ที่อยู่: ${bizAddress || '-'}`], [`สำนักงานใหญ่/สาขาที่: ${bizBranch || '00000'}`], [], ['ลำดับ', 'วันเดือนปี', 'เลขที่ใบกำกับภาษี', 'รายการ', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขประจำตัวผู้เสียภาษี', 'สาขา', 'มูลค่าสินค้า/บริการ', 'จำนวนภาษีมูลค่าเพิ่ม'], ...relevantTrans.map((t, index) => [index + 1, formatDate(t.date), t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0,8)) : '-'), t.description || '', t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'), t.type === 'expense' ? (t.vendorTaxId || '') : '', t.type === 'expense' ? (t.vendorBranch || '00000') : '00000', (t.net || 0), (t.vat || 0)]), [], ['', '', '', '', '', '', 'รวม', relevantTrans.reduce((s,t) => s + (t.net||0), 0), relevantTrans.reduce((s,t) => s + (t.vat||0), 0)]];
+    if (!isSales) {
+        data.push(['', '', '', '', '', '', 'เครดิตยกมา', '', vatCreditForward]);
+        data.push(['', '', '', '', '', '', 'รวมภาษีซื้อสุทธิ', '', monthlyVat.purchaseTax + vatCreditForward]);
+    }
+    exportToExcel(`รายงาน${isSales ? 'ภาษีขาย' : 'ภาษีซื้อ'}_${month+1}_${year}.xlsx`, data);
+  };
+
+  const exportWHTList = () => {
+      const whtTrans = transactions.filter(t => t.type === 'expense' && t.wht > 0);
+      const data = [
+          ['ลำดับ', 'วันที่จ่าย', 'ชื่อผู้ถูกหักภาษี', 'เลขประจำตัวผู้เสียภาษี', 'ที่อยู่', 'ประเภทเงินได้', 'อัตราภาษี', 'จำนวนเงินที่จ่าย', 'ภาษีที่หัก'],
+          ...whtTrans.map((t, i) => [
+              i + 1,
+              formatDate(t.date),
+              t.vendorName,
+              t.vendorTaxId || '-',
+              t.vendorAddress || '-',
+              t.description,
+              `${t.whtRate}%`,
+              t.net,
+              t.wht
+          ]),
+          [],
+          ['', '', '', '', '', 'รวมทั้งสิ้น', '', whtTrans.reduce((s,t)=>s+t.net,0), whtTrans.reduce((s,t)=>s+t.wht,0)]
+      ];
+      exportToExcel(`รายงานหักณที่จ่าย_50ทวิ_All.xlsx`, data);
+  };
+
+  const handleAskTax = async () => { if (!taxQuestion.trim()) return; setIsTaxLoading(true); await new Promise(r => setTimeout(r, 1500)); setTaxAnswer("สามารถนำใบกำกับภาษีเต็มรูปมาลดหย่อนได้ครับ หากมีการระบุชื่อและที่อยู่ครบถ้วน"); setIsTaxLoading(false); };
+
+  const handlePrintWht = () => {
+      const element = document.getElementById('wht-cert-preview');
+      const opt = { margin: 5, filename: `50Tavi-${viewingWhtCert.id}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } };
+      if (!window.html2pdf) { const script = document.createElement('script'); script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"; script.onload = () => { window.html2pdf().set(opt).from(element).save(); }; document.body.appendChild(script); } 
+      else { window.html2pdf().set(opt).from(element).save(); }
+  };
+
+  return (
     <div className="space-y-6">
       {/* 50 Tavi Preview Modal */}
       {viewingWhtCert && (
@@ -1025,15 +1244,75 @@ const TaxReport = ({ transactions }) => {
               <div className="flex-1 overflow-auto bg-slate-200 p-8 flex justify-center">
                   <div id="wht-cert-preview" className="bg-white w-[210mm] min-h-[297mm] p-[15mm] text-[12px] font-sarabun text-slate-900 shadow-xl relative">
                       <div className="text-center font-bold text-lg mb-4">หนังสือรับรองการหักภาษี ณ ที่จ่าย</div>
-                      <div className="flex justify-between mb-2"><div>เล่มที่ ____________</div><div>เลขที่ {viewingWhtCert.id.slice(0, 8)}</div></div>
-                      <div className="border border-black p-2 mb-2"><div className="font-bold">ผู้มีหน้าที่หักภาษี ณ ที่จ่าย:</div><div>ชื่อ: {savedSeller.sellerName || '____________________'}</div><div>เลขประจำตัวผู้เสียภาษี: {savedSeller.sellerTaxId || '____________________'}</div><div>ที่อยู่: {[savedSeller.sellerAddress, savedSeller.sellerSubDistrict, savedSeller.sellerDistrict, savedSeller.sellerProvince, savedSeller.sellerZipCode].filter(Boolean).join(' ')}</div></div>
-                      <div className="border border-black p-2 mb-2"><div className="font-bold">ผู้ถูกหักภาษี ณ ที่จ่าย:</div><div>ชื่อ: {viewingWhtCert.vendorName || '____________________'}</div><div>เลขประจำตัวผู้เสียภาษี: {viewingWhtCert.vendorTaxId || '____________________'}</div><div>ที่อยู่: {viewingWhtCert.vendorAddress || '____________________'}</div></div>
-                      <table className="w-full border border-black mb-4"><thead><tr className="text-center bg-slate-100"><th className="border border-black p-1">ประเภทเงินได้</th><th className="border border-black p-1 w-24">วัน เดือน ปี<br/>ที่จ่าย</th><th className="border border-black p-1 w-24">จำนวนเงิน<br/>ที่จ่าย</th><th className="border border-black p-1 w-24">ภาษีที่หัก<br/>และนำส่ง</th></tr></thead><tbody><tr><td className="border border-black p-2 align-top h-32">{viewingWhtCert.whtRate === 1 ? '1. ค่าขนส่ง' : viewingWhtCert.whtRate === 3 ? '2. ค่าบริการ/จ้างทำของ' : viewingWhtCert.whtRate === 5 ? '3. ค่าเช่า' : '4. อื่นๆ'}<br/>({viewingWhtCert.description})</td><td className="border border-black p-2 text-center align-top">{formatDate(viewingWhtCert.date)}</td><td className="border border-black p-2 text-right align-top">{formatCurrency(viewingWhtCert.net)}</td><td className="border border-black p-2 text-right align-top">{formatCurrency(viewingWhtCert.wht)}</td></tr><tr className="font-bold bg-slate-50"><td className="border border-black p-1 text-center">รวมเงินที่จ่ายและภาษีที่หักนำส่ง</td><td className="border border-black p-1"></td><td className="border border-black p-1 text-right">{formatCurrency(viewingWhtCert.net)}</td><td className="border border-black p-1 text-right">{formatCurrency(viewingWhtCert.wht)}</td></tr></tbody></table>
-                      <div className="mb-4">รวมเงินภาษีที่หักและนำส่ง (ตัวอักษร): <span className="font-bold underline decoration-dotted">{thaiBahtText(viewingWhtCert.wht)}</span></div>
-                      <div className="flex justify-between items-end mt-12"><div className="text-center w-1/2"><div className="mb-2">ขอรับรองว่าข้อความและตัวเลขดังกล่าวข้างต้นถูกต้องตรงกับความจริงทุกประการ</div><div className="border-b border-dotted border-black h-8 w-4/5 mx-auto"></div><div className="mt-1">ลงชื่อ ผู้มีหน้าที่หักภาษี ณ ที่จ่าย</div><div className="mt-1">วัน เดือน ปี ที่ออกหนังสือรับรองฯ: {formatDate(new Date())}</div></div></div>
+                      <div className="flex justify-between mb-2">
+                          <div>เล่มที่ ____________</div>
+                          <div>เลขที่ {viewingWhtCert.id.slice(0, 8)}</div>
+                      </div>
+                      
+                      {/* Payer */}
+                      <div className="border border-black p-2 mb-2">
+                          <div className="font-bold">ผู้มีหน้าที่หักภาษี ณ ที่จ่าย:</div>
+                          <div>ชื่อ: {savedSeller.sellerName || '____________________'}</div>
+                          <div>เลขประจำตัวผู้เสียภาษี: {savedSeller.sellerTaxId || '____________________'}</div>
+                          <div>ที่อยู่: {[savedSeller.sellerAddress, savedSeller.sellerSubDistrict, savedSeller.sellerDistrict, savedSeller.sellerProvince, savedSeller.sellerZipCode].filter(Boolean).join(' ')}</div>
+                      </div>
+
+                      {/* Payee */}
+                      <div className="border border-black p-2 mb-2">
+                          <div className="font-bold">ผู้ถูกหักภาษี ณ ที่จ่าย:</div>
+                          <div>ชื่อ: {viewingWhtCert.vendorName || '____________________'}</div>
+                          <div>เลขประจำตัวผู้เสียภาษี: {viewingWhtCert.vendorTaxId || '____________________'}</div>
+                          <div>ที่อยู่: {viewingWhtCert.vendorAddress || '____________________'}</div>
+                      </div>
+
+                      <table className="w-full border border-black mb-4">
+                          <thead>
+                              <tr className="text-center bg-slate-100">
+                                  <th className="border border-black p-1">ประเภทเงินได้</th>
+                                  <th className="border border-black p-1 w-24">วัน เดือน ปี<br/>ที่จ่าย</th>
+                                  <th className="border border-black p-1 w-24">จำนวนเงิน<br/>ที่จ่าย</th>
+                                  <th className="border border-black p-1 w-24">ภาษีที่หัก<br/>และนำส่ง</th>
+                              </tr>
+                          </thead>
+                          <tbody>
+                              <tr>
+                                  <td className="border border-black p-2 align-top h-32">
+                                      {viewingWhtCert.whtRate === 1 ? '1. ค่าขนส่ง' : 
+                                       viewingWhtCert.whtRate === 3 ? '2. ค่าบริการ/จ้างทำของ' : 
+                                       viewingWhtCert.whtRate === 5 ? '3. ค่าเช่า' : '4. อื่นๆ'}
+                                       <br/>({viewingWhtCert.description})
+                                  </td>
+                                  <td className="border border-black p-2 text-center align-top">{formatDate(viewingWhtCert.date)}</td>
+                                  <td className="border border-black p-2 text-right align-top">{formatCurrency(viewingWhtCert.net)}</td>
+                                  <td className="border border-black p-2 text-right align-top">{formatCurrency(viewingWhtCert.wht)}</td>
+                              </tr>
+                              <tr className="font-bold bg-slate-50">
+                                  <td className="border border-black p-1 text-center">รวมเงินที่จ่ายและภาษีที่หักนำส่ง</td>
+                                  <td className="border border-black p-1"></td>
+                                  <td className="border border-black p-1 text-right">{formatCurrency(viewingWhtCert.net)}</td>
+                                  <td className="border border-black p-1 text-right">{formatCurrency(viewingWhtCert.wht)}</td>
+                              </tr>
+                          </tbody>
+                      </table>
+                      
+                      <div className="mb-4">
+                          รวมเงินภาษีที่หักและนำส่ง (ตัวอักษร): <span className="font-bold underline decoration-dotted">{thaiBahtText(viewingWhtCert.wht)}</span>
+                      </div>
+
+                      <div className="flex justify-between items-end mt-12">
+                          <div className="text-center w-1/2">
+                              <div className="mb-2">ขอรับรองว่าข้อความและตัวเลขดังกล่าวข้างต้นถูกต้องตรงกับความจริงทุกประการ</div>
+                              <div className="border-b border-dotted border-black h-8 w-4/5 mx-auto"></div>
+                              <div className="mt-1">ลงชื่อ ผู้มีหน้าที่หักภาษี ณ ที่จ่าย</div>
+                              <div className="mt-1">วัน เดือน ปี ที่ออกหนังสือรับรองฯ: {formatDate(new Date())}</div>
+                          </div>
+                      </div>
                   </div>
               </div>
-              <div className="p-4 border-t bg-white rounded-b-xl flex justify-end gap-3"><button onClick={()=>setViewingWhtCert(null)} className="px-6 py-2 rounded-lg border border-slate-300 text-slate-600 font-bold hover:bg-slate-50">ปิด</button><button onClick={handlePrintWht} className="px-6 py-2 rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700 shadow-lg flex items-center gap-2"><Printer size={18}/> พิมพ์ / บันทึก PDF</button></div>
+              <div className="p-4 border-t bg-white rounded-b-xl flex justify-end gap-3">
+                  <button onClick={()=>setViewingWhtCert(null)} className="px-6 py-2 rounded-lg border border-slate-300 text-slate-600 font-bold hover:bg-slate-50">ปิด</button>
+                  <button onClick={handlePrintWht} className="px-6 py-2 rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700 shadow-lg flex items-center gap-2"><Printer size={18}/> พิมพ์ / บันทึก PDF</button>
+              </div>
            </div>
         </div>
       )}
@@ -1045,7 +1324,25 @@ const TaxReport = ({ transactions }) => {
       {activeSubTab === 'assessment' && (<div className="space-y-6 animate-fadeIn">
         <div className="bg-slate-800 text-white p-6 rounded-2xl shadow-lg flex flex-col md:flex-row items-center justify-between gap-4"><div><h3 className="text-yellow-400 font-bold text-lg mb-1 flex items-center gap-2"><Target size={20}/> AI Tax Recommendation</h3><p className="opacity-90">ปี {year} นี้ ควรยื่นแบบ <strong>{assessmentData.recommendedMethod === 'standard' ? 'เหมา 60%' : 'ตามจริง (Itemized)'}</strong> <br/>ประหยัดภาษีได้ประมาณ <span className="text-green-400 font-bold underline">{formatCurrency(assessmentData.savedAmount)} บาท</span></p></div><div className="text-right bg-white/10 p-4 rounded-xl backdrop-blur-sm min-w-[200px]"><p className="text-xs text-slate-300 uppercase">ประมาณการภาษีที่ต้องจ่าย</p><p className="text-3xl font-bold text-white">{formatCurrency(assessmentData.recommendedMethod === 'standard' ? assessmentData.taxStandard : assessmentData.taxActual)}</p></div></div>
         
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm"><h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Settings size={18}/> ข้อมูลเพิ่มเติม (สำหรับวิธีคิดค่าใช้จ่ายจริง)</h4><div className="flex flex-col md:flex-row gap-6"><div className="flex-1"><label className="block text-xs font-bold text-slate-500 mb-2">มูลค่าสินค้าคงเหลือปลายงวด (Closing Stock)</label><div className="relative"><input type="number" className="w-full bg-slate-50 border-0 rounded-xl p-3 pl-10 font-bold text-slate-700" value={closingStock} onChange={e=>setClosingStock(Number(e.target.value))} /><Package className="absolute left-3 top-3 text-slate-400" size={18}/></div><p className="text-[10px] text-slate-400 mt-2">* จำเป็นสำหรับการคำนวณต้นทุนขายที่ถูกต้อง (ต้นทุน = ซื้อ - สินค้าคงเหลือ)</p></div><div className="flex-1 bg-slate-50 p-4 rounded-xl"><p className="text-xs text-slate-500 mb-1">รายจ่ายจริง (คำนวณเบื้องต้น)</p><p className="text-xl font-bold text-slate-700">{formatCurrency(assessmentData.actualExpense)}</p><p className="text-[10px] text-rose-500 mt-1">มาจาก: ยอดซื้อ ({formatCurrency(assessmentData.totalPurchase)}) - สต็อก ({formatCurrency(closingStock)})</p></div></div></div>
+        {/* Actual Expense Setting */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Settings size={18}/> ข้อมูลเพิ่มเติม (สำหรับวิธีคิดค่าใช้จ่ายจริง)</h4>
+            <div className="flex flex-col md:flex-row gap-6">
+               <div className="flex-1">
+                   <label className="block text-xs font-bold text-slate-500 mb-2">มูลค่าสินค้าคงเหลือปลายงวด (Closing Stock)</label>
+                   <div className="relative">
+                       <input type="number" className="w-full bg-slate-50 border-0 rounded-xl p-3 pl-10 font-bold text-slate-700" value={closingStock} onChange={e=>setClosingStock(Number(e.target.value))} />
+                       <Package className="absolute left-3 top-3 text-slate-400" size={18}/>
+                   </div>
+                   <p className="text-[10px] text-slate-400 mt-2">* จำเป็นสำหรับการคำนวณต้นทุนขายที่ถูกต้อง (ต้นทุน = ซื้อ - สินค้าคงเหลือ)</p>
+               </div>
+               <div className="flex-1 bg-slate-50 p-4 rounded-xl">
+                   <p className="text-xs text-slate-500 mb-1">รายจ่ายจริง (คำนวณเบื้องต้น)</p>
+                   <p className="text-xl font-bold text-slate-700">{formatCurrency(assessmentData.actualExpense)}</p>
+                   <p className="text-[10px] text-rose-500 mt-1">มาจาก: ยอดซื้อ ({formatCurrency(assessmentData.totalPurchase)}) - สต็อก ({formatCurrency(closingStock)})</p>
+               </div>
+            </div>
+        </div>
 
         <div className="bg-white p-4 rounded-2xl border border-slate-200 flex justify-between items-center shadow-sm"><div className="flex items-center gap-3"><div className="p-2 bg-blue-50 text-blue-600 rounded-lg"><User size={20}/></div><div><h4 className="font-bold text-slate-700">ค่าลดหย่อน (Deductions)</h4><p className="text-xs text-slate-400">ระบุค่าลดหย่อนส่วนตัว ประกัน และครอบครัว</p></div></div><div className="flex items-center gap-4"><p className="font-bold text-slate-700 text-lg">{formatCurrency(assessmentData.totalDeductions)}</p><button onClick={() => setShowDeductionModal(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold transition-all">แก้ไข</button></div></div>
         
@@ -1058,9 +1355,26 @@ const TaxReport = ({ transactions }) => {
       </div>)}
       
       {activeSubTab === 'vat' && (<div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 animate-fadeIn"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-slate-700">VAT Summary (ภ.พ.30)</h3><div className="flex gap-2"><select value={month} onChange={e=>setMonth(Number(e.target.value))} className="bg-slate-50 border-0 rounded p-2 text-sm font-bold">{['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'].map((m,i)=><option key={i} value={i}>{m}</option>)}</select><select value={year} onChange={e=>setYear(Number(e.target.value))} className="bg-slate-50 border-0 rounded p-2 text-sm font-bold"><option value={2024}>2024</option><option value={2025}>2025</option><option value={2026}>2026</option></select></div></div>
-      <div className="mb-6 p-4 bg-slate-50 rounded-2xl border border-slate-200"><label className="text-xs font-bold text-slate-500 mb-2 block">เครดิตภาษีซื้อยกมา (VAT Credit Forward from Last Month)</label><div className="flex gap-4 items-center"><input type="number" className="bg-white border-0 rounded-xl p-3 font-bold text-indigo-600 w-full md:w-64 shadow-sm" placeholder="0.00" value={vatCreditForward} onChange={e=>setVatCreditForward(Number(e.target.value))}/><span className="text-xs text-slate-400">ระบุยอดภาษีที่ชำระเกินไว้จากเดือนก่อนหน้า</span></div></div>
-      <div className="grid grid-cols-4 gap-4 text-center mb-8"><div className="p-4 bg-emerald-50 rounded-xl"><p className="text-xs text-emerald-600 font-bold uppercase">ภาษีขาย</p><p className="text-xl font-bold text-emerald-700">{formatCurrency(monthlyVat.salesTax)}</p></div><div className="p-4 bg-rose-50 rounded-xl"><p className="text-xs text-rose-600 font-bold uppercase">ภาษีซื้อ</p><p className="text-xl font-bold text-rose-700">{formatCurrency(monthlyVat.purchaseTax)}</p></div><div className="p-4 bg-orange-50 rounded-xl"><p className="text-xs text-orange-600 font-bold uppercase">เครดิตยกมา</p><p className="text-xl font-bold text-orange-700">{formatCurrency(vatCreditForward)}</p></div><div className={`p-4 rounded-xl ${monthlyVat.remit > 0 ? 'bg-indigo-50' : 'bg-green-50'}`}><p className={`text-xs font-bold uppercase ${monthlyVat.remit > 0 ? 'text-indigo-600' : 'text-green-600'}`}>{monthlyVat.remit > 0 ? 'ต้องนำส่ง' : 'ชำระเกิน (ยกไป)'}</p><p className={`text-xl font-bold ${monthlyVat.remit > 0 ? 'text-indigo-700' : 'text-green-700'}`}>{formatCurrency(monthlyVat.remit > 0 ? monthlyVat.remit : monthlyVat.excess)}</p></div></div>
-      <div className="border-t border-slate-100 pt-6"><div className="bg-slate-50 p-4 rounded-xl mb-6 border border-slate-200"><div className="flex items-center gap-2 mb-3 text-slate-700 font-bold"><Settings size={18}/> ตั้งค่าหัวกระดาษรายงาน (Report Header)</div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><input className="border border-slate-300 rounded p-2 text-sm" placeholder="ชื่อผู้ประกอบการ (ร้านค้า)" value={bizName} onChange={e=>setBizName(e.target.value)}/><input className="border border-slate-300 rounded p-2 text-sm" placeholder="เลขประจำตัวผู้เสียภาษี (13 หลัก)" value={bizTaxId} onChange={e=>setBizTaxId(e.target.value)}/><input className="border border-slate-300 rounded p-2 text-sm md:col-span-2" placeholder="ที่อยู่สถานประกอบการ" value={bizAddress} onChange={e=>setBizAddress(e.target.value)}/><input className="border border-slate-300 rounded p-2 text-sm" placeholder="สาขา (เช่น 00000)" value={bizBranch} onChange={e=>setBizBranch(e.target.value)}/></div></div><div className="flex justify-between items-center mb-4"><div className="flex bg-slate-100 p-1 rounded-lg"><button onClick={()=>setVatTab('sales')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${vatTab==='sales'?'bg-white shadow text-emerald-600':'text-slate-500'}`}>รายงานภาษีขาย</button><button onClick={()=>setVatTab('purchase')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${vatTab==='purchase'?'bg-white shadow text-rose-600':'text-slate-500'}`}>รายงานภาษีซื้อ</button></div><button onClick={() => exportVATReport(vatTab)} className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-indigo-700 shadow-sm transition-all"><FileText size={16}/> Export Excel</button></div><div className="overflow-x-auto rounded-xl border border-slate-100"><table className="w-full text-sm text-left whitespace-nowrap"><thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase"><tr><th className="p-3">วันที่</th><th className="p-3">เลขที่ใบกำกับ</th><th className="p-3">รายการ</th><th className="p-3 text-right">มูลค่า</th><th className="p-3 text-right">VAT</th><th className="p-3 text-right">รวม</th></tr></thead><tbody className="divide-y divide-slate-50">{monthlyVat.filtered.filter(t => t.type === (vatTab === 'sales' ? 'income' : 'expense') && t.vatType !== 'none').map(t => (<tr key={t.id} className="hover:bg-slate-50"><td className="p-3 text-xs">{formatDate(t.date)}</td><td className="p-3 text-xs font-mono">{t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0,8)) : '-')}</td><td className="p-3 text-xs truncate max-w-[150px]">{t.description}</td><td className="p-3 text-right">{formatCurrency(t.net)}</td><td className={`p-3 text-right font-bold ${vatTab==='sales'?'text-emerald-600':'text-rose-600'}`}>{formatCurrency(t.vat)}</td><td className="p-3 text-right font-bold">{formatCurrency(t.total)}</td></tr>))}{monthlyVat.filtered.filter(t => t.type === (vatTab === 'sales' ? 'income' : 'expense') && t.vatType !== 'none').length === 0 && (<tr><td colSpan="6" className="p-8 text-center text-slate-400">ไม่พบรายการภาษีในเดือนนี้</td></tr>)}</tbody></table></div></div></div>)}
+      
+      <div className="mb-6 p-4 bg-slate-50 rounded-2xl border border-slate-200">
+          <label className="text-xs font-bold text-slate-500 mb-2 block">เครดิตภาษีซื้อยกมา (VAT Credit Forward from Last Month)</label>
+          <div className="flex gap-4 items-center">
+              <input type="number" className="bg-white border-0 rounded-xl p-3 font-bold text-indigo-600 w-full md:w-64 shadow-sm" placeholder="0.00" value={vatCreditForward} onChange={e=>setVatCreditForward(Number(e.target.value))}/>
+              <span className="text-xs text-slate-400">ระบุยอดภาษีที่ชำระเกินไว้จากเดือนก่อนหน้า</span>
+          </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-4 text-center mb-8">
+          <div className="p-4 bg-emerald-50 rounded-xl"><p className="text-xs text-emerald-600 font-bold uppercase">ภาษีขาย</p><p className="text-xl font-bold text-emerald-700">{formatCurrency(monthlyVat.salesTax)}</p></div>
+          <div className="p-4 bg-rose-50 rounded-xl"><p className="text-xs text-rose-600 font-bold uppercase">ภาษีซื้อ</p><p className="text-xl font-bold text-rose-700">{formatCurrency(monthlyVat.purchaseTax)}</p></div>
+          <div className="p-4 bg-orange-50 rounded-xl"><p className="text-xs text-orange-600 font-bold uppercase">เครดิตยกมา</p><p className="text-xl font-bold text-orange-700">{formatCurrency(vatCreditForward)}</p></div>
+          <div className={`p-4 rounded-xl ${monthlyVat.remit > 0 ? 'bg-indigo-50' : 'bg-green-50'}`}>
+              <p className={`text-xs font-bold uppercase ${monthlyVat.remit > 0 ? 'text-indigo-600' : 'text-green-600'}`}>{monthlyVat.remit > 0 ? 'ต้องนำส่ง' : 'ชำระเกิน (ยกไป)'}</p>
+              <p className={`text-xl font-bold ${monthlyVat.remit > 0 ? 'text-indigo-700' : 'text-green-700'}`}>{formatCurrency(monthlyVat.remit > 0 ? monthlyVat.remit : monthlyVat.excess)}</p>
+          </div>
+      </div>
+      
+      <div className="border-t border-slate-100 pt-6"><div className="bg-slate-50 p-4 rounded-xl mb-6 border border-slate-200"><div className="flex items-center gap-2 mb-3 text-slate-700 font-bold"><Settings size={18}/> ตั้งค่าหัวกระดาษรายงาน (Report Header)</div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><input className="border border-slate-300 rounded p-2 text-sm" placeholder="ชื่อผู้ประกอบการ (ร้านค้า)" value={bizName} onChange={e=>setBizName(e.target.value)}/><input className="border border-slate-300 rounded p-2 text-sm" placeholder="เลขประจำตัวผู้เสียภาษี (13 หลัก)" value={bizTaxId} onChange={e=>setBizTaxId(e.target.value)}/><input className="border border-slate-300 rounded p-2 text-sm md:col-span-2" placeholder="ที่อยู่สถานประกอบการ" value={bizAddress} onChange={e=>setBizAddress(e.target.value)}/><input className="border border-slate-300 rounded p-2 text-sm" placeholder="สาขา (เช่น 00000)" value={bizBranch} onChange={e=>setBizBranch(e.target.value)}/></div></div><div className="flex justify-between items-center mb-4"><div className="flex bg-slate-100 p-1 rounded-lg"><button onClick={()=>setVatTab('sales')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${vatTab==='sales'?'bg-white shadow text-emerald-600':'text-slate-500'}`}>รายงานภาษีขาย</button><button onClick={()=>setVatTab('purchase')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${vatTab==='purchase'?'bg-white shadow text-rose-600':'text-slate-500'}`}>รายงานภาษีซื้อ</button></div><button onClick={() => exportVATReport(vatTab)} className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-indigo-700 shadow-sm transition-all"><FileText size={16}/> Export Excel</button></div><div className="overflow-x-auto rounded-xl border border-slate-100"><table className="w-full text-sm text-left whitespace-nowrap"><thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase"><tr><th className="p-3">วันที่</th><th className="p-3">เลขที่ใบกำกับ</th><th className="p-3">รายการ</th><th className="p-3 text-right">มูลค่า</th><th className="p-3 text-right">VAT</th><th className="p-3 text-right">รวม</th></tr></thead><tbody className="divide-y divide-slate-50">{monthlyVat.filtered.filter(t => t.type === (vatTab === 'sales' ? 'income' : 'expense') && t.vatType !== 'none').map(t => (<tr key={t.id} className="hover:bg-slate-50"><td className="p-3 text-xs">{formatDate(t.date)}</td><td className="p-3 text-xs font-mono">{t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || '-') : '-')}</td><td className="p-3 text-xs truncate max-w-[150px]">{t.description}</td><td className="p-3 text-right">{formatCurrency(t.net)}</td><td className={`p-3 text-right font-bold ${vatTab==='sales'?'text-emerald-600':'text-rose-600'}`}>{formatCurrency(t.vat)}</td><td className="p-3 text-right font-bold">{formatCurrency(t.total)}</td></tr>))}{monthlyVat.filtered.filter(t => t.type === (vatTab === 'sales' ? 'income' : 'expense') && t.vatType !== 'none').length === 0 && (<tr><td colSpan="6" className="p-8 text-center text-slate-400">ไม่พบรายการภาษีในเดือนนี้</td></tr>)}</tbody></table></div></div></div>)}
     </div>
   );
 };
