@@ -27,7 +27,7 @@ const CONSTANTS = {
     PROD: 'eatsanduse',
     DEV: 'merchant-tax-dev-v1'
   },
-  SHOPS: ['eats and use', 'bubee bubee'],
+  SHOPS: ['eats and use', 'bubee bubee', 'ไม่ระบุ'],
   CATEGORIES: {
     INCOME: ['สินค้าทั่วไป', 'บริการ', 'อาหาร/เครื่องดื่ม', 'อื่นๆ'],
     EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าขนส่ง', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า']
@@ -555,6 +555,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const [showVendorModal, setShowVendorModal] = useState(false);
   const [deleteVendorId, setDeleteVendorId] = useState(null); 
   const [editingId, setEditingId] = useState(null);
+  const [expandedVendorId, setExpandedVendorId] = useState(null); // Added state for View button
 
   const initialForm = { 
     type: 'income', shop: CONSTANTS.SHOPS[0], date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0, channel: CONSTANTS.CHANNELS[0], orderId: '', category: CONSTANTS.CATEGORIES.INCOME[0], taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000', vendorAddress: '', itemAmount: '', customerShippingFee: '', platformFee: '', shippingFee: '', shopVoucher: '', expenseDiscount: '', shippingPayer: 'customer', grossAmount: '' 
@@ -568,9 +569,13 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
 
   // ... (descriptionSuggestions, useEffects, calculated, manageRelatedExpense, handleSubmit) ...
   const descriptionSuggestions = useMemo(() => {
-    const descriptions = transactions.map(t => t.description).filter(d => d && d.trim().length > 0 && !d.includes('ค่าธรรมเนียม') && !d.includes('ค่าขนส่ง'));
+    // Filter transactions by current form type (income/expense) so suggestions are relevant
+    const descriptions = transactions
+        .filter(t => t.type === formData.type)
+        .map(t => t.description)
+        .filter(d => d && d.trim().length > 0 && !d.includes('ค่าธรรมเนียม') && !d.includes('ค่าขนส่ง'));
     return [...new Set(descriptions)];
-  }, [transactions]);
+  }, [transactions, formData.type]);
 
   useEffect(() => { if (user) { const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'vendors')); const unsub = onSnapshot(q, (snap) => { setVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))); }); return () => unsub(); } }, [user, appId]);
    
@@ -611,13 +616,19 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
       const expenseNetPaid = formData.type === 'expense' ? ((parseFloat(formData.amount) || 0) - (parseFloat(formData.expenseDiscount) || 0)) : 0;
       return { net, vat, total: formData.vatType === 'excluded' ? net + vat : baseAmount, wht, baseAmount, expenseNetPaid }; 
   }, [formData.amount, formData.vatType, formData.whtRate, formData.type, formData.grossAmount, isEcommerceMode, formData.expenseDiscount]);
-   
+  
+  // Helper to determine collection name
+  const getCollectionName = (type) => type === 'income' ? 'transactions_income' : 'transactions_expense';
+
   const manageRelatedExpense = async (category, amount, baseDescription) => {
     if (amount <= 0 || !formData.orderId) return;
-    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), where('orderId', '==', formData.orderId), where('category', '==', category), where('type', '==', 'expense'));
+    // Check in 'transactions_expense'
+    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense'), where('orderId', '==', formData.orderId), where('category', '==', category), where('type', '==', 'expense'));
     const snap = await getDocs(q);
     const expenseData = { type: 'expense', shop: formData.shop, date: new Date(formData.date), category: category, description: baseDescription, amount: parseFloat(amount), vatType: 'included', total: parseFloat(amount), net: parseFloat(amount) * 100 / 107, vat: parseFloat(amount) - (parseFloat(amount) * 100 / 107), wht: 0, orderId: formData.orderId, userId: user.uid };
-    if (!snap.empty) { await updateDoc(snap.docs[0].ref, { ...expenseData, updatedAt: serverTimestamp() }); } else { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), { ...expenseData, createdAt: serverTimestamp() }); }
+    
+    // Save to 'transactions_expense'
+    if (!snap.empty) { await updateDoc(snap.docs[0].ref, { ...expenseData, updatedAt: serverTimestamp() }); } else { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense'), { ...expenseData, createdAt: serverTimestamp() }); }
   };
 
   const handleSubmit = async (e) => { 
@@ -636,19 +647,34 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
       }
 
       const dateObj = new Date(formData.date); const now = new Date(); dateObj.setHours(now.getHours(), now.getMinutes(), now.getSeconds()); dataToSave.date = dateObj; dataToSave.userId = user.uid;
-      if (!editingId) { dataToSave.createdAt = serverTimestamp(); } else { dataToSave.updatedAt = serverTimestamp(); }
+      
+      const targetCollection = getCollectionName(dataToSave.type);
 
       try { 
           if (editingId) {
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', editingId), dataToSave, {merge: true});
+            // Find original item to know previous type
+            const originalItem = transactions.find(t => t.id === editingId);
+            const originalCollection = getCollectionName(originalItem ? originalItem.type : dataToSave.type);
+
+            if (originalCollection !== targetCollection) {
+                // Type changed: Delete from old, Add to new
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', originalCollection, editingId));
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', targetCollection), { ...dataToSave, updatedAt: serverTimestamp() });
+            } else {
+                // Same type: Update in place
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', targetCollection, editingId), { ...dataToSave, updatedAt: serverTimestamp() }, {merge: true});
+            }
+
             if (isEcommerceMode) { await manageRelatedExpense('ค่าธรรมเนียม Platform', formData.platformFee, `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`); await manageRelatedExpense('ค่าขนส่ง', formData.shippingFee, `ค่าขนส่ง ${formData.channel} (Order: ${formData.orderId}) - ${formData.shippingPayer === 'customer' ? 'ลูกค้าจ่าย' : 'ร้านค้าจ่าย'}`); await manageRelatedExpense('ส่วนลดร้านค้า', formData.shopVoucher, `ส่วนลดร้านค้า ${formData.channel} (Order: ${formData.orderId})`); }
             showToast("แก้ไขรายการเรียบร้อย", "success"); setEditingId(null); setFormData(initialForm);
           } else {
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), dataToSave); 
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', targetCollection), { ...dataToSave, createdAt: serverTimestamp() }); 
             if (isEcommerceMode) {
-                if (formData.platformFee > 0) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), { type: 'expense', shop: formData.shop, date: new Date(formData.date), category: 'ค่าธรรมเนียม Platform', description: `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`, amount: parseFloat(formData.platformFee), vatType: 'included', total: parseFloat(formData.platformFee), net: parseFloat(formData.platformFee) * 100 / 107, vat: parseFloat(formData.platformFee) - (parseFloat(formData.platformFee) * 100 / 107), wht: 0, createdAt: serverTimestamp(), orderId: formData.orderId, userId: user.uid });
-                if (formData.shippingFee > 0) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), { type: 'expense', shop: formData.shop, date: new Date(formData.date), category: 'ค่าขนส่ง', description: `ค่าขนส่ง ${formData.channel} (Order: ${formData.orderId}) - ${formData.shippingPayer === 'customer' ? 'ลูกค้าจ่าย' : 'ร้านค้าจ่าย'}`, amount: parseFloat(formData.shippingFee), vatType: 'included', total: parseFloat(formData.shippingFee), net: parseFloat(formData.shippingFee) * 100 / 107, vat: parseFloat(formData.shippingFee) - (parseFloat(formData.shippingFee) * 100 / 107), wht: 0, createdAt: serverTimestamp(), orderId: formData.orderId, userId: user.uid });
-                if (formData.shopVoucher > 0) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), { type: 'expense', shop: formData.shop, date: new Date(formData.date), category: 'ส่วนลดร้านค้า', description: `ส่วนลดร้านค้า ${formData.channel} (Order: ${formData.orderId})`, amount: parseFloat(formData.shopVoucher), vatType: 'included', total: parseFloat(formData.shopVoucher), net: parseFloat(formData.shopVoucher) * 100 / 107, vat: parseFloat(formData.shopVoucher) - (parseFloat(formData.shopVoucher) * 100 / 107), wht: 0, createdAt: serverTimestamp(), orderId: formData.orderId, userId: user.uid });
+                // Related expenses always go to 'transactions_expense'
+                const expCollection = collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense');
+                if (formData.platformFee > 0) await addDoc(expCollection, { type: 'expense', shop: formData.shop, date: new Date(formData.date), category: 'ค่าธรรมเนียม Platform', description: `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`, amount: parseFloat(formData.platformFee), vatType: 'included', total: parseFloat(formData.platformFee), net: parseFloat(formData.platformFee) * 100 / 107, vat: parseFloat(formData.platformFee) - (parseFloat(formData.platformFee) * 100 / 107), wht: 0, createdAt: serverTimestamp(), orderId: formData.orderId, userId: user.uid });
+                if (formData.shippingFee > 0) await addDoc(expCollection, { type: 'expense', shop: formData.shop, date: new Date(formData.date), category: 'ค่าขนส่ง', description: `ค่าขนส่ง ${formData.channel} (Order: ${formData.orderId}) - ${formData.shippingPayer === 'customer' ? 'ลูกค้าจ่าย' : 'ร้านค้าจ่าย'}`, amount: parseFloat(formData.shippingFee), vatType: 'included', total: parseFloat(formData.shippingFee), net: parseFloat(formData.shippingFee) * 100 / 107, vat: parseFloat(formData.shippingFee) - (parseFloat(formData.shippingFee) * 100 / 107), wht: 0, createdAt: serverTimestamp(), orderId: formData.orderId, userId: user.uid });
+                if (formData.shopVoucher > 0) await addDoc(expCollection, { type: 'expense', shop: formData.shop, date: new Date(formData.date), category: 'ส่วนลดร้านค้า', description: `ส่วนลดร้านค้า ${formData.channel} (Order: ${formData.orderId})`, amount: parseFloat(formData.shopVoucher), vatType: 'included', total: parseFloat(formData.shopVoucher), net: parseFloat(formData.shopVoucher) * 100 / 107, vat: parseFloat(formData.shopVoucher) - (parseFloat(formData.shopVoucher) * 100 / 107), wht: 0, createdAt: serverTimestamp(), orderId: formData.orderId, userId: user.uid });
             } 
             showToast("บันทึกสำเร็จ", "success"); 
           }
@@ -663,7 +689,33 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const executeDeleteVendor = async () => { if (!deleteVendorId) return; setIsDeleting(true); try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vendors', deleteVendorId)); setDeleteVendorId(null); showToast("ลบผู้ขายสำเร็จ", "success"); } catch (err) { console.error(err); } finally { setIsDeleting(false); } };
   const selectVendor = (vendor) => { setFormData(prev => ({ ...prev, vendorName: vendor.vendorName || '', vendorTaxId: vendor.vendorTaxId || '', vendorBranch: vendor.vendorBranch || '', vendorAddress: vendor.vendorAddress || '' })); setShowVendorModal(false); };
   const confirmDelete = (id, e) => { if(e) e.stopPropagation(); setDeleteId(id); };
-  const executeDelete = async () => { if (!deleteId) return; setIsDeleting(true); try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', deleteId)); setDeleteId(null); showToast("ลบรายการสำเร็จ", "success"); } catch (err) { console.error("Error deleting record:", err); showToast("เกิดข้อผิดพลาดในการลบ", "error"); } finally { setIsDeleting(false); } };
+  
+  const executeDelete = async () => { 
+      if (!deleteId) return; 
+      setIsDeleting(true); 
+      try { 
+          // Identify collection based on item type
+          const item = transactions.find(t => t.id === deleteId);
+          const collectionName = getCollectionName(item ? item.type : 'income'); // Default to income if not found (should be found)
+
+          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', collectionName, deleteId)); 
+          setDeleteId(null); 
+          showToast("ลบรายการสำเร็จ", "success"); 
+      } catch (err) { 
+          console.error("Error deleting record:", err); 
+          
+          // Fallback: try deleting from legacy collection if not found or error
+          try {
+             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', deleteId));
+             setDeleteId(null); 
+             showToast("ลบรายการ (Legacy) สำเร็จ", "success");
+          } catch (e2) {
+             showToast("เกิดข้อผิดพลาดในการลบ", "error"); 
+          }
+      } finally { 
+          setIsDeleting(false); 
+      } 
+  };
    
   const recentTransactions = useMemo(() => transactions.filter(t => (filterType === 'all' || t.type === filterType) && (t.description?.toLowerCase().includes(recentSearch.toLowerCase()) || (t.amount && t.amount.toString().includes(recentSearch)) || (t.orderId && t.orderId.toString().toLowerCase().includes(recentSearch.toLowerCase())))).sort((a,b) => b.date - a.date).slice(0, 50), [transactions, filterType, recentSearch]);
   const groupedRecent = useMemo(() => { const groups = {}; recentTransactions.forEach(t => { const dateKey = formatDate(t.date); if (!groups[dateKey]) groups[dateKey] = []; groups[dateKey].push(t); }); return groups; }, [recentTransactions]);
@@ -700,7 +752,42 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
     <div className="flex flex-col h-full lg:h-[calc(100vh-88px)] relative">
        {/* ... (Previous Modals for Delete & Vendors) ... */}
        {deleteId && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl scale-100 animate-fadeIn"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold text-slate-800 mb-2">ยืนยันการลบ?</h3><p className="text-slate-500 mb-6">ข้อมูลนี้จะหายไปถาวร</p><div className="flex gap-3"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-slate-600 hover:bg-slate-200">ยกเลิก</button><button onClick={executeDelete} disabled={isDeleting} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">{isDeleting?<Loader className="animate-spin mx-auto"/>:'ลบรายการ'}</button></div></div></div>}
-       {showVendorModal && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn"><div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><List className="text-rose-500"/> เลือกผู้ขายเก่า</h3><button onClick={()=>setShowVendorModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button></div><div className="flex-1 overflow-y-auto p-4 space-y-2">{vendors.map((v, i) => <div key={v.id || i} onClick={()=>selectVendor(v)} className="p-4 rounded-xl border border-slate-100 hover:border-rose-200 hover:bg-rose-50 cursor-pointer transition-all group"><div className="flex justify-between items-start"><div><p className="font-bold text-slate-700">{v.vendorName}</p><p className="text-xs text-slate-400 mt-1">TAX: {v.vendorTaxId}</p></div><div className="flex gap-2"><button onClick={(e)=>handleDeleteVendorClick(v.id,e)} className="p-2 text-slate-300 hover:text-rose-500 bg-white rounded-full border border-slate-100 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14}/></button></div></div></div>)}</div></div></div>}
+       {showVendorModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="font-bold text-lg flex items-center gap-2"><List className="text-rose-500"/> เลือกผู้ขายเก่า</h3>
+              <button onClick={()=>setShowVendorModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {vendors.map((v, i) => (
+                <div key={v.id || i} onClick={()=>selectVendor(v)} className="p-4 rounded-xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 cursor-pointer transition-all group bg-white">
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-bold text-slate-700">{v.vendorName}</p>
+                        {v.vendorBranch && <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200 whitespace-nowrap">สาขา {v.vendorBranch}</span>}
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1">TAX: {v.vendorTaxId || '-'}</p>
+                      {expandedVendorId === (v.id || i) && (
+                        <div className="mt-2 pt-2 border-t border-slate-100 text-xs text-slate-500 animate-fadeIn">
+                          <p><span className="font-bold">ที่อยู่:</span> {v.vendorAddress || '-'}</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-1 pl-2 items-start">
+                      <button onClick={(e)=>{e.stopPropagation(); setExpandedVendorId(expandedVendorId === (v.id || i) ? null : (v.id || i))}} className={`p-2 rounded-full transition-colors border ${expandedVendorId === (v.id || i) ? 'bg-indigo-100 text-indigo-600 border-indigo-200' : 'bg-white text-slate-300 border-slate-100 hover:text-indigo-500 hover:bg-indigo-50'}`} title="ดูรายละเอียด"><Eye size={14}/></button>
+                      <button onClick={(e)=>{e.stopPropagation(); selectVendor(v)}} className="p-2 text-slate-300 hover:text-orange-500 hover:bg-orange-50 rounded-full transition-colors bg-white border border-slate-100" title="เลือก/แก้ไข"><Edit size={14}/></button>
+                      <button onClick={(e)=>handleDeleteVendorClick(v.id,e)} className="p-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors bg-white border border-slate-100" title="ลบ"><Trash2 size={14}/></button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {vendors.length === 0 && <div className="text-center text-slate-400 py-10">ยังไม่มีผู้ขายที่บันทึกไว้</div>}
+            </div>
+          </div>
+        </div>
+       )}
        {deleteVendorId && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold text-slate-800 mb-2">ลบผู้ขาย?</h3><div className="flex gap-3 mt-6"><button onClick={()=>setDeleteVendorId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-slate-600">ยกเลิก</button><button onClick={executeDeleteVendor} disabled={isDeleting} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">{isDeleting?<Loader className="animate-spin mx-auto"/>:'ยืนยัน'}</button></div></div></div>}
        
        <div className="flex gap-1 p-1 bg-slate-100/80 backdrop-blur-sm rounded-2xl w-fit mb-6 self-center md:self-start border border-slate-200">
@@ -804,6 +891,8 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
     </div>
   );
 };
+
+// ... (InvoiceGenerator, TaxReport components remain the same) ...
 
 const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
   const [mode, setMode] = useState('create');
@@ -1120,11 +1209,12 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
            </>
         )}
         
-        <div className="col-span-2 border-t border-black my-1"></div><span className="font-bold text-slate-900 text-lg">จำนวนเงินทั้งสิ้น</span><span className="font-bold text-slate-900 text-lg">{formatCurrency(totals.total)}</span><div className="col-span-2 border-t-2 border-black my-0.5"></div></div></div></div><div className="flex justify-between mt-12 px-8 absolute bottom-10 w-[calc(100%-60px)]"><div className="text-center w-[40%]"><div className="border-b border-dotted border-slate-400 h-8 mb-2"></div><p className="text-xs font-bold">{docType === 'quotation' ? 'ผู้สั่งซื้อ / ผู้อนุมัติ' : 'ผู้รับวางบิล / ผู้รับของ'}</p><p className="text-xs font-bold text-slate-400 uppercase">(Receiver Signature)</p><p className="text-xs mt-4">วันที่ ______/______/______</p></div><div className="text-center w-[40%]"><div className="border-b border-dotted border-slate-400 h-8 mb-2"></div><p className="text-xs font-bold">{docType === 'quotation' ? 'ผู้เสนอราคา' : 'ผู้รับเงิน / ผู้ออกใบกำกับภาษี'}</p><p className="text-[10px] text-slate-400 uppercase">(Authorized Signature)</p><p className="text-xs mt-4">วันที่ ______/______/______</p></div></div></div></div></>)}
+        <div className="col-span-2 border-t border-black my-1"></div><span className="font-bold text-slate-900 text-lg">จำนวนเงินทั้งสิ้น</span><span className="font-bold text-slate-900 text-lg">{formatCurrency(totals.total)}</span><div className="col-span-2 border-t-2 border-black my-0.5"></div></div></div></div><div className="flex justify-between mt-12 px-8 absolute bottom-10 w-[calc(100%-60px)]"><div className="text-center w-[40%]"><div className="border-b border-dotted border-slate-400 h-8 mb-2"></div><p className="text-xs font-bold">{docType === 'quotation' ? 'ผู้สั่งซื้อ / ผู้อนุมัติ' : 'ผู้รับวางบิล / ผู้รับของ'}</p><p className="text-xs font-bold text-slate-400 uppercase">(Receiver Signature)</p><p className="text-xs mt-4">วันที่ ______/______/______</p></div><div className="text-center w-[40%]"><div className="border-b border-dotted border-slate-400 h-8 mb-2"></div><p className="text-xs font-bold">{docType === 'quotation' ? 'ผู้เสนอราคา' : 'ผู้รับเงิน / ผู้ออกใบกำกับภาษี'}</p><p className="text-xs text-slate-400 uppercase">(Authorized Signature)</p><p className="text-xs mt-4">วันที่ ______/______/______</p></div></div></div></div></>)}
     </div>
   );
 };
 
+// ... (TaxReport component remains same) ...
 const TaxReport = ({ transactions }) => {
   const [activeSubTab, setActiveSubTab] = useState('assessment');
   const [year, setYear] = useState(new Date().getFullYear());
@@ -1436,10 +1526,39 @@ export default function App() {
     if (!user) return;
     setLoading(true);
 
-    const qTrans = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'));
-    const unsubTrans = onSnapshot(qTrans, (snapshot) => {
-      setTransactions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), date: normalizeDate(doc.data().date) })).sort((a, b) => b.date - a.date));
-    }, (error) => console.error("Trans Sync Error:", error));
+    // Fetch Income (Separate Collection)
+    const qIncome = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_income'));
+    // Fetch Expense (Separate Collection)
+    const qExpense = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+    // Legacy support (optional, but good for migration)
+    const qLegacy = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'));
+
+    let incomeDocs = [];
+    let expenseDocs = [];
+    let legacyDocs = [];
+
+    const updateTransactions = () => {
+        // Merge all sources
+        const allTrans = [...incomeDocs, ...expenseDocs, ...legacyDocs].sort((a, b) => b.date - a.date);
+        // Remove duplicates if migrated (simple id check)
+        const uniqueTrans = Array.from(new Map(allTrans.map(item => [item.id, item])).values());
+        setTransactions(uniqueTrans.sort((a, b) => b.date - a.date));
+    };
+
+    const unsubIncome = onSnapshot(qIncome, (snapshot) => {
+        incomeDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), date: normalizeDate(doc.data().date) }));
+        updateTransactions();
+    }, (error) => console.error("Income Sync Error:", error));
+
+    const unsubExpense = onSnapshot(qExpense, (snapshot) => {
+        expenseDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), date: normalizeDate(doc.data().date) }));
+        updateTransactions();
+    }, (error) => console.error("Expense Sync Error:", error));
+
+    const unsubLegacy = onSnapshot(qLegacy, (snapshot) => {
+        legacyDocs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), date: normalizeDate(doc.data().date) }));
+        updateTransactions();
+    }, (error) => console.error("Legacy Sync Error:", error));
 
     const qInv = query(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'));
     const unsubInv = onSnapshot(qInv, (snapshot) => {
@@ -1447,7 +1566,7 @@ export default function App() {
       setLoading(false);
     }, (error) => console.error("Inv Sync Error:", error));
 
-    return () => { unsubTrans(); unsubInv(); };
+    return () => { unsubIncome(); unsubExpense(); unsubLegacy(); unsubInv(); };
   }, [user, appId]);
 
   const renderContent = () => {
