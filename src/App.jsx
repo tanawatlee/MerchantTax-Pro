@@ -572,7 +572,8 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const [deleteVendorId, setDeleteVendorId] = useState(null); 
   const [editingId, setEditingId] = useState(null);
   const [expandedVendorId, setExpandedVendorId] = useState(null);
-  const [selectedVendorId, setSelectedVendorId] = useState(null); // New state to track selected vendor for update
+  const [selectedVendorId, setSelectedVendorId] = useState(null); 
+  const [vendorSearch, setVendorSearch] = useState(''); 
 
   const initialForm = { 
     type: 'income', shop: CONSTANTS.SHOPS[0], date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0, channel: CONSTANTS.CHANNELS[0], orderId: '', category: CONSTANTS.CATEGORIES.INCOME[0], taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000', vendorBranchName: '', vendorAddress: '', itemAmount: '', customerShippingFee: '', platformFee: '', shippingFee: '', shopVoucher: '', expenseDiscount: '', shippingPayer: 'customer', grossAmount: '' 
@@ -800,8 +801,29 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
               <h3 className="font-bold text-lg flex items-center gap-2"><List className="text-rose-500"/> เลือกผู้ขายเก่า</h3>
               <button onClick={()=>setShowVendorModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button>
             </div>
+            
+            {/* Added Search Bar */}
+            <div className="px-6 pt-4 pb-2">
+                <div className="relative">
+                    <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
+                    <input 
+                        className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 text-slate-600" 
+                        placeholder="ค้นหาชื่อ, เลขภาษี หรือ สาขา..." 
+                        value={vendorSearch} 
+                        onChange={e=>setVendorSearch(e.target.value)}
+                        autoFocus
+                    />
+                </div>
+            </div>
+
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {vendors.map((v, i) => (
+              {vendors.filter(v => 
+                  !vendorSearch || 
+                  v.vendorName.toLowerCase().includes(vendorSearch.toLowerCase()) || 
+                  (v.vendorTaxId && v.vendorTaxId.includes(vendorSearch)) ||
+                  (v.vendorBranch && v.vendorBranch.includes(vendorSearch)) ||
+                  (v.vendorBranchName && v.vendorBranchName.toLowerCase().includes(vendorSearch.toLowerCase()))
+              ).map((v, i) => (
                 <div key={v.id || i} onClick={()=>selectVendor(v)} className="p-4 rounded-xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 cursor-pointer transition-all group bg-white">
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
@@ -825,6 +847,13 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                 </div>
               ))}
               {vendors.length === 0 && <div className="text-center text-slate-400 py-10">ยังไม่มีผู้ขายที่บันทึกไว้</div>}
+              {vendors.length > 0 && vendors.filter(v => 
+                  !vendorSearch || 
+                  v.vendorName.toLowerCase().includes(vendorSearch.toLowerCase()) || 
+                  (v.vendorTaxId && v.vendorTaxId.includes(vendorSearch)) ||
+                  (v.vendorBranch && v.vendorBranch.includes(vendorSearch)) ||
+                  (v.vendorBranchName && v.vendorBranchName.toLowerCase().includes(vendorSearch.toLowerCase()))
+              ).length === 0 && <div className="text-center text-slate-400 py-10">ไม่พบข้อมูลที่ค้นหา</div>}
             </div>
           </div>
         </div>
@@ -849,7 +878,6 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                 <form onSubmit={handleSubmit} className="space-y-5 flex-1">
                    <div className="grid grid-cols-2 gap-4"><div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">วันที่</label><input type="date" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500" value={formData.date} onChange={e=>setFormData({...formData,date:e.target.value})}/></div><div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">หมวดหมู่</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500" value={formData.category} onChange={e=>setFormData({...formData,category:e.target.value})}>{(formData.type==='income'?CONSTANTS.CATEGORIES.INCOME:CONSTANTS.CATEGORIES.EXPENSE).map(c=><option key={c} value={c}>{c}</option>)}</select></div></div>
                    
-                   {/* TAX INVOICE NO - MOVED HERE */}
                    {formData.type === 'expense' && (
                      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm mb-2">
                         <label className="text-xs font-bold text-slate-500 mb-1 block">เลขที่ใบกำกับภาษี (Tax Invoice No.)</label>
