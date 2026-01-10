@@ -555,10 +555,11 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const [showVendorModal, setShowVendorModal] = useState(false);
   const [deleteVendorId, setDeleteVendorId] = useState(null); 
   const [editingId, setEditingId] = useState(null);
-  const [expandedVendorId, setExpandedVendorId] = useState(null); // Added state for View button
+  const [expandedVendorId, setExpandedVendorId] = useState(null);
+  const [selectedVendorId, setSelectedVendorId] = useState(null); // New state to track selected vendor for update
 
   const initialForm = { 
-    type: 'income', shop: CONSTANTS.SHOPS[0], date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0, channel: CONSTANTS.CHANNELS[0], orderId: '', category: CONSTANTS.CATEGORIES.INCOME[0], taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000', vendorAddress: '', itemAmount: '', customerShippingFee: '', platformFee: '', shippingFee: '', shopVoucher: '', expenseDiscount: '', shippingPayer: 'customer', grossAmount: '' 
+    type: 'income', shop: CONSTANTS.SHOPS[0], date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0, channel: CONSTANTS.CHANNELS[0], orderId: '', category: CONSTANTS.CATEGORIES.INCOME[0], taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000', vendorBranchName: '', vendorAddress: '', itemAmount: '', customerShippingFee: '', platformFee: '', shippingFee: '', shopVoucher: '', expenseDiscount: '', shippingPayer: 'customer', grossAmount: '' 
   };
    
   const [formData, setFormData] = useState(initialForm);
@@ -666,7 +667,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
             }
 
             if (isEcommerceMode) { await manageRelatedExpense('ค่าธรรมเนียม Platform', formData.platformFee, `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`); await manageRelatedExpense('ค่าขนส่ง', formData.shippingFee, `ค่าขนส่ง ${formData.channel} (Order: ${formData.orderId}) - ${formData.shippingPayer === 'customer' ? 'ลูกค้าจ่าย' : 'ร้านค้าจ่าย'}`); await manageRelatedExpense('ส่วนลดร้านค้า', formData.shopVoucher, `ส่วนลดร้านค้า ${formData.channel} (Order: ${formData.orderId})`); }
-            showToast("แก้ไขรายการเรียบร้อย", "success"); setEditingId(null); setFormData(initialForm);
+            showToast("แก้ไขรายการเรียบร้อย", "success"); setEditingId(null); setFormData(initialForm); setSelectedVendorId(null);
           } else {
             await addDoc(collection(db, 'artifacts', appId, 'public', 'data', targetCollection), { ...dataToSave, createdAt: serverTimestamp() }); 
             if (isEcommerceMode) {
@@ -678,16 +679,40 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
             } 
             showToast("บันทึกสำเร็จ", "success"); 
           }
-          setFormData(prev => ({ ...initialForm, type: prev.type, category: prev.category, shop: prev.shop })); 
+          setFormData(prev => ({ ...initialForm, type: prev.type, category: prev.category, shop: prev.shop })); setSelectedVendorId(null);
       } catch (error) { console.error("Save failed:", error); showToast("บันทึกไม่สำเร็จ: " + error.message, "error"); } 
   };
 
   const handleEdit = (item) => { setFormData({ ...initialForm, ...item, shop: item.shop || CONSTANTS.SHOPS[0], date: formatDateISO(item.date), amount: item.amount || item.total }); setEditingId(item.id); setSubTab('new'); };
-  const handleCancelEdit = () => { setEditingId(null); setFormData(initialForm); };
-  const handleSaveVendor = async () => { if (!formData.vendorName) return showToast("กรุณาระบุชื่อผู้ขาย", "error"); const vendorData = { vendorName: formData.vendorName, vendorTaxId: formData.vendorTaxId, vendorBranch: formData.vendorBranch, vendorAddress: formData.vendorAddress, updatedAt: serverTimestamp() }; try { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'vendors'), vendorData); showToast("บันทึกผู้ขายเรียบร้อย", "success"); } catch (e) { console.error(e); } };
+  const handleCancelEdit = () => { setEditingId(null); setFormData(initialForm); setSelectedVendorId(null); };
+  
+  const handleSaveVendor = async () => { if (!formData.vendorName) return showToast("กรุณาระบุชื่อผู้ขาย", "error"); const vendorData = { vendorName: formData.vendorName, vendorTaxId: formData.vendorTaxId, vendorBranch: formData.vendorBranch, vendorBranchName: formData.vendorBranchName, vendorAddress: formData.vendorAddress, updatedAt: serverTimestamp() }; try { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'vendors'), vendorData); showToast("บันทึกผู้ขายรายใหม่เรียบร้อย", "success"); } catch (e) { console.error(e); } };
+  
+  const handleUpdateVendor = async () => {
+    if (!selectedVendorId) return showToast("ไม่พบข้อมูลผู้ขายเดิม (กรุณาเลือกใหม่)", "error");
+    if (!formData.vendorName) return showToast("กรุณาระบุชื่อผู้ขาย", "error");
+    
+    const vendorData = { 
+        vendorName: formData.vendorName, 
+        vendorTaxId: formData.vendorTaxId, 
+        vendorBranch: formData.vendorBranch, 
+        vendorBranchName: formData.vendorBranchName, 
+        vendorAddress: formData.vendorAddress, 
+        updatedAt: serverTimestamp() 
+    };
+    
+    try { 
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vendors', selectedVendorId), vendorData); 
+        showToast("อัปเดตข้อมูลผู้ขายเรียบร้อย", "success"); 
+    } catch (e) { 
+        console.error(e);
+        showToast("อัปเดตล้มเหลว", "error");
+    }
+  };
+
   const handleDeleteVendorClick = (id, e) => { e.stopPropagation(); setDeleteVendorId(id); };
   const executeDeleteVendor = async () => { if (!deleteVendorId) return; setIsDeleting(true); try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vendors', deleteVendorId)); setDeleteVendorId(null); showToast("ลบผู้ขายสำเร็จ", "success"); } catch (err) { console.error(err); } finally { setIsDeleting(false); } };
-  const selectVendor = (vendor) => { setFormData(prev => ({ ...prev, vendorName: vendor.vendorName || '', vendorTaxId: vendor.vendorTaxId || '', vendorBranch: vendor.vendorBranch || '', vendorAddress: vendor.vendorAddress || '' })); setShowVendorModal(false); };
+  const selectVendor = (vendor) => { setFormData(prev => ({ ...prev, vendorName: vendor.vendorName || '', vendorTaxId: vendor.vendorTaxId || '', vendorBranch: vendor.vendorBranch || '', vendorBranchName: vendor.vendorBranchName || '', vendorAddress: vendor.vendorAddress || '' })); setSelectedVendorId(vendor.id); setShowVendorModal(false); };
   const confirmDelete = (id, e) => { if(e) e.stopPropagation(); setDeleteId(id); };
   
   const executeDelete = async () => { 
@@ -766,7 +791,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-bold text-slate-700">{v.vendorName}</p>
-                        {v.vendorBranch && <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200 whitespace-nowrap">สาขา {v.vendorBranch}</span>}
+                        {v.vendorBranch && <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200 whitespace-nowrap">สาขา {v.vendorBranch} {v.vendorBranchName ? `(${v.vendorBranchName})` : ''}</span>}
                       </div>
                       <p className="text-xs text-slate-400 mt-1">TAX: {v.vendorTaxId || '-'}</p>
                       {expandedVendorId === (v.id || i) && (
@@ -816,7 +841,29 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                      </div>
                    )}
 
-                   {formData.type === 'income' ? (<div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-4"><div className="flex justify-between items-center text-emerald-700 text-xs font-bold uppercase tracking-wider mb-1"><span className="flex items-center gap-1"><Package size={14}/> E-Commerce</span></div><div className="grid grid-cols-2 gap-4"><input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="Order ID" value={formData.orderId} onChange={e=>setFormData({...formData,orderId:e.target.value})}/><select className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" value={formData.channel} onChange={e=>setFormData({...formData,channel:e.target.value})}>{CONSTANTS.CHANNELS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>{isEcommerceMode && (<div className="bg-white p-4 rounded-xl shadow-sm border border-emerald-100"><div className="flex items-center justify-between mb-3"><div className="flex items-center gap-2 text-xs font-bold text-emerald-600"><Calculator size={14}/> Calculator (Gross vs Net)</div><div className="flex gap-2"><label className="flex items-center gap-1 text-[10px] cursor-pointer"><input type="radio" name="shippingPayer" checked={formData.shippingPayer === 'customer'} onChange={()=>setFormData({...formData, shippingPayer: 'customer'})} className="text-emerald-600 focus:ring-0 w-3 h-3"/>ลูกค้าจ่าย</label><label className="flex items-center gap-1 text-[10px] cursor-pointer"><input type="radio" name="shippingPayer" checked={formData.shippingPayer === 'shop'} onChange={()=>setFormData({...formData, shippingPayer: 'shop'})} className="text-emerald-600 focus:ring-0 w-3 h-3"/>ร้านจ่าย (Free)</label></div></div><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าสินค้า (Item)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.itemAmount} onChange={e=>setFormData({...formData,itemAmount:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งลูกค้าจ่าย (Cust.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.customerShippingFee} onChange={e=>setFormData({...formData,customerShippingFee:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าธรรมเนียม (Fee)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData,platformFee:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งระบบหัก (Act.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.shippingFee} onChange={e=>setFormData({...formData,shippingFee:e.target.value})}/></div></div><div className="mt-2 p-2 bg-orange-50 rounded-lg border border-orange-100 flex items-center gap-2"><div className="p-1.5 bg-white rounded-full text-orange-500"><Tag size={12}/></div><div className="flex-1"><label className="text-[10px] text-orange-500 font-bold block mb-0.5">ส่วนลดร้านค้า (Shop Voucher)</label><input type="number" className="w-full bg-white border-0 rounded-md p-1.5 text-sm font-bold text-orange-600 placeholder:text-orange-200" placeholder="0.00" value={formData.shopVoucher} onChange={e=>setFormData({...formData,shopVoucher:e.target.value})}/></div></div><div className="mt-3 grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-lg border border-emerald-100"><div className="text-center border-r border-slate-200"><p className="text-[10px] text-slate-400 uppercase font-bold">ยอดขาย (Gross)</p><p className="text-lg font-bold text-emerald-600">{formatCurrency(parseFloat(formData.grossAmount) || 0)}</p></div><div className="text-center"><p className="text-[10px] text-slate-400 uppercase font-bold">เงินเข้าจริง (Net)</p><p className="text-lg font-bold text-indigo-600">{formatCurrency(parseFloat(formData.amount) || 0)}</p></div></div></div>)}</div>) : (<div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 space-y-4"><div className="flex justify-between items-center mb-1"><span className="text-rose-700 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><User size={14}/> Vendor</span><div className="flex gap-1"><button type="button" onClick={()=>setShowVendorModal(true)} className="bg-white border border-rose-200 text-rose-600 text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-50">เลือกเก่า</button><button type="button" onClick={handleSaveVendor} className="bg-rose-600 text-white text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-700">บันทึกใหม่</button></div></div><input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ชื่อร้านค้า / ผู้รับเงิน" value={formData.vendorName} onChange={e=>setFormData({...formData,vendorName:e.target.value})}/><div className="grid grid-cols-2 gap-4"><input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="เลขผู้เสียภาษี" value={formData.vendorTaxId} onChange={e=>setFormData({...formData,vendorTaxId:e.target.value})}/><input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="สาขา" value={formData.vendorBranch} onChange={e=>setFormData({...formData,vendorBranch:e.target.value})}/></div><input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ที่อยู่ (สำหรับออก 50 ทวิ)" value={formData.vendorAddress} onChange={e=>setFormData({...formData,vendorAddress:e.target.value})}/></div>)}
+                   {formData.type === 'income' ? (<div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-4"><div className="flex justify-between items-center text-emerald-700 text-xs font-bold uppercase tracking-wider mb-1"><span className="flex items-center gap-1"><Package size={14}/> E-Commerce</span></div><div className="grid grid-cols-2 gap-4"><input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="Order ID" value={formData.orderId} onChange={e=>setFormData({...formData,orderId:e.target.value})}/><select className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" value={formData.channel} onChange={e=>setFormData({...formData,channel:e.target.value})}>{CONSTANTS.CHANNELS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>{isEcommerceMode && (<div className="bg-white p-4 rounded-xl shadow-sm border border-emerald-100"><div className="flex items-center justify-between mb-3"><div className="flex items-center gap-2 text-xs font-bold text-emerald-600"><Calculator size={14}/> Calculator (Gross vs Net)</div><div className="flex gap-2"><label className="flex items-center gap-1 text-[10px] cursor-pointer"><input type="radio" name="shippingPayer" checked={formData.shippingPayer === 'customer'} onChange={()=>setFormData({...formData, shippingPayer: 'customer'})} className="text-emerald-600 focus:ring-0 w-3 h-3"/>ลูกค้าจ่าย</label><label className="flex items-center gap-1 text-[10px] cursor-pointer"><input type="radio" name="shippingPayer" checked={formData.shippingPayer === 'shop'} onChange={()=>setFormData({...formData, shippingPayer: 'shop'})} className="text-emerald-600 focus:ring-0 w-3 h-3"/>ร้านจ่าย (Free)</label></div></div><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าสินค้า (Item)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.itemAmount} onChange={e=>setFormData({...formData,itemAmount:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งลูกค้าจ่าย (Cust.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.customerShippingFee} onChange={e=>setFormData({...formData,customerShippingFee:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าธรรมเนียม (Fee)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData,platformFee:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งระบบหัก (Act.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.shippingFee} onChange={e=>setFormData({...formData,shippingFee:e.target.value})}/></div></div><div className="mt-2 p-2 bg-orange-50 rounded-lg border border-orange-100 flex items-center gap-2"><div className="p-1.5 bg-white rounded-full text-orange-500"><Tag size={12}/></div><div className="flex-1"><label className="text-[10px] text-orange-500 font-bold block mb-0.5">ส่วนลดร้านค้า (Shop Voucher)</label><input type="number" className="w-full bg-white border-0 rounded-md p-1.5 text-sm font-bold text-orange-600 placeholder:text-orange-200" placeholder="0.00" value={formData.shopVoucher} onChange={e=>setFormData({...formData,shopVoucher:e.target.value})}/></div></div><div className="mt-3 grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-lg border border-emerald-100"><div className="text-center border-r border-slate-200"><p className="text-[10px] text-slate-400 uppercase font-bold">ยอดขาย (Gross)</p><p className="text-lg font-bold text-emerald-600">{formatCurrency(parseFloat(formData.grossAmount) || 0)}</p></div><div className="text-center"><p className="text-[10px] text-slate-400 uppercase font-bold">เงินเข้าจริง (Net)</p><p className="text-lg font-bold text-indigo-600">{formatCurrency(parseFloat(formData.amount) || 0)}</p></div></div></div>)}</div>) : (
+                   <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 space-y-4">
+                     <div className="flex justify-between items-center mb-1">
+                       <span className="text-rose-700 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><User size={14}/> Vendor</span>
+                       <div className="flex gap-1">
+                         <button type="button" onClick={()=>setShowVendorModal(true)} className="bg-white border border-rose-200 text-rose-600 text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-50 transition-colors">เลือกเก่า</button>
+                         {selectedVendorId && (
+                            <button type="button" onClick={handleUpdateVendor} className="bg-orange-100 border border-orange-200 text-orange-700 text-[10px] px-2 py-1 rounded-md font-bold hover:bg-orange-200 transition-colors animate-fadeIn">บันทึกทับ (อัปเดต)</button>
+                         )}
+                         <button type="button" onClick={handleSaveVendor} className="bg-rose-600 text-white text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-700 transition-colors">บันทึกใหม่</button>
+                       </div>
+                     </div>
+                     <input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ชื่อร้านค้า / ผู้รับเงิน" value={formData.vendorName} onChange={e=>setFormData({...formData,vendorName:e.target.value})}/>
+                     <div className="grid grid-cols-2 gap-4">
+                       <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="เลขผู้เสียภาษี" value={formData.vendorTaxId} onChange={e=>setFormData({...formData,vendorTaxId:e.target.value})}/>
+                       <div className="grid grid-cols-2 gap-2">
+                         <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm text-center" placeholder="รหัสสาขา" value={formData.vendorBranch} onChange={e=>setFormData({...formData,vendorBranch:e.target.value})}/>
+                         <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ชื่อสาขา" value={formData.vendorBranchName} onChange={e=>setFormData({...formData,vendorBranchName:e.target.value})}/>
+                       </div>
+                     </div>
+                     <input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ที่อยู่ (สำหรับออก 50 ทวิ)" value={formData.vendorAddress} onChange={e=>setFormData({...formData,vendorAddress:e.target.value})}/>
+                   </div>
+                   )}
                    <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">รายละเอียด</label><input list="desc-suggestions" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" placeholder="..." value={formData.description} onChange={e=>setFormData({...formData,description:e.target.value})}/><datalist id="desc-suggestions">{descriptionSuggestions.map((desc, i) => (<option key={i} value={desc} />))}</datalist></div>
                    <div className="grid grid-cols-2 gap-4"><div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">{isEcommerceMode ? "เงินเข้าจริง (Net)" : "ยอดตามบิล (Total)"}</label><input type="number" className={`w-full bg-slate-50 border-0 rounded-xl p-3 text-lg font-bold text-right ${isEcommerceMode?'text-emerald-500':'text-slate-800'}`} value={formData.amount} onChange={e=>setFormData({...formData,amount:e.target.value})} readOnly={isEcommerceMode}/></div><div className="space-y-1"><div className="flex justify-between items-center"><label className="text-xs font-bold text-slate-500 ml-1">VAT</label>{formData.type === 'expense' && (<button type="button" onClick={() => setFormData(prev => ({ ...prev, vatType: prev.vatType === 'none' ? 'included' : 'none' }))} className={`text-[10px] px-2 py-0.5 rounded transition-colors border ${formData.vatType === 'none' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'}`}>ไม่มีใบกำกับภาษี</button>)}</div><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm" value={formData.vatType} onChange={e=>setFormData({...formData,vatType:e.target.value})}><option value="included">รวม VAT</option><option value="excluded">แยก VAT</option><option value="none">ไม่มี VAT</option></select></div></div>
                    {formData.type === 'expense' && (<div className="flex gap-4"><div className="flex-1 space-y-1"><label className="text-xs font-bold text-slate-500 ml-1 flex items-center gap-1"><Tag size={12}/> ส่วนลด / Voucher</label><input type="number" className="w-full bg-orange-50/50 border border-orange-100 rounded-xl p-3 text-sm font-bold text-orange-600 text-right focus:ring-orange-200" placeholder="0.00" value={formData.expenseDiscount} onChange={e=>setFormData({...formData,expenseDiscount:e.target.value})}/></div><div className="flex-1 space-y-1 opacity-50"><label className="text-xs font-bold text-slate-500 ml-1">ยอดจ่ายจริง (Net Paid)</label><div className="w-full bg-slate-100 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-600 text-right cursor-not-allowed">{formatCurrency(calculated.expenseNetPaid)}</div></div></div>)}
@@ -1292,10 +1339,36 @@ const TaxReport = ({ transactions }) => {
     const relevantTrans = monthlyVat.filtered.filter(t => t.type === (isSales ? 'income' : 'expense') && t.vatType !== 'none');
     const monthNames = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
     const monthName = monthNames[month];
-    const data = [[`รายงานภาษี${isSales ? 'ขาย' : 'ซื้อ'}`], [`เดือนภาษี ${monthName} ปีภาษี ${year}`], [`ชื่อผู้ประกอบการ: ${bizName || '-'}`, `เลขประจำตัวผู้เสียภาษี: ${bizTaxId || '-'}`], [`ชื่อสถานประกอบการ/ที่อยู่: ${bizAddress || '-'}`], [`สำนักงานใหญ่/สาขาที่: ${bizBranch || '00000'}`], [], ['ลำดับ', 'วันเดือนปี', 'เลขที่ใบกำกับภาษี', 'รายการ', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขประจำตัวผู้เสียภาษี', 'สาขา', 'มูลค่าสินค้า/บริการ', 'จำนวนภาษีมูลค่าเพิ่ม'], ...relevantTrans.map((t, index) => [index + 1, formatDate(t.date), t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0,8)) : '-'), t.description || '', t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'), t.type === 'expense' ? (t.vendorTaxId || '') : '', t.type === 'expense' ? (t.vendorBranch || '00000') : '00000', (t.net || 0), (t.vat || 0)]), [], ['', '', '', '', '', '', 'รวม', relevantTrans.reduce((s,t) => s + (t.net||0), 0), relevantTrans.reduce((s,t) => s + (t.vat||0), 0)]];
+    
+    // Header for the excel file
+    const data = [
+        [`รายงานภาษี${isSales ? 'ขาย' : 'ซื้อ'}`], 
+        [`เดือนภาษี ${monthName} ปีภาษี ${year}`], 
+        [`ชื่อผู้ประกอบการ: ${bizName || '-'}`, `เลขประจำตัวผู้เสียภาษี: ${bizTaxId || '-'}`], 
+        [`ชื่อสถานประกอบการ/ที่อยู่: ${bizAddress || '-'}`], 
+        [`สำนักงานใหญ่/สาขาที่: ${bizBranch || '00000'}`], 
+        [], 
+        ['ลำดับ', 'วันเดือนปี', 'เลขที่ใบกำกับภาษี', 'รายการสินค้า/บริการ', 'หมวดหมู่', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขประจำตัวผู้เสียภาษี', 'สาขา', 'มูลค่าสินค้า/บริการ', 'จำนวนภาษีมูลค่าเพิ่ม'], 
+        ...relevantTrans.map((t, index) => [
+            index + 1, 
+            formatDate(t.date), 
+            t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0,8)) : '-'), 
+            // Combined format: Category + Description for clarity
+            t.description || '-',
+            t.category || '-',
+            t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'), 
+            t.type === 'expense' ? (t.vendorTaxId || '') : '', 
+            t.type === 'expense' ? (t.vendorBranch || '00000') : '00000', 
+            (t.net || 0), 
+            (t.vat || 0)
+        ]), 
+        [], 
+        ['', '', '', '', '', '', '', 'รวม', relevantTrans.reduce((s,t) => s + (t.net||0), 0), relevantTrans.reduce((s,t) => s + (t.vat||0), 0)]
+    ];
+
     if (!isSales) {
-        data.push(['', '', '', '', '', '', 'เครดิตยกมา', '', vatCreditForward]);
-        data.push(['', '', '', '', '', '', 'รวมภาษีซื้อสุทธิ', '', monthlyVat.purchaseTax + vatCreditForward]);
+        data.push(['', '', '', '', '', '', '', 'เครดิตยกมา', '', vatCreditForward]);
+        data.push(['', '', '', '', '', '', '', 'รวมภาษีซื้อสุทธิ', '', monthlyVat.purchaseTax + vatCreditForward]);
     }
     exportToExcel(`รายงาน${isSales ? 'ภาษีขาย' : 'ภาษีซื้อ'}_${month+1}_${year}.xlsx`, data);
   };
