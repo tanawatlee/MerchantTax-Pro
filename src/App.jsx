@@ -289,6 +289,7 @@ const NavButton = ({ active, onClick, icon, label }) => (
 const Dashboard = ({ transactions, invoices }) => {
   const [period, setPeriod] = useState('month'); 
   const [showValues, setShowValues] = useState(true);
+  const [customYear, setCustomYear] = useState(new Date().getFullYear()); // New state for year selection
 
   const analytics = useMemo(() => {
     const now = new Date();
@@ -312,9 +313,10 @@ const Dashboard = ({ transactions, invoices }) => {
             start = new Date(d.getFullYear(), d.getMonth(), 1);
             end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
         } else if (p === 'year') {
-            d.setFullYear(d.getFullYear() - offset);
-            start = new Date(d.getFullYear(), 0, 1);
-            end = new Date(d.getFullYear(), 11, 31);
+            // Use customYear logic
+            const y = customYear - offset;
+            start = new Date(y, 0, 1);
+            end = new Date(y, 11, 31);
         } else {
              return { start: new Date(0), end: new Date() };
         }
@@ -402,7 +404,7 @@ const Dashboard = ({ transactions, invoices }) => {
         transCount: currentTrans.length,
         startDate: currentRange.start
     };
-  }, [transactions, invoices, period]);
+  }, [transactions, invoices, period, customYear]);
 
   return (
     <div className="space-y-6 w-full max-w-[2400px] mx-auto pb-10 animate-fadeIn p-4 md:p-6 bg-slate-50/50">
@@ -411,12 +413,23 @@ const Dashboard = ({ transactions, invoices }) => {
                 <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Business Dashboard</h2>
                 <p className="text-slate-500 text-sm">วิเคราะห์ผลประกอบการแบบ Real-time</p>
             </div>
-            <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200">
+            <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200 items-center">
                 {['day', 'week', 'month', 'year', 'all'].map(p => (
                     <button key={p} onClick={() => setPeriod(p)} className={`px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all ${period === p ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
                         {p === 'day' ? 'วันนี้' : p === 'week' ? 'สัปดาห์นี้' : p === 'month' ? 'เดือนนี้' : p === 'year' ? 'ปีนี้' : 'ทั้งหมด'}
                     </button>
                 ))}
+                {period === 'year' && (
+                    <select 
+                        className="ml-2 bg-slate-50 border-none rounded-lg text-xs font-bold py-1.5 px-3 text-slate-600 cursor-pointer focus:ring-2 focus:ring-indigo-100"
+                        value={customYear}
+                        onChange={(e) => setCustomYear(Number(e.target.value))}
+                    >
+                        {Array.from({length: new Date().getFullYear() - 2025 + 1}, (_, i) => 2025 + i).reverse().map(y => (
+                            <option key={y} value={y}>{y}</option>
+                        ))}
+                    </select>
+                )}
             </div>
         </div>
 
@@ -651,6 +664,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   };
 
   const handleSubmit = async (e) => { 
+      // ... existing handleSubmit code ...
       e.preventDefault(); 
       if (!user) return; 
       let mainTransactionAmount = parseFloat(formData.amount);
@@ -734,6 +748,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const confirmDelete = (id, e) => { if(e) e.stopPropagation(); setDeleteId(id); };
   
   const executeDelete = async () => { 
+      // ... existing executeDelete ...
       if (!deleteId) return; 
       setIsDeleting(true); 
       try { 
@@ -763,16 +778,43 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const recentTransactions = useMemo(() => transactions.filter(t => (filterType === 'all' || t.type === filterType) && (t.description?.toLowerCase().includes(recentSearch.toLowerCase()) || (t.amount && t.amount.toString().includes(recentSearch)) || (t.orderId && t.orderId.toString().toLowerCase().includes(recentSearch.toLowerCase())))).sort((a,b) => b.date - a.date).slice(0, 50), [transactions, filterType, recentSearch]);
   const groupedRecent = useMemo(() => { const groups = {}; recentTransactions.forEach(t => { const dateKey = formatDate(t.date); if (!groups[dateKey]) groups[dateKey] = []; groups[dateKey].push(t); }); return groups; }, [recentTransactions]);
 
+  // --- UPDATED HISTORY FILTER LOGIC ---
   const historyData = useMemo(() => transactions.filter(t => { 
       let matchesPeriod = true;
       if (histPeriod !== 'all') {
           const tDate = normalizeDate(t.date); 
-          const [y, m, d] = histDate.split('-').map(Number);
-          const filterD = new Date(y, m - 1, d); 
-          if (histPeriod === 'day') matchesPeriod = tDate.getDate() === filterD.getDate() && tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear();
-          else if (histPeriod === 'week') { const day = filterD.getDay(); const startOfWeek = new Date(filterD); startOfWeek.setDate(filterD.getDate() - day); startOfWeek.setHours(0,0,0,0); const endOfWeek = new Date(startOfWeek); endOfWeek.setDate(startOfWeek.getDate() + 6); endOfWeek.setHours(23,59,59,999); matchesPeriod = tDate >= startOfWeek && tDate <= endOfWeek; }
-          else if (histPeriod === 'month') matchesPeriod = tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear(); 
-          else if (histPeriod === 'year') matchesPeriod = tDate.getFullYear() === filterD.getFullYear(); 
+          
+          if (histPeriod === 'year') {
+              // Robustly handle year selection
+              const filterYear = parseInt(histDate);
+              if (!isNaN(filterYear)) {
+                  matchesPeriod = tDate.getFullYear() === filterYear;
+              }
+          } else if (histPeriod === 'month') {
+              const [y, m] = histDate.split('-').map(Number);
+              if (!isNaN(y) && !isNaN(m)) {
+                  matchesPeriod = tDate.getMonth() === (m - 1) && tDate.getFullYear() === y;
+              }
+          } else {
+              // Day or Week (requires full date)
+              const [y, m, d] = histDate.split('-').map(Number);
+              const filterD = new Date(y, m - 1, d);
+              
+              if (!isNaN(filterD.getTime())) {
+                  if (histPeriod === 'day') {
+                      matchesPeriod = tDate.getDate() === filterD.getDate() && tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear();
+                  } else if (histPeriod === 'week') {
+                      const day = filterD.getDay();
+                      const startOfWeek = new Date(filterD);
+                      startOfWeek.setDate(filterD.getDate() - day);
+                      startOfWeek.setHours(0,0,0,0);
+                      const endOfWeek = new Date(startOfWeek);
+                      endOfWeek.setDate(startOfWeek.getDate() + 6);
+                      endOfWeek.setHours(23,59,59,999);
+                      matchesPeriod = tDate >= startOfWeek && tDate <= endOfWeek;
+                  }
+              }
+          }
       }
       const matchesType = histFilterType === 'all' || t.type === histFilterType;
       const searchLower = historySearch.toLowerCase();
@@ -783,6 +825,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const historySummary = useMemo(() => { const inc = historyData.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.total),0); const exp = historyData.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.total),0); return { inc, exp, bal: inc - exp }; }, [historyData]);
    
   const exportHistoryExcel = () => {
+    // ... existing exportHistoryExcel ...
     const totalIncome = historyData.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total) || 0), 0);
     const totalExpense = historyData.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total) || 0), 0);
     const data = [['วันที่', 'ร้านค้า', 'ประเภท', 'หมวดหมู่', 'รายละเอียด', 'รายการ', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขที่ใบกำกับภาษี/Order ID', 'ช่องทาง', 'รายรับ', 'รายจ่าย'], ...historyData.map(t => [formatDate(t.date), t.shop || '-', t.type === 'income' ? 'รายรับ' : 'รายจ่าย', t.category, t.description, t.description || '', t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'), t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0, 8)) : '-'), t.channel || '', t.type === 'income' ? (Number(t.total)||0) : 0, t.type === 'expense' ? (Number(t.total)||0) : 0]), [], ['', '', '', '', '', '', '', '', 'รวมสุทธิ', totalIncome, totalExpense], ['', '', '', '', '', '', '', '', 'คงเหลือ', totalIncome - totalExpense, '']];
@@ -798,6 +841,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
        {showVendorModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn">
+            {/* ... vendor modal content ... */}
             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
               <h3 className="font-bold text-lg flex items-center gap-2"><List className="text-rose-500"/> เลือกผู้ขายเก่า</h3>
               <button onClick={()=>setShowVendorModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button>
@@ -826,6 +870,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                   (v.vendorBranchName && v.vendorBranchName.toLowerCase().includes(vendorSearch.toLowerCase()))
               ).map((v, i) => (
                 <div key={v.id || i} onClick={()=>selectVendor(v)} className="p-4 rounded-xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 cursor-pointer transition-all group bg-white">
+                  {/* ... vendor item ... */}
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -866,6 +911,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
            <button onClick={()=>setSubTab('history')} className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${subTab==='history'?'bg-white text-indigo-600 shadow-sm':'text-slate-500 hover:text-slate-700'}`}><List size={16}/> รวมรายการ</button>
        </div>
        {subTab === 'new' ? (
+         // ... existing subTab === 'new' content ...
          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full overflow-hidden">
             <div className="lg:col-span-4 xl:col-span-5 bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 h-full overflow-y-auto custom-scrollbar flex flex-col">
                 <h3 className="font-bold text-xl text-slate-800 mb-6 flex items-center gap-3"><div className="p-2 bg-indigo-50 rounded-xl text-indigo-600"><Edit size={20}/></div> {editingId ? <span className="text-orange-600">แก้ไขรายการ (Editing)</span> : 'New Transaction'}</h3>
@@ -946,7 +992,24 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                     <button onClick={() => setHistFilterType('income')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${histFilterType === 'income' ? 'bg-white shadow text-emerald-600' : 'text-slate-500'}`}>รายรับ</button>
                     <button onClick={() => setHistFilterType('expense')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${histFilterType === 'expense' ? 'bg-white shadow text-rose-600' : 'text-slate-500'}`}>รายจ่าย</button>
                 </div>
-                <div className="relative"><Search className="absolute left-3 top-2.5 text-slate-400" size={16}/><input className="bg-slate-50 border-none rounded-xl text-sm py-2 pl-9 pr-4 text-slate-600 focus:ring-2 focus:ring-indigo-100 w-48" placeholder="ค้นหา..." value={historySearch} onChange={e=>setHistorySearch(e.target.value)}/></div><select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histPeriod} onChange={e=>setHistPeriod(e.target.value)}><option value="day">รายวัน</option><option value="week">รายสัปดาห์</option><option value="month">รายเดือน</option><option value="year">รายปี</option><option value="all">ทั้งหมด</option></select>{histPeriod !== 'all' && <input type={histPeriod==='month'?'month': (histPeriod==='day' || histPeriod==='week')?'date':'number'} className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histDate} onChange={e=>setHistDate(e.target.value)}/>} <button onClick={exportHistoryExcel} className="bg-indigo-50 text-indigo-600 p-2 rounded-xl hover:bg-indigo-100 flex items-center gap-2"><FileText size={20}/> Excel</button>
+                <div className="relative"><Search className="absolute left-3 top-2.5 text-slate-400" size={16}/><input className="bg-slate-50 border-none rounded-xl text-sm py-2 pl-9 pr-4 text-slate-600 focus:ring-2 focus:ring-indigo-100 w-48" placeholder="ค้นหา..." value={historySearch} onChange={e=>setHistorySearch(e.target.value)}/></div><select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histPeriod} onChange={e=>setHistPeriod(e.target.value)}><option value="day">รายวัน</option><option value="week">รายสัปดาห์</option><option value="month">รายเดือน</option><option value="year">รายปี</option><option value="all">ทั้งหมด</option></select>
+                {/* --- NEW YEAR SELECTOR LOGIC --- */}
+                {histPeriod !== 'all' && (
+                    histPeriod === 'year' ? (
+                        <select 
+                            className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600 cursor-pointer" 
+                            value={histDate.substring(0, 4)} 
+                            onChange={e=>setHistDate(e.target.value)}
+                        >
+                            {Array.from({length: new Date().getFullYear() - 2025 + 1}, (_, i) => 2025 + i).reverse().map(y => (
+                                <option key={y} value={y}>{y}</option>
+                            ))}
+                        </select>
+                    ) : (
+                        <input type={histPeriod==='month'?'month': (histPeriod==='day' || histPeriod==='week')?'date':'number'} className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histDate} onChange={e=>setHistDate(e.target.value)}/>
+                    )
+                )}
+                <button onClick={exportHistoryExcel} className="bg-indigo-50 text-indigo-600 p-2 rounded-xl hover:bg-indigo-100 flex items-center gap-2"><FileText size={20}/> Excel</button>
              </div>
            </div>
            <div className="grid grid-cols-3 gap-4 p-6 bg-slate-50/50"><div className="bg-white p-4 rounded-2xl shadow-sm border border-emerald-100 text-center"><p className="text-xs text-emerald-500 font-bold uppercase mb-1">รายรับ</p><p className="text-lg font-bold text-emerald-600">{formatCurrency(historySummary.inc)}</p></div><div className="bg-white p-4 rounded-2xl shadow-sm border border-rose-100 text-center"><p className="text-xs text-rose-500 font-bold uppercase mb-1">รายจ่าย</p><p className="text-lg font-bold text-rose-600">{formatCurrency(historySummary.exp)}</p></div><div className="bg-white p-4 rounded-2xl shadow-sm border border-indigo-100 text-center"><p className="text-xs text-indigo-500 font-bold uppercase mb-1">คงเหลือ</p><p className="text-lg font-bold text-indigo-600">{formatCurrency(historySummary.bal)}</p></div></div>
