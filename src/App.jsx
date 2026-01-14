@@ -30,24 +30,7 @@ const CONSTANTS = {
   SHOPS: ['eats and use', 'bubee bubee', 'ไม่ระบุ'],
   CATEGORIES: {
     INCOME: ['สินค้าทั่วไป', 'บริการ', 'อาหาร/เครื่องดื่ม', 'อื่นๆ'],
-    EXPENSE: [
-      'ค่าใช้จ่ายทั่วไป', 
-      'ต้นทุนสินค้า', 
-      'วัสดุสิ้นเปลือง/บรรจุภัณฑ์', 
-      'ค่าน้ำมัน/เดินทาง',       
-      'สาธารณูปโภค (น้ำ/ไฟ/เน็ต)',
-      'ค่าอาหารและสวัสดิการ', // เพิ่มหมวดหมู่สำหรับค่าอาหารทีมงาน/สวัสดิการ
-      'สินค้าเสียหาย/หมดอายุ', 
-      'ค่าบริการ/จ้างทำของ', 
-      'ค่าโฆษณา (ในประเทศ)', 
-      'ค่าโฆษณา (ภ.พ.36)', 
-      'ค่าธรรมเนียม Platform', 
-      'ค่าขนส่ง',
-      'ค่าเช่า', 
-      'เงินเดือน', 
-      'ภาษี/เบี้ยปรับ', 
-      'ส่วนลดร้านค้า'
-    ]
+    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าขนส่ง', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า']
   },
   CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
   VAT_RATES: {
@@ -289,7 +272,6 @@ const NavButton = ({ active, onClick, icon, label }) => (
 const Dashboard = ({ transactions, invoices }) => {
   const [period, setPeriod] = useState('month'); 
   const [showValues, setShowValues] = useState(true);
-  const [customYear, setCustomYear] = useState(new Date().getFullYear()); // New state for year selection
 
   const analytics = useMemo(() => {
     const now = new Date();
@@ -313,10 +295,9 @@ const Dashboard = ({ transactions, invoices }) => {
             start = new Date(d.getFullYear(), d.getMonth(), 1);
             end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
         } else if (p === 'year') {
-            // Use customYear logic
-            const y = customYear - offset;
-            start = new Date(y, 0, 1);
-            end = new Date(y, 11, 31);
+            d.setFullYear(d.getFullYear() - offset);
+            start = new Date(d.getFullYear(), 0, 1);
+            end = new Date(d.getFullYear(), 11, 31);
         } else {
              return { start: new Date(0), end: new Date() };
         }
@@ -404,7 +385,7 @@ const Dashboard = ({ transactions, invoices }) => {
         transCount: currentTrans.length,
         startDate: currentRange.start
     };
-  }, [transactions, invoices, period, customYear]);
+  }, [transactions, invoices, period]);
 
   return (
     <div className="space-y-6 w-full max-w-[2400px] mx-auto pb-10 animate-fadeIn p-4 md:p-6 bg-slate-50/50">
@@ -413,23 +394,12 @@ const Dashboard = ({ transactions, invoices }) => {
                 <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Business Dashboard</h2>
                 <p className="text-slate-500 text-sm">วิเคราะห์ผลประกอบการแบบ Real-time</p>
             </div>
-            <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200 items-center">
+            <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200">
                 {['day', 'week', 'month', 'year', 'all'].map(p => (
                     <button key={p} onClick={() => setPeriod(p)} className={`px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all ${period === p ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>
                         {p === 'day' ? 'วันนี้' : p === 'week' ? 'สัปดาห์นี้' : p === 'month' ? 'เดือนนี้' : p === 'year' ? 'ปีนี้' : 'ทั้งหมด'}
                     </button>
                 ))}
-                {period === 'year' && (
-                    <select 
-                        className="ml-2 bg-slate-50 border-none rounded-lg text-xs font-bold py-1.5 px-3 text-slate-600 cursor-pointer focus:ring-2 focus:ring-indigo-100"
-                        value={customYear}
-                        onChange={(e) => setCustomYear(Number(e.target.value))}
-                    >
-                        {Array.from({length: new Date().getFullYear() - 2025 + 1}, (_, i) => 2025 + i).reverse().map(y => (
-                            <option key={y} value={y}>{y}</option>
-                        ))}
-                    </select>
-                )}
             </div>
         </div>
 
@@ -585,12 +555,10 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const [showVendorModal, setShowVendorModal] = useState(false);
   const [deleteVendorId, setDeleteVendorId] = useState(null); 
   const [editingId, setEditingId] = useState(null);
-  const [expandedVendorId, setExpandedVendorId] = useState(null);
-  const [selectedVendorId, setSelectedVendorId] = useState(null); 
-  const [vendorSearch, setVendorSearch] = useState(''); 
+  const [expandedVendorId, setExpandedVendorId] = useState(null); // Added state for View button
 
   const initialForm = { 
-    type: 'income', shop: CONSTANTS.SHOPS[0], date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0, channel: CONSTANTS.CHANNELS[0], orderId: '', category: CONSTANTS.CATEGORIES.INCOME[0], taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000', vendorBranchName: '', vendorAddress: '', itemAmount: '', customerShippingFee: '', platformFee: '', shippingFee: '', shopVoucher: '', expenseDiscount: '', shippingPayer: 'customer', grossAmount: '' 
+    type: 'income', shop: CONSTANTS.SHOPS[0], date: new Date().toISOString().split('T')[0], description: '', amount: '', vatType: 'included', whtRate: 0, channel: CONSTANTS.CHANNELS[0], orderId: '', category: CONSTANTS.CATEGORIES.INCOME[0], taxInvoiceNo: '', vendorName: '', vendorTaxId: '', vendorBranch: '00000', vendorAddress: '', itemAmount: '', customerShippingFee: '', platformFee: '', shippingFee: '', shopVoucher: '', expenseDiscount: '', shippingPayer: 'customer', grossAmount: '' 
   };
    
   const [formData, setFormData] = useState(initialForm);
@@ -664,7 +632,6 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   };
 
   const handleSubmit = async (e) => { 
-      // ... existing handleSubmit code ...
       e.preventDefault(); 
       if (!user) return; 
       let mainTransactionAmount = parseFloat(formData.amount);
@@ -699,7 +666,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
             }
 
             if (isEcommerceMode) { await manageRelatedExpense('ค่าธรรมเนียม Platform', formData.platformFee, `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`); await manageRelatedExpense('ค่าขนส่ง', formData.shippingFee, `ค่าขนส่ง ${formData.channel} (Order: ${formData.orderId}) - ${formData.shippingPayer === 'customer' ? 'ลูกค้าจ่าย' : 'ร้านค้าจ่าย'}`); await manageRelatedExpense('ส่วนลดร้านค้า', formData.shopVoucher, `ส่วนลดร้านค้า ${formData.channel} (Order: ${formData.orderId})`); }
-            showToast("แก้ไขรายการเรียบร้อย", "success"); setEditingId(null); setFormData(initialForm); setSelectedVendorId(null);
+            showToast("แก้ไขรายการเรียบร้อย", "success"); setEditingId(null); setFormData(initialForm);
           } else {
             await addDoc(collection(db, 'artifacts', appId, 'public', 'data', targetCollection), { ...dataToSave, createdAt: serverTimestamp() }); 
             if (isEcommerceMode) {
@@ -711,44 +678,19 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
             } 
             showToast("บันทึกสำเร็จ", "success"); 
           }
-          setFormData(prev => ({ ...initialForm, type: prev.type, category: prev.category, shop: prev.shop })); setSelectedVendorId(null);
+          setFormData(prev => ({ ...initialForm, type: prev.type, category: prev.category, shop: prev.shop })); 
       } catch (error) { console.error("Save failed:", error); showToast("บันทึกไม่สำเร็จ: " + error.message, "error"); } 
   };
 
   const handleEdit = (item) => { setFormData({ ...initialForm, ...item, shop: item.shop || CONSTANTS.SHOPS[0], date: formatDateISO(item.date), amount: item.amount || item.total }); setEditingId(item.id); setSubTab('new'); };
-  const handleCancelEdit = () => { setEditingId(null); setFormData(initialForm); setSelectedVendorId(null); };
-  
-  const handleSaveVendor = async () => { if (!formData.vendorName) return showToast("กรุณาระบุชื่อผู้ขาย", "error"); const vendorData = { vendorName: formData.vendorName, vendorTaxId: formData.vendorTaxId, vendorBranch: formData.vendorBranch, vendorBranchName: formData.vendorBranchName, vendorAddress: formData.vendorAddress, updatedAt: serverTimestamp() }; try { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'vendors'), vendorData); showToast("บันทึกผู้ขายรายใหม่เรียบร้อย", "success"); } catch (e) { console.error(e); } };
-  
-  const handleUpdateVendor = async () => {
-    if (!selectedVendorId) return showToast("ไม่พบข้อมูลผู้ขายเดิม (กรุณาเลือกใหม่)", "error");
-    if (!formData.vendorName) return showToast("กรุณาระบุชื่อผู้ขาย", "error");
-    
-    const vendorData = { 
-        vendorName: formData.vendorName, 
-        vendorTaxId: formData.vendorTaxId, 
-        vendorBranch: formData.vendorBranch, 
-        vendorBranchName: formData.vendorBranchName, 
-        vendorAddress: formData.vendorAddress, 
-        updatedAt: serverTimestamp() 
-    };
-    
-    try { 
-        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vendors', selectedVendorId), vendorData); 
-        showToast("อัปเดตข้อมูลผู้ขายเรียบร้อย", "success"); 
-    } catch (e) { 
-        console.error(e);
-        showToast("อัปเดตล้มเหลว", "error");
-    }
-  };
-
+  const handleCancelEdit = () => { setEditingId(null); setFormData(initialForm); };
+  const handleSaveVendor = async () => { if (!formData.vendorName) return showToast("กรุณาระบุชื่อผู้ขาย", "error"); const vendorData = { vendorName: formData.vendorName, vendorTaxId: formData.vendorTaxId, vendorBranch: formData.vendorBranch, vendorAddress: formData.vendorAddress, updatedAt: serverTimestamp() }; try { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'vendors'), vendorData); showToast("บันทึกผู้ขายเรียบร้อย", "success"); } catch (e) { console.error(e); } };
   const handleDeleteVendorClick = (id, e) => { e.stopPropagation(); setDeleteVendorId(id); };
   const executeDeleteVendor = async () => { if (!deleteVendorId) return; setIsDeleting(true); try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vendors', deleteVendorId)); setDeleteVendorId(null); showToast("ลบผู้ขายสำเร็จ", "success"); } catch (err) { console.error(err); } finally { setIsDeleting(false); } };
-  const selectVendor = (vendor) => { setFormData(prev => ({ ...prev, vendorName: vendor.vendorName || '', vendorTaxId: vendor.vendorTaxId || '', vendorBranch: vendor.vendorBranch || '', vendorBranchName: vendor.vendorBranchName || '', vendorAddress: vendor.vendorAddress || '' })); setSelectedVendorId(vendor.id); setShowVendorModal(false); };
+  const selectVendor = (vendor) => { setFormData(prev => ({ ...prev, vendorName: vendor.vendorName || '', vendorTaxId: vendor.vendorTaxId || '', vendorBranch: vendor.vendorBranch || '', vendorAddress: vendor.vendorAddress || '' })); setShowVendorModal(false); };
   const confirmDelete = (id, e) => { if(e) e.stopPropagation(); setDeleteId(id); };
   
   const executeDelete = async () => { 
-      // ... existing executeDelete ...
       if (!deleteId) return; 
       setIsDeleting(true); 
       try { 
@@ -778,43 +720,16 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const recentTransactions = useMemo(() => transactions.filter(t => (filterType === 'all' || t.type === filterType) && (t.description?.toLowerCase().includes(recentSearch.toLowerCase()) || (t.amount && t.amount.toString().includes(recentSearch)) || (t.orderId && t.orderId.toString().toLowerCase().includes(recentSearch.toLowerCase())))).sort((a,b) => b.date - a.date).slice(0, 50), [transactions, filterType, recentSearch]);
   const groupedRecent = useMemo(() => { const groups = {}; recentTransactions.forEach(t => { const dateKey = formatDate(t.date); if (!groups[dateKey]) groups[dateKey] = []; groups[dateKey].push(t); }); return groups; }, [recentTransactions]);
 
-  // --- UPDATED HISTORY FILTER LOGIC ---
   const historyData = useMemo(() => transactions.filter(t => { 
       let matchesPeriod = true;
       if (histPeriod !== 'all') {
           const tDate = normalizeDate(t.date); 
-          
-          if (histPeriod === 'year') {
-              // Robustly handle year selection
-              const filterYear = parseInt(histDate);
-              if (!isNaN(filterYear)) {
-                  matchesPeriod = tDate.getFullYear() === filterYear;
-              }
-          } else if (histPeriod === 'month') {
-              const [y, m] = histDate.split('-').map(Number);
-              if (!isNaN(y) && !isNaN(m)) {
-                  matchesPeriod = tDate.getMonth() === (m - 1) && tDate.getFullYear() === y;
-              }
-          } else {
-              // Day or Week (requires full date)
-              const [y, m, d] = histDate.split('-').map(Number);
-              const filterD = new Date(y, m - 1, d);
-              
-              if (!isNaN(filterD.getTime())) {
-                  if (histPeriod === 'day') {
-                      matchesPeriod = tDate.getDate() === filterD.getDate() && tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear();
-                  } else if (histPeriod === 'week') {
-                      const day = filterD.getDay();
-                      const startOfWeek = new Date(filterD);
-                      startOfWeek.setDate(filterD.getDate() - day);
-                      startOfWeek.setHours(0,0,0,0);
-                      const endOfWeek = new Date(startOfWeek);
-                      endOfWeek.setDate(startOfWeek.getDate() + 6);
-                      endOfWeek.setHours(23,59,59,999);
-                      matchesPeriod = tDate >= startOfWeek && tDate <= endOfWeek;
-                  }
-              }
-          }
+          const [y, m, d] = histDate.split('-').map(Number);
+          const filterD = new Date(y, m - 1, d); 
+          if (histPeriod === 'day') matchesPeriod = tDate.getDate() === filterD.getDate() && tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear();
+          else if (histPeriod === 'week') { const day = filterD.getDay(); const startOfWeek = new Date(filterD); startOfWeek.setDate(filterD.getDate() - day); startOfWeek.setHours(0,0,0,0); const endOfWeek = new Date(startOfWeek); endOfWeek.setDate(startOfWeek.getDate() + 6); endOfWeek.setHours(23,59,59,999); matchesPeriod = tDate >= startOfWeek && tDate <= endOfWeek; }
+          else if (histPeriod === 'month') matchesPeriod = tDate.getMonth() === filterD.getMonth() && tDate.getFullYear() === filterD.getFullYear(); 
+          else if (histPeriod === 'year') matchesPeriod = tDate.getFullYear() === filterD.getFullYear(); 
       }
       const matchesType = histFilterType === 'all' || t.type === histFilterType;
       const searchLower = historySearch.toLowerCase();
@@ -825,7 +740,6 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
   const historySummary = useMemo(() => { const inc = historyData.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.total),0); const exp = historyData.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.total),0); return { inc, exp, bal: inc - exp }; }, [historyData]);
    
   const exportHistoryExcel = () => {
-    // ... existing exportHistoryExcel ...
     const totalIncome = historyData.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total) || 0), 0);
     const totalExpense = historyData.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total) || 0), 0);
     const data = [['วันที่', 'ร้านค้า', 'ประเภท', 'หมวดหมู่', 'รายละเอียด', 'รายการ', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขที่ใบกำกับภาษี/Order ID', 'ช่องทาง', 'รายรับ', 'รายจ่าย'], ...historyData.map(t => [formatDate(t.date), t.shop || '-', t.type === 'income' ? 'รายรับ' : 'รายจ่าย', t.category, t.description, t.description || '', t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'), t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0, 8)) : '-'), t.channel || '', t.type === 'income' ? (Number(t.total)||0) : 0, t.type === 'expense' ? (Number(t.total)||0) : 0]), [], ['', '', '', '', '', '', '', '', 'รวมสุทธิ', totalIncome, totalExpense], ['', '', '', '', '', '', '', '', 'คงเหลือ', totalIncome - totalExpense, '']];
@@ -841,41 +755,18 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
        {showVendorModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn">
-            {/* ... vendor modal content ... */}
             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
               <h3 className="font-bold text-lg flex items-center gap-2"><List className="text-rose-500"/> เลือกผู้ขายเก่า</h3>
               <button onClick={()=>setShowVendorModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button>
             </div>
-            
-            {/* Added Search Bar */}
-            <div className="px-6 pt-4 pb-2">
-                <div className="relative">
-                    <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
-                    <input 
-                        className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 text-slate-600" 
-                        placeholder="ค้นหาชื่อ, เลขภาษี หรือ สาขา..." 
-                        value={vendorSearch} 
-                        onChange={e=>setVendorSearch(e.target.value)}
-                        autoFocus
-                    />
-                </div>
-            </div>
-
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {vendors.filter(v => 
-                  !vendorSearch || 
-                  v.vendorName.toLowerCase().includes(vendorSearch.toLowerCase()) || 
-                  (v.vendorTaxId && v.vendorTaxId.includes(vendorSearch)) ||
-                  (v.vendorBranch && v.vendorBranch.includes(vendorSearch)) ||
-                  (v.vendorBranchName && v.vendorBranchName.toLowerCase().includes(vendorSearch.toLowerCase()))
-              ).map((v, i) => (
+              {vendors.map((v, i) => (
                 <div key={v.id || i} onClick={()=>selectVendor(v)} className="p-4 rounded-xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50 cursor-pointer transition-all group bg-white">
-                  {/* ... vendor item ... */}
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-bold text-slate-700">{v.vendorName}</p>
-                        {v.vendorBranch && <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200 whitespace-nowrap">สาขา {v.vendorBranch} {v.vendorBranchName ? `(${v.vendorBranchName})` : ''}</span>}
+                        {v.vendorBranch && <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200 whitespace-nowrap">สาขา {v.vendorBranch}</span>}
                       </div>
                       <p className="text-xs text-slate-400 mt-1">TAX: {v.vendorTaxId || '-'}</p>
                       {expandedVendorId === (v.id || i) && (
@@ -893,13 +784,6 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                 </div>
               ))}
               {vendors.length === 0 && <div className="text-center text-slate-400 py-10">ยังไม่มีผู้ขายที่บันทึกไว้</div>}
-              {vendors.length > 0 && vendors.filter(v => 
-                  !vendorSearch || 
-                  v.vendorName.toLowerCase().includes(vendorSearch.toLowerCase()) || 
-                  (v.vendorTaxId && v.vendorTaxId.includes(vendorSearch)) ||
-                  (v.vendorBranch && v.vendorBranch.includes(vendorSearch)) ||
-                  (v.vendorBranchName && v.vendorBranchName.toLowerCase().includes(vendorSearch.toLowerCase()))
-              ).length === 0 && <div className="text-center text-slate-400 py-10">ไม่พบข้อมูลที่ค้นหา</div>}
             </div>
           </div>
         </div>
@@ -911,7 +795,6 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
            <button onClick={()=>setSubTab('history')} className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${subTab==='history'?'bg-white text-indigo-600 shadow-sm':'text-slate-500 hover:text-slate-700'}`}><List size={16}/> รวมรายการ</button>
        </div>
        {subTab === 'new' ? (
-         // ... existing subTab === 'new' content ...
          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full overflow-hidden">
             <div className="lg:col-span-4 xl:col-span-5 bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 h-full overflow-y-auto custom-scrollbar flex flex-col">
                 <h3 className="font-bold text-xl text-slate-800 mb-6 flex items-center gap-3"><div className="p-2 bg-indigo-50 rounded-xl text-indigo-600"><Edit size={20}/></div> {editingId ? <span className="text-orange-600">แก้ไขรายการ (Editing)</span> : 'New Transaction'}</h3>
@@ -925,6 +808,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                 <form onSubmit={handleSubmit} className="space-y-5 flex-1">
                    <div className="grid grid-cols-2 gap-4"><div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">วันที่</label><input type="date" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500" value={formData.date} onChange={e=>setFormData({...formData,date:e.target.value})}/></div><div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">หมวดหมู่</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500" value={formData.category} onChange={e=>setFormData({...formData,category:e.target.value})}>{(formData.type==='income'?CONSTANTS.CATEGORIES.INCOME:CONSTANTS.CATEGORIES.EXPENSE).map(c=><option key={c} value={c}>{c}</option>)}</select></div></div>
                    
+                   {/* TAX INVOICE NO - MOVED HERE */}
                    {formData.type === 'expense' && (
                      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm mb-2">
                         <label className="text-xs font-bold text-slate-500 mb-1 block">เลขที่ใบกำกับภาษี (Tax Invoice No.)</label>
@@ -932,29 +816,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                      </div>
                    )}
 
-                   {formData.type === 'income' ? (<div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-4"><div className="flex justify-between items-center text-emerald-700 text-xs font-bold uppercase tracking-wider mb-1"><span className="flex items-center gap-1"><Package size={14}/> E-Commerce</span></div><div className="grid grid-cols-2 gap-4"><input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="Order ID" value={formData.orderId} onChange={e=>setFormData({...formData,orderId:e.target.value})}/><select className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" value={formData.channel} onChange={e=>setFormData({...formData,channel:e.target.value})}>{CONSTANTS.CHANNELS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>{isEcommerceMode && (<div className="bg-white p-4 rounded-xl shadow-sm border border-emerald-100"><div className="flex items-center justify-between mb-3"><div className="flex items-center gap-2 text-xs font-bold text-emerald-600"><Calculator size={14}/> Calculator (Gross vs Net)</div><div className="flex gap-2"><label className="flex items-center gap-1 text-[10px] cursor-pointer"><input type="radio" name="shippingPayer" checked={formData.shippingPayer === 'customer'} onChange={()=>setFormData({...formData, shippingPayer: 'customer'})} className="text-emerald-600 focus:ring-0 w-3 h-3"/>ลูกค้าจ่าย</label><label className="flex items-center gap-1 text-[10px] cursor-pointer"><input type="radio" name="shippingPayer" checked={formData.shippingPayer === 'shop'} onChange={()=>setFormData({...formData, shippingPayer: 'shop'})} className="text-emerald-600 focus:ring-0 w-3 h-3"/>ร้านจ่าย (Free)</label></div></div><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าสินค้า (Item)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.itemAmount} onChange={e=>setFormData({...formData,itemAmount:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งลูกค้าจ่าย (Cust.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.customerShippingFee} onChange={e=>setFormData({...formData,customerShippingFee:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าธรรมเนียม (Fee)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData,platformFee:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งระบบหัก (Act.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.shippingFee} onChange={e=>setFormData({...formData,shippingFee:e.target.value})}/></div></div><div className="mt-2 p-2 bg-orange-50 rounded-lg border border-orange-100 flex items-center gap-2"><div className="p-1.5 bg-white rounded-full text-orange-500"><Tag size={12}/></div><div className="flex-1"><label className="text-[10px] text-orange-500 font-bold block mb-0.5">ส่วนลดร้านค้า (Shop Voucher)</label><input type="number" className="w-full bg-white border-0 rounded-md p-1.5 text-sm font-bold text-orange-600 placeholder:text-orange-200" placeholder="0.00" value={formData.shopVoucher} onChange={e=>setFormData({...formData,shopVoucher:e.target.value})}/></div></div><div className="mt-3 grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-lg border border-emerald-100"><div className="text-center border-r border-slate-200"><p className="text-[10px] text-slate-400 uppercase font-bold">ยอดขาย (Gross)</p><p className="text-lg font-bold text-emerald-600">{formatCurrency(parseFloat(formData.grossAmount) || 0)}</p></div><div className="text-center"><p className="text-[10px] text-slate-400 uppercase font-bold">เงินเข้าจริง (Net)</p><p className="text-lg font-bold text-indigo-600">{formatCurrency(parseFloat(formData.amount) || 0)}</p></div></div></div>)}</div>) : (
-                   <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 space-y-4">
-                     <div className="flex justify-between items-center mb-1">
-                       <span className="text-rose-700 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><User size={14}/> Vendor</span>
-                       <div className="flex gap-1">
-                         <button type="button" onClick={()=>setShowVendorModal(true)} className="bg-white border border-rose-200 text-rose-600 text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-50 transition-colors">เลือกเก่า</button>
-                         {selectedVendorId && (
-                            <button type="button" onClick={handleUpdateVendor} className="bg-orange-100 border border-orange-200 text-orange-700 text-[10px] px-2 py-1 rounded-md font-bold hover:bg-orange-200 transition-colors animate-fadeIn">บันทึกทับ (อัปเดต)</button>
-                         )}
-                         <button type="button" onClick={handleSaveVendor} className="bg-rose-600 text-white text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-700 transition-colors">บันทึกใหม่</button>
-                       </div>
-                     </div>
-                     <input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ชื่อร้านค้า / ผู้รับเงิน" value={formData.vendorName} onChange={e=>setFormData({...formData,vendorName:e.target.value})}/>
-                     <div className="grid grid-cols-2 gap-4">
-                       <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="เลขผู้เสียภาษี" value={formData.vendorTaxId} onChange={e=>setFormData({...formData,vendorTaxId:e.target.value})}/>
-                       <div className="grid grid-cols-2 gap-2">
-                         <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm text-center" placeholder="รหัสสาขา" value={formData.vendorBranch} onChange={e=>setFormData({...formData,vendorBranch:e.target.value})}/>
-                         <input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ชื่อสาขา" value={formData.vendorBranchName} onChange={e=>setFormData({...formData,vendorBranchName:e.target.value})}/>
-                       </div>
-                     </div>
-                     <input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ที่อยู่ (สำหรับออก 50 ทวิ)" value={formData.vendorAddress} onChange={e=>setFormData({...formData,vendorAddress:e.target.value})}/>
-                   </div>
-                   )}
+                   {formData.type === 'income' ? (<div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-4"><div className="flex justify-between items-center text-emerald-700 text-xs font-bold uppercase tracking-wider mb-1"><span className="flex items-center gap-1"><Package size={14}/> E-Commerce</span></div><div className="grid grid-cols-2 gap-4"><input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="Order ID" value={formData.orderId} onChange={e=>setFormData({...formData,orderId:e.target.value})}/><select className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" value={formData.channel} onChange={e=>setFormData({...formData,channel:e.target.value})}>{CONSTANTS.CHANNELS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>{isEcommerceMode && (<div className="bg-white p-4 rounded-xl shadow-sm border border-emerald-100"><div className="flex items-center justify-between mb-3"><div className="flex items-center gap-2 text-xs font-bold text-emerald-600"><Calculator size={14}/> Calculator (Gross vs Net)</div><div className="flex gap-2"><label className="flex items-center gap-1 text-[10px] cursor-pointer"><input type="radio" name="shippingPayer" checked={formData.shippingPayer === 'customer'} onChange={()=>setFormData({...formData, shippingPayer: 'customer'})} className="text-emerald-600 focus:ring-0 w-3 h-3"/>ลูกค้าจ่าย</label><label className="flex items-center gap-1 text-[10px] cursor-pointer"><input type="radio" name="shippingPayer" checked={formData.shippingPayer === 'shop'} onChange={()=>setFormData({...formData, shippingPayer: 'shop'})} className="text-emerald-600 focus:ring-0 w-3 h-3"/>ร้านจ่าย (Free)</label></div></div><div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าสินค้า (Item)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.itemAmount} onChange={e=>setFormData({...formData,itemAmount:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งลูกค้าจ่าย (Cust.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-slate-700" placeholder="0.00" value={formData.customerShippingFee} onChange={e=>setFormData({...formData,customerShippingFee:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าธรรมเนียม (Fee)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData,platformFee:e.target.value})}/></div><div><label className="text-[10px] text-slate-400 font-bold block mb-1">ค่าส่งระบบหัก (Act.Ship)</label><input type="number" className="w-full bg-slate-50 border-0 rounded-lg p-2 text-sm font-bold text-rose-500" placeholder="0.00" value={formData.shippingFee} onChange={e=>setFormData({...formData,shippingFee:e.target.value})}/></div></div><div className="mt-2 p-2 bg-orange-50 rounded-lg border border-orange-100 flex items-center gap-2"><div className="p-1.5 bg-white rounded-full text-orange-500"><Tag size={12}/></div><div className="flex-1"><label className="text-[10px] text-orange-500 font-bold block mb-0.5">ส่วนลดร้านค้า (Shop Voucher)</label><input type="number" className="w-full bg-white border-0 rounded-md p-1.5 text-sm font-bold text-orange-600 placeholder:text-orange-200" placeholder="0.00" value={formData.shopVoucher} onChange={e=>setFormData({...formData,shopVoucher:e.target.value})}/></div></div><div className="mt-3 grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-lg border border-emerald-100"><div className="text-center border-r border-slate-200"><p className="text-[10px] text-slate-400 uppercase font-bold">ยอดขาย (Gross)</p><p className="text-lg font-bold text-emerald-600">{formatCurrency(parseFloat(formData.grossAmount) || 0)}</p></div><div className="text-center"><p className="text-[10px] text-slate-400 uppercase font-bold">เงินเข้าจริง (Net)</p><p className="text-lg font-bold text-indigo-600">{formatCurrency(parseFloat(formData.amount) || 0)}</p></div></div></div>)}</div>) : (<div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 space-y-4"><div className="flex justify-between items-center mb-1"><span className="text-rose-700 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><User size={14}/> Vendor</span><div className="flex gap-1"><button type="button" onClick={()=>setShowVendorModal(true)} className="bg-white border border-rose-200 text-rose-600 text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-50">เลือกเก่า</button><button type="button" onClick={handleSaveVendor} className="bg-rose-600 text-white text-[10px] px-2 py-1 rounded-md font-bold hover:bg-rose-700">บันทึกใหม่</button></div></div><input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ชื่อร้านค้า / ผู้รับเงิน" value={formData.vendorName} onChange={e=>setFormData({...formData,vendorName:e.target.value})}/><div className="grid grid-cols-2 gap-4"><input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="เลขผู้เสียภาษี" value={formData.vendorTaxId} onChange={e=>setFormData({...formData,vendorTaxId:e.target.value})}/><input className="bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="สาขา" value={formData.vendorBranch} onChange={e=>setFormData({...formData,vendorBranch:e.target.value})}/></div><input className="w-full bg-white border-0 rounded-xl p-3 text-sm shadow-sm" placeholder="ที่อยู่ (สำหรับออก 50 ทวิ)" value={formData.vendorAddress} onChange={e=>setFormData({...formData,vendorAddress:e.target.value})}/></div>)}
                    <div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">รายละเอียด</label><input list="desc-suggestions" className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500" placeholder="..." value={formData.description} onChange={e=>setFormData({...formData,description:e.target.value})}/><datalist id="desc-suggestions">{descriptionSuggestions.map((desc, i) => (<option key={i} value={desc} />))}</datalist></div>
                    <div className="grid grid-cols-2 gap-4"><div className="space-y-1"><label className="text-xs font-bold text-slate-500 ml-1">{isEcommerceMode ? "เงินเข้าจริง (Net)" : "ยอดตามบิล (Total)"}</label><input type="number" className={`w-full bg-slate-50 border-0 rounded-xl p-3 text-lg font-bold text-right ${isEcommerceMode?'text-emerald-500':'text-slate-800'}`} value={formData.amount} onChange={e=>setFormData({...formData,amount:e.target.value})} readOnly={isEcommerceMode}/></div><div className="space-y-1"><div className="flex justify-between items-center"><label className="text-xs font-bold text-slate-500 ml-1">VAT</label>{formData.type === 'expense' && (<button type="button" onClick={() => setFormData(prev => ({ ...prev, vatType: prev.vatType === 'none' ? 'included' : 'none' }))} className={`text-[10px] px-2 py-0.5 rounded transition-colors border ${formData.vatType === 'none' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'}`}>ไม่มีใบกำกับภาษี</button>)}</div><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm" value={formData.vatType} onChange={e=>setFormData({...formData,vatType:e.target.value})}><option value="included">รวม VAT</option><option value="excluded">แยก VAT</option><option value="none">ไม่มี VAT</option></select></div></div>
                    {formData.type === 'expense' && (<div className="flex gap-4"><div className="flex-1 space-y-1"><label className="text-xs font-bold text-slate-500 ml-1 flex items-center gap-1"><Tag size={12}/> ส่วนลด / Voucher</label><input type="number" className="w-full bg-orange-50/50 border border-orange-100 rounded-xl p-3 text-sm font-bold text-orange-600 text-right focus:ring-orange-200" placeholder="0.00" value={formData.expenseDiscount} onChange={e=>setFormData({...formData,expenseDiscount:e.target.value})}/></div><div className="flex-1 space-y-1 opacity-50"><label className="text-xs font-bold text-slate-500 ml-1">ยอดจ่ายจริง (Net Paid)</label><div className="w-full bg-slate-100 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-600 text-right cursor-not-allowed">{formatCurrency(calculated.expenseNetPaid)}</div></div></div>)}
@@ -992,24 +854,7 @@ const RecordManager = ({ user, transactions, appId, showToast }) => {
                     <button onClick={() => setHistFilterType('income')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${histFilterType === 'income' ? 'bg-white shadow text-emerald-600' : 'text-slate-500'}`}>รายรับ</button>
                     <button onClick={() => setHistFilterType('expense')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${histFilterType === 'expense' ? 'bg-white shadow text-rose-600' : 'text-slate-500'}`}>รายจ่าย</button>
                 </div>
-                <div className="relative"><Search className="absolute left-3 top-2.5 text-slate-400" size={16}/><input className="bg-slate-50 border-none rounded-xl text-sm py-2 pl-9 pr-4 text-slate-600 focus:ring-2 focus:ring-indigo-100 w-48" placeholder="ค้นหา..." value={historySearch} onChange={e=>setHistorySearch(e.target.value)}/></div><select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histPeriod} onChange={e=>setHistPeriod(e.target.value)}><option value="day">รายวัน</option><option value="week">รายสัปดาห์</option><option value="month">รายเดือน</option><option value="year">รายปี</option><option value="all">ทั้งหมด</option></select>
-                {/* --- NEW YEAR SELECTOR LOGIC --- */}
-                {histPeriod !== 'all' && (
-                    histPeriod === 'year' ? (
-                        <select 
-                            className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600 cursor-pointer" 
-                            value={histDate.substring(0, 4)} 
-                            onChange={e=>setHistDate(e.target.value)}
-                        >
-                            {Array.from({length: new Date().getFullYear() - 2025 + 1}, (_, i) => 2025 + i).reverse().map(y => (
-                                <option key={y} value={y}>{y}</option>
-                            ))}
-                        </select>
-                    ) : (
-                        <input type={histPeriod==='month'?'month': (histPeriod==='day' || histPeriod==='week')?'date':'number'} className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histDate} onChange={e=>setHistDate(e.target.value)}/>
-                    )
-                )}
-                <button onClick={exportHistoryExcel} className="bg-indigo-50 text-indigo-600 p-2 rounded-xl hover:bg-indigo-100 flex items-center gap-2"><FileText size={20}/> Excel</button>
+                <div className="relative"><Search className="absolute left-3 top-2.5 text-slate-400" size={16}/><input className="bg-slate-50 border-none rounded-xl text-sm py-2 pl-9 pr-4 text-slate-600 focus:ring-2 focus:ring-indigo-100 w-48" placeholder="ค้นหา..." value={historySearch} onChange={e=>setHistorySearch(e.target.value)}/></div><select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histPeriod} onChange={e=>setHistPeriod(e.target.value)}><option value="day">รายวัน</option><option value="week">รายสัปดาห์</option><option value="month">รายเดือน</option><option value="year">รายปี</option><option value="all">ทั้งหมด</option></select>{histPeriod !== 'all' && <input type={histPeriod==='month'?'month': (histPeriod==='day' || histPeriod==='week')?'date':'number'} className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histDate} onChange={e=>setHistDate(e.target.value)}/>} <button onClick={exportHistoryExcel} className="bg-indigo-50 text-indigo-600 p-2 rounded-xl hover:bg-indigo-100 flex items-center gap-2"><FileText size={20}/> Excel</button>
              </div>
            </div>
            <div className="grid grid-cols-3 gap-4 p-6 bg-slate-50/50"><div className="bg-white p-4 rounded-2xl shadow-sm border border-emerald-100 text-center"><p className="text-xs text-emerald-500 font-bold uppercase mb-1">รายรับ</p><p className="text-lg font-bold text-emerald-600">{formatCurrency(historySummary.inc)}</p></div><div className="bg-white p-4 rounded-2xl shadow-sm border border-rose-100 text-center"><p className="text-xs text-rose-500 font-bold uppercase mb-1">รายจ่าย</p><p className="text-lg font-bold text-rose-600">{formatCurrency(historySummary.exp)}</p></div><div className="bg-white p-4 rounded-2xl shadow-sm border border-indigo-100 text-center"><p className="text-xs text-indigo-500 font-bold uppercase mb-1">คงเหลือ</p><p className="text-lg font-bold text-indigo-600">{formatCurrency(historySummary.bal)}</p></div></div>
@@ -1055,7 +900,7 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
   const savedSeller = useMemo(() => { try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } catch (e) { return {}; } }, []);
 
   const initialInvData = {
-    docType: 'ใบกำกับภาษี / ใบเสร็จรับเงิน', customerName: '', address: '', taxId: '', branch: '00000', custSubDistrict: '', custDistrict: '', custProvince: '', custZipCode: '', customerPhone: '', customerEmail: '', items: [{ desc: '', qty: 1, unit: 'ชิ้น', price: 0 }], date: formatDateISO(new Date()), invNo: '', 
+    docType: 'ใบกำกับภาษี / ใบเสร็จรับเงิน', customerName: '', address: '', taxId: '', branch: '00000',orderId:'', custSubDistrict: '', custDistrict: '', custProvince: '', custZipCode: '', customerPhone: '', customerEmail: '', items: [{ desc: '', qty: 1, unit: 'ชิ้น', price: 0 }], date: formatDateISO(new Date()), invNo: '', orderId: '',
     sellerName: savedSeller.sellerName || '', sellerAddress: savedSeller.sellerAddress || '', sellerTaxId: savedSeller.sellerTaxId || '', sellerBranchId: savedSeller.sellerBranchId || '00000', sellerPhone: savedSeller.sellerPhone || '', sellerEmail: savedSeller.sellerEmail || '', sellerSubDistrict: savedSeller.sellerSubDistrict || '', sellerDistrict: savedSeller.sellerDistrict || '', sellerProvince: savedSeller.sellerProvince || '', sellerZipCode: savedSeller.sellerZipCode || '', 
     discount: 0, notes: 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน', vatType: 'excluded', logo: '', status: 'unpaid'
   };
@@ -1177,7 +1022,6 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
 
   return (
     <div className="w-full flex flex-col gap-8 relative h-full">
-      {/* ... (Modals: Seller Edit, Seller Delete, Customer, Delete Customer, Delete Invoice) ... */}
       {showSellerEditModal && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"><div className="bg-white rounded-3xl w-full max-w-2xl h-[85vh] flex flex-col shadow-2xl animate-fadeIn"><div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><Settings className="text-indigo-500"/> แก้ไขข้อมูลผู้ขาย & โลโก้</h3><button onClick={()=>setShowSellerEditModal(false)}><X className="text-slate-400 hover:text-slate-600"/></button></div><div className="flex-1 overflow-y-auto p-6 space-y-6"><div className="grid grid-cols-1 md:grid-cols-2 gap-6"><div><label className="text-sm font-bold text-slate-500 mb-2 block">โลโก้ร้านค้า</label><div className="border-2 border-dashed border-slate-200 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 hover:border-indigo-300 transition-all" onClick={() => logoInputRef.current?.click()}>{invData.logo ? <img src={invData.logo} className="h-24 object-contain mb-2" /> : <ImageIcon size={48} className="text-slate-300 mb-2"/>}<span className="text-xs text-indigo-600 font-bold">อัปโหลดรูปภาพ</span><input type="file" ref={logoInputRef} className="hidden" accept="image/*" onChange={handleLogoUpload} /></div></div><div className="space-y-4"><div className="p-3 bg-indigo-50 rounded-xl"><h4 className="font-bold text-indigo-700 text-xs uppercase mb-2">เลือกจากประวัติ</h4><div className="h-32 overflow-y-auto custom-scrollbar space-y-2">{sellerProfiles.map((s, idx) => (<div key={`${s.id}-${idx}`} className="p-3 bg-white rounded-lg border border-indigo-100 text-xs transition-colors flex justify-between items-center group hover:bg-indigo-50"><span onClick={()=>selectSeller(s)} className="cursor-pointer flex-1 font-medium text-slate-700">{s.sellerName}</span><button onClick={(e) => handleDeleteSellerProfile(s.id, e)} className="p-2 bg-rose-50 text-rose-500 rounded-lg hover:bg-rose-600 hover:text-white transition-all"><Trash2 size={14}/></button></div>))}{sellerProfiles.length === 0 && <p className="text-xs text-slate-400 text-center py-2">ยังไม่มีประวัติ</p>}</div></div></div></div><div className="space-y-4 pt-4 border-t border-slate-100"><h4 className="font-bold text-slate-700">รายละเอียดที่อยู่</h4><div className="grid grid-cols-2 gap-4"><div className="col-span-2"><label className="text-xs font-bold text-slate-500">ชื่อผู้เสียภาษี / ร้านค้า</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerName} onChange={e=>setInvData({...invData, sellerName: e.target.value})} /></div><div className="col-span-2"><label className="text-xs font-bold text-slate-500">ที่อยู่ (เลขที่, หมู่บ้าน, ถนน)</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerAddress} onChange={e=>setInvData({...invData, sellerAddress: e.target.value})} /></div><div><label className="text-xs font-bold text-slate-500">แขวง/ตำบล</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerSubDistrict} onChange={e=>setInvData({...invData, sellerSubDistrict: e.target.value})} /></div><div><label className="text-xs font-bold text-slate-500">เขต/อำเภอ</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerDistrict} onChange={e=>setInvData({...invData, sellerDistrict: e.target.value})} /></div><div><label className="text-xs font-bold text-slate-500">จังหวัด</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerProvince} onChange={e=>setInvData({...invData, sellerProvince: e.target.value})} /></div><div><label className="text-xs font-bold text-slate-500">รหัสไปรษณีย์</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerZipCode} onChange={e=>setInvData({...invData, sellerZipCode: e.target.value})} /></div><div><label className="text-xs font-bold text-slate-500">เลขผู้เสียภาษี (13 หลัก)</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerTaxId} onChange={e=>setInvData({...invData, sellerTaxId: e.target.value})} /></div><div><label className="text-xs font-bold text-slate-500">สาขา (00000)</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerBranchId} onChange={e=>setInvData({...invData, sellerBranchId: e.target.value})} /></div><div><label className="text-xs font-bold text-slate-500">เบอร์โทรศัพท์</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerPhone} onChange={e=>setInvData({...invData, sellerPhone: e.target.value})} /></div><div><label className="text-xs font-bold text-slate-500">อีเมล</label><input className="w-full border border-slate-200 rounded-lg p-2.5 mt-1" value={invData.sellerEmail} onChange={e=>setInvData({...invData, sellerEmail: e.target.value})} /></div></div></div></div><div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-3"><button onClick={saveSellerProfile} className="flex-1 bg-white border border-indigo-200 text-indigo-700 py-3 rounded-xl font-bold shadow-sm hover:bg-indigo-50">บันทึกเป็นโปรไฟล์ใหม่</button><button onClick={()=>setShowSellerEditModal(false)} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg hover:bg-indigo-700">เสร็จสิ้น</button></div></div></div>)}
       {deleteSellerId && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
@@ -1290,21 +1134,51 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
                </div>
             </div>
 
-            {/* Right: Customer Info */}
-            <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
-               <div className="flex justify-between items-center"><h4 className="font-bold text-sm text-rose-600">ข้อมูลลูกค้า (Customer)</h4><button onClick={()=>setShowCustomerModal(true)} className="text-[10px] bg-rose-100 text-rose-700 px-3 py-1 rounded-full font-bold hover:bg-rose-200">จัดการลูกค้า (Popup)</button></div>
-               <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">ชื่อลูกค้า / บริษัท</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm" value={invData.customerName} onChange={e=>setInvData({...invData, customerName: e.target.value})} /></div>
-               <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">ที่อยู่ (เลขที่, หมู่บ้าน, ถนน)</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm" value={invData.address} onChange={e=>setInvData({...invData, address: e.target.value})} /></div>
-               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                   <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">แขวง/ตำบล</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.custSubDistrict} onChange={e=>setInvData({...invData, custSubDistrict: e.target.value})} /></div>
-                   <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">เขต/อำเภอ</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.custDistrict} onChange={e=>setInvData({...invData, custDistrict: e.target.value})} /></div>
-                   <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">จังหวัด</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.custProvince} onChange={e=>setInvData({...invData, custProvince: e.target.value})} /></div>
-                   <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">รหัสไปรษณีย์</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.custZipCode} onChange={e=>setInvData({...invData, custZipCode: e.target.value})} /></div>
-               </div>
-               <div className="grid grid-cols-2 gap-2">
-                   <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">เลขผู้เสียภาษี</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.taxId} onChange={e=>setInvData({...invData, taxId: e.target.value})} /></div>
-                   <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">สาขา</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.branch} onChange={e=>setInvData({...invData, branch: e.target.value})} /></div>
-               </div>
+          
+            {/* Right: Customer Info, Date & Order ID */}
+<div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+    <div className="grid grid-cols-2 gap-3">
+        {/* ช่องวันที่เอกสาร */}
+        <div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm">
+            <label className="text-[10px] font-bold text-indigo-600 mb-1 flex items-center gap-1">
+                <Clock size={12}/> วันที่เอกสาร
+            </label>
+            <input 
+                type="date" 
+                className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0" 
+                value={invData.date} 
+                onChange={e => setInvData({ ...invData, date: e.target.value })} 
+            />
+        </div>
+        {/* ช่อง Order ID ที่เพิ่มใหม่ */}
+        <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+            <label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+                <Tag size={12}/> Order ID
+            </label>
+            <input 
+                className="w-full border-0 p-1 text-sm font-mono text-indigo-600 bg-transparent focus:ring-0" 
+                placeholder="เลขคำสั่งซื้อ"
+                value={invData.orderId} 
+                onChange={e => setInvData({ ...invData, orderId: e.target.value })} 
+            />
+        </div>
+    </div>
+                <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-sm text-rose-600">ข้อมูลลูกค้า (Customer)</h4>
+                    <button onClick={()=>setShowCustomerModal(true)} className="text-[10px] bg-rose-100 text-rose-700 px-3 py-1 rounded-full font-bold hover:bg-rose-200">จัดการลูกค้า</button>
+                </div>
+                <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">ชื่อลูกค้า / บริษัท</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm" value={invData.customerName} onChange={e=>setInvData({...invData, customerName: e.target.value})} /></div>
+                <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">ที่อยู่ (เลขที่, หมู่บ้าน, ถนน)</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm" value={invData.address} onChange={e=>setInvData({...invData, address: e.target.value})} /></div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">แขวง/ตำบล</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.custSubDistrict} onChange={e=>setInvData({...invData, custSubDistrict: e.target.value})} /></div>
+                    <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">เขต/อำเภอ</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.custDistrict} onChange={e=>setInvData({...invData, custDistrict: e.target.value})} /></div>
+                    <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">จังหวัด</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.custProvince} onChange={e=>setInvData({...invData, custProvince: e.target.value})} /></div>
+                    <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">รหัสไปรษณีย์</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.custZipCode} onChange={e=>setInvData({...invData, custZipCode: e.target.value})} /></div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                    <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">เลขผู้เสียภาษี</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.taxId} onChange={e=>setInvData({...invData, taxId: e.target.value})} /></div>
+                    <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">สาขา</label><input className="w-full border-0 rounded-lg p-2 text-sm" value={invData.branch} onChange={e=>setInvData({...invData, branch: e.target.value})} /></div>
+                </div>
             </div>
         </div>
         
@@ -1313,7 +1187,6 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
         {/* Preview Area */}
         <div className="overflow-x-auto pb-10 flex justify-center print:p-0 print:absolute print:left-0 print:top-0 print:w-full print:h-full print:z-50 print:bg-white"><div id="invoice-preview-area" className="shadow-2xl print:shadow-none bg-white p-[30px] w-[210mm] min-h-[296mm] text-sm font-sarabun text-slate-900 leading-relaxed relative box-border">
           
-          {/* Header Section Adjusted for Logo */}
           <div className="flex justify-between items-start mb-8">
             <div className="w-[65%] flex items-center gap-5">
               {invData.logo && (
@@ -1332,7 +1205,12 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
               </div>
             </div>
             
-            <div className="text-right w-[35%] flex flex-col items-end"><div className="text-lg font-bold uppercase mb-1">{docType === 'quotation' ? 'ใบเสนอราคา' : 'ใบกำกับภาษี / ใบเสร็จรับเงิน'}</div><div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">{docType === 'quotation' ? 'QUOTATION' : 'TAX INVOICE / RECEIPT'}</div><div className="border border-slate-300 p-2 w-full max-w-[200px]"><div className="flex justify-between mb-1"><span className="font-bold text-slate-500 text-xs">เลขที่ (No.)</span><span className="font-bold">{invData.invNo}</span></div><div className="flex justify-between"><span className="font-bold text-slate-500 text-xs">วันที่ (Date)</span><span>{formatDate(invData.date)}</span></div></div><div className="mt-2 text-right"><span className={`px-3 py-1 border rounded text-xs font-bold uppercase ${docTypeStatus === 'original' ? 'border-black text-black' : 'border-slate-300 text-slate-400'}`}>{docTypeStatus === 'original' ? 'ต้นฉบับ (Original)' : 'สำเนา (Copy)'}</span></div></div></div>
+            <div className="text-right w-[35%] flex flex-col items-end"><div className="text-lg font-bold uppercase mb-1">{docType === 'quotation' ? 'ใบเสนอราคา' : 'ใบกำกับภาษี / ใบเสร็จรับเงิน'}</div><div className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">{docType === 'quotation' ? 'QUOTATION' : 'TAX INVOICE / RECEIPT'}</div><div className="border border-slate-300 p-2 w-full max-w-[200px]"><div className="flex justify-between mb-1"><span className="font-bold text-slate-500 text-xs">เลขที่ (No.)</span><span className="font-bold">{invData.invNo}</span></div>{invData.orderId && (
+    <div className="flex justify-between mb-1 border-t border-slate-100 pt-1">
+        <span className="font-bold text-slate-500 text-[13px]">Order ID:</span>
+        <span className="font-bold text-[13px]">{invData.orderId}</span>
+    </div>
+)}<div className="flex justify-between"><span className="font-bold text-slate-500 text-xs">วันที่ (Date)</span><span>{formatDate(invData.date)}</span></div></div><div className="mt-2 text-right"><span className={`px-3 py-1 border rounded text-xs font-bold uppercase ${docTypeStatus === 'original' ? 'border-black text-black' : 'border-slate-300 text-slate-400'}`}>{docTypeStatus === 'original' ? 'ต้นฉบับ (Original)' : 'สำเนา (Copy)'}</span></div></div></div>
             
             <div className="border border-slate-300 p-4 mb-4 flex gap-4"><div className="flex-1"><div className="text-xs font-bold text-slate-400 uppercase mb-1">ลูกค้า (Customer)</div><p className="font-bold text-base mb-1">{invData.customerName}</p><p className="text-slate-600 text-sm leading-loose mb-2 whitespace-pre-wrap">{[invData.address, invData.custSubDistrict ? `ต.${invData.custSubDistrict}` : ''].filter(Boolean).join(' ')}<br/>{[invData.custDistrict ? `อ.${invData.custDistrict}` : '', invData.custProvince ? `จ.${invData.custProvince}` : '', invData.custZipCode].filter(Boolean).join(' ')}</p></div>
             
@@ -1351,17 +1229,15 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
                     <span>{invData.customerPhone}</span>
                 </div>
             </div>
-            
-            </div><table className="w-full mb-6 border-collapse"><thead><tr className="bg-slate-100 text-slate-800 font-bold text-xs uppercase text-center"><th className="py-2 border-y border-slate-300 w-12">ลำดับ<br/>No.</th><th className="py-2 border-y border-slate-300 text-left pl-4">รายการสินค้า / บริการ<br/>Description</th><th className="py-2 border-y border-slate-300 w-20">จำนวน<br/>Qty</th><th className="py-2 border-y border-slate-300 w-24">หน่วยละ<br/>Unit Price</th><th className="py-2 border-y border-slate-300 w-28">จำนวนเงิน<br/>Amount</th></tr></thead><tbody>{invData.items.map((it, i) => (<tr key={i}><td className="py-2 border-b border-slate-200 text-center align-top">{i+1}</td><td className="py-2 border-b border-slate-200 pl-4 align-top">{it.desc}</td><td className="py-2 border-b border-slate-200 text-center align-top">{it.qty}</td><td className="py-2 border-b border-slate-200 text-right pr-2 align-top">{formatCurrency(it.price)}</td><td className="py-2 border-b border-slate-200 text-right pr-2 font-bold align-top">{formatCurrency(it.qty * it.price)}</td></tr>))}{[...Array(Math.max(0, 8 - invData.items.length))].map((_, i) => (<tr key={`empty-${i}`} className="h-8"><td className="border-b border-slate-100"></td><td className="border-b border-slate-100"></td><td className="border-b border-slate-100"></td><td className="border-b border-slate-100"></td><td className="border-b border-slate-100"></td></tr>))}</tbody></table><div className="flex justify-between items-start mb-8"><div className="w-[55%] pr-4 flex flex-col justify-between h-full gap-4"><div><div className="text-xs font-bold text-slate-500 mb-1">จำนวนเงินตัวอักษร (Amount in Words)</div><div className="bg-slate-100 p-2 text-center font-bold italic border border-slate-200 rounded">({thaiBahtText(totals.total)})</div></div><div className="text-xs text-slate-500"><b>หมายเหตุ (Notes):</b> {invData.notes}</div></div><div className="w-[40%]"><div className="grid grid-cols-[auto_auto] gap-y-2 text-right text-sm"><span className="font-bold text-slate-600">รวมเป็นเงิน</span><span className="font-medium">{formatCurrency(totals.sub)}</span>{invData.discount > 0 && <><span className="font-bold text-rose-600">หักส่วนลด</span><span className="text-rose-600">-{formatCurrency(invData.discount)}</span></>}<span className="font-bold text-slate-600">จำนวนเงินหลังหักส่วนลด</span><span className="font-medium">{formatCurrency(totals.afterDisc)}</span>
+            </div><table className="w-full mb-6 border-collapse"><thead><tr className="bg-slate-100 text-slate-800 font-bold text-xs uppercase text-center"><th className="py-2 border-y border-slate-300 w-12">ลำดับ<br/>No.</th><th className="py-2 border-y border-slate-300 text-left pl-4">รายการสินค้า / บริการ<br/>Description</th><th className="py-2 border-y border-slate-300 w-20">จำนวน<br/>Qty</th><th className="py-2 border-y border-slate-300 w-24">หน่วยละ<br/>Unit Price</th><th className="py-2 border-y border-slate-300 w-28">จำนวนเงิน<br/>Amount</th></tr></thead><tbody>{invData.items.map((it, i) => (<tr key={i}><td className="py-2 border-b border-slate-200 text-center align-top">{i+1}</td><td className="py-2 border-b border-slate-200 pl-4 align-top">{it.desc}</td><td className="py-2 border-b border-slate-200 text-center align-top">{it.qty}</td><td className="py-2 border-b border-slate-200 text-right pr-2 align-top">{formatCurrency(it.price)}</td><td className="py-2 border-b border-slate-200 text-right pr-2 font-bold align-top">{formatCurrency(it.qty * it.price)}</td></tr>))}{[...Array(Math.max(0, 5 - invData.items.length))].map((_, i) => (<tr key={`empty-${i}`} className="h-8"><td className="border-b border-slate-100"></td><td className="border-b border-slate-100"></td><td className="border-b border-slate-100"></td><td className="border-b border-slate-100"></td><td className="border-b border-slate-100"></td></tr>))}</tbody></table><div className="flex justify-between items-start mb-8"><div className="w-[55%] pr-4 flex flex-col justify-between h-full gap-4"><div><div className="text-xs font-bold text-slate-500 mb-1">จำนวนเงินตัวอักษร (Amount in Words)</div><div className="bg-slate-100 p-2 text-center font-bold italic border border-slate-200 rounded">({thaiBahtText(totals.total)})</div></div><div className="text-xs text-slate-500"><b>หมายเหตุ (Notes):</b> {invData.notes}</div></div><div className="w-[40%]"><div className="grid grid-cols-[auto_auto] gap-y-2 text-right text-sm"><span className="font-bold text-slate-600">รวมเป็นเงิน</span><span className="font-medium">{formatCurrency(totals.sub)}</span>{invData.discount > 0 && <><span className="font-bold text-rose-600">หักส่วนลด</span><span className="text-rose-600">-{formatCurrency(invData.discount)}</span></>}<span className="font-bold text-slate-600">จำนวนเงินหลังหักส่วนลด</span><span className="font-medium">{formatCurrency(totals.afterDisc)}</span>
         
-        {/* Dynamic VAT Display based on Type */}
         {invData.vatType !== 'none' && (
-           <>
+            <>
               <span className="font-bold text-slate-600">มูลค่าสินค้า (Pre-VAT)</span>
               <span className="font-medium">{formatCurrency(totals.preVat)}</span>
               <span className="font-bold text-slate-600">ภาษีมูลค่าเพิ่ม 7%</span>
               <span className="font-medium">{formatCurrency(totals.vat)}</span>
-           </>
+            </>
         )}
         
         <div className="col-span-2 border-t border-black my-1"></div><span className="font-bold text-slate-900 text-lg">จำนวนเงินทั้งสิ้น</span><span className="font-bold text-slate-900 text-lg">{formatCurrency(totals.total)}</span><div className="col-span-2 border-t-2 border-black my-0.5"></div></div></div></div><div className="flex justify-between mt-12 px-8 absolute bottom-10 w-[calc(100%-60px)]"><div className="text-center w-[40%]"><div className="border-b border-dotted border-slate-400 h-8 mb-2"></div><p className="text-xs font-bold">{docType === 'quotation' ? 'ผู้สั่งซื้อ / ผู้อนุมัติ' : 'ผู้รับวางบิล / ผู้รับของ'}</p><p className="text-xs font-bold text-slate-400 uppercase">(Receiver Signature)</p><p className="text-xs mt-4">วันที่ ______/______/______</p></div><div className="text-center w-[40%]"><div className="border-b border-dotted border-slate-400 h-8 mb-2"></div><p className="text-xs font-bold">{docType === 'quotation' ? 'ผู้เสนอราคา' : 'ผู้รับเงิน / ผู้ออกใบกำกับภาษี'}</p><p className="text-xs text-slate-400 uppercase">(Authorized Signature)</p><p className="text-xs mt-4">วันที่ ______/______/______</p></div></div></div></div></>)}
@@ -1447,36 +1323,10 @@ const TaxReport = ({ transactions }) => {
     const relevantTrans = monthlyVat.filtered.filter(t => t.type === (isSales ? 'income' : 'expense') && t.vatType !== 'none');
     const monthNames = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
     const monthName = monthNames[month];
-    
-    // Header for the excel file
-    const data = [
-        [`รายงานภาษี${isSales ? 'ขาย' : 'ซื้อ'}`], 
-        [`เดือนภาษี ${monthName} ปีภาษี ${year}`], 
-        [`ชื่อผู้ประกอบการ: ${bizName || '-'}`, `เลขประจำตัวผู้เสียภาษี: ${bizTaxId || '-'}`], 
-        [`ชื่อสถานประกอบการ/ที่อยู่: ${bizAddress || '-'}`], 
-        [`สำนักงานใหญ่/สาขาที่: ${bizBranch || '00000'}`], 
-        [], 
-        ['ลำดับ', 'วันเดือนปี', 'เลขที่ใบกำกับภาษี', 'รายการสินค้า/บริการ', 'หมวดหมู่', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขประจำตัวผู้เสียภาษี', 'สาขา', 'มูลค่าสินค้า/บริการ', 'จำนวนภาษีมูลค่าเพิ่ม'], 
-        ...relevantTrans.map((t, index) => [
-            index + 1, 
-            formatDate(t.date), 
-            t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0,8)) : '-'), 
-            // Combined format: Category + Description for clarity
-            t.description || '-',
-            t.category || '-',
-            t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'), 
-            t.type === 'expense' ? (t.vendorTaxId || '') : '', 
-            t.type === 'expense' ? (t.vendorBranch || '00000') : '00000', 
-            (t.net || 0), 
-            (t.vat || 0)
-        ]), 
-        [], 
-        ['', '', '', '', '', '', '', 'รวม', relevantTrans.reduce((s,t) => s + (t.net||0), 0), relevantTrans.reduce((s,t) => s + (t.vat||0), 0)]
-    ];
-
+    const data = [[`รายงานภาษี${isSales ? 'ขาย' : 'ซื้อ'}`], [`เดือนภาษี ${monthName} ปีภาษี ${year}`], [`ชื่อผู้ประกอบการ: ${bizName || '-'}`, `เลขประจำตัวผู้เสียภาษี: ${bizTaxId || '-'}`], [`ชื่อสถานประกอบการ/ที่อยู่: ${bizAddress || '-'}`], [`สำนักงานใหญ่/สาขาที่: ${bizBranch || '00000'}`], [], ['ลำดับ', 'วันเดือนปี', 'เลขที่ใบกำกับภาษี', 'รายการ', 'ชื่อผู้ซื้อ/ผู้ขาย', 'เลขประจำตัวผู้เสียภาษี', 'สาขา', 'มูลค่าสินค้า/บริการ', 'จำนวนภาษีมูลค่าเพิ่ม'], ...relevantTrans.map((t, index) => [index + 1, formatDate(t.date), t.taxInvoiceNo || (t.type === 'income' ? (t.orderId || t.id.slice(0,8)) : '-'), t.description || '', t.type === 'expense' ? (t.vendorName || '') : (t.channel || 'ลูกค้าทั่วไป'), t.type === 'expense' ? (t.vendorTaxId || '') : '', t.type === 'expense' ? (t.vendorBranch || '00000') : '00000', (t.net || 0), (t.vat || 0)]), [], ['', '', '', '', '', '', 'รวม', relevantTrans.reduce((s,t) => s + (t.net||0), 0), relevantTrans.reduce((s,t) => s + (t.vat||0), 0)]];
     if (!isSales) {
-        data.push(['', '', '', '', '', '', '', 'เครดิตยกมา', '', vatCreditForward]);
-        data.push(['', '', '', '', '', '', '', 'รวมภาษีซื้อสุทธิ', '', monthlyVat.purchaseTax + vatCreditForward]);
+        data.push(['', '', '', '', '', '', 'เครดิตยกมา', '', vatCreditForward]);
+        data.push(['', '', '', '', '', '', 'รวมภาษีซื้อสุทธิ', '', monthlyVat.purchaseTax + vatCreditForward]);
     }
     exportToExcel(`รายงาน${isSales ? 'ภาษีขาย' : 'ภาษีซื้อ'}_${month+1}_${year}.xlsx`, data);
   };
