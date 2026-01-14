@@ -976,11 +976,32 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
   };
 
   const handleDownloadPDF = () => {
-      const element = document.getElementById('invoice-preview-area');
-      const opt = { margin: 0, filename: `${invData.invNo}.pdf`, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } };
-      if (!window.html2pdf) { const script = document.createElement('script'); script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"; script.onload = () => { window.html2pdf().set(opt).from(element).save(); }; document.body.appendChild(script); } 
-      else { window.html2pdf().set(opt).from(element).save(); }
-  };
+    const element = document.getElementById('invoice-preview-area');
+    
+    // แปลงสถานะภาษาอังกฤษเป็นคำภาษาไทยสำหรับชื่อไฟล์ (เลือกตามชอบ)
+    const statusThai = docTypeStatus === 'original' ? 'ต้นฉบับ' : 'สำเนา';
+    
+    // ตั้งชื่อไฟล์: เช่น INV-20240101-001_ต้นฉบับ.pdf
+    const fileName = `${invData.invNo}_${statusThai}.pdf`;
+
+    const opt = { 
+      margin: 0, 
+      filename: fileName, // ใช้ชื่อไฟล์ที่ตั้งใหม่ตรงนี้
+      image: { type: 'jpeg', quality: 0.98 }, 
+      html2canvas: { scale: 2, useCORS: true }, 
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } 
+    };
+
+    if (!window.html2pdf) { 
+      const script = document.createElement('script'); 
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"; 
+      script.onload = () => { window.html2pdf().set(opt).from(element).save(); }; 
+      document.body.appendChild(script); 
+    } 
+    else { 
+      window.html2pdf().set(opt).from(element).save(); 
+    }
+};
 
   const handleLogoUpload = (e) => {
     const file = e.target.files[0];
