@@ -975,33 +975,61 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
     } catch(e) { console.error(e); showToast("Save failed", "error"); }
   };
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     const element = document.getElementById('invoice-preview-area');
+    if (!element) return;
     
-    // แปลงสถานะภาษาอังกฤษเป็นคำภาษาไทยสำหรับชื่อไฟล์ (เลือกตามชอบ)
-    const statusThai = docTypeStatus === 'original' ? 'ต้นฉบับ' : 'สำเนา';
-    
-    // ตั้งชื่อไฟล์: เช่น INV-20240101-001_ต้นฉบับ.pdf
-    const fileName = `${invData.invNo}_${statusThai}.pdf`;
+    showToast("กำลังเตรียมไฟล์ Folder ZIP...", "success");
 
-    const opt = { 
-      margin: 0, 
-      filename: fileName, // ใช้ชื่อไฟล์ที่ตั้งใหม่ตรงนี้
-      image: { type: 'jpeg', quality: 0.98 }, 
-      html2canvas: { scale: 2, useCORS: true }, 
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } 
+    // 1. โหลด Library ที่จำเป็น (html2pdf และ jszip)
+    const loadScript = (src) => new Promise(res => {
+      const s = document.createElement('script'); s.src = src; s.onload = res; document.body.appendChild(s);
+    });
+
+    if (!window.html2pdf) await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js");
+    if (!window.JSZip) await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js");
+
+    const zip = new window.JSZip();
+    
+    // ฟังก์ชันสร้าง PDF เป็น Blob (ข้อมูลดิบ)
+    const generatePDFBlob = async (statusLabel) => {
+      setDocTypeStatus(statusLabel === 'ต้นฉบับ' ? 'original' : 'copy');
+      await new Promise(res => setTimeout(res, 400)); // รอให้ UI เปลี่ยนข้อความ
+
+      const opt = {
+        margin: 0,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
+
+      // สร้าง PDF และส่งกลับมาเป็น Blob
+      return await window.html2pdf().set(opt).from(element).output('blob');
     };
 
-    if (!window.html2pdf) { 
-      const script = document.createElement('script'); 
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"; 
-      script.onload = () => { window.html2pdf().set(opt).from(element).save(); }; 
-      document.body.appendChild(script); 
-    } 
-    else { 
-      window.html2pdf().set(opt).from(element).save(); 
+    try {
+      // 2. สร้างไฟล์ PDF ทั้ง 2 แบบ
+      const originalBlob = await generatePDFBlob('ต้นฉบับ');
+      const copyBlob = await generatePDFBlob('สำเนา');
+
+      // 3. นำไฟล์ใส่ลงใน ZIP (ตั้งชื่อ Folder ข้างใน ZIP ตามเลขที่ INV)
+      const folderName = invData.invNo;
+      zip.file(`${folderName}/${invData.invNo}_ต้นฉบับ.pdf`, originalBlob);
+      zip.file(`${folderName}/${invData.invNo}_สำเนา.pdf`, copyBlob);
+
+      // 4. สั่งดาวน์โหลด ZIP
+      const content = await zip.generateAsync({ type: "blob" });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(content);
+      link.download = `${invData.invNo}.zip`;
+      link.click();
+
+      showToast("ดาวน์โหลด Folder ZIP สำเร็จ", "success");
+    } catch (error) {
+      console.error(error);
+      showToast("เกิดข้อผิดพลาดในการสร้างไฟล์", "error");
     }
-};
+  };
 
   const handleLogoUpload = (e) => {
     const file = e.target.files[0];
