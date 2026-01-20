@@ -615,7 +615,6 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
                                 {items.map((it, idx) => {
                                     const totalLineAmount = it.amount || it.price || 0;
                                     const qty = Number(it.qty) || 1;
-                                    // Modified: Always show Price inclusive of VAT in the table rows
                                     const displayUnitPrice = totalLineAmount / qty;
                                     return (
                                         <tr key={idx}>
@@ -673,7 +672,7 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
     );
 };
 
-const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
+const RecordManager = ({ user, transactions, invoices, appId, showToast, stockProducts }) => {
   const [subTab, setSubTab] = useState('new'); 
   const [histFilterType, setHistFilterType] = useState('all');
   const [deleteId, setDeleteId] = useState(null); 
@@ -686,7 +685,6 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
   const [vendors, setVendors] = useState([]);
   const [vendorSearch, setVendorSearch] = useState('');
   
-  const [stockProducts, setStockProducts] = useState([]);
   const [inventoryLots, setInventoryLots] = useState([]); 
 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -745,9 +743,8 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
   useEffect(() => {
       if (user) {
           const unsubVendors = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'vendors')), (snap) => setVendors(snap.docs.map(d=>({id:d.id, ...d.data()}))));
-          const unsubStock = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'products')), (snap) => setStockProducts(snap.docs.map(d=>({id:d.id, ...d.data()}))));
           const unsubLots = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'inventory_lots')), (snap) => setInventoryLots(snap.docs.map(d=>({id:d.id, ...d.data()}))));
-          return () => { unsubVendors(); unsubStock(); unsubLots(); };
+          return () => { unsubVendors(); unsubLots(); };
       }
   }, [user, appId]);
     
@@ -955,7 +952,50 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                       createdAt: serverTimestamp()
                   };
                   await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'), invoicePayload);
-                  showToast(`บันทึกรายรับสำเร็จ (เลขที่: ${newInvNo})`, "success");
+
+                  // Auto-record Platform Fee and Shipping based on Shipping collected from Customer
+                  if (isEcommerceMode) {
+                      const platFee = parseFloat(formData.platformFee) || 0;
+                      const shipExpense = parseFloat(formData.shippingCost) || 0; 
+
+                      if (platFee > 0) {
+                          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense'), {
+                              type: 'expense',
+                              date: dateObj,
+                              shop: formData.shop,
+                              category: 'ค่าธรรมเนียม Platform',
+                              description: `ค่าธรรมเนียม ${formData.channel} (Order: ${formData.orderId})`,
+                              orderId: formData.orderId,
+                              amount: platFee,
+                              total: platFee,
+                              vatType: 'included',
+                              net: platFee * 100 / 107,
+                              vat: platFee - (platFee * 100 / 107),
+                              userId: user.uid,
+                              createdAt: serverTimestamp()
+                          });
+                      }
+
+                      if (shipExpense > 0) {
+                          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense'), {
+                              type: 'expense',
+                              date: dateObj,
+                              shop: formData.shop,
+                              category: 'ค่าขนส่ง',
+                              description: `ค่าขนส่ง ${formData.channel} (Order: ${formData.orderId}) - ลูกค้าจ่าย`,
+                              orderId: formData.orderId,
+                              amount: shipExpense,
+                              total: shipExpense,
+                              vatType: 'included',
+                              net: shipExpense * 100 / 107,
+                              vat: shipExpense - (shipExpense * 100 / 107),
+                              userId: user.uid,
+                              createdAt: serverTimestamp()
+                          });
+                      }
+                  }
+
+                  showToast(`บันทึกรายรับและหักรายจ่ายอัตโนมัติสำเร็จ (เลขที่: ${newInvNo})`, "success");
               } else {
                   showToast("บันทึกรายจ่ายและสต็อกสินค้าสำเร็จ", "success");
               }
@@ -984,10 +1024,54 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
   const executeDelete = async () => { 
       if (!deleteId) return; setIsDeleting(true); 
       try { 
-          const item = transactions.find(t => t.id === deleteId);
-          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', getCollectionName(item.type), deleteId)); 
-          setDeleteId(null); showToast("ลบสำเร็จ", "success"); 
-      } catch (err) { setDeleteId(null); } finally { setIsDeleting(false); } 
+          const itemToDelete = transactions.find(t => t.id === deleteId);
+          if (itemToDelete) {
+              // 1. Return stock logic for Income (Sales) Reversal
+              if (itemToDelete.type === 'income' && itemToDelete.items) {
+                  for (const it of itemToDelete.items) {
+                      const product = stockProducts.find(p => p.name === it.desc);
+                      if (product) {
+                          const qty = Number(it.qty) || 0;
+                          // Increase main stock
+                          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', product.id), {
+                              stock: increment(qty)
+                          });
+                          // Add back to inventory lots for future FIFO calculations
+                          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'inventory_lots'), {
+                              productId: product.id,
+                              productName: product.name,
+                              initialQty: qty,
+                              remainingQty: qty,
+                              cost: product.cost * qty,
+                              costPerUnit: product.cost,
+                              createdAt: serverTimestamp(),
+                              note: 'คืนสต็อกจากการลบรายการ: ' + (itemToDelete.invNo || '')
+                          });
+                      }
+                  }
+              } 
+              // 2. Remove stock logic for Expense (Purchase) Reversal
+              else if (itemToDelete.type === 'expense' && itemToDelete.items) {
+                  for (const it of itemToDelete.items) {
+                      const product = stockProducts.find(p => p.name === it.desc);
+                      if (product) {
+                          const qty = Number(it.qty) || 0;
+                          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', product.id), {
+                              stock: increment(-qty)
+                          });
+                      }
+                  }
+              }
+          }
+
+          // Delete the actual transaction record
+          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', getCollectionName(itemToDelete.type), deleteId)); 
+          setDeleteId(null); 
+          showToast("ลบรายการและปรับปรุงสต็อกสำเร็จ", "success"); 
+      } catch (err) { 
+          setDeleteId(null); 
+          showToast("เกิดข้อผิดพลาดในการลบ", "error");
+      } finally { setIsDeleting(false); } 
   };
 
   const groupedRecent = useMemo(() => { 
@@ -1094,7 +1178,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
 
   return (
     <div className="flex flex-col h-full lg:h-[calc(100vh-88px)] relative text-left font-sarabun">
-       {deleteId && <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 text-center"><div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl animate-fadeIn text-center"><Trash2 size={48} className="mx-auto text-rose-50 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold mb-6 text-slate-800 text-center">ยืนยันการลบ?</h3><div className="flex gap-3 mt-6 text-center"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button><button onClick={executeDelete} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ลบรายการ</button></div></div></div>}
+       {deleteId && <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 text-center"><div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl animate-fadeIn text-center"><Trash2 size={48} className="mx-auto text-rose-50 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold mb-6 text-slate-800 text-center">ยืนยันการลบ?</h3><p className="text-xs text-slate-500 -mt-4 mb-4">ระบบจะทำการปรับปรุงสต็อกสินค้าคืนให้อัตโนมัติ</p><div className="flex gap-3 mt-6 text-center"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button><button onClick={executeDelete} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ลบรายการ</button></div></div></div>}
        {previewInvoiceTransaction && (<InvoicePreviewModal transaction={previewInvoiceTransaction} onClose={()=>setPreviewInvoiceTransaction(null)} showToast={showToast}/>)}
        
        {showVendorModal && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 font-sarabun text-left"><div className="bg-white rounded-3xl w-full max-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn text-left"><div className="p-6 border-b flex justify-between items-center text-left"><h3 className="font-bold text-lg flex items-center gap-2 text-indigo-600 text-left"><Store className="text-indigo-500"/> เลือกคู่ค้า (Vendor)</h3><button onClick={()=>setShowVendorModal(false)}><X/></button></div><div className="px-6 pt-4 text-left"><div className="relative text-left"><Search className="absolute left-3 top-2.5 text-slate-400 text-left" size={18}/><input className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:ring-1 focus:ring-indigo-100 text-left" placeholder="ค้นหาชื่อร้าน, สาขา, ที่อยู่..." value={vendorSearch} onChange={e=>setVendorSearch(e.target.value)}/></div></div><div className="flex-1 overflow-y-auto p-4 space-y-2 text-left">{vendors.filter(v => v.vendorName?.toLowerCase().includes(vendorSearch.toLowerCase()) || v.vendorTaxId?.includes(vendorSearch) || v.vendorBranch?.includes(vendorSearch) || v.vendorBranchName?.includes(vendorSearch) || v.vendorAddress?.toLowerCase().includes(vendorSearch.toLowerCase())).map(v => (<div key={v.id} onClick={()=>{setFormData(p=>({...p, vendorName: v.vendorName, vendorTaxId: v.vendorTaxId, vendorBranch: v.vendorBranch, vendorBranchName: v.vendorBranchName || '', vendorAddress: v.vendorAddress})); setShowVendorModal(false);}} className="p-4 rounded-xl border border-slate-100 hover:bg-indigo-50 cursor-pointer shadow-sm text-left group transition-colors"><div className="flex justify-between items-start mb-1 text-left"><p className="font-bold text-slate-700 text-sm text-left">{v.vendorName}</p>{v.vendorBranch && <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded border border-slate-200 font-medium text-right max-w-[120px] truncate">สาขา {v.vendorBranch} {v.vendorBranchName ? `(${v.vendorBranchName})` : ''}</span>}</div><p className="text-xs text-slate-500 line-clamp-1 text-left">{v.vendorAddress || '-'}</p><p className="text-[10px] text-slate-400 mt-1 font-mono text-left">Tax ID: {v.vendorTaxId || '-'}</p></div>))}</div></div></div>)}
@@ -1708,7 +1792,7 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
     <div className="w-full flex flex-col gap-8 relative h-full text-left font-sarabun">
       {profileDeleteId && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 font-sarabun text-center">
-            <div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl animate-fadeIn text-center">
+            <div className="bg-white rounded-3xl p-8 max-sm w-full text-center shadow-2xl animate-fadeIn text-center">
                 <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-center">
                     <Trash2 size={32} className="text-rose-500 text-center"/>
                 </div>
@@ -1761,7 +1845,7 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
       
       {showCustomerModal && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 font-sarabun text-left"><div className="bg-white rounded-3xl w-full max-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn text-left"><div className="p-6 border-b flex justify-between items-center text-left"><h3 className="font-bold text-lg flex items-center gap-2 text-rose-600 text-left"><User className="text-rose-500"/> เลือกข้อมูลลูกค้า</h3><button onClick={()=>setShowCustomerModal(false)}><X/></button></div><div className="flex-1 overflow-y-auto p-4 space-y-2 text-left">{customers.map(c => (<div key={c.id} onClick={()=>{setInvData(p=>({...p, customerName: c.customerName, address: c.address, taxId: c.taxId, branch: c.branch, custSubDistrict: c.custSubDistrict || '', custDistrict: c.custDistrict || '', custProvince: c.custProvince || '', custZipCode: c.custZipCode || ''})); setShowCustomerModal(false); setIsGeneralCustomer(false);}} className="p-4 rounded-xl border border-slate-100 hover:bg-rose-50 cursor-pointer shadow-sm text-left"><p className="font-bold text-left">{c.customerName}</p><p className="text-xs text-slate-400 truncate text-left">{c.address}</p></div>))}</div></div></div>)}
       
-      {deleteId && (<div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 font-sarabun text-center"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl animate-fadeIn text-center"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-center"><Trash2 size={32} className="text-rose-500 text-center"/></div><h3 className="text-xl font-bold mb-6 text-slate-800 text-center">ลบเอกสารใบนี้?</h3><div className="flex gap-3 text-center"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button><button onClick={async ()=>{await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', deleteId)); setDeleteId(null); showToast("ลบเรียบร้อย", "success");}} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ยืนยันลบ</button></div></div></div>)}
+      {deleteId && (<div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 font-sarabun text-center"><div className="bg-white rounded-3xl p-8 max-sm w-full text-center shadow-2xl animate-fadeIn text-center"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-center"><Trash2 size={32} className="text-rose-500 text-center"/></div><h3 className="text-xl font-bold mb-6 text-slate-800 text-center">ลบเอกสารใบนี้?</h3><div className="flex gap-3 text-center"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button><button onClick={async ()=>{await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', deleteId)); setDeleteId(null); showToast("ลบเรียบร้อย", "success");}} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ยืนยันลบ</button></div></div></div>)}
       
       <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit print:hidden self-center text-left"><button onClick={() => setMode('create')} className={"px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all text-left " + (mode==='create'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700')}><FileText size={18}/> ออกเอกสาร</button><button onClick={() => setMode('history')} className={"px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all text-left " + (mode==='history'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700')}><Clock size={18}/> ประวัติเอกสาร</button></div>
       
@@ -1949,7 +2033,6 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
               <thead><tr className="bg-slate-100 text-slate-800 font-bold text-xs uppercase text-center"><th className="py-2 border-y border-slate-300 w-12 text-center">ลำดับ<br/>No.</th><th className="py-2 border-y border-slate-300 text-left pl-4 text-left">รายการสินค้า / บริการ<br/>Description</th><th className="py-2 border-y border-slate-300 w-20 text-center">จำนวน<br/>Qty</th><th className="py-2 border-y border-slate-300 w-24 text-right">หน่วยละ<br/>Unit Price</th><th className="py-2 border-y border-slate-300 w-28 text-right">จำนวนเงิน<br/>Amount</th></tr></thead>
               <tbody className="text-left">
                   {invData.items.map((it, i) => {
-                      // Modified: Show unit price as Inclusive of VAT in table rows
                       const displayUnitPrice = it.price;
                       return (
                           <tr key={"item-" + i} className="text-left">
@@ -1974,7 +2057,7 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
               </div>
               <div className="w-[40%] text-right">
                   <div className="grid grid-cols-[auto_auto] gap-y-2 text-right text-sm">
-                      <span className="font-bold text-slate-600 text-right">รวมเป็นเงิน (Sub-total)</span><span className="font-medium">{formatCurrency(totals.preVat + Number(invData.discount) + (invData.vatType === 'excluded' ? 0 : totals.vat))}</span>
+                      <span className="font-bold text-slate-600 text-right">รวมเป็นเงิน (Sub-total)</span><span className="font-medium">{formatCurrency(totals.preVat + totals.vat + Number(invData.discount))}</span>
                       {invData.discount > 0 && <><span className="font-bold text-rose-600 text-right">หักส่วนลด (Discount)</span><span className="text-rose-600">-{formatCurrency(invData.discount)}</span></>}
                       <span className="font-bold text-slate-600 text-right">มูลค่าสินค้า (Pre-VAT)</span><span className="font-medium">{formatCurrency(totals.preVat)}</span>
                       <span className="font-bold text-slate-600 text-right">ภาษีมูลค่าเพิ่ม 7% (VAT)</span><span className="font-medium">{formatCurrency(totals.vat)}</span>
@@ -2137,15 +2220,15 @@ const StockManager = ({ appId, showToast, transactions }) => {
     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 h-full flex flex-col animate-fadeIn text-left font-sarabun">
       {stockDeleteId && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 font-sarabun text-center">
-            <div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl animate-fadeIn">
-                <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Trash2 size={32} className="text-rose-500"/>
+            <div className="bg-white rounded-3xl p-8 max-sm w-full text-center shadow-2xl animate-fadeIn text-center">
+                <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-center">
+                    <Trash2 size={32} className="text-rose-500 text-center"/>
                 </div>
-                <h3 className="text-xl font-bold mb-2 text-slate-800">ยืนยันการลบสินค้า?</h3>
-                <p className="text-sm text-slate-500 mb-6">ข้อมูลสินค้าและจำนวนสต็อกจะหายไปอย่างถาวร</p>
-                <div className="flex gap-3">
-                    <button onClick={()=>setStockDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
-                    <button onClick={executeDelete} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">ยืนยันลบ</button>
+                <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันการลบสินค้า?</h3>
+                <p className="text-sm text-slate-500 mb-6 text-center">ข้อมูลสินค้าและจำนวนสต็อกจะหายไปอย่างถาวร</p>
+                <div className="flex gap-3 text-center">
+                    <button onClick={()=>setProfileDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button>
+                    <button onClick={executeDelete} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ยืนยันลบ</button>
                 </div>
             </div>
         </div>
@@ -2179,7 +2262,7 @@ const StockManager = ({ appId, showToast, transactions }) => {
 
       {viewingProduct && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 font-sarabun text-left">
-            <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl animate-fadeIn relative">
+            <div className="bg-white rounded-3xl p-8 max-md w-full shadow-2xl animate-fadeIn relative">
                 <button onClick={()=>setViewingProduct(null)} className="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full"><X/></button>
                 <div className="flex items-center gap-4 mb-6">
                     <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner"><Package size={28}/></div>
@@ -2282,7 +2365,9 @@ const StockManager = ({ appId, showToast, transactions }) => {
         </div>
       </div>
 
+      {/* Layout Grid with internal scrolling */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0 overflow-hidden">
+        {/* Left Side: Search and Table */}
         <div className="lg:col-span-8 xl:col-span-9 flex flex-col min-h-0">
           <div className="relative mb-4 text-left">
             <Search className="absolute left-3 top-2.5 text-slate-400 text-left" size={18}/>
@@ -2331,6 +2416,7 @@ const StockManager = ({ appId, showToast, transactions }) => {
           </div>
         </div>
 
+        {/* Right Side: Analytical Cards */}
         <div className="lg:col-span-4 xl:col-span-3 flex flex-col gap-6 min-h-0 overflow-y-auto custom-scrollbar pr-2">
           <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 shadow-sm flex flex-col max-h-[350px]">
               <h4 className="font-bold text-slate-700 text-xs uppercase mb-3 flex items-center gap-2 flex-shrink-0">
@@ -2474,6 +2560,21 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
            if (t.vatType !== 'none') { purchaseTotalBase += net; purchaseTotalVat += vat; }
            purchaseTotalWht += wht;
            purchaseTotalGross += (Number(t.total) || 0);
+      });
+
+      sales.forEach(t => {
+          if (t.platformFee > 0) {
+              const feeVat = t.platformFee * 7 / 107;
+              const feeNet = t.platformFee - feeVat;
+              purchaseTotalBase += feeNet;
+              purchaseTotalVat += feeVat;
+          }
+          if (t.shippingCost > 0) {
+              const shipVat = t.shippingCost * 7 / 107;
+              const shipNet = t.shippingCost - shipVat;
+              purchaseTotalBase += shipNet;
+              purchaseTotalVat += shipVat;
+          }
       });
   
       return { 
@@ -2691,6 +2792,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [transactions, setTransactions] = useState([]);
   const [invoices, setInvoices] = useState([]);
+  const [products, setProducts] = useState([]); 
   const [loading, setLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [appId, setAppId] = useState(localStorage.getItem('merchant_app_id') || CONSTANTS.IDS.DEV);
@@ -2722,17 +2824,20 @@ export default function App() {
     const qInc = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_income'));
     const qExp = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
     const qInv = query(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'));
+    const qProd = query(collection(db, 'artifacts', appId, 'public', 'data', 'products'));
     
     const unsubInc = onSnapshot(qInc, (s) => setTransactions(prev => [...prev.filter(t=>t.type!=='income'), ...s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))]));
     const unsubExp = onSnapshot(qExp, (s) => setTransactions(prev => [...prev.filter(t=>t.type!=='expense'), ...s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))]));
-    const unsubInv = onSnapshot(qInv, (s) => { setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))); setLoading(false); });
-    return () => { unsubInc(); unsubExp(); unsubInv(); };
+    const unsubInv = onSnapshot(qInv, (s) => setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))));
+    const unsubProd = onSnapshot(qProd, (s) => { setProducts(s.docs.map(d=>({id:d.id, ...d.data()}))); setLoading(false); });
+    
+    return () => { unsubInc(); unsubExp(); unsubInv(); unsubProd(); };
   }, [user, appId]);
 
   const renderContent = () => {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} />;
-      case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={appId} showToast={addToast} />;
+      case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={appId} showToast={addToast} stockProducts={products} />;
       case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} appId={appId} showToast={addToast} />;
       case 'stock': return <StockManager appId={appId} showToast={addToast} transactions={transactions} />;
       case 'taxes': return <TaxReport transactions={transactions} invoices={invoices} showToast={addToast} />;
