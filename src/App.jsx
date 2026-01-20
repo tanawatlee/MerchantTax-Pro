@@ -642,7 +642,7 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
                                 <div className="grid grid-cols-[auto_auto] gap-y-2 text-right text-sm">
                                     <span className="font-bold text-slate-600 text-right">รวมเป็นเงิน (Sub-total)</span><span className="font-medium">{formatCurrency(preVat + Number(transaction.discount || 0) + (transaction.vatType === 'excluded' ? 0 : vat))}</span>
                                     {(transaction.discount || 0) > 0 && <><span className="font-bold text-rose-600 text-right">หักส่วนลด (Discount)</span><span className="text-rose-600">-{formatCurrency(transaction.discount)}</span></>}
-                                    <span className="font-bold text-slate-600 text-right">มูลค่าสินค้า (Pre-VAT)</span><span className="font-medium">{formatCurrency(preVat)}</span>
+                                    <span className="font-bold text-slate-600 text-right">มูลค่าก่อนภาษี (Pre-VAT)</span><span className="font-medium">{formatCurrency(preVat)}</span>
                                     <span className="font-bold text-slate-600 text-right">ภาษีมูลค่าเพิ่ม 7% (VAT)</span><span className="font-medium">{formatCurrency(vat)}</span>
                                     <div className="col-span-2 border-t border-black my-1"></div>
                                     <span className="font-bold text-slate-900 text-lg text-right">จำนวนเงินทั้งสิ้น (Total)</span><span className="font-bold text-slate-900 text-lg">{formatCurrency(total)}</span>
@@ -716,7 +716,9 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
     shippingCost: '', 
     shopDiscount: '',
     whtType: CONSTANTS.WHT_TYPES[0],
-    shippingAmount: '' 
+    shippingAmount: '',
+    otherExpenseAmount: '',
+    otherExpenseNote: '' 
   };
 
   const [formData, setFormData] = useState(initialForm);
@@ -759,6 +761,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
       
       const expDiscount = parseFloat(formData.expenseDiscount) || 0;
       const shipInc = parseFloat(formData.shippingAmount) || 0;
+      const otherExp = parseFloat(formData.otherExpenseAmount) || 0;
 
       const platFee = parseFloat(formData.platformFee) || 0;
       const shipCost = parseFloat(formData.shippingCost) || 0;
@@ -767,7 +770,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
       const estimatedPayout = (baseAmount + shipInc) - (platFee + shipCost + shopDisc);
 
       let net = 0, vat = 0; 
-      const finalAmount = formData.type === 'expense' ? (baseAmount - expDiscount) : (baseAmount + shipInc);
+      const finalAmount = formData.type === 'expense' ? (baseAmount - expDiscount + otherExp) : (baseAmount + shipInc);
 
       if (formData.vatType === 'included') { net = finalAmount * 100 / 107; vat = finalAmount - net; } 
       else if (formData.vatType === 'excluded') { net = finalAmount; vat = finalAmount * 0.07; } 
@@ -786,7 +789,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
           whtAmount,
           finalPayout: (formData.vatType === 'excluded' ? net + vat : finalAmount) - whtAmount
       }; 
-  }, [formData.amount, formData.vatType, formData.type, formData.items, formData.platformFee, formData.shippingCost, formData.shopDiscount, formData.expenseDiscount, formData.whtRate, formData.shippingAmount]);
+  }, [formData.amount, formData.vatType, formData.type, formData.items, formData.platformFee, formData.shippingCost, formData.shopDiscount, formData.expenseDiscount, formData.whtRate, formData.shippingAmount, formData.otherExpenseAmount]);
   
   const getCollectionName = (type) => type === 'income' ? 'transactions_income' : 'transactions_expense';
 
@@ -898,6 +901,8 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
               shopDiscount: parseFloat(formData.shopDiscount) || 0,
               expenseDiscount: parseFloat(formData.expenseDiscount) || 0,
               shippingAmount: parseFloat(formData.shippingAmount) || 0,
+              otherExpenseAmount: parseFloat(formData.otherExpenseAmount) || 0,
+              otherExpenseNote: formData.otherExpenseNote || '',
               whtAmount: calculated.whtAmount || 0,
               finalPayout: calculated.finalPayout || 0
           };
@@ -1020,7 +1025,9 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
           shopDiscount: item.shopDiscount || '',
           expenseDiscount: item.expenseDiscount || '',
           shippingAmount: item.shippingAmount || '',
-          taxInvoiceNo: item.taxInvoiceNo || '' // Pull Manual Tax ID on Edit
+          otherExpenseAmount: item.otherExpenseAmount || '',
+          otherExpenseNote: item.otherExpenseNote || '',
+          taxInvoiceNo: item.taxInvoiceNo || '' 
       }); 
       setEditingId(item.id); 
       setSubTab('new'); 
@@ -1178,14 +1185,14 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
 
   return (
     <div className="flex flex-col h-full lg:h-[calc(100vh-88px)] relative text-left font-sarabun">
-       {deleteId && <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 text-center"><div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl animate-fadeIn text-center"><Trash2 size={48} className="mx-auto text-rose-50 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold mb-6 text-slate-800 text-center">ยืนยันการลบ?</h3><p className="text-xs text-slate-500 -mt-4 mb-4">ระบบจะทำการปรับปรุงสต็อกสินค้าคืนให้อัตโนมัติ</p><div className="flex gap-3 mt-6 text-center"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button><button onClick={executeDelete} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ลบรายการ</button></div></div></div>}
-       {previewInvoiceTransaction && (<InvoicePreviewModal transaction={previewInvoiceTransaction} onClose={()=>setPreviewInvoiceTransaction(null)} showToast={showToast}/>)}
-       
-       {showVendorModal && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 font-sarabun text-left"><div className="bg-white rounded-3xl w-full max-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn text-left"><div className="p-6 border-b flex justify-between items-center text-left"><h3 className="font-bold text-lg flex items-center gap-2 text-indigo-600 text-left"><Store className="text-indigo-500"/> เลือกคู่ค้า (Vendor)</h3><button onClick={()=>setShowVendorModal(false)}><X/></button></div><div className="px-6 pt-4 text-left"><div className="relative text-left"><Search className="absolute left-3 top-2.5 text-slate-400 text-left" size={18}/><input className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:ring-1 focus:ring-indigo-100 text-left" placeholder="ค้นหาชื่อร้าน, สาขา, ที่อยู่..." value={vendorSearch} onChange={e=>setVendorSearch(e.target.value)}/></div></div><div className="flex-1 overflow-y-auto p-4 space-y-2 text-left">{vendors.filter(v => v.vendorName?.toLowerCase().includes(vendorSearch.toLowerCase()) || v.vendorTaxId?.includes(vendorSearch) || v.vendorBranch?.includes(vendorSearch) || v.vendorBranchName?.includes(vendorSearch) || v.vendorAddress?.toLowerCase().includes(vendorSearch.toLowerCase())).map(v => (<div key={v.id} onClick={()=>{setFormData(p=>({...p, vendorName: v.vendorName, vendorTaxId: v.vendorTaxId, vendorBranch: v.vendorBranch, vendorBranchName: v.vendorBranchName || '', vendorAddress: v.vendorAddress})); setShowVendorModal(false);}} className="p-4 rounded-xl border border-slate-100 hover:bg-indigo-50 cursor-pointer shadow-sm text-left group transition-colors"><div className="flex justify-between items-start mb-1 text-left"><p className="font-bold text-slate-700 text-sm text-left">{v.vendorName}</p>{v.vendorBranch && <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded border border-slate-200 font-medium text-right max-w-[120px] truncate">สาขา {v.vendorBranch} {v.vendorBranchName ? `(${v.vendorBranchName})` : ''}</span>}</div><p className="text-xs text-slate-500 line-clamp-1 text-left">{v.vendorAddress || '-'}</p><p className="text-[10px] text-slate-400 mt-1 font-mono text-left">Tax ID: {v.vendorTaxId || '-'}</p></div>))}</div></div></div>)}
+        {deleteId && <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 text-center"><div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl animate-fadeIn text-center"><Trash2 size={48} className="mx-auto text-rose-50 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold mb-6 text-slate-800 text-center">ยืนยันการลบ?</h3><p className="text-xs text-slate-500 -mt-4 mb-4">ระบบจะทำการปรับปรุงสต็อกสินค้าคืนให้อัตโนมัติ</p><div className="flex gap-3 mt-6 text-center"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button><button onClick={executeDelete} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ลบรายการ</button></div></div></div>}
+        {previewInvoiceTransaction && (<InvoicePreviewModal transaction={previewInvoiceTransaction} onClose={()=>setPreviewInvoiceTransaction(null)} showToast={showToast}/>)}
+        
+        {showVendorModal && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 font-sarabun text-left"><div className="bg-white rounded-3xl w-full max-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn text-left"><div className="p-6 border-b flex justify-between items-center text-left"><h3 className="font-bold text-lg flex items-center gap-2 text-indigo-600 text-left"><Store className="text-indigo-500"/> เลือกคู่ค้า (Vendor)</h3><button onClick={()=>setShowVendorModal(false)}><X/></button></div><div className="px-6 pt-4 text-left"><div className="relative text-left"><Search className="absolute left-3 top-2.5 text-slate-400 text-left" size={18}/><input className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:ring-1 focus:ring-indigo-100 text-left" placeholder="ค้นหาชื่อร้าน, สาขา, ที่อยู่..." value={vendorSearch} onChange={e=>setVendorSearch(e.target.value)}/></div></div><div className="flex-1 overflow-y-auto p-4 space-y-2 text-left">{vendors.filter(v => v.vendorName?.toLowerCase().includes(vendorSearch.toLowerCase()) || v.vendorTaxId?.includes(vendorSearch) || v.vendorBranch?.includes(vendorSearch) || v.vendorBranchName?.includes(vendorSearch) || v.vendorAddress?.toLowerCase().includes(vendorSearch.toLowerCase())).map(v => (<div key={v.id} onClick={()=>{setFormData(p=>({...p, vendorName: v.vendorName, vendorTaxId: v.vendorTaxId, vendorBranch: v.vendorBranch, vendorBranchName: v.vendorBranchName || '', vendorAddress: v.vendorAddress})); setShowVendorModal(false);}} className="p-4 rounded-xl border border-slate-100 hover:bg-indigo-50 cursor-pointer shadow-sm text-left group transition-colors"><div className="flex justify-between items-start mb-1 text-left"><p className="font-bold text-slate-700 text-sm text-left">{v.vendorName}</p>{v.vendorBranch && <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded border border-slate-200 font-medium text-right max-w-[120px] truncate">สาขา {v.vendorBranch} {v.vendorBranchName ? `(${v.vendorBranchName})` : ''}</span>}</div><p className="text-xs text-slate-500 line-clamp-1 text-left">{v.vendorAddress || '-'}</p><p className="text-[10px] text-slate-400 mt-1 font-mono text-left">Tax ID: {v.vendorTaxId || '-'}</p></div>))}</div></div></div>)}
 
         <div className="flex gap-1 p-1 bg-slate-100/80 backdrop-blur-sm rounded-2xl w-fit mb-6 self-center md:self-start border border-slate-200 text-left">
-           <button onClick={()=>setSubTab('new')} className={"px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 text-left " + (subTab==='new'?'bg-white text-indigo-600 shadow-sm':'text-slate-500')}><Edit size={16}/> บันทึกรายการ</button>
-           <button onClick={()=>setSubTab('history')} className={"px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 text-left " + (subTab==='history'?'bg-white text-indigo-600 shadow-sm':'text-slate-500')}><BarChart2 size={16}/> Performance</button>
+            <button onClick={()=>setSubTab('new')} className={"px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 text-left " + (subTab==='new'?'bg-white text-indigo-600 shadow-sm':'text-slate-500')}><Edit size={16}/> บันทึกรายการ</button>
+            <button onClick={()=>setSubTab('history')} className={"px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 text-left " + (subTab==='history'?'bg-white text-indigo-600 shadow-sm':'text-slate-500')}><BarChart2 size={16}/> Performance</button>
         </div>
 
         {subTab === 'new' ? (
@@ -1209,7 +1216,6 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                         </div>
                     </div>
 
-                    {/* Added manual tax invoice field for Income to handle mismatches */}
                     {formData.type === 'income' && (
                         <div className="space-y-1 text-left">
                             <label className="text-xs font-bold text-slate-500 ml-1 flex items-center gap-1"><FileText size={14} className="text-emerald-500"/> เลขที่ใบกำกับภาษี (ถ้ามี - Manual)</label>
@@ -1318,6 +1324,22 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                                 </div>
                              </div>
 
+                             {/* Improved Other Expense field for Expense Mode */}
+                             <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 text-left">
+                                <label className="text-xs font-bold text-indigo-600 flex items-center gap-1 mb-3"><Package size={14}/> ค่าใช้จ่ายอื่นๆ / ค่าขนส่ง (ไม่นับสต็อก)</label>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-indigo-400 flex items-center gap-1"><FileText size={10}/> รายละเอียด</label>
+                                    <input className="w-full bg-white border-0 rounded-lg p-2 text-xs shadow-sm text-left" placeholder="เช่น ค่าขนส่ง, ค่าแพ็คของ..." value={formData.otherExpenseNote} onChange={e=>setFormData({...formData, otherExpenseNote: e.target.value})} />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-indigo-400 flex items-center gap-1"><DollarSign size={10}/> จำนวนเงิน</label>
+                                    <input type="number" className="w-full bg-white border-0 rounded-lg p-2 text-xs font-bold text-indigo-700 shadow-sm" placeholder="0.00" value={formData.otherExpenseAmount} onChange={e=>setFormData({...formData, otherExpenseAmount: e.target.value})} />
+                                  </div>
+                                </div>
+                                <p className="text-[10px] text-slate-400 mt-2">* ยอดนี้จะถูกรวมในยอดจ่ายสุทธิ แต่จะไม่ถูกนำไปตัดสต็อกสินค้า</p>
+                             </div>
+
                              <div className="grid grid-cols-2 gap-4">
                                 <div className="bg-orange-50/50 p-3 rounded-xl border border-orange-100 text-left">
                                     <label className="text-[10px] font-bold text-orange-600 flex items-center gap-1 mb-1 text-left"><Tag size={12}/> ส่วนลดจากร้านค้า</label>
@@ -1355,7 +1377,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                     <div className="space-y-1 text-left"><label className="text-xs font-bold text-slate-500 ml-1 text-left">รูปแบบ VAT</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm text-left font-bold" value={formData.vatType} onChange={e=>setFormData({...formData,vatType:e.target.value})}><option value="included">รวม VAT (7%)</option><option value="excluded">แยก VAT (7%)</option><option value="none">ไม่มี VAT</option></select></div>
 
                     <div className="bg-slate-800 text-white p-5 rounded-2xl shadow-lg mt-auto text-left">
-                        {formData.type === 'expense' && calculated.totalAfterDiscount < calculated.baseAmount && (
+                        {formData.type === 'expense' && calculated.totalAfterDiscount < (calculated.baseAmount + (parseFloat(formData.otherExpenseAmount) || 0)) && (
                             <div className="flex justify-between text-xs text-orange-300 mb-1 text-left"><span className="text-left">ส่วนลด:</span><span className="text-right">-{formatCurrency(formData.expenseDiscount)}</span></div>
                         )}
                         <div className="flex justify-between text-xs opacity-60 mb-1 text-left"><span className="text-left">Pre-VAT:</span><span className="text-right">{formatCurrency(calculated.net)}</span></div>
@@ -1391,6 +1413,12 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                             <span>-{formatCurrency(t.whtAmount)}</span>
                         </div>
                     )}
+                    {t.type === 'expense' && t.otherExpenseAmount > 0 && (
+                        <div className="mb-2 px-2 py-1 bg-indigo-50 rounded text-[10px] font-bold text-indigo-600 flex justify-between">
+                            <span>{t.otherExpenseNote || 'ค่าขนส่ง/อื่นๆ'}:</span>
+                            <span>+{formatCurrency(t.otherExpenseAmount)}</span>
+                        </div>
+                    )}
                     {t.type === 'income' && t.shippingAmount > 0 && (
                         <div className="mb-2 px-2 py-1 bg-emerald-50 rounded text-[10px] font-bold text-emerald-600 flex justify-between">
                             <span>ค่าขนส่ง:</span>
@@ -1405,166 +1433,166 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                 </div>
             </div>
          </div>
-       ) : (
-         <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden animate-fadeIn text-left">
-           <div className="p-6 border-b border-slate-100 space-y-4 text-left">
-             <div className="flex flex-col md:flex-row justify-between items-start gap-4 text-left">
-               <div className="text-left">
-                 <h3 className="font-bold text-slate-800 flex items-center gap-2 text-xl text-left"><BarChart2 className="text-indigo-600"/> Performance & History</h3>
-                 <p className="text-slate-500 text-sm text-left">วิเคราะห์เจาะลึกรายการบันทึกย้อนหลัง</p>
-               </div>
-               <div className="flex flex-wrap gap-2 text-center">
-                  <div className="flex bg-slate-100 p-1 rounded-xl text-center">
-                      <button onClick={()=>setSelectedYear(currentYear-1)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all text-center ${selectedYear === currentYear-1 ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีย้อนหลัง ({currentYear-1})</button>
-                      <button onClick={()=>setSelectedYear(currentYear)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all text-center ${selectedYear === currentYear ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีปัจจุบัน ({currentYear})</button>
-                  </div>
-                  <select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600 text-left" value={histFilterType} onChange={e=>setHistFilterType(e.target.value)}>
-                      <option value="all">รวมทุกประเภท</option>
-                      <option value="income">รายรับ (Income)</option>
-                      <option value="expense">รายจ่าย (Expense)</option>
-                  </select>
-                  <button onClick={exportHistoryExcel} className="bg-emerald-50 text-emerald-600 p-2 rounded-xl hover:bg-emerald-100 flex items-center gap-2 px-4 text-sm font-bold shadow-sm transition-all text-center"><FileText size={18}/> Export</button>
-               </div>
-             </div>
-             
-             <div className="flex flex-col md:flex-row gap-4 items-center justify-between text-left">
-                <div className="flex bg-indigo-50/50 p-1 rounded-xl w-full md:w-auto text-center">
-                    {['day', 'week', 'month', 'year'].map(m => (
-                        <button key={m} onClick={() => setViewMode(m)} className={`flex-1 md:flex-none px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all text-center ${viewMode === m ? 'bg-indigo-600 text-white shadow-md' : 'text-indigo-400 hover:bg-indigo-100'}`}>
-                            {m === 'day' ? 'รายวัน' : m === 'week' ? 'รายสัปดาห์' : m === 'month' ? 'รายเดือน' : 'ทั้งปี'}
-                        </button>
-                    ))}
+        ) : (
+          <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden animate-fadeIn text-left">
+            <div className="p-6 border-b border-slate-100 space-y-4 text-left">
+              <div className="flex flex-col md:flex-row justify-between items-start gap-4 text-left">
+                <div className="text-left">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-2 text-xl text-left"><BarChart2 className="text-indigo-600"/> Performance & History</h3>
+                  <p className="text-slate-500 text-sm text-left">วิเคราะห์เจาะลึกรายการบันทึกย้อนหลัง</p>
                 </div>
-                <div className="relative w-full md:w-64 text-left">
-                    <Search className="absolute left-3 top-2.5 text-slate-400 text-left" size={16}/>
-                    <input 
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 transition-all text-left" 
-                        placeholder="ค้นหารายการ, ยอดเงิน..." 
-                        value={historySearch} 
-                        onChange={e=>setHistorySearch(e.target.value)}
-                    />
+                <div className="flex flex-wrap gap-2 text-center">
+                   <div className="flex bg-slate-100 p-1 rounded-xl text-center">
+                       <button onClick={()=>setSelectedYear(currentYear-1)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all text-center ${selectedYear === currentYear-1 ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีย้อนหลัง ({currentYear-1})</button>
+                       <button onClick={()=>setSelectedYear(currentYear)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all text-center ${selectedYear === currentYear ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีปัจจุบัน ({currentYear})</button>
+                   </div>
+                   <select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600 text-left" value={histFilterType} onChange={e=>setHistFilterType(e.target.value)}>
+                       <option value="all">รวมทุกประเภท</option>
+                       <option value="income">รายรับ (Income)</option>
+                       <option value="expense">รายจ่าย (Expense)</option>
+                   </select>
+                   <button onClick={exportHistoryExcel} className="bg-emerald-50 text-emerald-600 p-2 rounded-xl hover:bg-emerald-100 flex items-center gap-2 px-4 text-sm font-bold shadow-sm transition-all text-center"><FileText size={18}/> Export</button>
                 </div>
-             </div>
-           </div>
+              </div>
+              
+              <div className="flex flex-col md:flex-row gap-4 items-center justify-between text-left">
+                 <div className="flex bg-indigo-50/50 p-1 rounded-xl w-full md:w-auto text-center">
+                     {['day', 'week', 'month', 'year'].map(m => (
+                         <button key={m} onClick={() => setViewMode(m)} className={`flex-1 md:flex-none px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all text-center ${viewMode === m ? 'bg-indigo-600 text-white shadow-md' : 'text-indigo-400 hover:bg-indigo-100'}`}>
+                             {m === 'day' ? 'รายวัน' : m === 'week' ? 'รายสัปดาห์' : m === 'month' ? 'รายเดือน' : 'ทั้งปี'}
+                         </button>
+                     ))}
+                 </div>
+                 <div className="relative w-full md:w-64 text-left">
+                     <Search className="absolute left-3 top-2.5 text-slate-400 text-left" size={16}/>
+                     <input 
+                         className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 transition-all text-left" 
+                         placeholder="ค้นหารายการ, ยอดเงิน..." 
+                         value={historySearch} 
+                         onChange={e=>setHistorySearch(e.target.value)}
+                     />
+                 </div>
+              </div>
+            </div>
 
-           <div className="flex-1 overflow-y-auto custom-scrollbar p-6 text-left">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 text-left">
-                    <div className="p-5 rounded-2xl bg-indigo-50 border border-indigo-100 relative overflow-hidden group text-left">
-                        <div className="relative z-10 text-left">
-                            <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-1 text-left">จำนวนรายการ (Volume)</p>
-                            <h4 className="text-3xl font-bold text-indigo-700 text-left">{formatCompactNumber(historyStats.count)} <span className="text-sm font-medium text-indigo-400">รายการ</span></h4>
-                        </div>
-                        <div className="absolute -right-2 -bottom-2 text-indigo-200 opacity-20 group-hover:scale-110 transition-transform"><List size={80}/></div>
-                    </div>
-                    <div className="p-5 rounded-2xl bg-emerald-50 border border-emerald-100 relative overflow-hidden group text-left">
-                        <div className="relative z-10 text-left">
-                            <p className="text-xs font-bold text-emerald-500 uppercase tracking-wider mb-1 text-left">มูลค่ารวม (Total Value)</p>
-                            <h4 className="text-3xl font-bold text-emerald-700 text-left">{formatCurrency(historyStats.totalAmount)}</h4>
-                        </div>
-                        <div className="absolute -right-2 -bottom-2 text-emerald-200 opacity-20 group-hover:scale-110 transition-transform"><Wallet size={80}/></div>
-                    </div>
-                    <div className="p-5 rounded-2xl bg-amber-50 border border-amber-100 relative overflow-hidden group text-left">
-                        <div className="relative z-10 text-left">
-                            <p className="text-xs font-bold text-amber-500 uppercase tracking-wider mb-1 text-left">เฉลี่ยต่อบิล (Avg. Ticket)</p>
-                            <h4 className="text-3xl font-bold text-amber-700 text-left">{formatCurrency(historyStats.avg)}</h4>
-                        </div>
-                        <div className="absolute -right-2 -bottom-2 text-amber-200 opacity-20 group-hover:scale-110 transition-transform"><Tag size={80}/></div>
-                    </div>
-                </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-6 text-left">
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 text-left">
+                     <div className="p-5 rounded-2xl bg-indigo-50 border border-indigo-100 relative overflow-hidden group text-left">
+                         <div className="relative z-10 text-left">
+                             <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-1 text-left">จำนวนรายการ (Volume)</p>
+                             <h4 className="text-3xl font-bold text-indigo-700 text-left">{formatCompactNumber(historyStats.count)} <span className="text-sm font-medium text-indigo-400">รายการ</span></h4>
+                         </div>
+                         <div className="absolute -right-2 -bottom-2 text-indigo-200 opacity-20 group-hover:scale-110 transition-transform"><List size={80}/></div>
+                     </div>
+                     <div className="p-5 rounded-2xl bg-emerald-50 border border-emerald-100 relative overflow-hidden group text-left">
+                         <div className="relative z-10 text-left">
+                             <p className="text-xs font-bold text-emerald-500 uppercase tracking-wider mb-1 text-left">มูลค่ารวม (Total Value)</p>
+                             <h4 className="text-3xl font-bold text-emerald-700 text-left">{formatCurrency(historyStats.totalAmount)}</h4>
+                         </div>
+                         <div className="absolute -right-2 -bottom-2 text-emerald-200 opacity-20 group-hover:scale-110 transition-transform"><Wallet size={80}/></div>
+                     </div>
+                     <div className="p-5 rounded-2xl bg-amber-50 border border-amber-100 relative overflow-hidden group text-left">
+                         <div className="relative z-10 text-left">
+                             <p className="text-xs font-bold text-amber-500 uppercase tracking-wider mb-1 text-left">เฉลี่ยต่อบิล (Avg. Ticket)</p>
+                             <h4 className="text-3xl font-bold text-amber-700 text-left">{formatCurrency(historyStats.avg)}</h4>
+                         </div>
+                         <div className="absolute -right-2 -bottom-2 text-amber-200 opacity-20 group-hover:scale-110 transition-transform"><Tag size={80}/></div>
+                     </div>
+                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8 text-left">
-                    <div className="lg:col-span-2 bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-sm text-left">
-                        <div className="flex justify-between items-center mb-6 text-left">
-                            <h4 className="font-bold text-slate-700 text-sm flex items-center gap-2 text-left"><Activity size={16}/> Activity Trend (Filtered)</h4>
-                        </div>
-                        <div className="flex items-end gap-3 h-40 text-center">
-                            {historyStats.trendData.length > 0 ? historyStats.trendData.map((d, i) => {
-                                const maxVal = Math.max(...historyStats.trendData.map(x => Math.max(x.income, x.expense))) || 1;
-                                return (
-                                    <div key={i} className="flex-1 flex flex-col justify-end gap-1 h-full group relative text-center">
-                                        <div className="w-full bg-emerald-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.income/maxVal)*100, 2)}%`}}></div>
-                                        <div className="w-full bg-rose-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.expense/maxVal)*100, 2)}%`}}></div>
-                                        <div className="text-[9px] text-center text-slate-400 font-bold mt-1 text-center">{d.date.getDate()}</div>
-                                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-800 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-20 shadow-xl transition-opacity text-center">
-                                            <div className="font-bold border-b border-slate-600 pb-1 mb-1 text-center">{formatDate(d.date)}</div>
-                                            <div className="text-emerald-300 text-left">In: {formatCurrency(d.income)}</div>
-                                            <div className="text-rose-300 text-left">Ex: {formatCurrency(d.expense)}</div>
-                                        </div>
-                                    </div>
-                                )
-                            }) : <div className="w-full h-full flex items-center justify-center text-slate-400 text-center">ไม่มีข้อมูลในช่วงนี้</div>}
-                        </div>
-                    </div>
+                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8 text-left">
+                     <div className="lg:col-span-2 bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-sm text-left">
+                         <div className="flex justify-between items-center mb-6 text-left">
+                             <h4 className="font-bold text-slate-700 text-sm flex items-center gap-2 text-left"><Activity size={16}/> Activity Trend (Filtered)</h4>
+                         </div>
+                         <div className="flex items-end gap-3 h-40 text-center">
+                             {historyStats.trendData.length > 0 ? historyStats.trendData.map((d, i) => {
+                                 const maxVal = Math.max(...historyStats.trendData.map(x => Math.max(x.income, x.expense))) || 1;
+                                 return (
+                                     <div key={i} className="flex-1 flex flex-col justify-end gap-1 h-full group relative text-center">
+                                         <div className="w-full bg-emerald-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.income/maxVal)*100, 2)}%`}}></div>
+                                         <div className="w-full bg-rose-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.expense/maxVal)*100, 2)}%`}}></div>
+                                         <div className="text-[9px] text-center text-slate-400 font-bold mt-1 text-center">{d.date.getDate()}</div>
+                                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-800 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-20 shadow-xl transition-opacity text-center">
+                                             <div className="font-bold border-b border-slate-600 pb-1 mb-1 text-center">{formatDate(d.date)}</div>
+                                             <div className="text-emerald-300 text-left">In: {formatCurrency(d.income)}</div>
+                                             <div className="text-rose-300 text-left">Ex: {formatCurrency(d.expense)}</div>
+                                         </div>
+                                     </div>
+                                 )
+                             }) : <div className="w-full h-full flex items-center justify-center text-slate-400 text-center">ไม่มีข้อมูลในช่วงนี้</div>}
+                         </div>
+                     </div>
 
-                    <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm text-left">
-                        <h4 className="font-bold text-slate-700 text-sm mb-4 flex items-center gap-2 text-left"><PieChart size={16}/> Top Categories</h4>
-                        <div className="space-y-4 text-left">
-                            {historyStats.topCats.length > 0 ? historyStats.topCats.map((c, i) => (
-                                <div key={i} className="text-left">
-                                    <div className="flex justify-between text-xs mb-1.5 font-bold text-left">
-                                        <span className="text-slate-600 text-left">{i+1}. {c.name}</span>
-                                        <span className="text-slate-800 text-right">{formatCompactNumber(c.value)} ({c.percent.toFixed(1)}%)</span>
-                                    </div>
-                                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden text-left">
-                                        <div className={`h-full rounded-full text-left ${i === 0 ? 'bg-indigo-500' : 'bg-indigo-300'}`} style={{width: `${c.percent}%`}}></div>
-                                    </div>
-                                </div>
-                            )) : <p className="text-center text-slate-400 text-sm py-4 text-center">ไม่มีข้อมูลหมวดหมู่</p>}
-                        </div>
-                    </div>
-                </div>
+                     <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm text-left">
+                         <h4 className="font-bold text-slate-700 text-sm mb-4 flex items-center gap-2 text-left"><PieChart size={16}/> Top Categories</h4>
+                         <div className="space-y-4 text-left">
+                             {historyStats.topCats.length > 0 ? historyStats.topCats.map((c, i) => (
+                                 <div key={i} className="text-left">
+                                     <div className="flex justify-between text-xs mb-1.5 font-bold text-left">
+                                         <span className="text-slate-600 text-left">{i+1}. {c.name}</span>
+                                         <span className="text-slate-800 text-right">{formatCompactNumber(c.value)} ({c.percent.toFixed(1)}%)</span>
+                                     </div>
+                                     <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden text-left">
+                                         <div className={`h-full rounded-full text-left ${i === 0 ? 'bg-indigo-500' : 'bg-indigo-300'}`} style={{width: `${c.percent}%`}}></div>
+                                     </div>
+                                 </div>
+                             )) : <p className="text-center text-slate-400 text-sm py-4 text-center">ไม่มีข้อมูลหมวดหมู่</p>}
+                         </div>
+                     </div>
+                 </div>
 
-                <h4 className="font-bold text-slate-700 text-lg mb-4 flex items-center gap-2 text-left"><List size={20}/> Transaction Logs <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full ml-2">Year: {selectedYear} / View: {viewMode.toUpperCase()}</span></h4>
-                <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm text-left">
-                    <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase border-b border-slate-200 text-left">
-                            <tr className="text-left">
-                                <th className="p-4 w-[120px] text-left">Date</th>
-                                <th className="p-4 w-[100px] text-left">Type</th>
-                                <th className="p-4 text-left">Description</th>
-                                <th className="p-4 text-right w-32 text-right">Amount</th>
-                                <th className="p-4 text-center w-[100px] text-center">Action</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-left">
-                            {historyStats.filtered.sort((a,b) => b.date - a.date).map((t, idx) => (
-                                <tr key={t.id + "-hist-" + idx} className="hover:bg-slate-50 transition-colors text-left">
-                                    <td className="p-4 text-slate-500 text-xs font-mono text-left">{formatDate(t.date)}</td>
-                                    <td className="p-4 text-left">
-                                        <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase text-left ${t.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                                            {t.type}
-                                        </span>
-                                    </td>
-                                    <td className="p-4 text-left">
-                                        <div className="font-bold text-slate-700 text-left">{t.description}</div>
-                                        <div className="flex gap-2 mt-1 text-left">
-                                            <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-left">{t.category}</span>
-                                            {t.orderId && <span className="text-[10px] text-indigo-400 font-mono text-left">Ref: {t.orderId}</span>}
-                                            {(t.taxInvoiceNo || t.invNo) && <span className="text-[10px] text-rose-500 font-bold text-left">Inv: {t.taxInvoiceNo || t.invNo}</span>}
-                                        </div>
-                                    </td>
-                                    <td className={`p-4 text-right font-bold text-right ${t.type==='income'?'text-emerald-600':'text-rose-800'}`}>
-                                        {t.type === 'income' ? '+' : '-'}{formatCurrency(t.total)}
-                                        {t.platformFee > 0 && <div className="text-[9px] text-slate-400 font-normal mt-1 text-right">Fee: -{formatCurrency(t.platformFee)}</div>}
-                                    </td>
-                                    <td className="p-4 text-center">
-                                        <div className="flex justify-center gap-2 text-center">
-                                            {t.type === 'income' && (<button onClick={() => setPreviewInvoiceTransaction(t)} className="text-slate-300 hover:text-indigo-600 text-center" title="Reprint Invoice"><Printer size={14}/></button>)}
-                                            <button onClick={()=>handleEdit(t)} className="text-slate-300 hover:text-orange-500 text-center"><Edit size={14}/></button>
-                                            <button onClick={(e)=>setDeleteId(t.id)} className="text-slate-300 hover:text-rose-500 text-center"><Trash2 size={14}/></button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                            {historyStats.filtered.length === 0 && (
-                                <tr className="text-left"><td colSpan="5" className="p-8 text-center text-slate-300 text-center">ไม่พบรายการในช่วงนี้</td></tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-           </div>
-         </div>
-       )}
+                 <h4 className="font-bold text-slate-700 text-lg mb-4 flex items-center gap-2 text-left"><List size={20}/> Transaction Logs <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full ml-2">Year: {selectedYear} / View: {viewMode.toUpperCase()}</span></h4>
+                 <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm text-left">
+                     <table className="w-full text-left text-sm">
+                         <thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase border-b border-slate-200 text-left">
+                             <tr className="text-left">
+                                 <th className="p-4 w-[120px] text-left">Date</th>
+                                 <th className="p-4 w-[100px] text-left">Type</th>
+                                 <th className="p-4 text-left">Description</th>
+                                 <th className="p-4 text-right w-32 text-right">Amount</th>
+                                 <th className="p-4 text-center w-[100px] text-center">Action</th>
+                             </tr>
+                         </thead>
+                         <tbody className="divide-y divide-slate-100 text-left">
+                             {historyStats.filtered.sort((a,b) => b.date - a.date).map((t, idx) => (
+                                 <tr key={t.id + "-hist-" + idx} className="hover:bg-slate-50 transition-colors text-left">
+                                     <td className="p-4 text-slate-500 text-xs font-mono text-left">{formatDate(t.date)}</td>
+                                     <td className="p-4 text-left">
+                                         <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase text-left ${t.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                             {t.type}
+                                         </span>
+                                     </td>
+                                     <td className="p-4 text-left">
+                                         <div className="font-bold text-slate-700 text-left">{t.description}</div>
+                                         <div className="flex gap-2 mt-1 text-left">
+                                             <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-left">{t.category}</span>
+                                             {t.orderId && <span className="text-[10px] text-indigo-400 font-mono text-left">Ref: {t.orderId}</span>}
+                                             {(t.taxInvoiceNo || t.invNo) && <span className="text-[10px] text-rose-500 font-bold text-left">Inv: {t.taxInvoiceNo || t.invNo}</span>}
+                                         </div>
+                                     </td>
+                                     <td className={`p-4 text-right font-bold text-right ${t.type==='income'?'text-emerald-600':'text-rose-600'}`}>
+                                         {t.type === 'income' ? '+' : '-'}{formatCurrency(t.total)}
+                                         {t.platformFee > 0 && <div className="text-[9px] text-slate-400 font-normal mt-1 text-right">Fee: -{formatCurrency(t.platformFee)}</div>}
+                                     </td>
+                                     <td className="p-4 text-center">
+                                         <div className="flex justify-center gap-2 text-center">
+                                             {t.type === 'income' && (<button onClick={() => setPreviewInvoiceTransaction(t)} className="text-slate-300 hover:text-indigo-600 text-center" title="Reprint Invoice"><Printer size={14}/></button>)}
+                                             <button onClick={()=>handleEdit(t)} className="text-slate-300 hover:text-orange-500 text-center"><Edit size={14}/></button>
+                                             <button onClick={(e)=>setDeleteId(t.id)} className="text-slate-300 hover:text-rose-500 text-center"><Trash2 size={14}/></button>
+                                         </div>
+                                     </td>
+                                 </tr>
+                             ))}
+                             {historyStats.filtered.length === 0 && (
+                                 <tr className="text-left"><td colSpan="5" className="p-8 text-center text-slate-300 text-center">ไม่พบรายการในช่วงนี้</td></tr>
+                             )}
+                         </tbody>
+                     </table>
+                 </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 };
@@ -2046,7 +2074,6 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
               <thead><tr className="bg-slate-100 text-slate-800 font-bold text-xs uppercase text-center"><th className="py-2 border-y border-slate-300 w-12 text-center">ลำดับ<br/>No.</th><th className="py-2 border-y border-slate-300 text-left pl-4 text-left">รายการสินค้า / บริการ<br/>Description</th><th className="py-2 border-y border-slate-300 w-20 text-center">จำนวน<br/>Qty</th><th className="py-2 border-y border-slate-300 w-24 text-right">หน่วยละ<br/>Unit Price</th><th className="py-2 border-y border-slate-300 w-28 text-right">จำนวนเงิน<br/>Amount</th></tr></thead>
               <tbody className="text-left">
                   {invData.items.map((it, i) => {
-                      // Correct: Show price as Inclusive of VAT in table rows as requested
                       const displayUnitPrice = it.price;
                       return (
                           <tr key={"item-" + i} className="text-left">
@@ -2242,7 +2269,7 @@ const StockManager = ({ appId, showToast, transactions }) => {
                 <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันการลบสินค้า?</h3>
                 <p className="text-sm text-slate-500 mb-6 text-center">ข้อมูลสินค้าและจำนวนสต็อกจะหายไปอย่างถาวร</p>
                 <div className="flex gap-3 text-center">
-                    <button onClick={()=>setProfileDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button>
+                    <button onClick={()=>setStockDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button>
                     <button onClick={executeDelete} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ยืนยันลบ</button>
                 </div>
             </div>
@@ -2431,7 +2458,6 @@ const StockManager = ({ appId, showToast, transactions }) => {
           </div>
         </div>
 
-        {/* Right Side: Analytical Cards */}
         <div className="lg:col-span-4 xl:col-span-3 flex flex-col gap-6 min-h-0 overflow-y-auto custom-scrollbar pr-2">
           <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 shadow-sm flex flex-col max-h-[350px]">
               <h4 className="font-bold text-slate-700 text-xs uppercase mb-3 flex items-center gap-2 flex-shrink-0">
@@ -2553,6 +2579,12 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
           const matchShop = shopFilter === 'all' || t.shop === shopFilter;
           return matchDate && matchShop;
       });
+
+      // Annual Data filtering
+      const annualIncomeTrans = transactions.filter(t => {
+          const d = normalizeDate(t.date);
+          return t.type === 'income' && d.getFullYear() === year && (shopFilter === 'all' || t.shop === shopFilter);
+      });
   
       const sales = periodTrans.filter(t => t.type === 'income');
       let salesTotalBase = 0, salesTotalVat = 0, salesTotalWht = 0, salesTotalGross = 0;
@@ -2592,12 +2624,55 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
               purchaseTotalVat += shipVat;
           }
       });
+
+      // Annual Calculation Logic
+      const totalAnnualIncome = annualIncomeTrans.reduce((sum, t) => sum + (Number(t.total) || 0), 0);
+      const annualExpenseDeduction = totalAnnualIncome * 0.6; // เหมาจ่าย 60%
+      const personalAllowance = 60000;
+      const netAnnualIncome = Math.max(0, totalAnnualIncome - annualExpenseDeduction - personalAllowance);
+
+      const calculatePersonalTax = (income) => {
+          let remaining = income;
+          const brackets = [
+              { limit: 150000, rate: 0, label: '0 - 150,000' },
+              { limit: 150000, rate: 0.05, label: '150,001 - 300,000' },
+              { limit: 200000, rate: 0.10, label: '300,001 - 500,000' },
+              { limit: 250000, rate: 0.15, label: '500,001 - 750,000' },
+              { limit: 250000, rate: 0.20, label: '750,001 - 1,000,000' },
+              { limit: 1000000, rate: 0.25, label: '1,000,001 - 2,000,000' },
+              { limit: 3000000, rate: 0.30, label: '2,000,001 - 5,000,000' },
+              { limit: Infinity, rate: 0.35, label: 'เกิน 5,000,000' }
+          ];
+
+          let totalTax = 0;
+          const results = [];
+
+          for (const b of brackets) {
+              const taxableInBracket = Math.min(remaining, b.limit);
+              const bracketTax = taxableInBracket * b.rate;
+              totalTax += bracketTax;
+              results.push({ ...b, amount: taxableInBracket, tax: bracketTax });
+              remaining -= taxableInBracket;
+              if (remaining <= 0) break;
+          }
+          return { totalTax, results };
+      };
+
+      const annualTaxInfo = calculatePersonalTax(netAnnualIncome);
   
       return { 
           sales, purchases, 
           salesTotalBase, salesTotalVat, salesTotalWht, salesTotalGross,
           purchaseTotalBase, purchaseTotalVat, purchaseTotalWht, purchaseTotalGross,
-          vatPayable: salesTotalVat - purchaseTotalVat
+          vatPayable: salesTotalVat - purchaseTotalVat,
+          annual: {
+              income: totalAnnualIncome,
+              expense: annualExpenseDeduction,
+              allowance: personalAllowance,
+              net: netAnnualIncome,
+              tax: annualTaxInfo.totalTax,
+              details: annualTaxInfo.results
+          }
       };
     }, [transactions, year, month, shopFilter]);
   
@@ -2621,7 +2696,7 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
           header = [['วันที่', 'เลขอ้างอิง/ใบกำกับ', 'รายละเอียด/คู่ค้า', 'ฐานภาษี (Tax Base)', 'VAT (7%)', 'จำนวนเงินรวม', 'ร้านค้า']];
           const items = subType === 'income' ? taxData.sales.filter(t => t.vatType !== 'none') : taxData.purchases.filter(t => t.vatType !== 'none');
           data = items.map(t => [formatDate(t.date), t.taxInvoiceNo || t.invNo || t.orderId || '-', t.customerName || t.vendorName || t.description, t.net || t.amount, t.vat || 0, t.total, t.shop]);
-       } else {
+       } else if (activeReport === 'wht') {
           header = [['วันที่', 'เลขที่เอกสาร', 'คู่ค้า/ผู้รับเงิน', 'ประเภทเงินได้', 'ฐานหักภาษี', 'อัตรา (%)', 'ภาษีที่หัก (WHT)', 'ร้านค้า']];
           const items = subType === 'income' ? taxData.sales.filter(t => (t.whtRate || 0) > 0) : taxData.purchases.filter(t => (t.whtRate || 0) > 0);
           data = items.map(t => [formatDate(t.date), t.taxInvoiceNo || t.invNo || t.orderId || '-', t.customerName || t.vendorName || t.description, t.category, t.net || t.amount, t.whtRate, (t.net || t.amount) * (t.whtRate / 100), t.shop]);
@@ -2631,7 +2706,7 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
     };
   
     return (
-      <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 h-full flex flex-col animate-fadeIn text-left">
+      <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 h-full flex flex-col animate-fadeIn text-left font-sarabun">
           <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4 border-b border-slate-100 pb-6 text-left">
               <div className="text-left">
                   <h3 className="font-bold text-slate-800 text-xl flex items-center gap-2 text-left"><Calculator className="text-indigo-600 text-left"/> รายงานภาษีสรรพากร (Tax Compliance)</h3>
@@ -2682,8 +2757,9 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
           </div>
 
           <div className="flex gap-1 p-1 bg-slate-100 rounded-2xl w-fit mb-6 text-left">
-             <button onClick={()=>setActiveReport('vat')} className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 text-left ${activeReport==='vat'?'bg-white text-indigo-600 shadow-sm':'text-slate-500'}`}><FileStack size={16}/> ภาษีมูลค่าเพิ่ม (VAT)</button>
-             <button onClick={()=>setActiveReport('wht')} className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 text-left ${activeReport==='wht'?'bg-white text-indigo-600 shadow-sm':'text-slate-500'}`}><CreditCard size={16}/> ภาษีหัก ณ ที่จ่าย (WHT)</button>
+              <button onClick={()=>setActiveReport('vat')} className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 text-left ${activeReport==='vat'?'bg-white text-indigo-600 shadow-sm':'text-slate-500'}`}><FileStack size={16}/> ภาษีมูลค่าเพิ่ม (VAT)</button>
+              <button onClick={()=>setActiveReport('wht')} className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 text-left ${activeReport==='wht'?'bg-white text-indigo-600 shadow-sm':'text-slate-500'}`}><CreditCard size={16}/> ภาษีหัก ณ ที่จ่าย (WHT)</button>
+              <button onClick={()=>setActiveReport('annual')} className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 text-left ${activeReport==='annual'?'bg-white text-indigo-600 shadow-sm':'text-slate-500'}`}><Target size={16}/> วางแผนภาษีประจำปี</button>
           </div>
   
           {activeReport === 'vat' ? (
@@ -2701,7 +2777,7 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
                     </div>
                     <div className={`p-5 rounded-2xl border flex flex-col justify-center text-left ${taxData.vatPayable >= 0 ? 'bg-indigo-50 border-indigo-100' : 'bg-blue-50 border-blue-100'}`}>
                         <p className={`text-[10px] font-bold uppercase mb-2 text-left ${taxData.vatPayable >= 0 ? 'text-indigo-600' : 'text-blue-600'}`}>
-                           {taxData.vatPayable >= 0 ? 'ภาษีที่ต้องชำระเพิ่ม (ภ.พ.30)' : 'ภาษีที่ชำระเกิน (ขอคืนได้)'}
+                            {taxData.vatPayable >= 0 ? 'ภาษีที่ต้องชำระเพิ่ม (ภ.พ.30)' : 'ภาษีที่ชำระเกิน (ขอคืนได้)'}
                         </p>
                         <p className={`text-2xl font-bold text-left ${taxData.vatPayable >= 0 ? 'text-indigo-700' : 'text-blue-700'}`}>{formatCurrency(Math.abs(taxData.vatPayable))}</p>
                     </div>
@@ -2744,7 +2820,7 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
                     </table>
                 </div>
               </div>
-          ) : (
+          ) : activeReport === 'wht' ? (
               <div className="space-y-6 animate-fadeIn text-left">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-left">
                     <div className="bg-indigo-50 p-5 rounded-2xl border border-indigo-100 text-left">
@@ -2797,7 +2873,95 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
                         </tbody>
                     </table>
                 </div>
-             </div>
+              </div>
+          ) : (
+            <div className="space-y-6 animate-fadeIn">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 space-y-6">
+                        <div className="bg-indigo-900 text-white p-8 rounded-3xl shadow-xl relative overflow-hidden">
+                            <div className="relative z-10">
+                                <p className="text-indigo-300 text-sm font-bold uppercase tracking-widest mb-2">สรุปประมาณการภาษีเงินได้บุคคลธรรมดา ปี {year + 543}</p>
+                                <h4 className="text-5xl font-bold mb-4">{formatCurrency(taxData.annual.tax)}</h4>
+                                <div className="flex flex-wrap gap-6 text-sm">
+                                    <div className="flex flex-col"><span className="text-indigo-400">รายได้รวม:</span><span className="font-bold text-lg">{formatCurrency(taxData.annual.income)}</span></div>
+                                    <div className="flex flex-col"><span className="text-indigo-400">หักเหมาจ่าย (60%):</span><span className="font-bold text-lg text-rose-400">-{formatCurrency(taxData.annual.expense)}</span></div>
+                                    <div className="flex flex-col"><span className="text-indigo-400">หักลดหย่อนส่วนตัว:</span><span className="font-bold text-lg text-rose-400">-60,000.00</span></div>
+                                </div>
+                            </div>
+                            <div className="absolute right-0 bottom-0 opacity-10 -mr-10 -mb-10"><Calculator size={240}/></div>
+                        </div>
+
+                        <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
+                            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+                                <h4 className="font-bold text-slate-800 flex items-center gap-2"><List size={18} className="text-indigo-600"/> รายละเอียดการคำนวณตามขั้นบันได</h4>
+                            </div>
+                            <table className="w-full text-sm">
+                                <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">
+                                    <tr>
+                                        <th className="p-4 text-left">ช่วงเงินได้สุทธิ</th>
+                                        <th className="p-4 text-right">เงินได้ในขั้นนี้</th>
+                                        <th className="p-4 text-center">อัตราภาษี</th>
+                                        <th className="p-4 text-right">ภาษีที่คำนวณได้</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {taxData.annual.details.map((b, i) => (
+                                        <tr key={i} className={b.amount > 0 ? "bg-indigo-50/30" : "opacity-40"}>
+                                            <td className="p-4 font-medium text-slate-700">{b.label}</td>
+                                            <td className="p-4 text-right font-mono">{formatCurrency(b.amount)}</td>
+                                            <td className="p-4 text-center font-bold text-indigo-600">{(b.rate * 100)}%</td>
+                                            <td className="p-4 text-right font-bold text-slate-900 font-mono">{formatCurrency(b.tax)}</td>
+                                        </tr>
+                                    ))}
+                                    <tr className="bg-slate-900 text-white font-bold">
+                                        <td colSpan="3" className="p-4 text-right uppercase tracking-widest">รวมภาษีที่ต้องชำระทั้งปี</td>
+                                        <td className="p-4 text-right text-lg font-mono">{formatCurrency(taxData.annual.tax)}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div className="space-y-6">
+                        <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-3xl shadow-sm">
+                            <h4 className="font-bold text-emerald-800 flex items-center gap-2 mb-4"><Clock size={18}/> วางแผนการชำระ (Tax Timeline)</h4>
+                            <div className="space-y-4">
+                                <div className="bg-white p-4 rounded-2xl border border-emerald-200">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-xs font-bold text-emerald-600 uppercase">ภ.ง.ด. 94 (กลางปี)</span>
+                                        <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">ก.ค. - ก.ย.</span>
+                                    </div>
+                                    <p className="text-xs text-slate-400 mb-2">คำนวณจากรายได้ ม.ค. - มิ.ย.</p>
+                                    <p className="text-xl font-bold text-slate-800">{formatCurrency(taxData.annual.tax / 2)}</p>
+                                </div>
+                                <div className="bg-white p-4 rounded-2xl border border-emerald-200">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-xs font-bold text-indigo-600 uppercase">ภ.ง.ด. 90 (ปลายปี)</span>
+                                        <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">ม.ค. - มี.ค.</span>
+                                    </div>
+                                    <p className="text-xs text-slate-400 mb-2">ภาษีส่วนที่เหลือหลังหักกลางปี</p>
+                                    <p className="text-xl font-bold text-slate-800">{formatCurrency(taxData.annual.tax / 2)}</p>
+                                </div>
+                            </div>
+                            <div className="mt-6 p-4 bg-emerald-100/50 rounded-2xl border border-dotted border-emerald-300">
+                                <p className="text-[10px] text-emerald-700 leading-relaxed font-bold italic">
+                                    * คำแนะนำ: ควรสำรองเงินไว้ประมาณ {(taxData.annual.tax / 12).toFixed(0)} บาท/เดือน เพื่อให้เพียงพอต่อการจ่ายภาษีเมื่อถึงกำหนด
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="bg-slate-50 border border-slate-200 p-6 rounded-3xl">
+                            <h4 className="font-bold text-slate-700 flex items-center gap-2 mb-4"><Settings size={18}/> หมายเหตุทางภาษี</h4>
+                            <ul className="text-xs text-slate-500 space-y-3 leading-relaxed list-disc pl-4 font-medium">
+                                <li>การคำนวณนี้เป็นการประมาณการเบื้องต้นโดยใช้วิธี **"หักค่าใช้จ่ายเหมา 60%"** (มาตรา 40(8))</li>
+                                <li>หากคุณมีค่าใช้จ่ายจริงมากกว่า 60% แนะนำให้ปรึกษาบัญชีเพื่อยื่นแบบ **"หักค่าใช้จ่ายตามจริง"**</li>
+                                <li>ยอดนี้ยังไม่รวมค่าลดหย่อนอื่นๆ เช่น ประกันชีวิต, SSF/RMF, หรือ ดอกเบี้ยบ้าน</li>
+                                <li>หากรายได้เกิน 1.8 ล้านบาท/ปี คุณมีหน้าที่ต้องจดทะเบียน **VAT** เพิ่มเติม</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
           )}
       </div>
     );
