@@ -613,17 +613,17 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
                             <thead><tr className="bg-slate-100 text-slate-800 font-bold text-xs uppercase text-center"><th className="py-2 border-y border-slate-300 w-12">ลำดับ<br/>No.</th><th className="py-2 border-y border-slate-300 text-left pl-4">รายการสินค้า / บริการ<br/>Description</th><th className="py-2 border-y border-slate-300 w-20">จำนวน<br/>Qty</th><th className="py-2 border-y border-slate-300 w-24">หน่วยละ<br/>Unit Price</th><th className="py-2 border-y border-slate-300 w-28">จำนวนเงิน<br/>Amount</th></tr></thead>
                             <tbody className="text-left">
                                 {items.map((it, idx) => {
-                                    const rawPrice = it.amount || it.price || 0;
+                                    const totalLineAmount = it.amount || it.price || 0;
                                     const qty = Number(it.qty) || 1;
-                                    // หากรวม VAT ให้ดึงราคาต่อหน่วยก่อน VAT มาแสดง (ตรงตาม InvoiceGenerator)
-                                    const unitPrice = isVatIncluded ? (rawPrice / qty / 1.07) : (rawPrice / qty);
+                                    // Modified: Always show Price inclusive of VAT in the table rows
+                                    const displayUnitPrice = totalLineAmount / qty;
                                     return (
                                         <tr key={idx}>
                                             <td className="py-2 border-b border-slate-200 text-center align-top">{idx+1}</td>
                                             <td className="py-2 border-b border-slate-200 pl-4 align-top text-left">{it.desc}</td>
                                             <td className="py-2 border-b border-slate-200 text-center align-top">{qty}</td>
-                                            <td className="py-2 border-b border-slate-200 text-right pr-2 align-top">{formatCurrency(unitPrice)}</td>
-                                            <td className="py-2 border-b border-slate-200 text-right pr-2 font-bold align-top">{formatCurrency(qty * unitPrice)}</td>
+                                            <td className="py-2 border-b border-slate-200 text-right pr-2 align-top">{formatCurrency(displayUnitPrice)}</td>
+                                            <td className="py-2 border-b border-slate-200 text-right pr-2 font-bold align-top">{formatCurrency(totalLineAmount)}</td>
                                         </tr>
                                     );
                                 })}
@@ -1949,15 +1949,15 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
               <thead><tr className="bg-slate-100 text-slate-800 font-bold text-xs uppercase text-center"><th className="py-2 border-y border-slate-300 w-12 text-center">ลำดับ<br/>No.</th><th className="py-2 border-y border-slate-300 text-left pl-4 text-left">รายการสินค้า / บริการ<br/>Description</th><th className="py-2 border-y border-slate-300 w-20 text-center">จำนวน<br/>Qty</th><th className="py-2 border-y border-slate-300 w-24 text-right">หน่วยละ<br/>Unit Price</th><th className="py-2 border-y border-slate-300 w-28 text-right">จำนวนเงิน<br/>Amount</th></tr></thead>
               <tbody className="text-left">
                   {invData.items.map((it, i) => {
-                      const isIncluded = invData.vatType === 'included';
-                      const displayPrice = isIncluded ? (it.price / 1.07) : it.price;
+                      // Modified: Show unit price as Inclusive of VAT in table rows
+                      const displayUnitPrice = it.price;
                       return (
                           <tr key={"item-" + i} className="text-left">
                               <td className="py-2 border-b border-slate-200 text-center align-top text-center">{i+1}</td>
                               <td className="py-2 border-b border-slate-200 pl-4 align-top text-left">{it.desc}</td>
                               <td className="py-2 border-b border-slate-200 text-center align-top text-center">{it.qty}</td>
-                              <td className="py-2 border-b border-slate-200 text-right pr-2 align-top text-right">{formatCurrency(displayPrice)}</td>
-                              <td className="py-2 border-b border-slate-200 text-right pr-2 font-bold align-top text-right">{formatCurrency(it.qty * displayPrice)}</td>
+                              <td className="py-2 border-b border-slate-200 text-right pr-2 align-top text-right">{formatCurrency(displayUnitPrice)}</td>
+                              <td className="py-2 border-b border-slate-200 text-right pr-2 font-bold align-top text-right">{formatCurrency(it.qty * displayUnitPrice)}</td>
                           </tr>
                       );
                   })}
@@ -1974,7 +1974,7 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
               </div>
               <div className="w-[40%] text-right">
                   <div className="grid grid-cols-[auto_auto] gap-y-2 text-right text-sm">
-                      <span className="font-bold text-slate-600 text-right">รวมเป็นเงิน (Sub-total)</span><span className="font-medium">{formatCurrency(totals.preVat + Number(invData.discount))}</span>
+                      <span className="font-bold text-slate-600 text-right">รวมเป็นเงิน (Sub-total)</span><span className="font-medium">{formatCurrency(totals.preVat + Number(invData.discount) + (invData.vatType === 'excluded' ? 0 : totals.vat))}</span>
                       {invData.discount > 0 && <><span className="font-bold text-rose-600 text-right">หักส่วนลด (Discount)</span><span className="text-rose-600">-{formatCurrency(invData.discount)}</span></>}
                       <span className="font-bold text-slate-600 text-right">มูลค่าสินค้า (Pre-VAT)</span><span className="font-medium">{formatCurrency(totals.preVat)}</span>
                       <span className="font-bold text-slate-600 text-right">ภาษีมูลค่าเพิ่ม 7% (VAT)</span><span className="font-medium">{formatCurrency(totals.vat)}</span>
@@ -2135,7 +2135,6 @@ const StockManager = ({ appId, showToast, transactions }) => {
 
   return (
     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 h-full flex flex-col animate-fadeIn text-left font-sarabun">
-      {/* Delete Confirmation Modal */}
       {stockDeleteId && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 font-sarabun text-center">
             <div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl animate-fadeIn">
@@ -2152,7 +2151,6 @@ const StockManager = ({ appId, showToast, transactions }) => {
         </div>
       )}
 
-      {/* Low Stock Items List Modal */}
       {showLowStockModal && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 font-sarabun text-left">
             <div className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl animate-fadeIn flex flex-col max-h-[80vh]">
@@ -2179,10 +2177,9 @@ const StockManager = ({ appId, showToast, transactions }) => {
         </div>
       )}
 
-      {/* View Details Modal */}
       {viewingProduct && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 font-sarabun text-left">
-            <div className="bg-white rounded-3xl p-8 max-md w-full shadow-2xl animate-fadeIn relative">
+            <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl animate-fadeIn relative">
                 <button onClick={()=>setViewingProduct(null)} className="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full"><X/></button>
                 <div className="flex items-center gap-4 mb-6">
                     <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner"><Package size={28}/></div>
@@ -2285,9 +2282,7 @@ const StockManager = ({ appId, showToast, transactions }) => {
         </div>
       </div>
 
-      {/* Layout Grid with internal scrolling */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0 overflow-hidden">
-        {/* Left Side: Search and Table */}
         <div className="lg:col-span-8 xl:col-span-9 flex flex-col min-h-0">
           <div className="relative mb-4 text-left">
             <Search className="absolute left-3 top-2.5 text-slate-400 text-left" size={18}/>
@@ -2336,7 +2331,6 @@ const StockManager = ({ appId, showToast, transactions }) => {
           </div>
         </div>
 
-        {/* Right Side: Analytical Cards */}
         <div className="lg:col-span-4 xl:col-span-3 flex flex-col gap-6 min-h-0 overflow-y-auto custom-scrollbar pr-2">
           <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 shadow-sm flex flex-col max-h-[350px]">
               <h4 className="font-bold text-slate-700 text-xs uppercase mb-3 flex items-center gap-2 flex-shrink-0">
@@ -2371,7 +2365,6 @@ const StockManager = ({ appId, showToast, transactions }) => {
         </div>
       </div>
 
-      {/* Edit/Add Product Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 overflow-y-auto text-left font-sarabun">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
