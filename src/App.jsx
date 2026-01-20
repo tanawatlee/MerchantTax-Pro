@@ -615,6 +615,7 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
                                 {items.map((it, idx) => {
                                     const totalLineAmount = it.amount || it.price || 0;
                                     const qty = Number(it.qty) || 1;
+                                    // Modified: Always show Price inclusive of VAT in the table rows
                                     const displayUnitPrice = totalLineAmount / qty;
                                     return (
                                         <tr key={idx}>
@@ -639,9 +640,9 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
                             </div>
                             <div className="w-[40%] text-right">
                                 <div className="grid grid-cols-[auto_auto] gap-y-2 text-right text-sm">
-                                    <span className="font-bold text-slate-600 text-right">รวมเป็นเงิน (Sub-total)</span><span className="font-medium">{formatCurrency(preVat + discount)}</span>
-                                    {discount > 0 && <><span className="font-bold text-rose-600 text-right">หักส่วนลด (Discount)</span><span className="text-rose-600">-{formatCurrency(discount)}</span></>}
-                                    <span className="font-bold text-slate-600 text-right">มูลค่าก่อนภาษี (Pre-VAT)</span><span className="font-medium">{formatCurrency(preVat)}</span>
+                                    <span className="font-bold text-slate-600 text-right">รวมเป็นเงิน (Sub-total)</span><span className="font-medium">{formatCurrency(preVat + Number(transaction.discount || 0) + (transaction.vatType === 'excluded' ? 0 : vat))}</span>
+                                    {(transaction.discount || 0) > 0 && <><span className="font-bold text-rose-600 text-right">หักส่วนลด (Discount)</span><span className="text-rose-600">-{formatCurrency(transaction.discount)}</span></>}
+                                    <span className="font-bold text-slate-600 text-right">มูลค่าสินค้า (Pre-VAT)</span><span className="font-medium">{formatCurrency(preVat)}</span>
                                     <span className="font-bold text-slate-600 text-right">ภาษีมูลค่าเพิ่ม 7% (VAT)</span><span className="font-medium">{formatCurrency(vat)}</span>
                                     <div className="col-span-2 border-t border-black my-1"></div>
                                     <span className="font-bold text-slate-900 text-lg text-right">จำนวนเงินทั้งสิ้น (Total)</span><span className="font-bold text-slate-900 text-lg">{formatCurrency(total)}</span>
@@ -876,15 +877,19 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
       try { 
           const dateObj = new Date(formData.date);
           const dateStr = formData.date.replace(/-/g, '');
-          const prefix = "INV-" + dateStr;
           
-          const qMatch = invoices.filter(inv => inv.invNo && inv.invNo.startsWith(prefix)).length;
-          const newInvNo = `${prefix}-${String(qMatch + 1).padStart(3, '0')}`;
+          // Fix: Ensure we use the existing invNo if editing
+          let finalInvNo = editingId ? formData.invNo : '';
+          if (!finalInvNo) {
+            const prefix = "INV-" + dateStr;
+            const qMatch = invoices.filter(inv => inv.invNo && inv.invNo.startsWith(prefix)).length;
+            finalInvNo = `${prefix}-${String(qMatch + 1).padStart(3, '0')}`;
+          }
 
           const dataToSave = { 
               ...formData, 
               ...calculated, 
-              invNo: newInvNo, 
+              invNo: finalInvNo, 
               amount: calculated.baseAmount, 
               date: dateObj, 
               userId: user.uid,
@@ -930,7 +935,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                       address: '', taxId: '', branch: '00000',
                       items: invoiceItems,
                       date: dateObj,
-                      invNo: newInvNo, 
+                      invNo: finalInvNo, 
                       orderId: formData.orderId || '',
                       shop: formData.shop || '', 
                       sellerName: savedSeller.sellerName || '',
@@ -953,7 +958,6 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                   };
                   await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'), invoicePayload);
 
-                  // Auto-record Platform Fee and Shipping based on Shipping collected from Customer
                   if (isEcommerceMode) {
                       const platFee = parseFloat(formData.platformFee) || 0;
                       const shipExpense = parseFloat(formData.shippingCost) || 0; 
@@ -995,7 +999,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                       }
                   }
 
-                  showToast(`บันทึกรายรับและหักรายจ่ายอัตโนมัติสำเร็จ (เลขที่: ${newInvNo})`, "success");
+                  showToast(`บันทึกรายรับและหักรายจ่ายอัตโนมัติสำเร็จ (เลขที่: ${finalInvNo})`, "success");
               } else {
                   showToast("บันทึกรายจ่ายและสต็อกสินค้าสำเร็จ", "success");
               }
@@ -1015,7 +1019,8 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
           shippingCost: item.shippingCost || '',
           shopDiscount: item.shopDiscount || '',
           expenseDiscount: item.expenseDiscount || '',
-          shippingAmount: item.shippingAmount || ''
+          shippingAmount: item.shippingAmount || '',
+          taxInvoiceNo: item.taxInvoiceNo || '' // Pull Manual Tax ID on Edit
       }); 
       setEditingId(item.id); 
       setSubTab('new'); 
@@ -1026,17 +1031,14 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
       try { 
           const itemToDelete = transactions.find(t => t.id === deleteId);
           if (itemToDelete) {
-              // 1. Return stock logic for Income (Sales) Reversal
               if (itemToDelete.type === 'income' && itemToDelete.items) {
                   for (const it of itemToDelete.items) {
                       const product = stockProducts.find(p => p.name === it.desc);
                       if (product) {
                           const qty = Number(it.qty) || 0;
-                          // Increase main stock
                           await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', product.id), {
                               stock: increment(qty)
                           });
-                          // Add back to inventory lots for future FIFO calculations
                           await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'inventory_lots'), {
                               productId: product.id,
                               productName: product.name,
@@ -1050,7 +1052,6 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                       }
                   }
               } 
-              // 2. Remove stock logic for Expense (Purchase) Reversal
               else if (itemToDelete.type === 'expense' && itemToDelete.items) {
                   for (const it of itemToDelete.items) {
                       const product = stockProducts.find(p => p.name === it.desc);
@@ -1064,7 +1065,6 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
               }
           }
 
-          // Delete the actual transaction record
           await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', getCollectionName(itemToDelete.type), deleteId)); 
           setDeleteId(null); 
           showToast("ลบรายการและปรับปรุงสต็อกสำเร็จ", "success"); 
@@ -1208,6 +1208,19 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                             </select>
                         </div>
                     </div>
+
+                    {/* Added manual tax invoice field for Income to handle mismatches */}
+                    {formData.type === 'income' && (
+                        <div className="space-y-1 text-left">
+                            <label className="text-xs font-bold text-slate-500 ml-1 flex items-center gap-1"><FileText size={14} className="text-emerald-500"/> เลขที่ใบกำกับภาษี (ถ้ามี - Manual)</label>
+                            <input className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm font-mono text-indigo-600 shadow-inner outline-none" 
+                                placeholder="ระบุเลขที่ใบกำกับเพื่อใช้ในรายงาน" 
+                                value={formData.taxInvoiceNo} 
+                                onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} 
+                            />
+                        </div>
+                    )}
+
                     <div className="space-y-1 text-left"><label className="text-xs font-bold text-slate-500 ml-1 text-left">หมวดหมู่</label><select className="w-full bg-slate-50 border-0 rounded-xl p-3 text-sm font-semibold text-left" value={formData.category} onChange={e=>setFormData({...formData,category:e.target.value})}>{(formData.type==='income'?CONSTANTS.CATEGORIES.INCOME:CONSTANTS.CATEGORIES.EXPENSE).map(c=><option key={c} value={c}>{c}</option>)}</select></div>
 
                     <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-left">
@@ -1527,7 +1540,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast, stockPr
                                         <div className="flex gap-2 mt-1 text-left">
                                             <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-left">{t.category}</span>
                                             {t.orderId && <span className="text-[10px] text-indigo-400 font-mono text-left">Ref: {t.orderId}</span>}
-                                            {t.taxInvoiceNo && <span className="text-[10px] text-rose-500 font-bold text-left">Inv: {t.taxInvoiceNo}</span>}
+                                            {(t.taxInvoiceNo || t.invNo) && <span className="text-[10px] text-rose-500 font-bold text-left">Inv: {t.taxInvoiceNo || t.invNo}</span>}
                                         </div>
                                     </td>
                                     <td className={`p-4 text-right font-bold text-right ${t.type==='income'?'text-emerald-600':'text-rose-800'}`}>
@@ -2033,6 +2046,7 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
               <thead><tr className="bg-slate-100 text-slate-800 font-bold text-xs uppercase text-center"><th className="py-2 border-y border-slate-300 w-12 text-center">ลำดับ<br/>No.</th><th className="py-2 border-y border-slate-300 text-left pl-4 text-left">รายการสินค้า / บริการ<br/>Description</th><th className="py-2 border-y border-slate-300 w-20 text-center">จำนวน<br/>Qty</th><th className="py-2 border-y border-slate-300 w-24 text-right">หน่วยละ<br/>Unit Price</th><th className="py-2 border-y border-slate-300 w-28 text-right">จำนวนเงิน<br/>Amount</th></tr></thead>
               <tbody className="text-left">
                   {invData.items.map((it, i) => {
+                      // Correct: Show price as Inclusive of VAT in table rows as requested
                       const displayUnitPrice = it.price;
                       return (
                           <tr key={"item-" + i} className="text-left">
@@ -2218,6 +2232,7 @@ const StockManager = ({ appId, showToast, transactions }) => {
 
   return (
     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 h-full flex flex-col animate-fadeIn text-left font-sarabun">
+      {/* Delete Confirmation Modal */}
       {stockDeleteId && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 font-sarabun text-center">
             <div className="bg-white rounded-3xl p-8 max-sm w-full text-center shadow-2xl animate-fadeIn text-center">
@@ -2451,6 +2466,7 @@ const StockManager = ({ appId, showToast, transactions }) => {
         </div>
       </div>
 
+      {/* Edit/Add Product Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 overflow-y-auto text-left font-sarabun">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
@@ -2604,11 +2620,11 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
        if (activeReport === 'vat') {
           header = [['วันที่', 'เลขอ้างอิง/ใบกำกับ', 'รายละเอียด/คู่ค้า', 'ฐานภาษี (Tax Base)', 'VAT (7%)', 'จำนวนเงินรวม', 'ร้านค้า']];
           const items = subType === 'income' ? taxData.sales.filter(t => t.vatType !== 'none') : taxData.purchases.filter(t => t.vatType !== 'none');
-          data = items.map(t => [formatDate(t.date), t.invNo || t.taxInvoiceNo || '-', t.customerName || t.vendorName || t.description, t.net || t.amount, t.vat || 0, t.total, t.shop]);
+          data = items.map(t => [formatDate(t.date), t.taxInvoiceNo || t.invNo || t.orderId || '-', t.customerName || t.vendorName || t.description, t.net || t.amount, t.vat || 0, t.total, t.shop]);
        } else {
           header = [['วันที่', 'เลขที่เอกสาร', 'คู่ค้า/ผู้รับเงิน', 'ประเภทเงินได้', 'ฐานหักภาษี', 'อัตรา (%)', 'ภาษีที่หัก (WHT)', 'ร้านค้า']];
           const items = subType === 'income' ? taxData.sales.filter(t => (t.whtRate || 0) > 0) : taxData.purchases.filter(t => (t.whtRate || 0) > 0);
-          data = items.map(t => [formatDate(t.date), t.invNo || t.taxInvoiceNo || '-', t.customerName || t.vendorName || t.description, t.category, t.net || t.amount, t.whtRate, (t.net || t.amount) * (t.whtRate / 100), t.shop]);
+          data = items.map(t => [formatDate(t.date), t.taxInvoiceNo || t.invNo || t.orderId || '-', t.customerName || t.vendorName || t.description, t.category, t.net || t.amount, t.whtRate, (t.net || t.amount) * (t.whtRate / 100), t.shop]);
        }
   
        exportToExcel(fileName, data, infoRows.concat(header));
@@ -2713,7 +2729,7 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
                                 (subType === 'income' ? taxData.sales : taxData.purchases).filter(t => t.vatType !== 'none').map((t, i) => (
                                     <tr key={i} className="hover:bg-slate-50 transition-colors text-left">
                                         <td className="p-4 text-slate-500 font-mono text-xs text-left">{formatDate(t.date)}</td>
-                                        <td className="p-4 font-mono text-xs font-bold text-slate-700 text-left">{t.invNo || t.taxInvoiceNo || t.orderId || '-'}</td>
+                                        <td className="p-4 font-mono text-xs font-bold text-slate-700 text-left">{t.taxInvoiceNo || t.invNo || t.orderId || '-'}</td>
                                         <td className="p-4 text-left">
                                            <div className="text-slate-700 font-medium text-left">{t.customerName || t.vendorName || t.description}</div>
                                            {t.vendorTaxId && <div className="text-[9px] text-slate-400 font-mono text-left">Tax ID: {t.vendorTaxId}</div>}
@@ -2765,7 +2781,7 @@ const TaxReport = ({ transactions, invoices, showToast }) => {
                                 (subType === 'income' ? taxData.sales : taxData.purchases).filter(t => (t.whtRate || 0) > 0).map((t, i) => (
                                     <tr key={i} className="hover:bg-slate-50 transition-colors text-left">
                                         <td className="p-4 text-slate-500 font-mono text-xs text-left">{formatDate(t.date)}</td>
-                                        <td className="p-4 font-mono text-xs font-bold text-slate-700 text-left">{t.invNo || t.taxInvoiceNo || t.orderId || '-'}</td>
+                                        <td className="p-4 font-mono text-xs font-bold text-slate-700 text-left">{t.taxInvoiceNo || t.invNo || t.orderId || '-'}</td>
                                         <td className="p-4 text-left">
                                            <div className="text-slate-700 font-medium text-left">{t.customerName || t.vendorName || t.description}</div>
                                            <div className="text-[9px] text-slate-400 text-left italic">{t.category}</div>
