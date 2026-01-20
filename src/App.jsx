@@ -595,9 +595,13 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
                             <div className="flex-1 text-left">
                                 <div className="text-xs font-bold text-slate-400 uppercase mb-1 text-left">ลูกค้า (Customer)</div>
                                 <p className="font-bold text-base mb-1 text-left">{transaction.customerName || 'ลูกค้าทั่วไป'}</p>
-                                {transaction.address && (
-                                    <p className="text-xs text-slate-600 mb-1 text-left">{transaction.address}</p>
-                                )}
+                                <div className="text-xs text-slate-600 mb-1 text-left">
+                                    {transaction.address ? (
+                                        <p>{transaction.address}</p>
+                                    ) : (
+                                        <p>{[transaction.custSubDistrict, transaction.custDistrict, transaction.custProvince, transaction.custZipCode].filter(Boolean).join(' ')}</p>
+                                    )}
+                                </div>
                                 {(transaction.taxId || transaction.branch) && (
                                     <p className="text-xs text-slate-700 text-left">
                                         <b>เลขผู้เสียภาษี:</b> {transaction.taxId || '-'} <b>สาขา:</b> {transaction.branch || '00000'}
@@ -610,15 +614,16 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
                             <tbody className="text-left">
                                 {items.map((it, idx) => {
                                     const rawPrice = it.amount || it.price || 0;
-                                    const displayPrice = isVatIncluded ? (rawPrice / 1.07) : rawPrice;
-                                    const qty = it.qty || 1;
+                                    const qty = Number(it.qty) || 1;
+                                    // หากรวม VAT ให้ดึงราคาต่อหน่วยก่อน VAT มาแสดง (ตรงตาม InvoiceGenerator)
+                                    const unitPrice = isVatIncluded ? (rawPrice / qty / 1.07) : (rawPrice / qty);
                                     return (
                                         <tr key={idx}>
                                             <td className="py-2 border-b border-slate-200 text-center align-top">{idx+1}</td>
                                             <td className="py-2 border-b border-slate-200 pl-4 align-top text-left">{it.desc}</td>
                                             <td className="py-2 border-b border-slate-200 text-center align-top">{qty}</td>
-                                            <td className="py-2 border-b border-slate-200 text-right pr-2 align-top">{formatCurrency(displayPrice)}</td>
-                                            <td className="py-2 border-b border-slate-200 text-right pr-2 font-bold align-top">{formatCurrency(qty * displayPrice)}</td>
+                                            <td className="py-2 border-b border-slate-200 text-right pr-2 align-top">{formatCurrency(unitPrice)}</td>
+                                            <td className="py-2 border-b border-slate-200 text-right pr-2 font-bold align-top">{formatCurrency(qty * unitPrice)}</td>
                                         </tr>
                                     );
                                 })}
@@ -638,7 +643,7 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
                                     <span className="font-bold text-slate-600 text-right">รวมเป็นเงิน (Sub-total)</span><span className="font-medium">{formatCurrency(preVat + discount)}</span>
                                     {discount > 0 && <><span className="font-bold text-rose-600 text-right">หักส่วนลด (Discount)</span><span className="text-rose-600">-{formatCurrency(discount)}</span></>}
                                     <span className="font-bold text-slate-600 text-right">มูลค่าก่อนภาษี (Pre-VAT)</span><span className="font-medium">{formatCurrency(preVat)}</span>
-                                    <span className="font-bold text-slate-600 text-right">ภาษีมูลค่าเพิ่ม (VAT 7%)</span><span className="font-medium">{formatCurrency(vat)}</span>
+                                    <span className="font-bold text-slate-600 text-right">ภาษีมูลค่าเพิ่ม 7% (VAT)</span><span className="font-medium">{formatCurrency(vat)}</span>
                                     <div className="col-span-2 border-t border-black my-1"></div>
                                     <span className="font-bold text-slate-900 text-lg text-right">จำนวนเงินทั้งสิ้น (Total)</span><span className="font-bold text-slate-900 text-lg">{formatCurrency(total)}</span>
                                     <div className="col-span-2 border-t-2 border-black my-0.5"></div>
@@ -909,7 +914,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                       desc: it.desc || 'สินค้า/บริการ',
                       qty: it.qty || 1,
                       unit: 'รายการ',
-                      price: parseFloat(it.amount) || 0
+                      price: (parseFloat(it.amount) / (Number(it.qty) || 1)) 
                   }));
 
                   if (parseFloat(formData.shippingAmount) > 0) {
@@ -1017,12 +1022,14 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
       const newItems = [...formData.items];
       newItems[index][field] = value;
       
-      if (field === 'desc') {
-          const matchedProduct = stockProducts.find(p => p.name === value);
+      if (field === 'desc' || field === 'qty') {
+          const matchedProduct = stockProducts.find(p => p.name === newItems[index].desc);
           if (matchedProduct && formData.type === 'income') {
-              newItems[index]['amount'] = matchedProduct.price || '';
+              const qty = Number(newItems[index].qty) || 0;
+              newItems[index]['amount'] = (matchedProduct.price * qty).toString();
           }
       }
+      
       if (index === 0 && field === 'desc') {
           setFormData({ ...formData, items: newItems, description: value });
       } else {
@@ -1439,7 +1446,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                                             {t.taxInvoiceNo && <span className="text-[10px] text-rose-500 font-bold text-left">Inv: {t.taxInvoiceNo}</span>}
                                         </div>
                                     </td>
-                                    <td className={`p-4 text-right font-bold text-right ${t.type==='income'?'text-emerald-600':'text-rose-600'}`}>
+                                    <td className={`p-4 text-right font-bold text-right ${t.type==='income'?'text-emerald-600':'text-rose-800'}`}>
                                         {t.type === 'income' ? '+' : '-'}{formatCurrency(t.total)}
                                         {t.platformFee > 0 && <div className="text-[9px] text-slate-400 font-normal mt-1 text-right">Fee: -{formatCurrency(t.platformFee)}</div>}
                                     </td>
@@ -2175,7 +2182,7 @@ const StockManager = ({ appId, showToast, transactions }) => {
       {/* View Details Modal */}
       {viewingProduct && (
         <div className="fixed inset-0 bg-black/60 z-[110] flex items-center justify-center p-4 font-sarabun text-left">
-            <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl animate-fadeIn relative">
+            <div className="bg-white rounded-3xl p-8 max-md w-full shadow-2xl animate-fadeIn relative">
                 <button onClick={()=>setViewingProduct(null)} className="absolute top-6 right-6 p-2 hover:bg-slate-100 rounded-full"><X/></button>
                 <div className="flex items-center gap-4 mb-6">
                     <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner"><Package size={28}/></div>
