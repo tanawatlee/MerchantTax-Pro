@@ -4,7 +4,7 @@ import {
   Download, Trash2, Edit, Menu, X, Printer, 
   CheckCircle, Loader, User, Package, Search, Clock, List, Settings, PlusCircle, Tag,
   Store, Code, Database, Image as ImageIcon, BarChart2, Activity, ShoppingBag, Eye, EyeOff, Inbox, XCircle, ArrowUp, ArrowDown,
-  ChevronDown, ChevronUp, AlertTriangle, Calendar, Info, MapPin, Building, Layers, ArrowRightLeft, Percent, Ticket
+  ChevronDown, ChevronUp, AlertTriangle, Calendar, Info, MapPin, Building, Layers, ArrowRightLeft, Percent, Ticket, Filter, RefreshCw
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -1555,7 +1555,13 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
   const [sellerProfiles, setSellerProfiles] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [deleteId, setDeleteId] = useState(null); 
+  
+  // New States for History Filters
   const [invoiceSearch, setInvoiceSearch] = useState(''); 
+  const [statusFilter, setStatusFilter] = useState('all'); // all, paid, unpaid
+  const [typeFilter, setTypeFilter] = useState('all'); // all, invoice, quotation
+  const [shopFilter, setShopFilter] = useState('all');
+
   const logoInputRef = useRef(null);
   const signatureInputRef = useRef(null);
   const [draftStatus, setDraftStatus] = useState(null);
@@ -1654,13 +1660,29 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
   const updateItem = (i, field, val) => { const newItems = [...invData.items]; newItems[i][field] = val; setInvData({...invData, items: newItems}); };
   const saveSellerProfile = async () => { if(!invData.sellerName) return; await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'seller_profiles'), { sellerName: invData.sellerName, sellerAddress: invData.sellerAddress, sellerTaxId: invData.sellerTaxId, sellerBranchId: invData.sellerBranchId, sellerPhone: invData.sellerPhone, sellerEmail: invData.sellerEmail, logo: invData.logo, signature: invData.signature, sellerSubDistrict: invData.sellerSubDistrict, sellerDistrict: invData.sellerDistrict, sellerProvince: invData.sellerProvince, sellerZipCode: invData.sellerZipCode }); showToast("บันทึกโปรไฟล์สำเร็จ", "success"); };
 
-  const filteredInvoices = invoices.filter(inv => {
-      const searchLower = (inv.invNo || '').toLowerCase();
-      const customerLower = (inv.customerName || '').toLowerCase();
-      const orderLower = (inv.orderId || '').toLowerCase();
+  const filteredInvoices = useMemo(() => {
+    return invoices.filter(inv => {
+      // 1. Text Search
       const searchInput = invoiceSearch.toLowerCase();
-      return searchLower.includes(searchInput) || customerLower.includes(searchInput) || orderLower.includes(searchInput);
-  });
+      const textMatch = !invoiceSearch || 
+        (inv.invNo || '').toLowerCase().includes(searchInput) || 
+        (inv.customerName || '').toLowerCase().includes(searchInput) || 
+        (inv.orderId || '').toLowerCase().includes(searchInput);
+      
+      if (!textMatch) return false;
+
+      // 2. Status Filter
+      if (statusFilter !== 'all' && inv.status !== statusFilter) return false;
+
+      // 3. Doc Type Filter
+      if (typeFilter !== 'all' && inv.type !== typeFilter) return false;
+
+      // 4. Shop Filter
+      if (shopFilter !== 'all' && inv.shop !== shopFilter) return false;
+
+      return true;
+    }).sort((a, b) => b.date - a.date);
+  }, [invoices, invoiceSearch, statusFilter, typeFilter, shopFilter]);
 
   return (
     <div className="w-full flex flex-col gap-8 relative h-full text-left font-sarabun">
@@ -1669,10 +1691,112 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
       {deleteId && (<div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 font-sarabun text-center"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl animate-fadeIn"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4"><Trash2 size={32} className="text-rose-500"/></div><h3 className="text-xl font-bold mb-6 text-slate-800">ลบเอกสารใบนี้?</h3><div className="flex gap-3 text-center"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button><button onClick={async ()=>{await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', deleteId)); setDeleteId(null); showToast("ลบเรียบร้อย", "success");}} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ยืนยันลบ</button></div></div></div>)}
       <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit print:hidden self-center"><button onClick={() => setMode('create')} className={"px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all " + (mode==='create'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700')}><FileText size={18}/> ออกเอกสาร</button><button onClick={() => setMode('history')} className={"px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all " + (mode==='history'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700')}><Clock size={18}/> ประวัติเอกสาร</button></div>
       {mode === 'history' ? (
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 animate-fadeIn h-full flex flex-col text-left">
-            <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-slate-700 text-xl flex-shrink-0 text-left">Document History</h3><div className="relative w-64"><Search className="absolute left-3 top-2.5 text-slate-400" size={16}/><input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm" placeholder="ค้นหาเอกสาร..." value={invoiceSearch} onChange={e => setInvoiceSearch(e.target.value)} /></div></div>
+        <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 animate-fadeIn h-full flex flex-col text-left">
+            <div className="flex flex-col gap-6 mb-6">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <h3 className="font-bold text-slate-700 text-xl flex-shrink-0 text-left">Document History</h3>
+                    <div className="relative w-full md:w-80">
+                        <Search className="absolute left-3 top-3 text-slate-400" size={18}/>
+                        <input className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-10 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100 transition-all" placeholder="เลขที่เอกสาร, ชื่อลูกค้า, Order ID..." value={invoiceSearch} onChange={e => setInvoiceSearch(e.target.value)} />
+                    </div>
+                </div>
+                
+                <div className="flex flex-wrap items-center gap-3 bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
+                    <div className="flex items-center gap-2">
+                        <Filter size={16} className="text-slate-400"/>
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider mr-2">Filters:</span>
+                    </div>
+                    
+                    <div className="flex flex-col gap-1">
+                        <label className="text-[9px] font-bold text-slate-400 uppercase px-1">Status</label>
+                        <select className="bg-white border border-slate-200 rounded-xl text-xs font-bold py-2 px-3 text-slate-600 outline-none focus:ring-2 focus:ring-indigo-50" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                            <option value="all">ทั้งหมด (ทุกสถานะ)</option>
+                            <option value="paid">ชำระแล้ว (Paid)</option>
+                            <option value="unpaid">ค้างชำระ (Unpaid)</option>
+                        </select>
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                        <label className="text-[9px] font-bold text-slate-400 uppercase px-1">Doc Type</label>
+                        <select className="bg-white border border-slate-200 rounded-xl text-xs font-bold py-2 px-3 text-slate-600 outline-none focus:ring-2 focus:ring-indigo-50" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+                            <option value="all">ทั้งหมด (ทุกประเภท)</option>
+                            <option value="invoice">ใบกำกับภาษี (Invoice)</option>
+                            <option value="quotation">ใบเสนอราคา (Quotation)</option>
+                        </select>
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                        <label className="text-[9px] font-bold text-slate-400 uppercase px-1">Shop / Branch</label>
+                        <select className="bg-white border border-slate-200 rounded-xl text-xs font-bold py-2 px-3 text-slate-600 outline-none focus:ring-2 focus:ring-indigo-50" value={shopFilter} onChange={e => setShopFilter(e.target.value)}>
+                            <option value="all">ทั้งหมด (ทุกสาขา)</option>
+                            {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="ml-auto">
+                        <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-3 py-1.5 rounded-full">พบ {filteredInvoices.length} รายการ</span>
+                    </div>
+                </div>
+            </div>
+
             <div className="rounded-2xl border border-slate-100 overflow-x-auto flex-1 custom-scrollbar text-left">
-                <table className="w-full text-sm text-left whitespace-nowrap text-left"><thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider text-xs sticky top-0 z-10 text-left"><tr><th className="p-4 text-left">Date</th><th className="p-4 text-left">No.</th><th className="p-4 text-left">Customer</th><th className="p-4 text-right">Total</th><th className="p-4 text-center">Status</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-50 text-left">{filteredInvoices.map((inv, idx) => (<tr key={inv.id + "-" + idx} className="hover:bg-indigo-50/30 even:bg-slate-50/50 text-left"><td className="p-4 text-slate-500 text-xs text-left">{formatDate(inv.date)}</td><td className="p-4 text-slate-700 font-bold text-left">{inv.invNo}</td><td className="p-4 text-left">{inv.customerName}</td><td className="p-4 text-right font-bold">{formatCurrency(inv.total)}</td><td className="p-4 text-center"><button onClick={async ()=>{await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', inv.id), { status: inv.status === 'paid' ? 'unpaid' : 'paid' });}} className={"px-3 py-1 rounded-full text-[10px] font-bold border transition-all " + (inv.status === 'paid' ? 'bg-emerald-100 text-emerald-600 border-emerald-200' : 'bg-orange-100 text-orange-600 border-orange-200')}>{inv.status === 'paid' ? 'Paid' : 'Unpaid'}</button></td><td className="p-4 text-center"><div className="flex justify-center gap-2 text-center"><button onClick={() => handleEditInvoice(inv)} className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-100 transition-all flex items-center gap-1 text-center"><Edit size={12}/> Edit/Print</button><button onClick={()=>setDeleteId(inv.id)} className="p-1.5 text-slate-300 hover:text-rose-500 text-center"><Trash2 size={14}/></button></div></td></tr>))}</tbody></table>
+                <table className="w-full text-sm text-left whitespace-nowrap text-left">
+                    <thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider text-xs sticky top-0 z-10 text-left">
+                        <tr>
+                            <th className="p-4 text-left">Date</th>
+                            <th className="p-4 text-left">No.</th>
+                            <th className="p-4 text-left">Customer / Shop</th>
+                            <th className="p-4 text-right">Total</th>
+                            <th className="p-4 text-center">Status</th>
+                            <th className="p-4 text-center">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50 text-left">
+                        {filteredInvoices.map((inv, idx) => (
+                            <tr key={inv.id + "-" + idx} className="hover:bg-indigo-50/30 even:bg-slate-50/50 text-left">
+                                <td className="p-4 text-slate-500 text-xs text-left">{formatDate(inv.date)}</td>
+                                <td className="p-4">
+                                    <div className="flex flex-col">
+                                        <span className="text-slate-700 font-bold">{inv.invNo}</span>
+                                        <span className={`text-[9px] font-bold uppercase ${inv.type === 'quotation' ? 'text-amber-500' : 'text-indigo-400'}`}>{inv.type}</span>
+                                    </div>
+                                </td>
+                                <td className="p-4 text-left">
+                                    <div className="flex flex-col">
+                                        <span className="font-medium text-slate-800">{inv.customerName}</span>
+                                        <span className="text-[10px] text-slate-400 flex items-center gap-1"><Store size={10}/> {inv.shop || 'ไม่ระบุสาขา'}</span>
+                                    </div>
+                                </td>
+                                <td className="p-4 text-right font-bold text-slate-800">{formatCurrency(inv.total)}</td>
+                                <td className="p-4 text-center">
+                                    <button 
+                                        onClick={async ()=>{await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', inv.id), { status: inv.status === 'paid' ? 'unpaid' : 'paid' });}} 
+                                        className={"px-3 py-1 rounded-full text-[10px] font-bold border transition-all " + (inv.status === 'paid' ? 'bg-emerald-100 text-emerald-600 border-emerald-200' : 'bg-orange-100 text-orange-600 border-orange-200')}
+                                    >
+                                        {inv.status === 'paid' ? 'Paid' : 'Unpaid'}
+                                    </button>
+                                </td>
+                                <td className="p-4 text-center">
+                                    <div className="flex justify-center gap-2 text-center">
+                                        <button onClick={() => handleEditInvoice(inv)} className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-100 transition-all flex items-center gap-1 text-center"><Edit size={12}/> Edit/Print</button>
+                                        <button onClick={()=>setDeleteId(inv.id)} className="p-1.5 text-slate-300 hover:text-rose-500 text-center"><Trash2 size={14}/></button>
+                                    </div>
+                                </td>
+                            </tr>
+                        ))}
+                        {filteredInvoices.length === 0 && (
+                            <tr>
+                                <td colSpan="6" className="p-20 text-center text-slate-300">
+                                    <div className="flex flex-col items-center gap-3">
+                                        <Search size={40} className="opacity-20"/>
+                                        <p className="font-bold">ไม่พบข้อมูลที่ตรงกับเงื่อนไขการค้นหา</p>
+                                        <button onClick={() => {setInvoiceSearch(''); setStatusFilter('all'); setTypeFilter('all'); setShopFilter('all');}} className="text-xs text-indigo-500 font-bold hover:underline">ล้างตัวกรองทั้งหมด</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
             </div>
         </div>
       ) : (
@@ -1738,7 +1862,7 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
   );
 };
 
-const StockManager = ({ appId, showToast }) => {
+const StockManager = ({ appId, transactions, showToast }) => {
   const [products, setProducts] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [showAdjModal, setShowAdjModal] = useState(false);
@@ -1746,6 +1870,9 @@ const StockManager = ({ appId, showToast }) => {
   const [editingProduct, setEditingProduct] = useState(null);
   const [inventoryLots, setInventoryLots] = useState([]); 
   const [expandedProductId, setExpandedProductId] = useState(null);
+  const [viewMode, setViewMode] = useState('inventory'); // inventory | report
+  const [reportMonth, setReportMonth] = useState(new Date().getMonth());
+  const [reportYear, setReportYear] = useState(new Date().getFullYear());
   const productImgRef = useRef(null);
   
   const initialProduct = { name: '', sku: '', category: CONSTANTS.CATEGORIES.INCOME[0], cost: '', price: '', stock: 0, image: '', expiryDate: '' };
@@ -1763,6 +1890,63 @@ const StockManager = ({ appId, showToast }) => {
     });
     return () => { unsubProducts(); unsubLots(); };
   }, [appId]);
+
+  const movementReport = useMemo(() => {
+    const startDate = new Date(reportYear, reportMonth, 1);
+    const endDate = new Date(reportYear, reportMonth + 1, 0, 23, 59, 59);
+
+    return products.map(p => {
+      // 1. รับเข้า (Purchases) ในช่วงเวลา
+      const inflows = transactions.filter(t => 
+        t.type === 'expense' && 
+        normalizeDate(t.date) >= startDate && normalizeDate(t.date) <= endDate &&
+        (Array.isArray(t.items) ? t.items.some(it => it.desc === p.name) : t.description === p.name)
+      ).reduce((sum, t) => {
+        const qty = Array.isArray(t.items) 
+          ? t.items.filter(it => it.desc === p.name).reduce((s, it) => s + (Number(it.qty) || 0), 0)
+          : (Number(t.qty) || 1);
+        return sum + qty;
+      }, 0);
+
+      // 2. จ่ายออก (Sales) ในช่วงเวลา
+      const outflows = transactions.filter(t => 
+        t.type === 'income' && 
+        normalizeDate(t.date) >= startDate && normalizeDate(t.date) <= endDate &&
+        (Array.isArray(t.items) ? t.items.some(it => it.desc === p.name) : t.description === p.name)
+      ).reduce((sum, t) => {
+        const qty = Array.isArray(t.items) 
+          ? t.items.filter(it => it.desc === p.name).reduce((s, it) => s + (Number(it.qty) || 0), 0)
+          : (Number(t.qty) || 1);
+        return sum + qty;
+      }, 0);
+
+      // 3. ปรับปรุง/ชำรุด (Adjustments) ในช่วงเวลา
+      const adjusts = transactions.filter(t => 
+        t.type === 'expense' && 
+        t.category === 'สินค้าเสียหาย/หมดอายุ' &&
+        normalizeDate(t.date) >= startDate && normalizeDate(t.date) <= endDate &&
+        (t.description?.includes(p.name))
+      ).reduce((sum, t) => sum + (Number(t.qty) || 1), 0);
+
+      // 4. คำนวณยอดยกมา (Beginning) - ใช้วิธีคำนวณจากยอดปัจจุบันย้อนกลับไป
+      // (ยอดยกมา = ยอดปัจจุบัน - รับเข้าสุทธิทั้งหมดหลังจากจุดเริ่ม + จ่ายออกสุทธิทั้งหมดหลังจากจุดเริ่ม)
+      const afterStartDateTransactions = transactions.filter(t => normalizeDate(t.date) >= startDate);
+      const afterIn = afterStartDateTransactions.filter(t => t.type === 'expense' && t.category !== 'สินค้าเสียหาย/หมดอายุ' && (Array.isArray(t.items) ? t.items.some(it => it.desc === p.name) : t.description === p.name)).reduce((sum, t) => sum + (Array.isArray(t.items) ? t.items.filter(it => it.desc === p.name).reduce((s, it) => s + (Number(it.qty) || 0), 0) : 1), 0);
+      const afterOut = afterStartDateTransactions.filter(t => t.type === 'income' && (Array.isArray(t.items) ? t.items.some(it => it.desc === p.name) : t.description === p.name)).reduce((sum, t) => sum + (Array.isArray(t.items) ? t.items.filter(it => it.desc === p.name).reduce((s, it) => s + (Number(it.qty) || 0), 0) : 1), 0);
+      const afterAdj = afterStartDateTransactions.filter(t => t.type === 'expense' && t.category === 'สินค้าเสียหาย/หมดอายุ' && t.description?.includes(p.name)).reduce((sum, t) => sum + (Number(t.qty) || 1), 0);
+
+      const beginning = (p.stock || 0) + afterOut + afterAdj - afterIn;
+
+      return {
+        ...p,
+        beginning,
+        inflow: inflows,
+        outflow: outflows,
+        adjust: adjusts,
+        ending: beginning + inflows - outflows - adjusts
+      };
+    });
+  }, [products, transactions, reportMonth, reportYear]);
 
   const handleImgUpload = (e) => {
     const file = e.target.files[0];
@@ -1816,12 +2000,20 @@ const StockManager = ({ appId, showToast }) => {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', adjData.productId), { stock: increment(-adjData.qty) });
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense'), { 
         type: 'expense', category: 'สินค้าเสียหาย/หมดอายุ', description: `ตัดสต็อกเสีย: ${product.name} (${adjData.reason})`, 
-        total: 0, date: new Date(), note: adjData.note, createdAt: serverTimestamp() 
+        total: 0, qty: Number(adjData.qty), date: new Date(), note: adjData.note, createdAt: serverTimestamp() 
       });
 
       showToast("ตัดสต็อกเรียบร้อย", "success");
       setShowAdjModal(false);
     } catch (e) { showToast("ล้มเหลว", "error"); }
+  };
+
+  const exportInventoryReport = () => {
+    const months = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+    const header = [['ลำดับ', 'SKU', 'ชื่อสินค้า', 'หมวดหมู่', 'ยอดยกมา', 'รับเข้า', 'จ่ายออก', 'ชำรุด/ปรับปรุง', 'ยอดคงเหลือ']];
+    const data = movementReport.map((p, i) => [i + 1, p.sku, p.name, p.category, p.beginning, p.inflow, p.outflow, p.adjust, p.ending]);
+    const info = [[`รายงานความเคลื่อนไหวสินค้า ประจำเดือน ${months[reportMonth]} พ.ศ. ${reportYear + 543}`], []];
+    exportToExcel(`Inventory_Report_${months[reportMonth]}_${reportYear}.xlsx`, data, info.concat(header));
   };
 
   const filteredProducts = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || p.sku?.toLowerCase().includes(search.toLowerCase()) || p.category?.toLowerCase().includes(search.toLowerCase()));
@@ -1834,9 +2026,13 @@ const StockManager = ({ appId, showToast }) => {
           <h3 className="font-bold text-slate-800 text-2xl flex items-center gap-2">
             <Package className="text-indigo-600" size={28}/> FIFO Inventory Pro
           </h3>
-          <p className="text-slate-500 text-sm">เจาะลึกล็อตต้นทุนรายสินค้า (First-In, First-Out Tracking)</p>
+          <p className="text-slate-500 text-sm">เจาะลึกล็อตต้นทุนรายสินค้าและการเคลื่อนไหว (Tax Ready)</p>
         </div>
         <div className="flex gap-2">
+          <div className="bg-slate-100 p-1 rounded-2xl flex mr-2">
+            <button onClick={() => setViewMode('inventory')} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${viewMode === 'inventory' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>คลังปัจจุบัน</button>
+            <button onClick={() => setViewMode('report')} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${viewMode === 'report' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>รายงาน In-Out</button>
+          </div>
           <button onClick={() => setShowAdjModal(true)} className="bg-rose-50 text-rose-600 px-5 py-2.5 rounded-2xl font-bold flex items-center gap-2 border border-rose-100 hover:bg-rose-100 transition-all active:scale-95">
             <AlertTriangle size={18}/> ตัดสต็อกเสีย
           </button>
@@ -1846,149 +2042,217 @@ const StockManager = ({ appId, showToast }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div className="bg-indigo-50/40 p-6 rounded-3xl border border-indigo-100 flex items-center gap-5">
-          <div className="p-4 bg-indigo-100 rounded-2xl text-indigo-600 shadow-inner"><Database size={24}/></div>
-          <div><p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">มูลค่าทุน FIFO</p><p className="text-2xl font-bold text-indigo-700">{formatCurrency(totalVal)}</p></div>
-        </div>
-        <div className="bg-emerald-50/40 p-6 rounded-3xl border border-emerald-100 flex items-center gap-5">
-          <div className="p-4 bg-emerald-100 rounded-2xl text-emerald-600 shadow-inner"><ShoppingBag size={24}/></div>
-          <div><p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">สินค้าในคลัง</p><p className="text-2xl font-bold text-emerald-700">{products.length} <span className="text-sm font-normal">รายการ</span></p></div>
-        </div>
-        <div className="bg-rose-50/40 p-6 rounded-3xl border border-rose-100 flex items-center gap-5">
-          <div className="p-4 bg-rose-100 rounded-2xl text-rose-600 shadow-inner"><AlertTriangle size={24}/></div>
-          <div><p className="text-[10px] font-bold text-rose-400 uppercase tracking-wider mb-1">ใกล้หมดอายุ (30 วัน)</p><h4 className="text-2xl font-bold text-rose-700">{inventoryLots.filter(l => l.remainingQty > 0 && l.expiryDate && new Date(l.expiryDate) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)).length}</h4></div>
-        </div>
-      </div>
+      {viewMode === 'inventory' ? (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="bg-indigo-50/40 p-6 rounded-3xl border border-indigo-100 flex items-center gap-5">
+              <div className="p-4 bg-indigo-100 rounded-2xl text-indigo-600 shadow-inner"><Database size={24}/></div>
+              <div><p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">มูลค่าทุน FIFO</p><p className="text-2xl font-bold text-indigo-700">{formatCurrency(totalVal)}</p></div>
+            </div>
+            <div className="bg-emerald-50/40 p-6 rounded-3xl border border-emerald-100 flex items-center gap-5">
+              <div className="p-4 bg-emerald-100 rounded-2xl text-emerald-600 shadow-inner"><ShoppingBag size={24}/></div>
+              <div><p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">สินค้าในคลัง</p><p className="text-2xl font-bold text-emerald-700">{products.length} <span className="text-sm font-normal">รายการ</span></p></div>
+            </div>
+            <div className="bg-rose-50/40 p-6 rounded-3xl border border-rose-100 flex items-center gap-5">
+              <div className="p-4 bg-rose-100 rounded-2xl text-rose-600 shadow-inner"><AlertTriangle size={24}/></div>
+              <div><p className="text-[10px] font-bold text-rose-400 uppercase tracking-wider mb-1">ใกล้หมดอายุ (30 วัน)</p><h4 className="text-2xl font-bold text-rose-700">{inventoryLots.filter(l => l.remainingQty > 0 && l.expiryDate && new Date(l.expiryDate) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)).length}</h4></div>
+            </div>
+          </div>
 
-      <div className="relative mb-6">
-        <Search className="absolute left-4 top-3.5 text-slate-400" size={20}/>
-        <input className="w-full bg-slate-50 border-2 border-slate-100 rounded-3xl pl-12 pr-4 py-3 text-sm font-medium focus:ring-2 focus:ring-indigo-100 focus:border-indigo-200 outline-none transition-all" placeholder="ค้นหาชื่อสินค้าเพื่อเจาะดูรายละเอียดล็อต..." value={search} onChange={e => setSearch(e.target.value)} />
-      </div>
+          <div className="relative mb-6">
+            <Search className="absolute left-4 top-3.5 text-slate-400" size={20}/>
+            <input className="w-full bg-slate-50 border-2 border-slate-100 rounded-3xl pl-12 pr-4 py-3 text-sm font-medium focus:ring-2 focus:ring-indigo-100 focus:border-indigo-200 outline-none transition-all" placeholder="ค้นหาชื่อสินค้าเพื่อเจาะดูรายละเอียดล็อต..." value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
 
-      <div className="flex-1 overflow-auto rounded-3xl border border-slate-100 custom-scrollbar shadow-sm bg-white">
-        <table className="w-full text-sm text-left border-collapse">
-          <thead className="bg-slate-50/50 text-slate-500 font-bold uppercase text-[10px] sticky top-0 z-20 border-b border-slate-100">
-            <tr>
-              <th className="p-5 w-16"></th>
-              <th className="p-5">สินค้า</th>
-              <th className="p-5">หมวดหมู่</th>
-              <th className="p-5 text-right">ราคาขาย</th>
-              <th className="p-5 text-center">คงเหลือรวม</th>
-              <th className="p-5 text-center">จัดการ</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-50">
-            {filteredProducts.map((p) => {
-              const isExpanded = expandedProductId === p.id;
-              const productLots = inventoryLots.filter(l => l.productId === p.id && l.remainingQty > 0).sort((a,b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
-              
-              return (
-                <React.Fragment key={p.id}>
-                  <tr onClick={() => setExpandedProductId(isExpanded ? null : p.id)} className={`cursor-pointer transition-all ${isExpanded ? 'bg-indigo-50/30' : 'hover:bg-slate-50'}`}>
-                    <td className="p-5 text-center">
-                      {isExpanded ? <ChevronUp className="text-indigo-600" size={20}/> : <ChevronDown className="text-slate-300" size={20}/>}
-                    </td>
-                    <td className="p-5">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-slate-100 overflow-hidden flex items-center justify-center border border-slate-100">
-                          {p.image ? <img src={p.image} className="w-full h-full object-cover" /> : <ImageIcon className="text-slate-300" size={16}/>}
-                        </div>
-                        <div>
-                          <div className="font-bold text-slate-700">{p.name}</div>
-                          <div className="text-[10px] text-slate-400 font-mono">{p.sku}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-5">
-                      <span className="bg-white border border-slate-200 text-slate-500 px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-tighter">{p.category}</span>
-                    </td>
-                    <td className="p-5 text-right font-bold text-indigo-600">{formatCurrency(p.price)}</td>
-                    <td className="p-5 text-center">
-                      <span className={`px-3 py-1 rounded-full font-bold text-[10px] ${p.stock < 10 ? 'bg-orange-100 text-orange-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                        {p.stock}
-                      </span>
-                    </td>
-                    <td className="p-5 text-center">
-                      <div className="flex justify-center gap-1" onClick={e => e.stopPropagation()}>
-                        <button onClick={() => { setEditingProduct(p); setFormData(p); setShowModal(true); }} className="p-2 text-slate-300 hover:text-indigo-600 transition-all"><Edit size={18}/></button>
-                        <button onClick={async () => { if(confirm("ลบข้อมูลสินค้านี้ทั้งหมด?")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', p.id)); }} className="p-2 text-slate-300 hover:text-rose-600 transition-all"><Trash2 size={18}/></button>
-                      </div>
-                    </td>
-                  </tr>
+          <div className="flex-1 overflow-auto rounded-3xl border border-slate-100 custom-scrollbar shadow-sm bg-white">
+            <table className="w-full text-sm text-left border-collapse">
+              <thead className="bg-slate-50/50 text-slate-500 font-bold uppercase text-[10px] sticky top-0 z-20 border-b border-slate-100">
+                <tr>
+                  <th className="p-5 w-16"></th>
+                  <th className="p-5">สินค้า</th>
+                  <th className="p-5">หมวดหมู่</th>
+                  <th className="p-5 text-right">ราคาขาย</th>
+                  <th className="p-5 text-center">คงเหลือรวม</th>
+                  <th className="p-5 text-center">จัดการ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {filteredProducts.map((p) => {
+                  const isExpanded = expandedProductId === p.id;
+                  const productLots = inventoryLots.filter(l => l.productId === p.id && l.remainingQty > 0).sort((a,b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
                   
-                  {isExpanded && (
-                    <tr className="bg-slate-50/50">
-                      <td colSpan="6" className="p-0 border-b border-indigo-100">
-                        <div className="p-6 pl-20 animate-fadeIn space-y-4">
-                          <div className="flex items-center gap-2 text-xs font-bold text-indigo-500">
-                            <Info size={14}/> รายละเอียดล็อตสินค้า (FIFO Queue)
+                  return (
+                    <React.Fragment key={p.id}>
+                      <tr onClick={() => setExpandedProductId(isExpanded ? null : p.id)} className={`cursor-pointer transition-all ${isExpanded ? 'bg-indigo-50/30' : 'hover:bg-slate-50'}`}>
+                        <td className="p-5 text-center">
+                          {isExpanded ? <ChevronUp className="text-indigo-600" size={20}/> : <ChevronDown className="text-slate-300" size={20}/>}
+                        </td>
+                        <td className="p-5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-slate-100 overflow-hidden flex items-center justify-center border border-slate-100">
+                              {p.image ? <img src={p.image} className="w-full h-full object-cover" /> : <ImageIcon className="text-slate-300" size={16}/>}
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-700">{p.name}</div>
+                              <div className="text-[10px] text-slate-400 font-mono">{p.sku}</div>
+                            </div>
                           </div>
-                          <div className="grid grid-cols-1 gap-2">
-                            {productLots.map((lot, idx) => {
-                              const isExpiring = lot.expiryDate && new Date(lot.expiryDate) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-                              return (
-                                <div key={lot.id} className="flex flex-wrap items-center justify-between bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group">
-                                  {idx === 0 && <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500" title="ล็อตที่กำลังถูกระบายออกเป็นอันดับแรก"></div>}
-                                  <div className="flex gap-8 items-center">
-                                    <div className="text-[10px] font-bold text-slate-400">
-                                      <p className="uppercase">ลำดับล็อต</p>
-                                      <p className="text-sm text-slate-700 font-mono">#{idx + 1} {idx === 0 && <span className="text-[8px] bg-emerald-50 text-emerald-600 px-1 rounded ml-1">TOP</span>}</p>
-                                    </div>
-                                    <div className="text-[10px] font-bold text-slate-400">
-                                      <p className="uppercase">วันที่ทำรายการ</p>
-                                      <p className="text-xs text-slate-600">{formatDate(lot.createdAt)}</p>
-                                    </div>
-                                    <div className="text-[10px] font-bold text-slate-400">
-                                      <p className="uppercase">ทุน/ชิ้น</p>
-                                      <p className="text-xs text-slate-600">{formatCurrency(lot.costPerUnit)}</p>
-                                    </div>
-                                    <div className="text-[10px] font-bold text-slate-400">
-                                      <p className="uppercase">วันหมดอายุ</p>
-                                      <p className={`text-xs font-bold ${isExpiring ? 'text-rose-500' : 'text-slate-600'}`}>
-                                        {lot.expiryDate ? formatDate(new Date(lot.expiryDate)) : '-'}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center gap-6">
-                                    <div className="text-right">
-                                      <p className="text-[9px] font-bold text-slate-400 uppercase">คงเหลือในล็อต</p>
-                                      <p className="text-lg font-bold text-indigo-600">{lot.remainingQty} <span className="text-[10px] text-slate-300 font-normal">/ {lot.initialQty}</span></p>
-                                    </div>
-                                    <div className="text-right border-l pl-6 border-slate-100">
-                                      <p className="text-[9px] font-bold text-slate-400 uppercase">มูลค่าต้นทุน</p>
-                                      <p className="text-sm font-bold text-slate-800">{formatCurrency(lot.remainingQty * lot.costPerUnit)}</p>
-                                    </div>
-                                  </div>
-                                </div>
-                              )
-                            })}
-                            {productLots.length === 0 && (
-                              <div className="text-center py-6 text-slate-400 italic text-xs">ไม่มีล็อตสินค้าคงเหลือในขณะนี้</div>
-                            )}
+                        </td>
+                        <td className="p-5">
+                          <span className="bg-white border border-slate-200 text-slate-500 px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-tighter">{p.category}</span>
+                        </td>
+                        <td className="p-5 text-right font-bold text-indigo-600">{formatCurrency(p.price)}</td>
+                        <td className="p-5 text-center">
+                          <span className={`px-3 py-1 rounded-full font-bold text-[10px] ${p.stock < 10 ? 'bg-orange-100 text-orange-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                            {p.stock}
+                          </span>
+                        </td>
+                        <td className="p-5 text-center">
+                          <div className="flex justify-center gap-1" onClick={e => e.stopPropagation()}>
+                            <button onClick={() => { setEditingProduct(p); setFormData(p); setShowModal(true); }} className="p-2 text-slate-300 hover:text-indigo-600 transition-all"><Edit size={18}/></button>
+                            <button onClick={async () => { if(confirm("ลบข้อมูลสินค้านี้ทั้งหมด?")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', p.id)); }} className="p-2 text-slate-300 hover:text-rose-600 transition-all"><Trash2 size={18}/></button>
                           </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+                        </td>
+                      </tr>
+                      
+                      {isExpanded && (
+                        <tr className="bg-slate-50/50">
+                          <td colSpan="6" className="p-0 border-b border-indigo-100">
+                            <div className="p-6 pl-20 animate-fadeIn space-y-4">
+                              <div className="flex items-center gap-2 text-xs font-bold text-indigo-500">
+                                <Info size={14}/> รายละเอียดล็อตสินค้า (FIFO Queue)
+                              </div>
+                              <div className="grid grid-cols-1 gap-2">
+                                {productLots.map((lot, idx) => {
+                                  const isExpiring = lot.expiryDate && new Date(lot.expiryDate) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+                                  return (
+                                    <div key={lot.id} className="flex flex-wrap items-center justify-between bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group">
+                                      {idx === 0 && <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500" title="ล็อตที่กำลังถูกระบายออกเป็นอันดับแรก"></div>}
+                                      <div className="flex gap-8 items-center">
+                                        <div className="text-[10px] font-bold text-slate-400">
+                                          <p className="uppercase">ลำดับล็อต</p>
+                                          <p className="text-sm text-slate-700 font-mono">#{idx + 1} {idx === 0 && <span className="text-[8px] bg-emerald-50 text-emerald-600 px-1 rounded ml-1">TOP</span>}</p>
+                                        </div>
+                                        <div className="text-[10px] font-bold text-slate-400">
+                                          <p className="uppercase">วันที่ทำรายการ</p>
+                                          <p className="text-xs text-slate-600">{formatDate(lot.createdAt)}</p>
+                                        </div>
+                                        <div className="text-[10px] font-bold text-slate-400">
+                                          <p className="uppercase">ทุน/ชิ้น</p>
+                                          <p className="text-xs text-slate-600">{formatCurrency(lot.costPerUnit)}</p>
+                                        </div>
+                                        <div className="text-[10px] font-bold text-slate-400">
+                                          <p className="uppercase">วันหมดอายุ</p>
+                                          <p className={`text-xs font-bold ${isExpiring ? 'text-rose-500' : 'text-slate-600'}`}>
+                                            {lot.expiryDate ? formatDate(new Date(lot.expiryDate)) : '-'}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-6">
+                                        <div className="text-right">
+                                          <p className="text-[9px] font-bold text-slate-400 uppercase">คงเหลือในล็อต</p>
+                                          <p className="text-lg font-bold text-indigo-600">{lot.remainingQty} <span className="text-[10px] text-slate-300 font-normal">/ {lot.initialQty}</span></p>
+                                        </div>
+                                        <div className="text-right border-l pl-6 border-slate-100">
+                                          <p className="text-[9px] font-bold text-slate-400 uppercase">มูลค่าต้นทุน</p>
+                                          <p className="text-sm font-bold text-slate-800">{formatCurrency(lot.remainingQty * lot.costPerUnit)}</p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                                {productLots.length === 0 && (
+                                  <div className="text-center py-6 text-slate-400 italic text-xs">ไม่มีล็อตสินค้าคงเหลือในขณะนี้</div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <div className="flex-1 flex flex-col min-h-0 animate-fadeIn">
+          <div className="flex flex-wrap items-center justify-between mb-6 gap-4 bg-slate-50 p-4 rounded-3xl border border-slate-100">
+            <div className="flex items-center gap-4">
+              <div className="flex flex-col">
+                <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">เดือนรายงาน</span>
+                <select value={reportMonth} onChange={e => setReportMonth(Number(e.target.value))} className="bg-white border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-700 shadow-sm">
+                  {['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'].map((m, i) => <option key={i} value={i}>{m}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[10px] font-bold text-slate-400 uppercase ml-1">ปีภาษี</span>
+                <select value={reportYear} onChange={e => setReportYear(Number(e.target.value))} className="bg-white border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-700 shadow-sm">
+                  {[2024, 2025, 2026].map(y => <option key={y} value={y}>{y + 543}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={exportInventoryReport} className="bg-emerald-50 text-emerald-600 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border border-emerald-100 hover:bg-emerald-100 transition-all shadow-sm">
+                <Download size={16}/> Export Excel
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-auto rounded-3xl border border-slate-100 custom-scrollbar shadow-sm bg-white">
+            <table className="w-full text-xs text-left border-collapse">
+              <thead className="bg-slate-800 text-white font-bold uppercase text-[9px] sticky top-0 z-20">
+                <tr>
+                  <th className="p-4 border-r border-slate-700">SKU / ชื่อสินค้า</th>
+                  <th className="p-4 border-r border-slate-700 text-center bg-slate-700">ยอดยกมา<br/>(Beginning)</th>
+                  <th className="p-4 border-r border-slate-700 text-center text-emerald-300">รับเข้า<br/>(In)</th>
+                  <th className="p-4 border-r border-slate-700 text-center text-rose-300">จ่ายออก<br/>(Out)</th>
+                  <th className="p-4 border-r border-slate-700 text-center text-orange-300">ชำรุด/ปรับปรุง<br/>(Adj)</th>
+                  <th className="p-4 text-center bg-indigo-900">คงเหลือปลายงวด<br/>(Ending)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {movementReport.map(p => (
+                  <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="p-4 border-r border-slate-50">
+                      <div className="font-bold text-slate-700">{p.name}</div>
+                      <div className="text-[10px] text-slate-400 font-mono">{p.sku}</div>
+                    </td>
+                    <td className="p-4 border-r border-slate-50 text-center font-bold text-slate-500 bg-slate-50/30">{p.beginning}</td>
+                    <td className="p-4 border-r border-slate-50 text-center font-bold text-emerald-600">{p.inflow > 0 ? `+${p.inflow}` : '-'}</td>
+                    <td className="p-4 border-r border-slate-50 text-center font-bold text-rose-600">{p.outflow > 0 ? `-${p.outflow}` : '-'}</td>
+                    <td className="p-4 border-r border-slate-50 text-center font-bold text-orange-600">{p.adjust > 0 ? `-${p.adjust}` : '-'}</td>
+                    <td className="p-4 text-center font-bold text-indigo-700 bg-indigo-50/20">{p.ending}</td>
+                  </tr>
+                ))}
+                {movementReport.length === 0 && (
+                  <tr><td colSpan="6" className="p-20 text-center text-slate-300">ไม่มีข้อมูลสินค้าในคลัง</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4 p-4 bg-indigo-50 rounded-2xl border border-indigo-100 flex items-start gap-3">
+            <Info className="text-indigo-500 shrink-0" size={18}/>
+            <p className="text-[11px] text-indigo-700 leading-relaxed">
+              <strong>หมายเหตุสำหรับการยื่นภาษี:</strong> รายงานความเคลื่อนไหวสินค้านี้คำนวณจากธุรกรรมจริงที่ถูกบันทึกในระบบ (Inflows จากหน้ารับสินค้า / Outflows จากหน้าขาย) 
+              คุณควรทำการตรวจนับสต็อกจริง (Physical Count) อย่างน้อยเดือนละครั้งเพื่อปรับปรุงยอดให้ตรงกับความเป็นจริงหากมีการสูญหายหรือชำรุดที่ไม่ได้บันทึกไว้.
+            </p>
+          </div>
+        </div>
+      )}
 
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
           <div className="bg-white rounded-[40px] p-10 w-full max-w-lg shadow-2xl relative animate-in zoom-in-95 duration-200">
             <h3 className="text-2xl font-bold mb-8 flex items-center gap-2">{editingProduct ? <Edit/> : <PlusCircle/>} ข้อมูลสินค้าใหม่</h3>
             <div className="space-y-6 mb-10">
-               <div className="flex gap-6 items-start">
-                  <div onClick={() => productImgRef.current?.click()} className="w-28 h-28 rounded-[24px] bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:bg-indigo-50 transition-all overflow-hidden relative shrink-0 group">
+                <div className="flex gap-6 items-start">
+                   <div onClick={() => productImgRef.current?.click()} className="w-28 h-28 rounded-[24px] bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:bg-indigo-50 transition-all overflow-hidden relative shrink-0 group">
                     {formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : <><ImageIcon className="text-slate-300" size={28}/><p className="text-[9px] font-bold text-slate-400 mt-2">ใส่ภาพ</p></>}
                     <input type="file" ref={productImgRef} hidden accept="image/*" onChange={handleImgUpload} />
-                  </div>
-                  <div className="flex-1 space-y-4">
+                   </div>
+                   <div className="flex-1 space-y-4">
                     <div>
                       <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">ชื่อสินค้าปลีก</label>
                       <input className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="ชื่อสินค้า..." />
@@ -1997,9 +2261,9 @@ const StockManager = ({ appId, showToast }) => {
                       <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Auto SKU</label>
                       <input className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1" value={formData.sku} onChange={e => setFormData({ ...formData, sku: e.target.value })} placeholder="ว่างไว้เพื่อเจนรหัสออโต้" />
                     </div>
-                  </div>
-               </div>
-               <div className="grid grid-cols-2 gap-4">
+                   </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">หมวดหมู่</label>
                     <select className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1 appearance-none" value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })}>
@@ -2010,16 +2274,16 @@ const StockManager = ({ appId, showToast }) => {
                     <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">ราคาขาย</label>
                     <input type="number" className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold text-right text-indigo-600 mt-1" value={formData.price} onChange={e => setFormData({ ...formData, price: e.target.value })} />
                   </div>
-               </div>
-               {!editingProduct && (
-                 <div className="bg-indigo-50/50 p-6 rounded-[28px] space-y-4">
-                   <div className="grid grid-cols-2 gap-4">
-                    <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">ต้นทุนล็อตแรก</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-right" value={formData.cost} onChange={e => setFormData({ ...formData, cost: e.target.value })} /></div>
-                    <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">จำนวนยอดยกมา</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-center" value={formData.stock} onChange={e => setFormData({ ...formData, stock: e.target.value })} /></div>
-                   </div>
-                   <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1 flex items-center gap-1"><Calendar size={12}/> วันหมดอายุของสต็อกนี้</label><input type="date" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold mt-1" value={formData.expiryDate} onChange={e => setFormData({ ...formData, expiryDate: e.target.value })} /></div>
-                 </div>
-               )}
+                </div>
+                {!editingProduct && (
+                  <div className="bg-indigo-50/50 p-6 rounded-[28px] space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                     <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">ต้นทุนล็อตแรก</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-right" value={formData.cost} onChange={e => setFormData({ ...formData, cost: e.target.value })} /></div>
+                     <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">จำนวนยอดยกมา</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-center" value={formData.stock} onChange={e => setFormData({ ...formData, stock: e.target.value })} /></div>
+                    </div>
+                    <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1 flex items-center gap-1"><Calendar size={12}/> วันหมดอายุของสต็อกนี้</label><input type="date" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold mt-1" value={formData.expiryDate} onChange={e => setFormData({ ...formData, expiryDate: e.target.value })} /></div>
+                  </div>
+                )}
             </div>
             <div className="flex gap-3">
               <button onClick={() => setShowModal(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-600">ยกเลิก</button>
@@ -2344,7 +2608,7 @@ export default function App() {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} />;
       case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={appId} showToast={addToast} />;
       case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} appId={appId} showToast={addToast} />;
-      case 'stock': return <StockManager appId={appId} showToast={addToast} />;
+      case 'stock': return <StockManager appId={appId} transactions={transactions} showToast={addToast} />;
       case 'taxes': return <TaxReport transactions={transactions} invoices={invoices} />;
       case 'analytics': return <CentralAnalytics user={user} showToast={addToast} />;
       case 'annual_tax': return <AnnualTaxCalculator user={user} transactions={transactions} showToast={addToast} />;
