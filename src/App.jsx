@@ -1403,8 +1403,8 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                         <>
                            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-indigo-300 transition-colors">
                                 <div className="flex items-center justify-between mb-3">
-                                   <div className="flex items-center gap-2"><input type="checkbox" id="taxReq" className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-gray-300" checked={formData.isTaxInvoiceReq} onChange={e => setFormData({...formData, isTaxInvoiceReq: e.target.checked})} /><label htmlFor="taxReq" className="text-sm font-bold text-slate-700 cursor-pointer select-none">ต้องการใบกำกับภาษีเต็มรูป?</label></div>
-                                   {formData.isTaxInvoiceReq && <button type="button" onClick={()=>setShowCustomerModal(true)} className="text-[10px] bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-bold hover:bg-slate-200 transition-colors">เลือกจากประวัติ</button>}
+                                    <div className="flex items-center gap-2"><input type="checkbox" id="taxReq" className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-gray-300" checked={formData.isTaxInvoiceReq} onChange={e => setFormData({...formData, isTaxInvoiceReq: e.target.checked})} /><label htmlFor="taxReq" className="text-sm font-bold text-slate-700 cursor-pointer select-none">ต้องการใบกำกับภาษีเต็มรูป?</label></div>
+                                    {formData.isTaxInvoiceReq && <button type="button" onClick={()=>setShowCustomerModal(true)} className="text-[10px] bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-bold hover:bg-slate-200 transition-colors">เลือกจากประวัติ</button>}
                                 </div>
                                 {formData.isTaxInvoiceReq && (
                                     <div className="space-y-3 animate-in slide-in-from-top-2 pt-2 border-t border-slate-50">
@@ -1444,10 +1444,10 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
 
                     <div className="pt-4 mt-auto">
                         <div className="space-y-1 mb-4 px-2">
-                           <div className="flex justify-between items-center text-sm"><span className="font-bold text-slate-500">รูปแบบ VAT</span><select className="bg-transparent text-right font-bold text-slate-700 outline-none cursor-pointer" value={formData.vatType} onChange={e=>setFormData({...formData,vatType:e.target.value})}><option value="included">รวมในยอด (Included)</option><option value="excluded">คิดแยก (Excluded)</option><option value="none">ไม่มี (None)</option></select></div>
-                           {formData.type === 'expense' && calculated.totalAfterDiscount < calculated.baseAmount && (<div className="flex justify-between text-xs text-orange-500 font-medium"><span>ส่วนลด</span><span>-{formatCurrency(formData.expenseDiscount)}</span></div>)}
-                           <div className="flex justify-between text-xs text-slate-400"><span>ก่อน VAT</span><span>{formatCurrency(calculated.net)}</span></div>
-                           <div className="flex justify-between text-xs text-slate-400"><span>VAT 7%</span><span>{formatCurrency(calculated.vat)}</span></div>
+                            <div className="flex justify-between items-center text-sm"><span className="font-bold text-slate-500">รูปแบบ VAT</span><select className="bg-transparent text-right font-bold text-slate-700 outline-none cursor-pointer" value={formData.vatType} onChange={e=>setFormData({...formData,vatType:e.target.value})}><option value="included">รวมในยอด (Included)</option><option value="excluded">คิดแยก (Excluded)</option><option value="none">ไม่มี (None)</option></select></div>
+                            {formData.type === 'expense' && calculated.totalAfterDiscount < calculated.baseAmount && (<div className="flex justify-between text-xs text-orange-500 font-medium"><span>ส่วนลด</span><span>-{formatCurrency(formData.expenseDiscount)}</span></div>)}
+                            <div className="flex justify-between text-xs text-slate-400"><span>ก่อน VAT</span><span>{formatCurrency(calculated.net)}</span></div>
+                            <div className="flex justify-between text-xs text-slate-400"><span>VAT 7%</span><span>{formatCurrency(calculated.vat)}</span></div>
                         </div>
 
                         <div className="bg-slate-900 text-white p-6 rounded-3xl shadow-xl shadow-slate-200 text-left relative overflow-hidden group">
@@ -2103,30 +2103,30 @@ const TaxReport = ({ transactions, invoices }) => {
     const reportTitle = activeReport === 'sales' ? 'รายงานภาษีขาย' : activeReport === 'purchase' ? 'รายงานภาษีซื้อ' : 'รายงานสรุปสินค้าและวัตถุดิบ';
 
     const exportTaxReport = () => {
-       const fileName = `${activeReport === 'sales' ? 'Output' : activeReport === 'purchase' ? 'Input' : 'Product'}_Tax_Report_${months[month]}_${year}.xlsx`;
-       let header = [], data = [];
-       
-       const infoRows = [
-           [`${reportTitle}`],
-           [`เดือนภาษี: ${months[month]} พ.ศ. ${year + 543}`],
-           [`ผู้ประกอบการ: ${operatorInfo.name || '-'} เลขประจำตัวผู้เสียภาษี: ${operatorInfo.taxId || '-'}`],
-           [`ที่อยู่: ${operatorInfo.address || '-'}`],
-           [`สถานประกอบการ: ${operatorInfo.isHeadOffice ? 'สำนักงานใหญ่' : 'สาขาที่ ' + operatorInfo.branchCode}`],
-           []
-       ];
+        const fileName = `${activeReport === 'sales' ? 'Output' : activeReport === 'purchase' ? 'Input' : 'Product'}_Tax_Report_${months[month]}_${year}.xlsx`;
+        let header = [], data = [];
+        
+        const infoRows = [
+            [`${reportTitle}`],
+            [`เดือนภาษี: ${months[month]} พ.ศ. ${year + 543}`],
+            [`ผู้ประกอบการ: ${operatorInfo.name || '-'} เลขประจำตัวผู้เสียภาษี: ${operatorInfo.taxId || '-'}`],
+            [`ที่อยู่: ${operatorInfo.address || '-'}`],
+            [`สถานประกอบการ: ${operatorInfo.isHeadOffice ? 'สำนักงานใหญ่' : 'สาขาที่ ' + operatorInfo.branchCode}`],
+            []
+        ];
 
-       if (activeReport === 'sales') {
+        if (activeReport === 'sales') {
           header = [['ลำดับ', 'วันที่', 'เลขที่ใบกำกับภาษี', 'ชื่อผู้ซื้อสินค้า/ผู้รับบริการ', 'รายการสินค้า', 'เลขผู้เสียภาษี', 'สาขา', 'มูลค่าสินค้า (Tax Base)', 'ภาษีมูลค่าเพิ่ม (VAT)', 'จำนวนเงินรวม']];
           data = taxData.sales.map((t, i) => [i + 1, formatDate(t.date), t.invNo || t.orderId || '-', t.customerName || 'ลูกค้าทั่วไป', t.itemNames, t.customerTaxId || '-', t.customerBranch === '00000' ? 'สำนักงานใหญ่' : (t.customerBranch || '-'), t.net || t.amount, t.vat || 0, t.total]);
-       } else if (activeReport === 'purchase') {
+        } else if (activeReport === 'purchase') {
           header = [['ลำดับ', 'วันที่', 'เลขใบกำกับภาษี', 'ชื่อผู้ขายสินค้า/ผู้ให้บริการ', 'รายการสินค้า', 'เลขผู้เสียภาษี', 'สาขา', 'มูลค่าสินค้า (Tax Base)', 'ภาษีมูลค่าเพิ่ม (VAT)', 'จำนวนเงินรวม']];
           data = taxData.purchases.map((t, i) => [i + 1, formatDate(t.date), t.taxInvoiceNo || '-', t.vendorName || 'ไม่ระบุชื่อคู่ค้า', t.itemNames, t.vendorTaxId || '-', t.vendorBranch === '00000' ? 'สำนักงานใหญ่' : (t.vendorBranch || '-'), t.net || t.amount, t.vat || 0, t.total]);
-       } else {
+        } else {
           header = [['ลำดับ', 'หมวดหมู่', 'ชื่อสินค้า', 'จำนวนที่ขาย', 'ยอดขายรวม', 'จำนวนที่ซื้อ', 'ยอดซื้อรวม']];
           data = taxData.products.map((p, i) => [i + 1, p.category, p.name, p.salesQty.toFixed(2), p.salesAmt, p.purchaseQty.toFixed(2), p.purchaseAmt]);
-       }
-       
-       exportToExcel(fileName, data, infoRows.concat(header));
+        }
+        
+        exportToExcel(fileName, data, infoRows.concat(header));
     };
 
     return (
@@ -2336,16 +2336,42 @@ export default function App() {
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_STYLES }} />
       <ToastContainer toasts={toasts} removeToast={removeToast} />
       <aside className={"fixed lg:static inset-y-0 left-0 z-30 w-72 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out " + (sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0") + " flex flex-col text-left"}>
-        <div className="p-6 border-b border-slate-800 text-left"><h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400 flex items-center gap-2 text-left"><Wallet className="text-indigo-400 text-left"/> MerchantTax</h1></div>
-        <nav className="p-4 space-y-1 mt-2 flex-1 overflow-y-auto text-left">
-          <NavButton active={activeTab === 'dashboard'} onClick={() => {setActiveTab('dashboard'); setSidebarOpen(false);}} icon={<PieChart size={20} />} label="ภาพรวมธุรกิจ (Pro)" />
-          <NavButton active={activeTab === 'analytics'} onClick={() => {setActiveTab('analytics'); setSidebarOpen(false);}} icon={<Layers size={20} />} label="วิเคราะห์ข้ามปี (YoY)" />
-          <NavButton active={activeTab === 'annual_tax'} onClick={() => {setActiveTab('annual_tax'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="ภาษีประจำปี (PIT)" />
-          <NavButton active={activeTab === 'records'} onClick={() => {setActiveTab('records'); setSidebarOpen(false);}} icon={<Store size={20} />} label="POS / ขายหน้าร้าน" />
-          <NavButton active={activeTab === 'invoice'} onClick={() => {setActiveTab('invoice'); setSidebarOpen(false);}} icon={<Printer size={20} />} label="ใบกำกับภาษี (Pro)" />
-          <NavButton active={activeTab === 'stock'} onClick={() => {setActiveTab('stock'); setSidebarOpen(false);}} icon={<Package size={20} />} label="สต็อกสินค้า" />
-          <NavButton active={activeTab === 'taxes'} onClick={() => {setActiveTab('taxes'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="รายงานภาษี" />
+        <div className="p-6 border-b border-slate-800 text-left">
+          <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400 flex items-center gap-2 text-left">
+            <Wallet className="text-indigo-400 text-left"/> MerchantTax
+          </h1>
+        </div>
+        
+        <nav className="p-4 space-y-8 mt-2 flex-1 overflow-y-auto text-left">
+          {/* Insights Section */}
+          <div className="space-y-2">
+            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Insights</p>
+            <div className="space-y-1">
+              <NavButton active={activeTab === 'dashboard'} onClick={() => {setActiveTab('dashboard'); setSidebarOpen(false);}} icon={<PieChart size={20} />} label="ภาพรวมธุรกิจ (Pro)" />
+              <NavButton active={activeTab === 'analytics'} onClick={() => {setActiveTab('analytics'); setSidebarOpen(false);}} icon={<Layers size={20} />} label="วิเคราะห์ข้ามปี (YoY)" />
+              <NavButton active={activeTab === 'annual_tax'} onClick={() => {setActiveTab('annual_tax'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="ภาษีประจำปี (PIT)" />
+            </div>
+          </div>
+
+          {/* Operations Section */}
+          <div className="space-y-2">
+            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Operations</p>
+            <div className="space-y-1">
+              <NavButton active={activeTab === 'records'} onClick={() => {setActiveTab('records'); setSidebarOpen(false);}} icon={<Store size={20} />} label="POS / ขายหน้าร้าน" />
+              <NavButton active={activeTab === 'invoice'} onClick={() => {setActiveTab('invoice'); setSidebarOpen(false);}} icon={<Printer size={20} />} label="ใบกำกับภาษี (Pro)" />
+            </div>
+          </div>
+
+          {/* Back Office Section */}
+          <div className="space-y-2">
+            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Back Office</p>
+            <div className="space-y-1">
+              <NavButton active={activeTab === 'stock'} onClick={() => {setActiveTab('stock'); setSidebarOpen(false);}} icon={<Package size={20} />} label="สต็อกสินค้า" />
+              <NavButton active={activeTab === 'taxes'} onClick={() => {setActiveTab('taxes'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="รายงานภาษี" />
+            </div>
+          </div>
         </nav>
+
         <div className="p-6 bg-slate-900/50 backdrop-blur-sm border-t border-slate-800 text-left">
             <div className="mb-2 text-[10px] uppercase font-bold text-slate-500 ml-1">Database Instance</div>
             <button onClick={toggleAppMode} className={"w-full py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all bg-slate-800 text-indigo-300 ring-1 ring-slate-700 hover:bg-slate-700 hover:text-white"}>
@@ -2353,10 +2379,18 @@ export default function App() {
             </button>
         </div>
       </aside>
+      
       <main className="flex-1 flex flex-col h-full overflow-hidden relative w-full text-left">
         <header className="bg-white/90 backdrop-blur-md shadow-sm border-b border-slate-200 p-4 lg:px-8 flex justify-between items-center z-10 sticky top-0 text-left">
-          <div className="flex items-center gap-3 text-left"><button onClick={() => setSidebarOpen(true)} className="lg:hidden p-1 rounded-md hover:bg-slate-100 transition-colors text-left"><Menu size={24} /></button><h2 className="font-semibold text-slate-800 text-lg text-left">{activeTab.toUpperCase()}</h2></div>
-          <div className="flex items-center gap-3 text-right">{loading && <div className="text-xs font-bold text-indigo-600 flex items-center gap-1 animate-pulse text-right"><Loader size={12} className="animate-spin text-right"/> Syncing...</div>}</div>
+          <div className="flex items-center gap-3 text-left">
+            <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-1 rounded-md hover:bg-slate-100 transition-colors text-left">
+              <Menu size={24} />
+            </button>
+            <h2 className="font-semibold text-slate-800 text-lg text-left">{activeTab.toUpperCase()}</h2>
+          </div>
+          <div className="flex items-center gap-3 text-right">
+            {loading && <div className="text-xs font-bold text-indigo-600 flex items-center gap-1 animate-pulse text-right"><Loader size={12} className="animate-spin text-right"/> Syncing...</div>}
+          </div>
         </header>
         <div className="flex-1 overflow-auto p-2 lg:p-6 relative scroll-smooth w-full text-left">{renderContent()}</div>
       </main>
