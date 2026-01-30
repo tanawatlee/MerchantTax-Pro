@@ -31,20 +31,16 @@ const CONSTANTS = {
   },
   SHOPS: ['eats and use', 'bubee bubee', 'ไม่ระบุ'],
   CATEGORIES: {
+    // หมวดหมู่รายรับ ตามกฎหมายภาษี
     INCOME: [
-      'เครื่องดื่ม (Beverages)',
-      'ขนมและของว่าง (Snacks & Sweets)',
-      'ผลิตภัณฑ์นมและไข่ (Dairy & Eggs)',
-      'ของแห้งและเครื่องปรุง (Grocery & Seasoning)',
-      'ผลิตภัณฑ์ดูแลร่างกาย (Personal Care)',
-      'ผลิตภัณฑ์ทำความสะอาดบ้าน (Home Care)',
-      'ผลิตภัณฑ์สำหรับเด็ก (Baby Care)',
-      'ความงามและเครื่องสำอาง (Beauty & Cosmetics)',
-      'อาหารสดและอาหารแช่แข็ง (Fresh & Frozen Food)',
-      'ยาสามัญและอาหารเสริม (Health & Supplements)',
-      'ผลิตภัณฑ์สำหรับสัตว์เลี้ยง (Pet Care)',
-      'สินค้าเบ็ดเตล็ดอื่นๆ'
+      'รายได้จากการขายสินค้า (มาตรา 40(8))',
+      'รายได้จากการรับจ้าง/บริการ (มาตรา 40(8))',
+      'รายได้ค่านายหน้า/ตัวแทน (มาตรา 40(2))',
+      'รายได้จากการให้เช่าทรัพย์สิน (มาตรา 40(5))',
+      'รายได้จากการขนส่ง (มาตรา 40(8))',
+      'รายได้อื่นๆ (ต้องเสียภาษี)'
     ],
+    // หมวดหมู่รายจ่าย
     EXPENSE: [
       'ค่าใช้จ่ายทั่วไป', 
       'ต้นทุนสินค้า', 
@@ -61,6 +57,21 @@ const CONSTANTS = {
       'เงินเดือน', 
       'ภาษี/เบี้ยปรับ', 
       'ส่วนลดร้านค้า'
+    ],
+    // หมวดหมู่สต็อกสินค้า FMCG
+    STOCK: [
+      'เครื่องดื่ม (Beverages)',
+      'ขนมและของว่าง (Snacks & Sweets)',
+      'ผลิตภัณฑ์นมและไข่ (Dairy & Eggs)',
+      'ของแห้งและเครื่องปรุง (Grocery & Seasoning)',
+      'ผลิตภัณฑ์ดูแลร่างกาย (Personal Care)',
+      'ผลิตภัณฑ์ทำความสะอาดบ้าน (Home Care)',
+      'ผลิตภัณฑ์สำหรับเด็ก (Baby Care)',
+      'ความงามและเครื่องสำอาง (Beauty & Cosmetics)',
+      'อาหารสดและอาหารแช่แข็ง (Fresh & Frozen Food)',
+      'ยาสามัญและอาหารเสริม (Health & Supplements)',
+      'ผลิตภัณฑ์สำหรับสัตว์เลี้ยง (Pet Care)',
+      'สินค้าเบ็ดเตล็ดอื่นๆ'
     ]
   },
   CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
@@ -1435,7 +1446,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                       <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase"><User size={12}/> ข้อมูล{formData.type === 'income' ? 'ลูกค้า' : 'คู่ค้า'}</div>
                       {formData.type === 'income' ? (
                         <>
-                           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-indigo-300 transition-colors">
+                            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-indigo-300 transition-colors">
                                 <div className="flex items-center justify-between mb-3">
                                     <div className="flex items-center gap-2"><input type="checkbox" id="taxReq" className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-gray-300" checked={formData.isTaxInvoiceReq} onChange={e => setFormData({...formData, isTaxInvoiceReq: e.target.checked})} /><label htmlFor="taxReq" className="text-sm font-bold text-slate-700 cursor-pointer select-none">ต้องการใบกำกับภาษีเต็มรูป?</label></div>
                                     {formData.isTaxInvoiceReq && <button type="button" onClick={()=>setShowCustomerModal(true)} className="text-[10px] bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-bold hover:bg-slate-200 transition-colors">เลือกจากประวัติ</button>}
@@ -1447,19 +1458,19 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                                         <input className="w-full bg-slate-50 border-0 rounded-xl px-3 py-2 text-sm shadow-sm" placeholder="ที่อยู่ (สำหรับการออกบิล)" value={formData.customerAddress} onChange={e=>setFormData({...formData, customerAddress: e.target.value})} />
                                     </div>
                                 )}
-                           </div>
-                           {isEcommerceMode && (
-                             <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 animate-in slide-in-from-top-2">
-                               <h4 className="font-bold text-xs text-indigo-600 uppercase flex items-center gap-1 mb-3"><ShoppingBag size={14}/> E-Commerce Deductions</h4>
-                               <div className="grid grid-cols-2 gap-3 mb-3">
-                                 <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 flex items-center gap-1"><Package size={10}/> ค่าส่งจากลูกค้า (+)</label><input type="number" className="w-full bg-white border-0 rounded-lg p-2 text-xs font-bold text-emerald-600 shadow-sm" placeholder="0.00" value={formData.customerShipping} onChange={e=>setFormData({...formData, customerShipping: e.target.value})} /></div>
-                                 <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 flex items-center gap-1"><Tag size={10}/> ส่วนลดร้านค้า (-)</label><input type="number" className="w-full bg-white border-0 rounded-lg p-2 text-xs font-bold text-rose-600 shadow-sm" placeholder="0.00" value={formData.shopDiscount} onChange={e=>setFormData({...formData, shopDiscount: e.target.value})} /></div>
-                                 <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 flex items-center gap-1"><PieChart size={10}/> ค่าธรรมเนียม (-)</label><input type="number" className="w-full bg-white border-0 rounded-lg p-2 text-xs font-bold text-slate-600 shadow-sm" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData, platformFee: e.target.value})} /></div>
-                                 <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 flex items-center gap-1"><Package size={10}/> ค่าส่งถูกหัก (-)</label><input type="number" className="w-full bg-white border-0 rounded-lg p-2 text-xs font-bold text-slate-600 shadow-sm" placeholder="0.00" value={formData.shippingCost} onChange={e=>setFormData({...formData, shippingCost: e.target.value})} /></div>
-                               </div>
-                               <div className="flex justify-between items-center pt-2 border-t border-indigo-100 text-xs"><span className="font-bold text-indigo-400">Est. Payout:</span><span className="font-bold text-indigo-700 text-base">{formatCurrency(calculated.estimatedPayout)}</span></div>
-                             </div>
-                           )}
+                            </div>
+                            {isEcommerceMode && (
+                              <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 animate-in slide-in-from-top-2">
+                                <h4 className="font-bold text-xs text-indigo-600 uppercase flex items-center gap-1 mb-3"><ShoppingBag size={14}/> E-Commerce Deductions</h4>
+                                <div className="grid grid-cols-2 gap-3 mb-3">
+                                  <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 flex items-center gap-1"><Package size={10}/> ค่าส่งจากลูกค้า (+)</label><input type="number" className="w-full bg-white border-0 rounded-lg p-2 text-xs font-bold text-emerald-600 shadow-sm" placeholder="0.00" value={formData.customerShipping} onChange={e=>setFormData({...formData, customerShipping: e.target.value})} /></div>
+                                  <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 flex items-center gap-1"><Tag size={10}/> ส่วนลดร้านค้า (-)</label><input type="number" className="w-full bg-white border-0 rounded-lg p-2 text-xs font-bold text-rose-600 shadow-sm" placeholder="0.00" value={formData.shopDiscount} onChange={e=>setFormData({...formData, shopDiscount: e.target.value})} /></div>
+                                  <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 flex items-center gap-1"><PieChart size={10}/> ค่าธรรมเนียม (-)</label><input type="number" className="w-full bg-white border-0 rounded-lg p-2 text-xs font-bold text-slate-600 shadow-sm" placeholder="0.00" value={formData.platformFee} onChange={e=>setFormData({...formData, platformFee: e.target.value})} /></div>
+                                  <div className="space-y-1"><label className="text-[10px] font-bold text-slate-500 flex items-center gap-1"><Package size={10}/> ค่าส่งถูกหัก (-)</label><input type="number" className="w-full bg-white border-0 rounded-lg p-2 text-xs font-bold text-slate-600 shadow-sm" placeholder="0.00" value={formData.shippingCost} onChange={e=>setFormData({...formData, shippingCost: e.target.value})} /></div>
+                                </div>
+                                <div className="flex justify-between items-center pt-2 border-t border-indigo-100 text-xs"><span className="font-bold text-indigo-400">Est. Payout:</span><span className="font-bold text-indigo-700 text-base">{formatCurrency(calculated.estimatedPayout)}</span></div>
+                              </div>
+                            )}
                         </>
                       ) : (
                         <div className="space-y-4 animate-fadeIn">
@@ -1900,7 +1911,7 @@ const StockManager = ({ appId, showToast }) => {
   const [viewMode, setViewMode] = useState('inventory'); // 'inventory' or 'report'
   const productImgRef = useRef(null);
   
-  const initialProduct = { name: '', sku: '', category: CONSTANTS.CATEGORIES.INCOME[0], cost: '', price: '', stock: 0, image: '', expiryDate: '' };
+  const initialProduct = { name: '', sku: '', category: CONSTANTS.CATEGORIES.STOCK[0], cost: '', price: '', stock: 0, image: '', expiryDate: '' };
   const initialAdj = { productId: '', qty: 1, reason: 'damaged', note: '' };
   
   const [formData, setFormData] = useState(initialProduct);
@@ -2286,11 +2297,11 @@ const StockManager = ({ appId, showToast }) => {
             <h3 className="text-2xl font-bold mb-8 flex items-center gap-2">{editingProduct ? <Edit/> : <PlusCircle/>} ข้อมูลสินค้าใหม่</h3>
             <div className="space-y-6 mb-10">
                 <div className="flex gap-6 items-start">
-                   <div onClick={() => productImgRef.current?.click()} className="w-28 h-28 rounded-[24px] bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:bg-indigo-50 transition-all overflow-hidden relative shrink-0 group">
+                    <div onClick={() => productImgRef.current?.click()} className="w-28 h-28 rounded-[24px] bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:bg-indigo-50 transition-all overflow-hidden relative shrink-0 group">
                     {formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : <><ImageIcon className="text-slate-300" size={28}/><p className="text-[9px] font-bold text-slate-400 mt-2">ใส่ภาพ</p></>}
                     <input type="file" ref={productImgRef} hidden accept="image/*" onChange={handleImgUpload} />
-                   </div>
-                   <div className="flex-1 space-y-4">
+                    </div>
+                    <div className="flex-1 space-y-4">
                     <div>
                       <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">ชื่อสินค้าปลีก</label>
                       <input className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="ชื่อสินค้า..." />
@@ -2299,13 +2310,13 @@ const StockManager = ({ appId, showToast }) => {
                       <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Auto SKU</label>
                       <input className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1" value={formData.sku} onChange={e => setFormData({ ...formData, sku: e.target.value })} placeholder="ว่างไว้เพื่อเจนรหัสออโต้" />
                     </div>
-                   </div>
+                    </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">หมวดหมู่</label>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">หมวดหมู่สต็อก</label>
                     <select className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1 appearance-none" value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })}>
-                      {CONSTANTS.CATEGORIES.INCOME.map(c => <option key={c} value={c}>{c}</option>)}
+                      {CONSTANTS.CATEGORIES.STOCK.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                   <div>
@@ -2316,8 +2327,8 @@ const StockManager = ({ appId, showToast }) => {
                 {!editingProduct && (
                   <div className="bg-indigo-50/50 p-6 rounded-[28px] space-y-4">
                     <div className="grid grid-cols-2 gap-4">
-                     <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">ต้นทุนล็อตแรก</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-right" value={formData.cost} onChange={e => setFormData({ ...formData, cost: e.target.value })} /></div>
-                     <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">จำนวนยอดยกมา</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-center" value={formData.stock} onChange={e => setFormData({ ...formData, stock: e.target.value })} /></div>
+                      <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">ต้นทุนล็อตแรก</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-right" value={formData.cost} onChange={e => setFormData({ ...formData, cost: e.target.value })} /></div>
+                      <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">จำนวนยอดยกมา</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-center" value={formData.stock} onChange={e => setFormData({ ...formData, stock: e.target.value })} /></div>
                     </div>
                     <div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1 flex items-center gap-1"><Calendar size={12}/> วันหมดอายุของสต็อกนี้</label><input type="date" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold mt-1" value={formData.expiryDate} onChange={e => setFormData({ ...formData, expiryDate: e.target.value })} /></div>
                   </div>
@@ -2567,7 +2578,7 @@ const TaxReport = ({ transactions, invoices }) => {
                       <tbody className="divide-y divide-slate-100">
                         {(activeReport === 'sales' ? taxData.sales : taxData.purchases).map((t, i) => (
                           <tr key={i} className="hover:bg-slate-50 transition-colors">
-                            <td className="p-4 border-r border-slate-50 text-center">{i + 1}</td>
+                            <td className="p-4 text-center border-r border-slate-50">{i + 1}</td>
                             <td className="p-4 border-r border-slate-50 text-slate-500 font-mono">{formatDate(t.date)}</td>
                             <td className="p-4 border-r border-slate-50 font-mono font-bold text-slate-800">{activeReport === 'sales' ? (t.invNo || '-') : (t.taxInvoiceNo || '-')}</td>
                             <td className="p-4 border-r border-slate-50 font-bold">{activeReport === 'sales' ? (t.customerName || 'ลูกค้าทั่วไป') : (t.vendorName || 'ไม่ระบุ')}</td>
