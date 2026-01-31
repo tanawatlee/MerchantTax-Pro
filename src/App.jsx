@@ -5,7 +5,7 @@ import {
   CheckCircle, Loader, User, Package, Search, Clock, List, Settings, PlusCircle, Tag,
   Store, Code, Database, Image as ImageIcon, BarChart2, Activity, ShoppingBag, Eye, EyeOff, Inbox, XCircle, ArrowUp, ArrowDown,
   ChevronDown, ChevronUp, AlertTriangle, Calendar, Info, MapPin, Building, Layers, ArrowRightLeft, Percent, ClipboardList, Briefcase,
-  Camera, Sparkles, ScanText, Zap, ChevronRight, Truck, Ticket
+  Camera, Sparkles, ScanText, Zap, ChevronRight, Truck, Ticket, CreditCard
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -73,9 +73,9 @@ const GLOBAL_STYLES = `
 `;
 
 // --- Firebase Initialization ---
-const app = getApps().length > 0 ? getApp() : initializeApp(FIREBASE_CONFIG);
-const auth = getAuth(app);
-const db = getFirestore(app);
+const firebaseApp = getApps().length > 0 ? getApp() : initializeApp(FIREBASE_CONFIG);
+const authInstance = getAuth(firebaseApp);
+const dbInstance = getFirestore(firebaseApp);
 
 // --- Utility Functions ---
 const normalizeDate = (dateInput) => {
@@ -492,7 +492,6 @@ const FinancialPosition = ({ transactions, invoices, inventoryLots, sellerInfo }
       </div>
 
       <div id="financial-position-print-area" className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* ASSETS SIDE */}
         <div className="space-y-6">
           <div className="bg-emerald-50/50 p-6 rounded-[32px] border border-emerald-100 h-full">
             <h4 className="text-lg font-bold text-emerald-800 mb-6 flex items-center justify-between">
@@ -529,7 +528,6 @@ const FinancialPosition = ({ transactions, invoices, inventoryLots, sellerInfo }
           </div>
         </div>
 
-        {/* LIABILITIES & EQUITY SIDE */}
         <div className="space-y-6">
           <div className="bg-rose-50/50 p-6 rounded-[32px] border border-rose-100">
             <h4 className="text-lg font-bold text-rose-800 mb-6 flex items-center justify-between">
@@ -578,7 +576,7 @@ const FinancialPosition = ({ transactions, invoices, inventoryLots, sellerInfo }
 
 // --- Annual Tax Calculator Component ---
 const AnnualTaxCalculator = ({ user, transactions, showToast }) => {
-  const [deductionType, setDeductionType] = useState('standard'); // standard (60%) or actual
+  const [deductionType, setDeductionType] = useState('standard'); 
   const [personalAllowance, setPersonalAllowance] = useState(60000);
   const [otherDeductions, setOtherDeductions] = useState(0);
 
@@ -702,7 +700,7 @@ const AnnualTaxCalculator = ({ user, transactions, showToast }) => {
   );
 };
 
-// --- Updated: Central Analytics Component with Selectors ---
+// --- Central Analytics Component with Selectors ---
 const CentralAnalytics = ({ user, showToast }) => {
   const [multiYearData, setMultiYearData] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -720,8 +718,8 @@ const CentralAnalytics = ({ user, showToast }) => {
     try {
       const selectedYears = [ { id: baseId, label: getLabel(baseId) }, { id: compId, label: getLabel(compId) } ];
       const results = await Promise.all(selectedYears.map(async (year) => {
-        const qInc = query(collection(db, 'artifacts', year.id, 'public', 'data', 'transactions_income'));
-        const qExp = query(collection(db, 'artifacts', year.id, 'public', 'data', 'transactions_expense'));
+        const qInc = query(collection(dbInstance, 'artifacts', year.id, 'public', 'data', 'transactions_income'));
+        const qExp = query(collection(dbInstance, 'artifacts', year.id, 'public', 'data', 'transactions_expense'));
         const [snapInc, snapExp] = await Promise.all([getDocs(qInc), getDocs(qExp)]);
         const income = snapInc.docs.reduce((sum, d) => sum + (Number(d.data().total) || 0), 0);
         const expense = snapExp.docs.reduce((sum, d) => sum + (Number(d.data().total) || 0), 0);
@@ -866,22 +864,15 @@ const Dashboard = ({ transactions, invoices }) => {
       else trendMap[label].expense += Number(t.total);
     });
     const trendData = Object.entries(trendMap).map(([label, data]) => ({ label, ...data }));
-    const expenseByCategory = {};
-    currTrans.filter(t => t.type === 'expense').forEach(t => { expenseByCategory[t.category] = (expenseByCategory[t.category] || 0) + Number(t.total); });
-    const topExpenses = Object.entries(expenseByCategory).map(([name, value]) => ({ name, value, percent: totalExpense > 0 ? (value / totalExpense) * 100 : 0 })).sort((a,b) => b.value - a.value).slice(0, 5);
-    const incomeByChannel = {};
-    currTrans.filter(t => t.type === 'income').forEach(t => { const ch = t.channel || 'หน้าร้าน'; incomeByChannel[ch] = (incomeByChannel[ch] || 0) + Number(t.total); });
-    const topIncomes = Object.entries(incomeByChannel).map(([name, value]) => ({ name, value, percent: totalIncome > 0 ? (value / totalIncome) * 100 : 0 })).sort((a,b) => b.value - a.value).slice(0, 5);
-    const estimatedTax = calculateProgressiveTax(totalIncome * 0.4); 
     const unpaidTotal = invoices.filter(inv => inv.type === 'invoice' && inv.status !== 'paid').reduce((sum, inv) => sum + (Number(inv.total) || 0), 0);
-    return { totalIncome, totalExpense, incomeTrend, expenseTrend, netProfit, profitMargin, operatingRatio, trendData, topExpenses, topIncomes, estimatedTax, unpaidTotal };
+    return { totalIncome, totalExpense, incomeTrend, expenseTrend, netProfit, profitMargin, operatingRatio, trendData, unpaidTotal };
   }, [transactions, invoices, period]);
 
   return (
     <div className="space-y-6 w-full max-w-[2400px] mx-auto pb-10 animate-fadeIn p-4 md:p-6 bg-slate-50/50 text-left">
         <div className="flex flex-row justify-between items-center gap-4 text-left border-b border-slate-100 pb-4 mb-2">
             <div className="text-left">
-                <h2 className="text-xl md:text-2xl font-bold text-slate-800 tracking-tight">Business Dashboard Pro</h2>
+                <h2 className="text-xl md:text-2xl font-bold text-slate-800 tracking-tight">แดชบอร์ดผลงาน (Performance)</h2>
                 <p className="text-slate-500 text-xs md:text-sm">วิเคราะห์ผลประกอบการแบบ Real-time</p>
             </div>
             <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
@@ -913,66 +904,40 @@ const Dashboard = ({ transactions, invoices }) => {
             </div>
             <div className="bg-gradient-to-br from-slate-800 to-slate-900 text-white p-6 rounded-3xl shadow-lg flex items-center justify-between relative overflow-hidden text-left">
                  <div className="relative z-10 text-left">
-                     <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1 text-left">ประมาณการภาษี (Est. Tax)</p>
-                     <h3 className="text-3xl font-bold tracking-tight text-left">{formatCurrency(analytics.estimatedTax)}</h3>
-                     <p className="text-xs text-slate-500 mt-2 text-left">คำนวณแบบเหมาจ่าย 60% เบื้องต้น</p>
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1 text-left">ประมาณการภาษี (Est. Tax)</p>
+                    <h3 className="text-3xl font-bold tracking-tight text-left">{formatCurrency(analytics.estimatedTax)}</h3>
+                    <p className="text-xs text-slate-500 mt-2 text-left">คำนวณแบบเหมาจ่าย 60% เบื้องต้น</p>
                  </div>
                  <div className="p-4 rounded-full bg-white/10 text-white relative z-10"><Calculator size={32}/></div>
                  <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-white/5 rounded-full blur-3xl"></div>
             </div>
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
-            <div className="lg:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[400px] text-left">
-                <div className="flex justify-between items-center mb-6 text-left">
-                    <h3 className="font-bold text-slate-700 text-lg flex items-center gap-2 text-left"><BarChart2 className="text-indigo-500"/> แนวโน้มรายรับ-รายจ่าย</h3>
-                    <button onClick={() => setShowValues(!showValues)} className={"text-xs px-3 py-1.5 rounded-lg font-bold border flex items-center gap-2 transition-all " + (showValues ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'bg-white text-slate-500 border-slate-200')}>
-                        {showValues ? <Eye size={14}/> : <EyeOff size={14}/>} {showValues ? 'ซ่อนตัวเลข' : 'แสดงตัวเลข'}
-                    </button>
-                </div>
-                <div className="flex-1 flex items-end gap-2 overflow-x-auto pb-4 px-2 relative text-left">
-                    {analytics.trendData.length > 0 ? analytics.trendData.map((d, i) => {
-                        const maxVal = Math.max(...analytics.trendData.map(x => Math.max(x.income, x.expense))) || 1;
-                        return (
-                            <div key={i} className="flex-1 min-w-[60px] flex flex-col items-center gap-2 h-full justify-end group text-left">
-                                {showValues && (
-                                    <div className="flex flex-col items-center text-[8px] font-bold w-full opacity-60 gap-0.5 pointer-events-none mb-1 text-center">
-                                        <span className="text-emerald-600">+{formatCompactNumber(d.income)}</span>
-                                        <span className="text-rose-500">-{formatCompactNumber(d.expense)}</span>
-                                    </div>
-                                )}
-                                <div className="flex gap-1 items-end w-full justify-center h-[70%] text-center">
-                                    <div className="w-3 bg-emerald-400 rounded-t-sm transition-all group-hover:bg-emerald-500" style={{height: (d.income/maxVal)*100 + "%"}}></div>
-                                    <div className="w-3 bg-rose-400 rounded-t-sm transition-all group-hover:bg-rose-500" style={{height: (d.expense/maxVal)*100 + "%"}}></div>
-                                </div>
-                                <span className="text-[9px] font-bold text-slate-400 truncate w-full text-center">{d.label}</span>
-                            </div>
-                        )
-                    }) : <div className="w-full h-full flex items-center justify-center text-slate-300">ไม่มีข้อมูล</div>}
-                </div>
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-col h-[400px] text-left">
+            <div className="flex justify-between items-center mb-6 text-left">
+                <h3 className="font-bold text-slate-700 text-lg flex items-center gap-2 text-left"><BarChart2 className="text-indigo-500"/> แนวโน้มรายรับ-รายจ่าย</h3>
+                <button onClick={() => setShowValues(!showValues)} className={"text-xs px-3 py-1.5 rounded-lg font-bold border flex items-center gap-2 transition-all " + (showValues ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : 'bg-white text-slate-500 border-slate-200')}>
+                    {showValues ? <Eye size={14}/> : <EyeOff size={14}/>} {showValues ? 'ซ่อนตัวเลข' : 'แสดงตัวเลข'}
+                </button>
             </div>
-            <div className="flex flex-col gap-6 text-left">
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex-1 flex flex-col text-left">
-                    <h3 className="font-bold text-slate-700 text-sm flex items-center gap-2 mb-4 text-left"><ShoppingBag className="text-emerald-500" size={18}/> แหล่งที่มารายได้</h3>
-                    <div className="space-y-3 text-left">
-                        {analytics.topIncomes.length > 0 ? analytics.topIncomes.map((e, i) => (
-                            <div key={i} className="text-left">
-                                <div className="flex justify-between text-[11px] mb-1 font-bold text-left"><span className="text-slate-600 text-left">{e.name}</span><span className="text-slate-800">{e.percent.toFixed(1)}%</span></div>
-                                <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden text-left"><div className="h-full rounded-full bg-emerald-400" style={{width: e.percent + "%"}}></div></div>
+            <div className="flex-1 flex items-end gap-2 overflow-x-auto pb-4 px-2 relative text-left">
+                {analytics.trendData.length > 0 ? analytics.trendData.map((d, i) => {
+                    const maxVal = Math.max(...analytics.trendData.map(x => Math.max(x.income, x.expense))) || 1;
+                    return (
+                        <div key={i} className="flex-1 min-w-[60px] flex flex-col items-center gap-2 h-full justify-end group text-left">
+                            {showValues && (
+                                <div className="flex flex-col items-center text-[8px] font-bold w-full opacity-60 gap-0.5 pointer-events-none mb-1 text-center">
+                                    <span className="text-emerald-600">+{formatCompactNumber(d.income)}</span>
+                                    <span className="text-rose-500">-{formatCompactNumber(d.expense)}</span>
+                                </div>
+                            )}
+                            <div className="flex gap-1 items-end w-full justify-center h-[70%] text-center">
+                                <div className="w-3 bg-emerald-400 rounded-t-sm transition-all group-hover:bg-emerald-500" style={{height: (d.income/maxVal)*100 + "%"}}></div>
+                                <div className="w-3 bg-rose-400 rounded-t-sm transition-all group-hover:bg-rose-500" style={{height: (d.expense/maxVal)*100 + "%"}}></div>
                             </div>
-                        )) : <p className="text-xs text-slate-400">ไม่มีข้อมูล</p>}
-                    </div>
-                </div>
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex-1 flex flex-col text-left">
-                    <h3 className="font-bold text-slate-700 text-sm flex items-center gap-2 mb-4 text-left"><PieChart className="text-rose-500" size={18}/> รายจ่ายตามหมวดหมู่</h3>
-                    <div className="space-y-3 text-left">
-                        {analytics.topExpenses.length > 0 ? analytics.topExpenses.map((e, i) => (
-                            <div key={i} className="text-left">
-                                <div className="flex justify-between text-[11px] mb-1 font-bold text-left"><span className="text-slate-600 text-left">{e.name}</span><span className="text-slate-800">{e.percent.toFixed(1)}%</span></div>
-                                <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden text-left"><div className="h-full rounded-full bg-rose-400" style={{width: e.percent + "%"}}></div></div>
-                            </div>
-                        )) : <p className="text-xs text-slate-400 text-left">ไม่มีข้อมูล</p>}
-                    </div>
-                </div>
+                            <span className="text-[9px] font-bold text-slate-400 truncate w-full text-center">{d.label}</span>
+                        </div>
+                    )
+                }) : <div className="w-full h-full flex items-center justify-center text-slate-300">ไม่มีข้อมูล</div>}
             </div>
         </div>
     </div>
@@ -993,6 +958,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
   const [vendors, setVendors] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [vendorSearch, setVendorSearch] = useState('');
+  const [customerSearch, setCustomerSearch] = useState('');
   const [stockProducts, setStockProducts] = useState([]);
   const [inventoryLots, setInventoryLots] = useState([]); 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -1064,10 +1030,10 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
   useEffect(() => { setIsEcommerceMode(formData.type === 'income' && ['Shopee', 'Lazada', 'TikTok'].includes(formData.channel)); }, [formData.channel, formData.type]);
   useEffect(() => {
       if (user) {
-          const unsubVendors = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'vendors')), (snap) => setVendors(snap.docs.map(d=>({id:d.id, ...d.data()}))));
-          const unsubCustomers = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'customers')), (snap) => setCustomers(snap.docs.map(d=>({id:d.id, ...d.data()}))));
-          const unsubStock = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'products')), (snap) => setStockProducts(snap.docs.map(d=>({id:d.id, ...d.data()}))));
-          const unsubLots = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'inventory_lots')), (snap) => setInventoryLots(snap.docs.map(d=>({id:d.id, ...d.data()}))));
+          const unsubVendors = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'vendors')), (snap) => setVendors(snap.docs.map(d=>({id:d.id, ...d.data()}))));
+          const unsubCustomers = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'customers')), (snap) => setCustomers(snap.docs.map(d=>({id:d.id, ...d.data()}))));
+          const unsubStock = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'products')), (snap) => setStockProducts(snap.docs.map(d=>({id:d.id, ...d.data()}))));
+          const unsubLots = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_lots')), (snap) => setInventoryLots(snap.docs.map(d=>({id:d.id, ...d.data()}))));
           return () => { unsubVendors(); unsubCustomers(); unsubStock(); unsubLots(); };
       }
   }, [user, appId]);
@@ -1088,11 +1054,9 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
     const totalAmount = filtered.reduce((sum, t) => sum + (Number(t.total) || 0), 0);
     const count = filtered.length;
     const avg = count > 0 ? totalAmount / count : 0;
-    const catMap = {}; filtered.forEach(t => { catMap[t.category] = (catMap[t.category] || 0) + (Number(t.total) || 0); });
-    const topCats = Object.entries(catMap).map(([name, value]) => ({ name: name || "ไม่ระบุ", value, percent: totalAmount > 0 ? (value/totalAmount)*100 : 0 })).sort((a,b) => b.value - a.value).slice(0, 5);
     const trendMap = {}; filtered.forEach(t => { const d = normalizeDate(t.date); const dateKey = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; if (!trendMap[dateKey]) trendMap[dateKey] = { date: d, income: 0, expense: 0 }; if (t.type === 'income') trendMap[dateKey].income += Number(t.total); else trendMap[dateKey].expense += Number(t.total); });
     const trendData = Object.values(trendMap).sort((a,b) => a.date - b.date).slice(-14);
-    return { totalAmount, count, avg, topCats, trendData, filtered };
+    return { totalAmount, count, avg, trendData, filtered };
   }, [transactions, histFilterType, selectedYear, viewMode, historySearch]);
     
   const calculated = useMemo(() => { 
@@ -1115,16 +1079,28 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
       return { net, vat, total: formData.vatType === 'excluded' ? net + vat : finalAmount, baseAmount, estimatedPayout, totalAfterDiscount }; 
   }, [formData]);
   
-  const getCollectionName = (type) => type === 'income' ? 'transactions_income' : 'transactions_expense';
-  
   const saveVendorProfile = async () => {
       if (!formData.vendorName) { showToast("กรุณาระบุชื่อร้านค้า", "error"); return; }
       try {
-          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'vendors'), {
+          await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'vendors'), {
               vendorName: formData.vendorName, vendorTaxId: formData.vendorTaxId || '', vendorBranch: formData.vendorBranch || '', vendorBranchName: formData.vendorBranchName || '', vendorAddress: formData.vendorAddress || '', createdAt: serverTimestamp()
           });
-          showToast("บันทึกข้อมูลผู้ขายเรียบร้อย", "success");
+          showToast("บันทึกข้อมูลคู่ค้าเรียบร้อย", "success");
       } catch (e) { showToast("บันทึกไม่สำเร็จ", "error"); }
+  };
+
+  const saveCustomerProfile = async () => {
+    if (!formData.customerName) { showToast("กรุณาระบุชื่อลูกค้า", "error"); return; }
+    try {
+        await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'customers'), {
+            customerName: formData.customerName,
+            taxId: formData.customerTaxId || '',
+            branch: formData.customerBranch || '00000',
+            address: formData.customerAddress || '',
+            createdAt: serverTimestamp()
+        });
+        showToast("บันทึกข้อมูลลูกค้าเรียบร้อย", "success");
+    } catch (e) { showToast("บันทึกไม่สำเร็จ", "error"); }
   };
 
   const handleScanExpense = async (e) => {
@@ -1136,37 +1112,17 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
     const reader = new FileReader();
     reader.onloadend = async () => {
       const base64 = reader.result;
-      const prompt = `ทำหน้าที่เป็น AI Billing Assistant สกัดข้อมูลจากบิลใบกำกับภาษีซื้อ/ใบเสร็จรับเงินในรูปภาพนี้ ให้ข้อมูลเป็น JSON ดังนี้:
-      {
-        "vendorName": "ชื่อผู้ขาย",
-        "vendorTaxId": "เลขผู้เสียภาษี 13 หลัก",
-        "vendorAddress": "ที่อยู่เต็ม",
-        "taxInvoiceNo": "เลขที่ใบกำกับภาษี",
-        "amount": ยอดรวมตัวเลขสุทธิ,
-        "vatType": "included"|"excluded"|"none",
-        "items": [{"desc": "ชื่อรายการ", "qty": จำนวน, "amount": ราคารวมรายการนี้}],
-        "date": "YYYY-MM-DD",
-        "category": "เลือกจากหมวดหมู่: ค่าใช้จ่ายทั่วไป, ต้นทุนสินค้า, ค่าบริการ, ค่าโฆษณา",
-        "expenseDiscount": 0,
-        "voucherDiscount": 0
-      }
-      ตอบเป็น JSON เท่านั้น ภาษาไทย.`;
-
+      const prompt = `Extract transaction from image. Return JSON: { vendorName, vendorTaxId, vendorAddress, taxInvoiceNo, amount, items: [{desc, qty, amount}], date, category }.`;
       try {
         const result = await SmartTaxAI.generate(prompt, base64, true);
         if (result) {
-          setFormData(prev => ({
-            ...prev,
-            ...result,
-            type: 'expense',
-            items: result.items && result.items.length > 0 ? result.items : prev.items
-          }));
-          showToast("สกัดข้อมูลจากบิลสำเร็จ โปรดตรวจสอบความถูกต้อง", "success");
+          setFormData(prev => ({ ...prev, ...result, type: 'expense' }));
+          showToast("สแกนบิลสำเร็จ", "success");
         } else {
-          showToast("AI ไม่สามารถอ่านข้อมูลบิลได้ชัดเจน", "error");
+          showToast("AI อ่านไม่สำเร็จ", "error");
         }
       } catch (err) {
-        showToast("เกิดข้อผิดพลาดในการสแกน", "error");
+        showToast("เกิดข้อผิดพลาด", "error");
       } finally {
         setIsAIScanning(false);
       }
@@ -1188,20 +1144,20 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
               for (const lot of productLots) {
                   if (remainingToDeduct <= 0) break;
                   const deductAmount = Math.min(remainingToDeduct, lot.remainingQty);
-                  await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventory_lots', lot.id), { remainingQty: lot.remainingQty - deductAmount });
+                  await updateDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_lots', lot.id), { remainingQty: lot.remainingQty - deductAmount });
                   remainingToDeduct -= deductAmount;
               }
-              await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', product.id), { stock: increment(-qtyChange) });
+              await updateDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'products', product.id), { stock: increment(-qtyChange) });
           } else {
               const itemAmount = parseFloat(item.amount) || 0;
               const discountRatio = totalLineItemsAmount > 0 ? itemAmount / totalLineItemsAmount : 0;
               const allocatedDiscount = discountRatio * totalDiscount;
               const netItemCost = Math.max(0, itemAmount - allocatedDiscount);
-              await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'inventory_lots'), { 
+              await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_lots'), { 
                   productId: product.id, productName: product.name, initialQty: qtyChange, remainingQty: qtyChange, 
                   cost: netItemCost, costPerUnit: netItemCost / qtyChange, lotDate: transDate, createdAt: serverTimestamp() 
               });
-              await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', product.id), { stock: increment(qtyChange), cost: netItemCost / qtyChange });
+              await updateDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'products', product.id), { stock: increment(qtyChange), cost: netItemCost / qtyChange });
           }
       }
   };
@@ -1218,34 +1174,20 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
               expenseDiscount: parseFloat(formData.expenseDiscount) || 0,
               voucherDiscount: parseFloat(formData.voucherDiscount) || 0,
           };
-          if (editingId) { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', getCollectionName(dataToSave.type), editingId), { ...dataToSave, updatedAt: serverTimestamp() }, {merge: true}); } 
+          const collectionName = formData.type === 'income' ? 'transactions_income' : 'transactions_expense';
+          if (editingId) { await setDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', collectionName, editingId), { ...dataToSave, updatedAt: serverTimestamp() }, {merge: true}); } 
           else {
-              await addDoc(collection(db, 'artifacts', appId, 'public', 'data', getCollectionName(dataToSave.type)), { ...dataToSave, createdAt: serverTimestamp() });
+              await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', collectionName), { ...dataToSave, createdAt: serverTimestamp() });
               await updateStockFIFO(formData.items, formData.type, dateObj, (parseFloat(formData.expenseDiscount) || 0) + (parseFloat(formData.voucherDiscount) || 0));
-              if (formData.type === 'income') {
-                  const savedSeller = JSON.parse(localStorage.getItem('merchant_seller_info') || '{}');
-                  const dateStr = formData.date.replace(/-/g, '');
-                  const prefix = "INV-" + dateStr;
-                  const existingCount = invoices.filter(inv => inv.invNo && inv.invNo.startsWith(prefix)).length;
-                  const newInvNo = `${prefix}-${String(existingCount + 1).padStart(3, '0')}`;
-                  const invoicePayload = { type: 'invoice', docType: 'ใบกำกับภาษี / ใบเสร็จรับเงิน', customerName: formData.isTaxInvoiceReq ? formData.customerName : 'ลูกค้าทั่วไป', address: formData.isTaxInvoiceReq ? formData.customerAddress : '', taxId: formData.isTaxInvoiceReq ? formData.customerTaxId : '', branch: formData.isTaxInvoiceReq ? formData.customerBranch : '', items: formData.items.map(it => ({ desc: it.desc || 'สินค้า/บริการ', qty: it.qty || 1, unit: 'รายการ', price: parseFloat(it.amount) || 0 })), date: dateObj, invNo: newInvNo, orderId: formData.orderId || '', sellerName: savedSeller.sellerName || '', sellerAddress: savedSeller.sellerAddress || '', sellerTaxId: savedSeller.sellerTaxId || '', sellerBranchId: savedSeller.sellerBranchId || '00000', sellerPhone: savedSeller.sellerPhone || '', sellerEmail: savedSeller.sellerEmail || '', sellerSubDistrict: savedSeller.sellerSubDistrict || '', sellerDistrict: savedSeller.sellerDistrict || '', sellerProvince: savedSeller.sellerProvince || '', sellerZipCode: savedSeller.sellerZipCode || '', logo: savedSeller.logo || '', signature: savedSeller.signature || '', vatType: formData.vatType, discount: parseFloat(formData.shopDiscount) || 0, notes: 'ออกอัตโนมัติจากการบันทึกรายรับ', shop: formData.shop, status: 'paid', sub: calculated.baseAmount, afterDisc: calculated.baseAmount - (parseFloat(formData.shopDiscount) || 0), vat: calculated.vat, total: calculated.total, preVat: calculated.net, createdAt: serverTimestamp() };
-                  await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'), invoicePayload);
-              }
-              showToast("บันทึกสำเร็จ", "success");
-              localStorage.removeItem('merchant_draft_record');
-              setDraftStatus(null);
           }
+          showToast("บันทึกสำเร็จ", "success");
           setFormData(initialForm); setEditingId(null);
-      } catch (error) { showToast("บันทึกไม่สำเร็จ: " + error.message, "error"); } 
+      } catch (error) { showToast("บันทึกไม่สำเร็จ", "error"); } 
   };
 
   const handleEdit = (item) => { 
-      setFormData({ ...initialForm, ...item, date: formatDateISO(item.date), amount: item.amount || item.total, items: item.items || [{ desc: item.description, qty: 1, amount: item.amount }], customerShipping: item.customerShipping || '', platformFee: item.platformFee || '', shippingCost: item.shippingCost || '', shopDiscount: item.shopDiscount || '', expenseDiscount: item.expenseDiscount || '', voucherDiscount: item.voucherDiscount || '' }); 
+      setFormData({ ...initialForm, ...item, date: formatDateISO(item.date), amount: item.amount || item.total, items: item.items || [{ desc: item.description, qty: 1, amount: item.amount }] }); 
       setEditingId(item.id); setSubTab('new'); 
-  };
-  const executeDelete = async () => { 
-      if (!deleteId) return; setIsDeleting(true); 
-      try { const item = transactions.find(t => t.id === deleteId); await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', getCollectionName(item.type), deleteId)); setDeleteId(null); showToast("ลบสำเร็จ", "success"); } catch (err) { setDeleteId(null); } finally { setIsDeleting(false); } 
   };
   const handleAddItem = () => { setFormData({ ...formData, items: [...formData.items, { desc: '', qty: 1, amount: '' }] }); };
   const handleRemoveItem = (index) => { if (formData.items.length > 1) { setFormData({ ...formData, items: formData.items.filter((_, i) => i !== index) }); } };
@@ -1255,30 +1197,19 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
           if (field === 'desc') { 
               const matchedProduct = stockProducts.find(p => p.name === value); 
               if (matchedProduct) { 
-                  const unitPrice = Number(matchedProduct.price) || 0;
-                  newItems[index].price = unitPrice; newItems[index].amount = unitPrice * (Number(newItems[index].qty) || 1); 
+                  newItems[index].price = matchedProduct.price; newItems[index].amount = matchedProduct.price * newItems[index].qty; 
               } 
           } else if (field === 'qty') {
-              const qty = Number(value) || 0;
-              const unitPrice = Number(newItems[index].price) || 0;
-              if (unitPrice > 0) { newItems[index].amount = qty * unitPrice; }
+              newItems[index].amount = (newItems[index].price || 0) * value;
           }
       }
-      if (index === 0 && field === 'desc') { setFormData({ ...formData, items: newItems, description: value }); } else { setFormData({ ...formData, items: newItems }); }
+      setFormData({ ...formData, items: newItems });
   };
   const handleSelectProduct = (product) => {
     setFormData(prev => {
-        const existingItemIndex = prev.items.findIndex(item => item.desc === product.name);
-        if (existingItemIndex >= 0) {
-             const newItems = [...prev.items];
-             newItems[existingItemIndex].qty = Number(newItems[existingItemIndex].qty) + 1;
-             newItems[existingItemIndex].amount = newItems[existingItemIndex].qty * (Number(product.price) || 0);
-             return { ...prev, items: newItems };
-        } else {
-            let currentItems = prev.items;
-            if (currentItems.length === 1 && !currentItems[0].desc && !currentItems[0].amount) { currentItems = []; }
-            return { ...prev, items: [ ...currentItems, { desc: product.name, qty: 1, amount: Number(product.price) || 0, price: Number(product.price) || 0 } ] };
-        }
+        let currentItems = prev.items;
+        if (currentItems.length === 1 && !currentItems[0].desc && !currentItems[0].amount) { currentItems = []; }
+        return { ...prev, items: [ ...currentItems, { desc: product.name, qty: 1, amount: product.price, price: product.price } ] };
     });
     showToast(`เพิ่ม ${product.name} แล้ว`, 'success');
   };
@@ -1286,10 +1217,155 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
 
   return (
     <div className="flex flex-col h-full lg:h-[calc(100vh-88px)] relative text-left font-sarabun">
-        {deleteId && <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 text-center"><div className="bg-white rounded-3xl p-8 max-sm w-full shadow-2xl animate-fadeIn"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold mb-6 text-slate-800">ยืนยันการลบ?</h3><div className="flex gap-3 mt-6"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold">ยกเลิก</button><button onClick={executeDelete} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">ลบรายการ</button></div></div></div>}
+        {deleteId && <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 text-center"><div className="bg-white rounded-3xl p-8 max-sm w-full shadow-2xl animate-fadeIn"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold mb-6 text-slate-800">ยืนยันการลบ?</h3><div className="flex gap-3 mt-6"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold">ยกเลิก</button><button onClick={async ()=>{const item = transactions.find(t=>t.id===deleteId); await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', item.type==='income'?'transactions_income':'transactions_expense', deleteId)); setDeleteId(null); showToast("ลบสำเร็จ", "success");}} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">ลบรายการ</button></div></div></div>}
         {previewInvoiceTransaction && (<InvoicePreviewModal transaction={previewInvoiceTransaction} onClose={()=>setPreviewInvoiceTransaction(null)} showToast={showToast}/>)}
-        {showVendorModal && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 font-sarabun text-left"><div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn text-left"><div className="p-6 border-b flex justify-between items-center text-left"><h3 className="font-bold text-lg flex items-center gap-2 text-indigo-600 text-left"><Store className="text-indigo-500"/> เลือกคู่ค้า (Vendor)</h3><button onClick={()=>setShowVendorModal(false)}><X/></button></div><div className="px-6 pt-4"><div className="relative"><Search className="absolute left-3 top-2.5 text-slate-400" size={18}/><input className="w-full bg-slate-50 border-0 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:ring-1 focus:ring-indigo-100" placeholder="ค้นหา..." value={vendorSearch} onChange={e=>setVendorSearch(e.target.value)}/></div></div><div className="flex-1 overflow-y-auto p-4 space-y-2 text-left">{vendors.filter(v => v.vendorName?.toLowerCase().includes(vendorSearch.toLowerCase())).map(v => (<div key={v.id} onClick={()=>{setFormData(p=>({...p, vendorName: v.vendorName, vendorTaxId: v.vendorTaxId, vendorBranch: v.vendorBranch, vendorBranchName: v.vendorBranchName || '', vendorAddress: v.vendorAddress})); setShowVendorModal(false);}} className="p-4 rounded-xl border border-slate-100 hover:bg-indigo-50 cursor-pointer shadow-sm text-left group transition-colors"><p className="font-bold text-slate-700 text-sm">{v.vendorName}</p><p className="text-xs text-slate-500">{v.vendorAddress || '-'}</p></div>))}</div></div></div>)}
-        {showCustomerModal && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 font-sarabun text-left"><div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn text-left"><div className="p-6 border-b flex justify-between items-center text-left"><h3 className="font-bold text-lg flex items-center gap-2 text-rose-600 text-left"><User className="text-rose-500"/> เลือกข้อมูลลูกค้า</h3><button onClick={()=>setShowCustomerModal(false)}><X/></button></div><div className="flex-1 overflow-y-auto p-4 space-y-2 text-left">{customers.map(c => (<div key={c.id} onClick={()=>{setFormData(p=>({...p, customerName: c.customerName, customerAddress: c.address, customerTaxId: c.taxId, customerBranch: c.branch})); setShowCustomerModal(false);}} className="p-4 rounded-xl border border-slate-100 hover:bg-rose-50 cursor-pointer shadow-sm text-left"><p className="font-bold text-left">{c.customerName}</p><p className="text-xs text-slate-400 truncate text-left">{c.address}</p></div>))}</div></div></div>)}
+        
+        {/* Updated Vendor Selection Modal (Performance Style) */}
+        {showVendorModal && (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[120] flex items-center justify-center p-4">
+            <div className="bg-white rounded-[32px] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+              <div className="p-6 border-b flex justify-between items-center bg-slate-50 rounded-t-[32px]">
+                <div>
+                  <h3 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Store className="text-indigo-600"/> Vendor Selection (Performance)</h3>
+                  <p className="text-sm text-slate-500">เลือกคู่ค้าจากประวัติเพื่อความรวดเร็วในการบันทึก</p>
+                </div>
+                <button onClick={() => setShowVendorModal(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X size={24}/></button>
+              </div>
+              <div className="p-6 pb-0">
+                <div className="relative">
+                  <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
+                  <input 
+                    className="w-full bg-slate-100 border-0 rounded-2xl pl-12 pr-4 py-3 text-base font-medium focus:ring-2 focus:ring-indigo-500 transition-all" 
+                    placeholder="ค้นหาคู่ค้า (ชื่อ, เลขผู้เสียภาษี)..." 
+                    value={vendorSearch} 
+                    onChange={e => setVendorSearch(e.target.value)} 
+                    autoFocus 
+                  />
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {vendors.filter(v => v.vendorName?.toLowerCase().includes(vendorSearch.toLowerCase()) || v.vendorTaxId?.includes(vendorSearch)).map(v => (
+                    <div 
+                      key={v.id} 
+                      onClick={() => {
+                        setFormData(p => ({...p, vendorName: v.vendorName, vendorTaxId: v.vendorTaxId, vendorBranch: v.vendorBranch, vendorBranchName: v.vendorBranchName || '', vendorAddress: v.vendorAddress}));
+                        setShowVendorModal(false);
+                      }} 
+                      className="bg-white border border-slate-200 rounded-2xl p-5 cursor-pointer hover:border-indigo-500 hover:shadow-xl transition-all group relative flex flex-col gap-3"
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                          <Building size={20}/>
+                        </div>
+                        <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded-lg font-bold uppercase tracking-tighter">
+                          Branch: {v.vendorBranch || '00000'}
+                        </span>
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-slate-800 text-lg group-hover:text-indigo-600 transition-colors">{v.vendorName}</h4>
+                        <div className="flex items-center gap-2 text-slate-400 mt-1">
+                          <CreditCard size={14}/>
+                          <span className="text-xs font-mono">{v.vendorTaxId || 'ไม่ระบุเลขผู้เสียภาษี'}</span>
+                        </div>
+                      </div>
+                      <div className="pt-3 border-t border-slate-50 mt-1 flex items-start gap-2 text-slate-500">
+                        <MapPin size={14} className="mt-0.5 shrink-0"/>
+                        <p className="text-xs leading-relaxed line-clamp-2">{v.vendorAddress || 'ไม่มีที่อยู่'}</p>
+                      </div>
+                      <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <ChevronRight className="text-indigo-400" />
+                      </div>
+                    </div>
+                  ))}
+                  {vendors.length === 0 && (
+                    <div className="col-span-full py-20 text-center text-slate-300">
+                      <Inbox size={48} className="mx-auto mb-4 opacity-20"/>
+                      <p className="font-bold">ไม่พบข้อมูลคู่ค้า</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="p-4 border-t bg-slate-50 flex justify-end items-center rounded-b-[32px]">
+                <button onClick={() => setShowVendorModal(false)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-bold shadow-lg transition-all">ปิด</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Updated Customer Selection Modal (Performance Style) */}
+        {showCustomerModal && (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[120] flex items-center justify-center p-4">
+            <div className="bg-white rounded-[32px] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+              <div className="p-6 border-b flex justify-between items-center bg-slate-50 rounded-t-[32px]">
+                <div>
+                  <h3 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><User className="text-rose-600"/> Customer Selection (Performance)</h3>
+                  <p className="text-sm text-slate-500">เลือกลูกค้าจากฐานข้อมูลเพื่อความรวดเร็ว</p>
+                </div>
+                <button onClick={() => setShowCustomerModal(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X size={24}/></button>
+              </div>
+              <div className="p-6 pb-0">
+                <div className="relative">
+                  <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
+                  <input 
+                    className="w-full bg-slate-100 border-0 rounded-2xl pl-12 pr-4 py-3 text-base font-medium focus:ring-2 focus:ring-rose-500 transition-all" 
+                    placeholder="ค้นหาลูกค้า (ชื่อ, เลขผู้เสียภาษี)..." 
+                    value={customerSearch} 
+                    onChange={e => setCustomerSearch(e.target.value)} 
+                    autoFocus 
+                  />
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {customers.filter(c => c.customerName?.toLowerCase().includes(customerSearch.toLowerCase()) || c.taxId?.includes(customerSearch)).map(c => (
+                    <div 
+                      key={c.id} 
+                      onClick={() => {
+                        setFormData(p => ({...p, customerName: c.customerName, customerTaxId: c.taxId, customerBranch: c.branch, customerAddress: c.address}));
+                        setShowCustomerModal(false);
+                      }} 
+                      className="bg-white border border-slate-200 rounded-2xl p-5 cursor-pointer hover:border-rose-500 hover:shadow-xl transition-all group relative flex flex-col gap-3"
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="p-3 bg-rose-50 text-rose-600 rounded-xl group-hover:bg-rose-600 group-hover:text-white transition-colors">
+                          <User size={20}/>
+                        </div>
+                        <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded-lg font-bold uppercase tracking-tighter">
+                          Branch: {c.branch || '00000'}
+                        </span>
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-slate-800 text-lg group-hover:text-rose-600 transition-colors">{c.customerName}</h4>
+                        <div className="flex items-center gap-2 text-slate-400 mt-1">
+                          <CreditCard size={14}/>
+                          <span className="text-xs font-mono">{c.taxId || 'ไม่ระบุเลขผู้เสียภาษี'}</span>
+                        </div>
+                      </div>
+                      <div className="pt-3 border-t border-slate-50 mt-1 flex items-start gap-2 text-slate-500">
+                        <MapPin size={14} className="mt-0.5 shrink-0"/>
+                        <p className="text-xs leading-relaxed line-clamp-2">{c.address || 'ไม่มีที่อยู่'}</p>
+                      </div>
+                      <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <ChevronRight className="text-rose-400" />
+                      </div>
+                    </div>
+                  ))}
+                  {customers.length === 0 && (
+                    <div className="col-span-full py-20 text-center text-slate-300">
+                      <Inbox size={48} className="mx-auto mb-4 opacity-20"/>
+                      <p className="font-bold">ไม่พบข้อมูลลูกค้า</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="p-4 border-t bg-slate-50 flex justify-end items-center rounded-b-[32px]">
+                <button onClick={() => setShowCustomerModal(false)} className="bg-rose-600 hover:bg-rose-700 text-white px-8 py-3 rounded-xl font-bold shadow-lg transition-all">ปิด</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {showProductSelector && (
             <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
                 <div className="bg-white rounded-[32px] w-full max-w-5xl h-[85vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200">
@@ -1527,6 +1603,11 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                                                 <input className="w-full bg-slate-50 border-0 rounded-xl px-3 py-2.5 text-sm font-medium" placeholder="สาขา" value={formData.customerBranch} onChange={e=>setFormData({...formData, customerBranch: e.target.value})} />
                                             </div>
                                             <textarea className="w-full bg-slate-50 border-0 rounded-xl px-3 py-2.5 text-sm font-medium h-20" placeholder="ที่อยู่..." value={formData.customerAddress} onChange={e=>setFormData({...formData, customerAddress: e.target.value})} />
+                                            <div className="pt-2">
+                                              <button onClick={saveCustomerProfile} type="button" className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 border border-slate-200">
+                                                <Save size={14}/> บันทึกข้อมูลลูกค้า
+                                              </button>
+                                            </div>
                                         </div>
                                     )}
                                     <div className="space-y-1.5 pt-2 border-t border-slate-50">
@@ -1545,6 +1626,11 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                                     <div className="pt-2 border-t border-slate-50">
                                         <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">เลขที่ใบกำกับภาษี (Ref.)</label>
                                         <input className="w-full bg-slate-50 border-0 rounded-xl px-3 py-2.5 text-sm font-bold text-indigo-600 mt-1" placeholder="INV-XXXX" value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})}/>
+                                    </div>
+                                    <div className="pt-2">
+                                      <button onClick={saveVendorProfile} type="button" className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 border border-slate-200">
+                                        <Save size={14}/> บันทึกข้อมูลคู่ค้า
+                                      </button>
                                     </div>
                                 </div>
                             )}
@@ -1611,11 +1697,11 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
           </div>
         ) : (
           <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden animate-fadeIn text-left">
-            <div className="p-6 border-b border-slate-100 space-y-4"><div className="flex flex-col md:flex-row justify-between items-start gap-4"><div><h3 className="font-bold text-slate-800 flex items-center gap-2 text-xl"><BarChart2 className="text-indigo-600"/> Performance & History</h3><p className="text-slate-500 text-sm">วิเคราะห์เจาะลึกรายการบันทึกย้อนหลัง</p></div><div className="flex flex-wrap gap-2"><div className="flex bg-slate-100 p-1 rounded-xl"><button onClick={()=>setSelectedYear(currentYear-1)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${selectedYear === currentYear-1 ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีย้อนหลัง ({currentYear-1})</button><button onClick={()=>setSelectedYear(currentYear)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${selectedYear === currentYear ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีปัจจุบัน ({currentYear})</button></div><select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histFilterType} onChange={e=>setHistFilterType(e.target.value)}><option value="all">รวมทุกประเภท</option><option value="income">รายรับ (Income)</option><option value="expense">รายจ่าย (Expense)</option></select><button className="bg-emerald-50 text-emerald-600 p-2 rounded-xl hover:bg-emerald-100 flex items-center gap-2 px-4 text-sm font-bold shadow-sm transition-all"><FileText size={18}/> Export</button></div></div>
+            <div className="p-6 border-b border-slate-100 space-y-4"><div className="flex flex-col md:flex-row justify-between items-center gap-4"><div><h3 className="font-bold text-slate-800 flex items-center gap-2 text-xl"><BarChart2 className="text-indigo-600"/> Performance & History</h3><p className="text-slate-500 text-sm">วิเคราะห์เจาะลึกรายการบันทึกย้อนหลัง</p></div><div className="flex flex-wrap gap-2"><div className="flex bg-slate-100 p-1 rounded-xl"><button onClick={()=>setSelectedYear(currentYear-1)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${selectedYear === currentYear-1 ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีย้อนหลัง ({currentYear-1})</button><button onClick={()=>setSelectedYear(currentYear)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${selectedYear === currentYear ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีปัจจุบัน ({currentYear})</button></div><select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histFilterType} onChange={e=>setHistFilterType(e.target.value)}><option value="all">รวมทุกประเภท</option><option value="income">รายรับ (Income)</option><option value="expense">รายจ่าย (Expense)</option></select><button className="bg-emerald-50 text-emerald-600 p-2 rounded-xl hover:bg-emerald-100 flex items-center gap-2 px-4 text-sm font-bold shadow-sm transition-all"><FileText size={18}/> Export</button></div></div>
             <div className="flex flex-col md:flex-row gap-4 items-center justify-between"><div className="flex bg-indigo-50/50 p-1 rounded-xl w-full md:w-auto">{['day', 'week', 'month', 'year'].map(m => (<button key={m} onClick={() => setViewMode(m)} className={`flex-1 md:flex-none px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all ${viewMode === m ? 'bg-indigo-600 text-white shadow-md' : 'text-indigo-400 hover:bg-indigo-100'}`}>{m === 'day' ? 'รายวัน' : m === 'week' ? 'รายสัปดาห์' : m === 'month' ? 'รายเดือน' : 'ทั้งปี'}</button>))}</div><div className="relative w-full md:w-64"><Search className="absolute left-3 top-2.5 text-slate-400" size={16}/><input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 transition-all" placeholder="ค้นหารายการ, ยอดเงิน..." value={historySearch} onChange={e=>setHistorySearch(e.target.value)}/></div></div></div>
             <div className="flex-1 overflow-y-auto custom-scrollbar p-6"><div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6"><div className="p-5 rounded-2xl bg-indigo-50 border border-indigo-100 relative overflow-hidden group"><div className="relative z-10"><p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-1">จำนวนรายการ (Volume)</p><h4 className="text-3xl font-bold text-indigo-700">{formatCompactNumber(historyStats.count)} <span className="text-sm font-medium text-indigo-400">รายการ</span></h4></div><div className="absolute -right-2 -bottom-2 text-indigo-200 opacity-20 group-hover:scale-110 transition-transform"><List size={80}/></div></div><div className="p-5 rounded-2xl bg-emerald-50 border border-emerald-100 relative overflow-hidden group"><div className="relative z-10"><p className="text-xs font-bold text-emerald-500 uppercase tracking-wider mb-1">มูลค่ารวม (Total Value)</p><h4 className="text-3xl font-bold text-emerald-700">{formatCurrency(historyStats.totalAmount)}</h4></div><div className="absolute -right-2 -bottom-2 text-emerald-200 opacity-20 group-hover:scale-110 transition-transform"><Wallet size={80}/></div></div><div className="p-5 rounded-2xl bg-amber-50 border border-amber-100 relative overflow-hidden group"><div className="relative z-10"><p className="text-xs font-bold text-amber-500 uppercase tracking-wider mb-1">เฉลี่ยต่อบิล (Avg. Ticket)</p><h4 className="text-3xl font-bold text-amber-700">{formatCurrency(historyStats.avg)}</h4></div><div className="absolute -right-2 -bottom-2 text-emerald-200 opacity-20 group-hover:scale-110 transition-transform"><Tag size={80}/></div></div></div>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8"><div className="lg:col-span-2 bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><h4 className="font-bold text-slate-700 text-sm flex items-center gap-2"><Activity size={16}/> Activity Trend (Filtered)</h4></div><div className="flex items-end gap-3 h-40">{historyStats.trendData.length > 0 ? historyStats.trendData.map((d, i) => { const maxVal = Math.max(...historyStats.trendData.map(x => Math.max(x.income, x.expense))) || 1; return (<div key={i} className="flex-1 flex flex-col justify-end gap-1 h-full group relative"><div className="w-full bg-emerald-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.income/maxVal)*100, 2)}%`}}></div><div className="w-full bg-rose-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.expense/maxVal)*100, 2)}%`}}></div><div className="text-[9px] text-center text-slate-400 font-bold mt-1">{d.date.getDate()}</div><div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-800 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-20 shadow-xl transition-opacity"><div className="font-bold border-b border-slate-600 pb-1 mb-1">{formatDate(d.date)}</div><div className="text-emerald-300">In: {formatCurrency(d.income)}</div><div className="text-rose-300">Ex: {formatCurrency(d.expense)}</div></div></div>) }) : <div className="w-full h-full flex items-center justify-center text-slate-400">ไม่มีข้อมูลในช่วงนี้</div>}</div></div>
-                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm"><h4 className="font-bold text-slate-700 text-sm mb-4 flex items-center gap-2"><PieChart size={16}/> Top Categories</h4><div className="space-y-4">{historyStats.topCats.length > 0 ? historyStats.topCats.map((c, i) => (<div key={i}><div className="flex justify-between text-xs mb-1.5 font-bold"><span className="text-slate-600">{i+1}. {c.name}</span><span className="text-slate-800">{formatCompactNumber(c.value)} ({c.percent.toFixed(1)}%)</span></div><div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden"><div className={`h-full rounded-full ${i === 0 ? 'bg-indigo-500' : 'bg-indigo-300'}`} style={{width: `${c.percent}%`}}></div></div></div>)) : <p className="text-center text-slate-400 text-sm py-4">ไม่มีข้อมูลหมวดหมู่</p>}</div></div></div>
+                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm"><h4 className="font-bold text-slate-700 text-sm mb-4 flex items-center gap-2"><PieChart size={16}/> Top Categories</h4></div></div>
                 <h4 className="font-bold text-slate-700 text-lg mb-4 flex items-center gap-2"><List size={20}/> Transaction Logs <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full ml-2">Year: {selectedYear} / View: {viewMode.toUpperCase()}</span></h4>
                 <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm"><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase border-b border-slate-200"><tr><th className="p-4 border-r border-slate-200 w-[50px] text-center">ลำดับ</th><th className="p-4 w-[120px]">Date</th><th className="p-4 w-[100px]">Type</th><th className="p-4">Description</th><th className="p-4 text-right">Amount</th><th className="p-4 text-center w-[100px]">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{historyStats.filtered.sort((a,b) => b.date - a.date).map((t, idx) => (<tr key={t.id + "-hist-" + idx} className="hover:bg-slate-50 transition-colors"><td className="p-4 text-center border-r border-slate-50 text-slate-400 text-xs">{idx + 1}</td><td className="p-4 text-slate-500 text-xs font-mono">{formatDate(t.date)}</td><td className="p-4"><span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${t.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{t.type}</span></td><td className="p-4"><div className="font-bold text-slate-700">{t.description}</div><div className="flex gap-2 mt-1"><span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">{t.category}</span>{t.orderId && <span className="text-[10px] text-indigo-400 font-mono">Ref: {t.orderId}</span>}</div></td><td className={`p-4 text-right font-bold ${t.type==='income'?'text-emerald-600':'text-rose-600'}`}>{t.type === 'income' ? '+' : '-'}{formatCurrency(t.total)}</td><td className="p-4 text-center"><div className="flex justify-center gap-2">{t.type === 'income' && (<button onClick={() => setPreviewInvoiceTransaction(t)} className="text-slate-300 hover:text-indigo-600" title="Reprint Invoice"><Printer size={14}/></button>)}<button onClick={()=>handleEdit(t)} className="text-slate-300 hover:text-orange-500"><Edit size={14}/></button><button onClick={(e)=>setDeleteId(t.id)} className="text-slate-300 hover:text-rose-500"><Trash2 size={14}/></button></div></td></tr>))}{historyStats.filtered.length === 0 && (<tr><td colSpan="6" className="p-8 text-center text-slate-300">ไม่พบรายการในช่วงนี้</td></tr>)}</tbody></table></div>
             </div>
@@ -1681,8 +1767,8 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
 
   useEffect(() => {
       if (user) {
-          const unsubSellers = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'seller_profiles')), (snap) => setSellerProfiles(snap.docs.map(d=>({id:d.id, ...d.data()}))));
-          const unsubCustomers = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'customers')), (snap) => setCustomers(snap.docs.map(d=>({id:d.id, ...d.data()}))));
+          const unsubSellers = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'seller_profiles')), (snap) => setSellerProfiles(snap.docs.map(d=>({id:d.id, ...d.data()}))));
+          const unsubCustomers = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'customers')), (snap) => setCustomers(snap.docs.map(d=>({id:d.id, ...d.data()}))));
           return () => { unsubSellers(); unsubCustomers(); };
       }
   }, [user, appId]);
@@ -1691,8 +1777,8 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
     if (!user) return;
     try {
       const payload = { ...invData, ...totals, date: new Date(invData.date), type: docType };
-      if (editingDocId) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', editingDocId), { ...payload, updatedAt: serverTimestamp() }, {merge: true}); 
-      else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'), { ...payload, createdAt: serverTimestamp(), status: 'unpaid' });
+      if (editingDocId) await setDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', editingDocId), { ...payload, updatedAt: serverTimestamp() }, {merge: true}); 
+      else await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'), { ...payload, createdAt: serverTimestamp(), status: 'unpaid' });
       localStorage.removeItem('merchant_draft_inv'); setDraftStatus(null); showToast("บันทึกสำเร็จ", "success"); setMode('history'); setEditingDocId(null);
     } catch(e) { showToast("บันทึกไม่สำเร็จ", "error"); }
   };
@@ -1702,17 +1788,17 @@ const InvoiceGenerator = ({ user, invoices, appId, showToast }) => {
   const handleNewInvoice = () => { const currentSavedSeller = JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); setEditingDocId(null); setInvData({ ...initialInvData, ...currentSavedSeller }); setMode('create'); }
   const handleEditInvoice = (inv) => { setInvData({ ...inv, date: formatDateISO(inv.date) }); setEditingDocId(inv.id); setMode('create'); }
   const updateItem = (i, field, val) => { const newItems = [...invData.items]; newItems[i][field] = val; setInvData({...invData, items: newItems}); };
-  const saveSellerProfile = async () => { if(!invData.sellerName) return; await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'seller_profiles'), { sellerName: invData.sellerName, sellerAddress: invData.sellerAddress, sellerTaxId: invData.sellerTaxId, sellerBranchId: invData.sellerBranchId, sellerPhone: invData.sellerPhone, sellerEmail: invData.sellerEmail, logo: invData.logo, signature: invData.signature, sellerSubDistrict: invData.sellerSubDistrict, sellerDistrict: invData.sellerDistrict, sellerProvince: invData.sellerProvince, sellerZipCode: invData.sellerZipCode }); showToast("บันทึกโปรไฟล์สำเร็จ", "success"); };
+  const saveSellerProfile = async () => { if(!invData.sellerName) return; await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'seller_profiles'), { sellerName: invData.sellerName, sellerAddress: invData.sellerAddress, sellerTaxId: invData.sellerTaxId, sellerBranchId: invData.sellerBranchId, sellerPhone: invData.sellerPhone, sellerEmail: invData.sellerEmail, logo: invData.logo, signature: invData.signature, sellerSubDistrict: invData.sellerSubDistrict, sellerDistrict: invData.sellerDistrict, sellerProvince: invData.sellerProvince, sellerZipCode: invData.sellerZipCode }); showToast("บันทึกโปรไฟล์สำเร็จ", "success"); };
   const filteredInvoices = useMemo(() => { return invoices.filter(inv => { const searchLower = (inv.invNo || '').toLowerCase(); const customerLower = (inv.customerName || '').toLowerCase(); const orderLower = (inv.orderId || '').toLowerCase(); const searchInput = invoiceSearch.toLowerCase(); const matchSearch = searchLower.includes(searchInput) || customerLower.includes(searchInput) || orderLower.includes(searchInput); const matchStatus = filterStatus === 'all' || (inv.status || 'unpaid') === filterStatus; return matchSearch && matchStatus; }).sort((a, b) => sortOrder === 'newest' ? (new Date(b.date) - new Date(a.date)) : (new Date(a.date) - new Date(b.date))); }, [invoices, invoiceSearch, filterStatus, sortOrder]);
 
   return (
     <div className="w-full flex flex-col gap-8 relative h-full text-left font-sarabun">
       {showSellerEditModal && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 font-sarabun text-left"><div className="bg-white rounded-3xl w-full max-w-2xl h-[85vh] flex flex-col shadow-2xl animate-fadeIn"><div className="p-6 border-b flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2 text-indigo-700 text-left"><Settings/> ตั้งค่าผู้ขาย & โปรไฟล์</h3><button onClick={()=>setShowSellerEditModal(false)}><X/></button></div><div className="flex-1 overflow-y-auto p-6 space-y-4 text-left"><div className="grid grid-cols-2 gap-4"><div><label className="text-xs font-bold text-slate-500 text-left">โลโก้ร้านค้า</label><div className="border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 text-center" onClick={() => logoInputRef.current?.click()}>{invData.logo ? <img src={invData.logo} className="h-24 object-contain" alt="Preview" /> : <ImageIcon size={48} className="text-slate-300"/>}<input type="file" ref={logoInputRef} hidden accept="image/*" onChange={handleLogoUpload} /></div></div><div><label className="text-xs font-bold text-slate-500 text-left">ลายเซ็น (Signature)</label><div className="border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 text-center" onClick={() => signatureInputRef.current?.click()}>{invData.signature ? <img src={invData.signature} className="h-24 object-contain" alt="Signature Preview" /> : <Edit size={48} className="text-slate-300"/>}<input type="file" ref={signatureInputRef} hidden accept="image/*" onChange={handleSignatureUpload} /></div></div></div><div className="grid grid-cols-2 gap-4 text-left"><div><label className="text-xs font-bold text-left block mb-1">ชื่อร้านค้า</label><input className="w-full border rounded-lg p-2.5 mt-1 text-left" value={invData.sellerName} onChange={e=>setInvData({...invData, sellerName: e.target.value})} /></div><div><label className="text-xs font-bold text-left block mb-1">เลขผู้เสียภาษี</label><input className="w-full border rounded-lg p-2.5 mt-1 text-left" value={invData.sellerTaxId} onChange={e=>setInvData({...invData, sellerTaxId: e.target.value})} /></div><div className="col-span-2 text-left"><label className="text-xs font-bold text-left block mb-1">ที่อยู่ (บ้านเลขที่, ถนน)</label><input className="w-full border rounded-lg p-2.5 mt-1 text-left" value={invData.sellerAddress} onChange={e=>setInvData({...invData, sellerAddress: e.target.value})} /></div><div><label className="text-xs font-bold text-left block mb-1">แขวง/ตำบล</label><input className="w-full border rounded-lg p-2.5 mt-1 text-left" value={invData.sellerSubDistrict} onChange={e=>setInvData({...invData, sellerSubDistrict: e.target.value})} /></div><div><label className="text-xs font-bold text-left block mb-1">เขต/อำเภอ</label><input className="w-full border rounded-lg p-2.5 mt-1 text-left" value={invData.sellerDistrict} onChange={e=>setInvData({...invData, sellerDistrict: e.target.value})} /></div><div><label className="text-xs font-bold text-left block mb-1">จังหวัด</label><input className="w-full border rounded-lg p-2.5 mt-1 text-left" value={invData.sellerProvince} onChange={e=>setInvData({...invData, sellerProvince: e.target.value})} /></div><div><label className="text-xs font-bold text-left block mb-1">รหัสไปรษณีย์</label><input className="w-full border rounded-lg p-2.5 mt-1 text-left" value={invData.sellerZipCode} onChange={e=>setInvData({...invData, sellerZipCode: e.target.value})} /></div></div><div className="pt-4 border-t text-left"><h4 className="text-xs font-bold text-slate-400 mb-2 uppercase text-left">เลือกจากโปรไฟล์เก่า</h4><div className="space-y-2 text-left">{sellerProfiles.map(s => (<div key={s.id} onClick={()=>{setInvData(p=>({...p, ...s})); setShowSellerEditModal(false);}} className="p-3 bg-slate-50 border rounded-xl cursor-pointer hover:border-indigo-300 font-medium text-left">{s.sellerName}</div>))}</div></div></div><div className="p-4 border-t flex gap-3 text-center"><button onClick={saveSellerProfile} className="flex-1 bg-white border border-indigo-200 text-indigo-700 py-3 rounded-xl font-bold shadow-sm text-center">บันทึกโปรไฟล์ใหม่</button><button onClick={()=>setShowSellerEditModal(false)} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-bold text-center">เสร็จสิ้น</button></div></div></div>)}
       {showCustomerModal && (<div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 font-sarabun text-left"><div className="bg-white rounded-3xl w-full max-w-md h-[70vh] flex flex-col shadow-2xl animate-fadeIn text-left"><div className="p-6 border-b flex justify-between items-center text-left"><h3 className="font-bold text-lg flex items-center gap-2 text-rose-600 text-left"><User className="text-rose-500"/> เลือกข้อมูลลูกค้า</h3><button onClick={()=>setShowCustomerModal(false)}><X/></button></div><div className="flex-1 overflow-y-auto p-4 space-y-2 text-left">{customers.map(c => (<div key={c.id} onClick={()=>{setInvData(p=>({...p, customerName: c.customerName, address: c.address, taxId: c.taxId, branch: c.branch, custSubDistrict: c.custSubDistrict || '', custDistrict: c.custDistrict || '', custProvince: c.custProvince || '', custZipCode: c.custZipCode || ''})); setShowCustomerModal(false);}} className="p-4 rounded-xl border border-slate-100 hover:bg-rose-50 cursor-pointer shadow-sm text-left"><p className="font-bold text-left">{c.customerName}</p><p className="text-xs text-slate-400 truncate text-left">{c.address}</p></div>))}</div></div></div>)}
-      {deleteId && (<div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 font-sarabun text-center"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl animate-fadeIn"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4"><Trash2 size={32} className="text-rose-500"/></div><h3 className="text-xl font-bold mb-6 text-slate-800">ลบเอกสารใบนี้?</h3><div className="flex gap-3 text-center"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button><button onClick={async ()=>{await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', deleteId)); setDeleteId(null); showToast("ลบเรียบร้อย", "success");}} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ยืนยันลบ</button></div></div></div>)}
+      {deleteId && (<div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 font-sarabun text-center"><div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl animate-fadeIn"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4"><Trash2 size={32} className="text-rose-500"/></div><h3 className="text-xl font-bold mb-6 text-slate-800">ลบเอกสารใบนี้?</h3><div className="flex gap-3 text-center"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold text-center">ยกเลิก</button><button onClick={async ()=>{await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', deleteId)); setDeleteId(null); showToast("ลบเรียบร้อย", "success");}} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold text-center">ยืนยันลบ</button></div></div></div>)}
       <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit print:hidden self-center"><button onClick={() => setMode('create')} className={"px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all " + (mode==='create'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700')}><FileText size={18}/> ออกเอกสาร</button><button onClick={() => setMode('history')} className={"px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all " + (mode==='history'?'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200':'text-slate-500 hover:text-slate-700')}><Clock size={18}/> ประวัติเอกสาร</button></div>
       {mode === 'history' ? (
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 animate-fadeIn h-full flex flex-col text-left"><div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4"><h3 className="font-bold text-slate-700 text-xl flex-shrink-0 text-left">Document History</h3><div className="flex flex-wrap gap-2 w-full md:w-auto justify-end"><select className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-100" value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}><option value="all">สถานะ: ทั้งหมด</option><option value="paid">ชำระแล้ว (Paid)</option><option value="unpaid">รอดำเนินการ (Unpaid)</option></select><select className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-100" value={sortOrder} onChange={e=>setSortOrder(e.target.value)}><option value="newest">วันที่: ใหม่ล่าสุด</option><option value="oldest">วันที่: เก่าสุด</option></select><div className="relative w-full md:w-64"><Search className="absolute left-3 top-2.5 text-slate-400" size={16}/><input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm" placeholder="ค้นหาเอกสาร..." value={invoiceSearch} onChange={e => setInvoiceSearch(e.target.value)} /></div></div></div><div className="rounded-2xl border border-slate-100 overflow-x-auto flex-1 custom-scrollbar text-left"><table className="w-full text-sm text-left whitespace-nowrap text-left"><thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider text-xs sticky top-0 z-10 text-left"><tr><th className="p-4 text-left">Date</th><th className="p-4 text-left">No.</th><th className="p-4 text-left">Customer</th><th className="p-4 text-right">Total</th><th className="p-4 text-center">Status</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-50 text-left">{filteredInvoices.map((inv, idx) => (<tr key={inv.id + "-" + idx} className="hover:bg-indigo-50/30 even:bg-slate-50/50 text-left"><td className="p-4 text-slate-500 text-xs text-left">{formatDate(inv.date)}</td><td className="p-4 text-slate-700 font-bold text-left">{inv.invNo}</td><td className="p-4 text-left">{inv.customerName}</td><td className="p-4 text-right font-bold">{formatCurrency(inv.total)}</td><td className="p-4 text-center"><button onClick={async ()=>{await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'invoices', inv.id), { status: inv.status === 'paid' ? 'unpaid' : 'paid' });}} className={"px-3 py-1 rounded-full text-[10px] font-bold border transition-all " + (inv.status === 'paid' ? 'bg-emerald-100 text-emerald-600 border-emerald-200' : 'bg-orange-100 text-orange-600 border-orange-200')}>{inv.status === 'paid' ? 'Paid' : 'Unpaid'}</button></td><td className="p-4 text-center"><div className="flex justify-center gap-2 text-center"><button onClick={() => handleEditInvoice(inv)} className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-100 transition-all flex items-center gap-1 text-center"><Edit size={12}/> Edit/Print</button><button onClick={()=>setDeleteId(inv.id)} className="p-1.5 text-slate-300 hover:text-rose-500 text-center"><Trash2 size={14}/></button></div></td></tr>))}</tbody></table></div></div>
+        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 animate-fadeIn h-full flex flex-col text-left"><div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4"><h3 className="font-bold text-slate-700 text-xl flex-shrink-0 text-left">Document History</h3><div className="flex wrap gap-2 w-full md:w-auto justify-end"><select className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-100" value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}><option value="all">สถานะ: ทั้งหมด</option><option value="paid">ชำระแล้ว (Paid)</option><option value="unpaid">รอดำเนินการ (Unpaid)</option></select><select className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-100" value={sortOrder} onChange={e=>setSortOrder(e.target.value)}><option value="newest">วันที่: ใหม่ล่าสุด</option><option value="oldest">วันที่: เก่าสุด</option></select><div className="relative w-full md:w-64"><Search className="absolute left-3 top-2.5 text-slate-400" size={16}/><input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm" placeholder="ค้นหาเอกสาร..." value={invoiceSearch} onChange={e => setInvoiceSearch(e.target.value)} /></div></div></div><div className="rounded-2xl border border-slate-100 overflow-x-auto flex-1 custom-scrollbar text-left"><table className="w-full text-sm text-left whitespace-nowrap text-left"><thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider text-xs sticky top-0 z-10 text-left"><tr><th className="p-4 text-left">Date</th><th className="p-4 text-left">No.</th><th className="p-4 text-left">Customer</th><th className="p-4 text-right">Total</th><th className="p-4 text-center">Status</th><th className="p-4 text-center">Action</th></tr></thead><tbody className="divide-y divide-slate-50 text-left">{filteredInvoices.map((inv, idx) => (<tr key={inv.id + "-" + idx} className="hover:bg-indigo-50/30 even:bg-slate-50/50 text-left"><td className="p-4 text-slate-500 text-xs text-left">{formatDate(inv.date)}</td><td className="p-4 text-slate-700 font-bold text-left">{inv.invNo}</td><td className="p-4 text-left">{inv.customerName}</td><td className="p-4 text-right font-bold">{formatCurrency(inv.total)}</td><td className="p-4 text-center"><button onClick={async ()=>{await updateDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', inv.id), { status: inv.status === 'paid' ? 'unpaid' : 'paid' });}} className={"px-3 py-1 rounded-full text-[10px] font-bold border transition-all " + (inv.status === 'paid' ? 'bg-emerald-100 text-emerald-600 border-emerald-200' : 'bg-orange-100 text-orange-600 border-orange-200')}>{inv.status === 'paid' ? 'Paid' : 'Unpaid'}</button></td><td className="p-4 text-center"><div className="flex justify-center gap-2 text-center"><button onClick={() => handleEditInvoice(inv)} className="text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-100 transition-all flex items-center gap-1 text-center"><Edit size={12}/> Edit/Print</button><button onClick={()=>setDeleteId(inv.id)} className="p-1.5 text-slate-300 hover:text-rose-500 text-center"><Trash2 size={14}/></button></div></td></tr>))}</tbody></table></div></div>
       ) : (
         <><div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 print:hidden space-y-6 text-left"><div className="flex justify-between border-b border-slate-100 pb-4 text-left"><div><h3 className="font-bold text-slate-800 text-xl flex items-center gap-2 text-left">Document Editor</h3><p className="text-slate-400 text-sm text-left">สร้างเอกสารใบกำกับภาษี หรือ ใบเสนอราคา</p></div><div className="text-right flex flex-col items-end gap-2 text-right"><button onClick={handleNewInvoice} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 text-right"><PlusCircle size={14}/> New Document</button><div><p className="text-xs text-slate-400 font-bold uppercase text-right">DOC ID</p><div className="flex items-center gap-2 justify-end"><p className="text-2xl font-bold text-indigo-600 font-mono text-right">{invData.invNo}</p>{draftStatus === 'saved' && <span className="text-[10px] bg-emerald-50 text-emerald-600 px-2 rounded-full font-bold">Draft Saved</span>}</div></div></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-left"><div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 flex flex-col justify-between text-left"><div className="text-left"><div className="flex justify-between items-start mb-4 text-left"><h4 className="font-bold text-indigo-700 flex items-center gap-2 text-left"><Store size={18}/> ข้อมูลผู้ขาย</h4><button onClick={()=>setShowSellerEditModal(true)} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-lg font-bold text-left">แก้ไข/ตั้งค่า</button></div><div className="flex gap-4 items-start text-left">{invData.logo && <div className="w-16 h-16 rounded-lg bg-white p-1 border border-slate-200 flex-shrink-0 text-left"><img src={invData.logo} className="w-full h-full object-contain" alt="Logo"/></div>}<div className="text-sm text-slate-600 text-left"><p className="font-bold text-slate-800 text-base text-left">{invData.sellerName || 'กรุณาระบุชื่อร้านค้า'}</p><p className="text-xs mt-1 text-left">{[invData.sellerAddress, invData.sellerSubDistrict, invData.sellerDistrict, invData.sellerProvince, invData.sellerZipCode].filter(Boolean).join(' ')}</p></div></div></div><div className="mt-4 pt-4 border-t flex gap-2 text-center"><button onClick={()=>setInvData({...invData, vatType: 'excluded'})} className={`flex-1 py-2 text-[10px] font-bold rounded-lg border ${invData.vatType==='excluded' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white'}`}>แยก VAT (Excluded)</button><button onClick={()=>setInvData({...invData, vatType: 'included'})} className={`flex-1 py-2 text-[10px] font-bold rounded-lg border ${invData.vatType==='included' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white'}`}>รวม VAT (Included)</button><button onClick={()=>setInvData({...invData, vatType: 'none'})} className={`flex-1 py-2 text-[10px] font-bold rounded-lg border ${invData.vatType==='none' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white'}`}>ไม่มี VAT</button></div></div><div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200 text-left"><div className="grid grid-cols-2 gap-3 text-left"><div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm text-left"><label className="text-[10px] font-bold text-indigo-600 mb-1 flex items-center gap-1 text-left">วันที่เอกสาร</label><input type="date" className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left" value={invData.date} onChange={e => setInvData({ ...invData, date: e.target.value })} /></div><div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left"><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">Order ID</label><input className="w-full border-0 p-1 text-sm font-mono text-indigo-600 bg-transparent focus:ring-0 text-left" placeholder="เลขคำสั่งซื้อ" value={invData.orderId} onChange={e => setInvData({ ...invData, orderId: e.target.value })} /></div></div><div className="flex justify-between items-center text-left"><h4 className="font-bold text-sm text-rose-600 text-left">ข้อมูลลูกค้า</h4><button onClick={()=>setShowCustomerModal(true)} className="text-[10px] bg-rose-100 text-rose-700 px-3 py-1 rounded-full font-bold text-left">เลือกเก่า</button></div><div className="text-left"><label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">ชื่อลูกค้า / บริษัท</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm text-left" value={invData.customerName} onChange={e=>setInvData({...invData, customerName: e.target.value})} /></div><div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-left"><div className="text-left"><label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">บ้านเลขที่/ถนน</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm text-left" value={invData.address} onChange={e=>setInvData({...invData, address: e.target.value})} /></div><div className="text-left"><label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">ตำบล</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm text-left" value={invData.custSubDistrict} onChange={e=>setInvData({...invData, custSubDistrict: e.target.value})} /></div><div className="text-left"><label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">อำเภอ</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm text-left" value={invData.custDistrict} onChange={e=>setInvData({...invData, custDistrict: e.target.value})} /></div><div className="text-left"><label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">จังหวัด</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm text-left" value={invData.custProvince} onChange={e=>setInvData({...invData, custProvince: e.target.value})} /></div></div></div></div><div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-left"><h4 className="font-bold text-sm text-slate-600 mb-2 text-left">รายการสินค้า</h4>{(invData.items || []).map((it, i) => (<div key={i} className="flex gap-2 mb-2 items-center text-left"><span className="text-xs text-slate-400 w-4 text-left">{i+1}.</span><input className="flex-[3] border-0 rounded p-2 text-sm shadow-sm text-left" value={it.desc} onChange={e=>updateItem(i,'desc',e.target.value)}/><input className="w-20 border-0 rounded p-2 text-sm text-center shadow-sm text-center" type="number" value={it.qty} onChange={e=>updateItem(i,'qty',Number(e.target.value))}/><input className="w-24 border-0 rounded p-2 text-sm text-right shadow-sm text-right" type="number" value={it.price} onChange={e=>updateItem(i,'price',Number(e.target.value))}/><button onClick={()=>setInvData({...invData, items: invData.items.filter((_,idx)=>idx!==i)})} className="text-rose-400 p-2 text-center"><Trash2 size={16}/></button></div>))}<button onClick={()=>setInvData({...invData, items:[...(invData.items||[]), {desc:'', qty:1, unit:'ชิ้น', price:0}]})} className="mt-2 text-[10px] bg-indigo-600 text-white px-4 py-1.5 rounded-lg flex items-center gap-1 w-fit font-bold shadow-md text-center"><PlusCircle size={14}/> เพิ่มรายการ</button></div><div className="flex gap-4 text-center"><button onClick={handleSaveInvoice} className={"flex-1 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition-all " + (editingDocId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-emerald-600 hover:bg-emerald-700') + " flex items-center justify-center gap-2 text-center"}><Save size={18}/> {editingDocId ? 'Update Document' : 'Save Document'}</button><button onClick={handleDownloadPDF} className="bg-slate-700 hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-all text-center"><Download size={18}/> Download ZIP</button></div></div><div className="overflow-x-auto pb-10 flex justify-center print:p-0 print:absolute print:left-0 print:top-0 print:w-full print:h-full print:z-50 print:bg-white text-left"><div id="invoice-preview-area" className="shadow-2xl print:shadow-none bg-white p-[30px] w-[210mm] min-h-[296mm] text-sm font-sarabun text-slate-900 leading-relaxed relative box-border text-left">
           <div className="flex justify-between items-start mb-8 text-left"><div className="w-[65%] flex items-center gap-5 text-left">{invData.logo && (<img src={invData.logo} className="w-[90px] h-[90px] object-contain flex-shrink-0 text-left" alt="Logo"/>)}<div className="flex flex-col justify-center text-left"><h2 className="text-xl font-bold text-slate-900 mb-1 leading-tight text-left">{invData.sellerName}</h2><p className="text-slate-600 text-xs leading-snug mb-1 text-left">{[invData.sellerAddress, invData.sellerSubDistrict, invData.sellerDistrict, invData.sellerProvince, invData.sellerZipCode].filter(Boolean).join(' ')}</p><div className="text-xs text-slate-700 leading-snug text-left"><p className="text-left"><b>เลขผู้เสียภาษี:</b> {invData.sellerTaxId} <b>สาขา:</b> {invData.sellerBranchId}</p><p className="text-left"><b>โทร:</b> {invData.sellerPhone} {invData.sellerEmail && <><b>Email:</b> {invData.sellerEmail}</>}</p></div></div></div><div className="text-right w-[35%] flex flex-col items-end text-right"><div className="text-lg font-bold uppercase mb-1 text-right">ใบกำกับภาษี / ใบเสร็จรับเงิน</div><div className="border border-slate-300 p-2 w-full max-w-[200px] text-right"><div className="flex justify-between mb-1 text-right"><span className="font-bold text-slate-500 text-xs">เลขที่ (No.)</span><span className="font-bold">{invData.invNo}</span></div><div className="flex justify-between text-right"><span className="font-bold text-slate-500 text-xs">วันที่ (Date)</span><span>{formatDate(invData.date)}</span></div><div className="flex justify-between text-right"><span className="font-bold text-slate-500 text-xs">อ้างอิง (Ref.)</span><span>{invData.orderId || "-"}</span></div></div><div className="mt-2 text-right"><span className={"px-3 py-1 border rounded text-xs font-bold uppercase " + (docTypeStatus === 'original' ? 'border-black text-black' : 'border-slate-300 text-slate-400') + " text-right"}>{docTypeStatus === 'original' ? 'ต้นฉบับ (Original)' : 'สำเนา (Copy)'}</span></div></div></div>
@@ -1744,8 +1830,8 @@ const StockManager = ({ appId, showToast }) => {
   const [adjData, setAdjData] = useState(initialAdj);
 
   useEffect(() => {
-    const unsubProducts = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'products')), (snap) => { setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() }))); });
-    const unsubLots = onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'inventory_lots')), (snap) => { setInventoryLots(snap.docs.map(d => ({ id: d.id, ...d.data() }))); });
+    const unsubProducts = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'products')), (snap) => { setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() }))); });
+    const unsubLots = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_lots')), (snap) => { setInventoryLots(snap.docs.map(d => ({ id: d.id, ...d.data() }))); });
     return () => { unsubProducts(); unsubLots(); };
   }, [appId]);
 
@@ -1754,10 +1840,10 @@ const StockManager = ({ appId, showToast }) => {
     try {
       const autoSKU = formData.sku || `SKU-P-${Date.now().toString().slice(-8)}`;
       const data = { ...formData, sku: autoSKU, cost: Number(formData.cost), price: Number(formData.price), stock: Number(formData.stock) };
-      if (editingProduct) { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', editingProduct.id), { name: data.name, sku: data.sku, category: data.category, price: data.price, cost: data.cost, image: data.image, updatedAt: serverTimestamp() }); showToast("อัปเดตข้อมูลสำเร็จ", "success"); } 
+      if (editingProduct) { await updateDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'products', editingProduct.id), { name: data.name, sku: data.sku, category: data.category, price: data.price, cost: data.cost, image: data.image, updatedAt: serverTimestamp() }); showToast("อัปเดตข้อมูลสำเร็จ", "success"); } 
       else { 
-        const docRef = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { ...data, createdAt: serverTimestamp() }); 
-        if (data.stock > 0) { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'inventory_lots'), { productId: docRef.id, productName: data.name, initialQty: Number(data.stock), remainingQty: Number(data.stock), cost: data.cost * data.stock, costPerUnit: Number(data.cost), expiryDate: formData.expiryDate || '', lotDate: new Date(), createdAt: serverTimestamp(), note: 'Initial Stock' }); } 
+        const docRef = await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'products'), { ...data, createdAt: serverTimestamp() }); 
+        if (data.stock > 0) { await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_lots'), { productId: docRef.id, productName: data.name, initialQty: Number(data.stock), remainingQty: Number(data.stock), cost: data.cost * data.stock, costPerUnit: Number(data.cost), expiryDate: formData.expiryDate || '', lotDate: new Date(), createdAt: serverTimestamp(), note: 'Initial Stock' }); } 
         showToast("เพิ่มสินค้าสำเร็จ", "success"); 
       }
       setShowModal(false); setFormData(initialProduct); setEditingProduct(null);
@@ -1770,9 +1856,9 @@ const StockManager = ({ appId, showToast }) => {
       if (product.stock < adjData.qty) { showToast("สต็อกไม่พอ", "error"); return; }
       let remainingToDeduct = Number(adjData.qty);
       const productLots = inventoryLots.filter(l => l.productId === adjData.productId && l.remainingQty > 0).sort((a, b) => (a.lotDate ? normalizeDate(a.lotDate) : normalizeDate(a.createdAt)) - (b.lotDate ? normalizeDate(b.lotDate) : normalizeDate(b.createdAt)));
-      for (const lot of productLots) { if (remainingToDeduct <= 0) break; const deductAmount = Math.min(remainingToDeduct, lot.remainingQty); await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventory_lots', lot.id), { remainingQty: lot.remainingQty - deductAmount }); remainingToDeduct -= deductAmount; }
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', adjData.productId), { stock: increment(-adjData.qty) });
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense'), { type: 'expense', category: 'สินค้าเสียหาย/หมดอายุ', description: `ตัดสต็อกเสีย: ${product.name} (${adjData.reason})`, total: 0, date: new Date(), note: adjData.note, createdAt: serverTimestamp() });
+      for (const lot of productLots) { if (remainingToDeduct <= 0) break; const deductAmount = Math.min(remainingToDeduct, lot.remainingQty); await updateDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_lots', lot.id), { remainingQty: lot.remainingQty - deductAmount }); remainingToDeduct -= deductAmount; }
+      await updateDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'products', adjData.productId), { stock: increment(-adjData.qty) });
+      await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), { type: 'expense', category: 'สินค้าเสียหาย/หมดอายุ', description: `ตัดสต็อกเสีย: ${product.name} (${adjData.reason})`, total: 0, date: new Date(), note: adjData.note, createdAt: serverTimestamp() });
       showToast("ตัดสต็อกเรียบร้อย", "success"); setShowAdjModal(false);
     } catch (e) { showToast("ล้มเหลว", "error"); }
   };
@@ -1804,11 +1890,11 @@ const StockManager = ({ appId, showToast }) => {
           <table className="w-full text-sm text-left border-collapse"><thead className="bg-slate-50/50 text-slate-500 font-bold uppercase text-[10px] sticky top-0 z-20 border-b border-slate-100"><tr><th className="p-5 w-16"></th><th className="p-5">สินค้า</th><th className="p-5">หมวดหมู่</th><th className="p-5 text-right">ราคาขาย</th><th className="p-5 text-center">คงเหลือรวม</th><th className="p-5 text-center no-print">จัดการ</th></tr></thead><tbody className="divide-y divide-slate-50">{filteredProducts.map((p) => {
                 const isExpanded = expandedProductId === p.id;
                 const productLots = inventoryLots.filter(l => l.productId === p.id && l.remainingQty > 0).sort((a,b) => (a.lotDate ? normalizeDate(a.lotDate) : normalizeDate(a.createdAt)) - (b.lotDate ? normalizeDate(b.lotDate) : normalizeDate(b.createdAt)));
-                return (<React.Fragment key={p.id}><tr onClick={() => setExpandedProductId(isExpanded ? null : p.id)} className={`cursor-pointer transition-all ${isExpanded ? 'bg-indigo-50/30' : 'hover:bg-slate-50'}`}><td className="p-5 text-center">{isExpanded ? <ChevronUp className="text-indigo-600" size={20}/> : <ChevronDown className="text-slate-300" size={20}/>}</td><td className="p-5"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-slate-100 overflow-hidden flex items-center justify-center border border-slate-100">{p.image ? <img src={p.image} className="w-full h-full object-cover" /> : <ImageIcon className="text-slate-300" size={16}/>}</div><div><div className="font-bold text-slate-700">{p.name}</div><div className="text-[10px] text-slate-400 font-mono">{p.sku}</div></div></div></td><td className="p-5"><span className="bg-white border border-slate-200 text-slate-500 px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-tighter">{p.category}</span></td><td className="p-5 text-right font-bold text-indigo-600">{formatCurrency(p.price)}</td><td className="p-5 text-center"><span className={`px-3 py-1 rounded-full font-bold text-[10px] ${p.stock < 10 ? 'bg-orange-100 text-orange-600' : 'bg-emerald-100 text-emerald-600'}`}>{p.stock}</span></td><td className="p-5 text-center no-print"><div className="flex justify-center gap-1" onClick={e => e.stopPropagation()}><button onClick={() => { setEditingProduct(p); setFormData(p); setShowModal(true); }} className="p-2 text-slate-300 hover:text-indigo-600 transition-all"><Edit size={18}/></button><button onClick={async () => { if(confirm("ลบข้อมูลสินค้านี้ทั้งหมด?")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', p.id)); }} className="p-2 text-slate-300 hover:text-rose-600 transition-all"><Trash2 size={18}/></button></div></td></tr>{isExpanded && (<tr className="bg-slate-50/50"><td colSpan="6" className="p-0 border-b border-indigo-100"><div className="p-6 pl-20 animate-fadeIn space-y-4"><div className="flex items-center gap-2 text-xs font-bold text-indigo-500"><Info size={14}/> รายละเอียดล็อตสินค้า (FIFO Queue)</div><div className="grid grid-cols-1 gap-2">{productLots.map((lot, idx) => { const isExpiring = lot.expiryDate && new Date(lot.expiryDate) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); return (<div key={lot.id} className="flex flex-wrap items-center justify-between bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group">{idx === 0 && <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500" title="ล็อตที่กำลังถูกระบายออกเป็นอันดับแรก"></div>}<div className="flex gap-8 items-center"><div className="text-[10px] font-bold text-slate-400"><p className="uppercase">ลำดับล็อต</p><p className="text-sm text-slate-700 font-mono">#{idx + 1} {idx === 0 && <span className="text-[8px] bg-emerald-50 text-emerald-600 px-1 rounded ml-1">TOP</span>}</p></div><div className="text-[10px] font-bold text-slate-400"><p className="uppercase">วันที่บันทึกรายการ</p><p className="text-xs text-slate-600">{formatDate(lot.lotDate || lot.createdAt)}</p></div><div className="text-[10px] font-bold text-slate-400"><p className="uppercase">ทุน/ชิ้น</p><p className="text-xs text-slate-600">{formatCurrency(lot.costPerUnit)}</p></div><div className="text-[10px] font-bold text-slate-400"><p className="uppercase">วันหมดอายุ</p><p className={`text-xs font-bold ${isExpiring ? 'text-rose-500' : 'text-slate-600'}`}>{lot.expiryDate ? formatDate(new Date(lot.expiryDate)) : '-'}</p></div></div><div className="flex items-center gap-6"><div className="text-right"><p className="text-[9px] font-bold text-slate-400 uppercase">คงเหลือในล็อต</p><p className="text-lg font-bold text-indigo-600">{lot.remainingQty} <span className="text-[10px] text-slate-300 font-normal">/ {lot.initialQty}</span></p></div><div className="text-right border-l pl-6 border-slate-100"><p className="text-[9px] font-bold text-slate-400 uppercase">มูลค่าต้นทุน</p><p className="text-sm font-bold text-slate-800">{formatCurrency(lot.remainingQty * lot.costPerUnit)}</p></div></div></div>) })} {productLots.length === 0 && (<div className="text-center py-6 text-slate-400 italic text-xs">ไม่มีล็อตสินค้าคงเหลือในขณะนี้</div>)}</div></div></td></tr>)}</React.Fragment>)
+                return (<React.Fragment key={p.id}><tr onClick={() => setExpandedProductId(isExpanded ? null : p.id)} className={`cursor-pointer transition-all ${isExpanded ? 'bg-indigo-50/30' : 'hover:bg-slate-50'}`}><td className="p-5 text-center">{isExpanded ? <ChevronUp className="text-indigo-600" size={20}/> : <ChevronDown className="text-slate-300" size={20}/>}</td><td className="p-5"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-slate-100 overflow-hidden flex items-center justify-center border border-slate-100">{p.image ? <img src={p.image} className="w-full h-full object-cover" /> : <ImageIcon className="text-slate-300" size={16}/>}</div><div><div className="font-bold text-slate-700">{p.name}</div><div className="text-[10px] text-slate-400 font-mono">{p.sku}</div></div></div></td><td className="p-5"><span className="bg-white border border-slate-200 text-slate-500 px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-tighter">{p.category}</span></td><td className="p-5 text-right font-bold text-indigo-600">{formatCurrency(p.price)}</td><td className="p-5 text-center"><span className={`px-3 py-1 rounded-full font-bold text-[10px] ${p.stock < 10 ? 'bg-orange-100 text-orange-600' : 'bg-emerald-100 text-emerald-600'}`}>{p.stock}</span></td><td className="p-5 text-center no-print"><div className="flex justify-center gap-1" onClick={e => e.stopPropagation()}><button onClick={() => { setEditingProduct(p); setFormData(p); setShowModal(true); }} className="p-2 text-slate-300 hover:text-indigo-600 transition-all"><Edit size={18}/></button><button onClick={async () => { if(confirm("ลบข้อมูลสินค้านี้ทั้งหมด?")) await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'products', p.id)); }} className="p-2 text-slate-300 hover:text-rose-600 transition-all"><Trash2 size={18}/></button></div></td></tr>{isExpanded && (<tr className="bg-slate-50/50"><td colSpan="6" className="p-0 border-b border-indigo-100"><div className="p-6 pl-20 animate-fadeIn space-y-4"><div className="flex items-center gap-2 text-xs font-bold text-indigo-500"><Info size={14}/> รายละเอียดล็อตสินค้า (FIFO Queue)</div><div className="grid grid-cols-1 gap-2">{productLots.map((lot, idx) => { const isExpiring = lot.expiryDate && new Date(lot.expiryDate) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); return (<div key={lot.id} className="flex flex-wrap items-center justify-between bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group">{idx === 0 && <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500" title="ล็อตที่กำลังถูกระบายออกเป็นอันดับแรก"></div>}<div className="flex gap-8 items-center"><div className="text-[10px] font-bold text-slate-400"><p className="uppercase">ลำดับล็อต</p><p className="text-sm text-slate-700 font-mono">#{idx + 1} {idx === 0 && <span className="text-[8px] bg-emerald-50 text-emerald-600 px-1 rounded ml-1">TOP</span>}</p></div><div className="text-[10px] font-bold text-slate-400"><p className="uppercase">วันที่บันทึกรายการ</p><p className="text-xs text-slate-600">{formatDate(lot.lotDate || lot.createdAt)}</p></div><div className="text-[10px] font-bold text-slate-400"><p className="uppercase">ทุน/ชิ้น</p><p className="text-xs text-slate-600">{formatCurrency(lot.costPerUnit)}</p></div><div className="text-[10px] font-bold text-slate-400"><p className="uppercase">วันหมดอายุ</p><p className={`text-xs font-bold ${isExpiring ? 'text-rose-500' : 'text-slate-600'}`}>{lot.expiryDate ? formatDate(new Date(lot.expiryDate)) : '-'}</p></div></div><div className="flex items-center gap-6"><div className="text-right"><p className="text-[9px] font-bold text-slate-400 uppercase">คงเหลือในล็อต</p><p className="text-lg font-bold text-indigo-600">{lot.remainingQty} <span className="text-[10px] text-slate-300 font-normal">/ {lot.initialQty}</span></p></div><div className="text-right border-l pl-6 border-slate-100"><p className="text-[9px] font-bold text-slate-400 uppercase">มูลค่าต้นทุน</p><p className="text-sm font-bold text-slate-800">{formatCurrency(lot.remainingQty * lot.costPerUnit)}</p></div></div></div>) })} {productLots.length === 0 && (<div className="text-center py-6 text-slate-400 italic text-xs">ไม่มีล็อตสินค้าคงเหลือในขณะนี้</div>)}</div></div></td></tr>)}</React.Fragment>)
               })}</tbody></table>) : (
           <div className="animate-fadeIn"><div className="p-8 border-b bg-slate-50/50 hidden print:block text-center"><h1 className="text-2xl font-bold text-slate-900 mb-2">รายงานสินค้าคงคลังและมูลค่าต้นทุน</h1><p className="text-sm text-slate-600 font-bold">ข้อมูลสรุปเพื่อการจัดทำบัญชีและยื่นภาษี ณ วันที่ {formatDate(new Date())}</p></div><table className="w-full text-left border-collapse"><thead className="bg-slate-900 text-white font-bold uppercase text-[10px] sticky top-0 z-20"><tr><th className="p-4 w-12 text-center border-r border-slate-700">ลำดับ</th><th className="p-4 border-r border-slate-700">รหัสสินค้า (SKU)</th><th className="p-4 border-r border-slate-700">ชื่อสินค้า</th><th className="p-4 text-center border-r border-slate-700">สินค้าเข้า (In)</th><th className="p-4 text-center border-r border-slate-700">สินค้าออก (Out)</th><th className="p-4 text-center border-r border-slate-700">คงเหลือ (Balance)</th><th className="p-4 text-right border-r border-slate-700">ทุนเฉลี่ย/หน่วย</th><th className="p-4 text-right">มูลค่าทุนรวม</th></tr></thead><tbody className="divide-y divide-slate-100">{filteredProducts.map((p, idx) => { const info = getProductTaxInfo(p.id); return (<tr key={`tax-${p.id}`} className="hover:bg-slate-50 transition-colors"><td className="p-4 text-center text-slate-400 font-mono border-r">{idx + 1}</td><td className="p-4 font-mono text-slate-600 border-r">{p.sku}</td><td className="p-4 font-bold text-slate-800 border-r">{p.name}</td><td className="p-4 text-center text-emerald-600 font-bold border-r bg-emerald-50/30">{info.totalIn}</td><td className="p-4 text-center text-rose-600 font-bold border-r bg-rose-50/30">{info.totalOut}</td><td className="p-4 text-center font-bold text-slate-700 border-r">{info.totalQty}</td><td className="p-4 text-right text-slate-500 border-r">{formatCurrency(info.avgCostPerUnit)}</td><td className="p-4 text-right font-black text-indigo-700">{formatCurrency(info.totalCostValue)}</td></tr>); })}</tbody><tfoot className="bg-slate-50"><tr className="font-black text-slate-900 border-t-2 border-slate-200"><td colSpan="3" className="p-4 text-right text-sm uppercase">มูลค่ารวมสินค้าคงคลังทั้งสิ้น</td><td className="p-4 text-center text-sm text-emerald-700">{filteredProducts.reduce((sum, p) => sum + getProductTaxInfo(p.id).totalIn, 0)}</td><td className="p-4 text-center text-sm text-rose-700">{filteredProducts.reduce((sum, p) => sum + getProductTaxInfo(p.id).totalOut, 0)}</td><td className="p-4 text-center text-sm">{filteredProducts.reduce((sum, p) => sum + getProductTaxInfo(p.id).totalQty, 0)}</td><td className="p-4 border-r"></td><td className="p-4 text-right text-lg text-indigo-800">{formatCurrency(totalVal)}</td></tr></tfoot></table></div>
         )}</div>
-      {showModal && (<div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 no-print"><div className="bg-white rounded-[40px] p-10 w-full max-w-lg shadow-2xl relative animate-in zoom-in-95 duration-200"><h3 className="text-2xl font-bold mb-8 flex items-center gap-2">{editingProduct ? <Edit/> : <PlusCircle/>} ข้อมูลสินค้าใหม่</h3><div className="space-y-6 mb-10"><div className="flex gap-6 items-start"><div onClick={() => productImgRef.current?.click()} className="w-28 h-28 rounded-[24px] bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:bg-indigo-50 transition-all overflow-hidden relative shrink-0 group">{formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : <><ImageIcon className="text-slate-300" size={28}/><p className="text-[9px] font-bold text-slate-400 mt-2">ใส่ภาพ</p></>}<input type="file" ref={productImgRef} hidden accept="image/*" onChange={handleImgUpload} /></div><div className="flex-1 space-y-4"><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">ชื่อสินค้าปลีก</label><input className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="ชื่อสินค้า..." /></div><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Auto SKU</label><input className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1" value={formData.sku} onChange={e => setFormData({ ...formData, sku: e.target.value })} placeholder="ว่างไว้เพื่อเจนรหัสออโต้" /></div></div></div><div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">หมวดหมู่</label><select className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1 appearance-none" value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })}>{CONSTANTS.CATEGORIES.STOCK.map(c => <option key={c} value={c}>{c}</option>)}</select></div><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">ราคาขาย</label><input type="number" className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold text-right text-indigo-600 mt-1" value={formData.price} onChange={e => setFormData({ ...formData, price: e.target.value })} /></div></div>{!editingProduct && (<div className="bg-indigo-50/50 p-6 rounded-[28px] space-y-4"><div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">ต้นทุนล็อตแรก</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-right" value={formData.cost} onChange={e => setFormData({ ...formData, cost: e.target.value })} /></div><div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">จำนวนยอดยกมา</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-center" value={formData.stock} onChange={e => setFormData({ ...formData, stock: e.target.value })} /></div></div><div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1 flex items-center gap-1"><Calendar size={12}/> วันหมดอายุของสต็อกนี้</label><input type="date" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold mt-1" value={formData.expiryDate} onChange={e => setFormData({ ...formData, expiryDate: e.target.value })} /></div></div>)}</div><div className="flex gap-3"><button onClick={() => setShowModal(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-600">ยกเลิก</button><button onClick={handleSave} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100">บันทึกข้อมูล</button></div></div></div>)}
+      {showModal && (<div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 no-print"><div className="bg-white rounded-[40px] p-10 w-full max-lg shadow-2xl relative animate-in zoom-in-95 duration-200"><h3 className="text-2xl font-bold mb-8 flex items-center gap-2">{editingProduct ? <Edit/> : <PlusCircle/>} ข้อมูลสินค้าใหม่</h3><div className="space-y-6 mb-10"><div className="flex gap-6 items-start"><div onClick={() => productImgRef.current?.click()} className="w-28 h-28 rounded-[24px] bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:bg-indigo-50 transition-all overflow-hidden relative shrink-0 group">{formData.image ? <img src={formData.image} className="w-full h-full object-cover" /> : <><ImageIcon className="text-slate-300" size={28}/><p className="text-[9px] font-bold text-slate-400 mt-2">ใส่ภาพ</p></>}<input type="file" ref={productImgRef} hidden accept="image/*" onChange={handleImgUpload} /></div><div className="flex-1 space-y-4"><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">ชื่อสินค้าปลีก</label><input className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="ชื่อสินค้า..." /></div><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Auto SKU</label><input className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1" value={formData.sku} onChange={e => setFormData({ ...formData, sku: e.target.value })} placeholder="ว่างไว้เพื่อเจนรหัสออโต้" /></div></div></div><div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">หมวดหมู่</label><select className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold mt-1 appearance-none" value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })}>{CONSTANTS.CATEGORIES.STOCK.map(c => <option key={c} value={c}>{c}</option>)}</select></div><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">ราคาขาย</label><input type="number" className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold text-right text-indigo-600 mt-1" value={formData.price} onChange={e => setFormData({ ...formData, price: e.target.value })} /></div></div>{!editingProduct && (<div className="bg-indigo-50/50 p-6 rounded-[28px] space-y-4"><div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">ต้นทุนล็อตแรก</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-right" value={formData.cost} onChange={e => setFormData({ ...formData, cost: e.target.value })} /></div><div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1">จำนวนยอดยกมา</label><input type="number" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold text-center" value={formData.stock} onChange={e => setFormData({ ...formData, stock: e.target.value })} /></div></div><div><label className="text-[10px] font-bold text-indigo-400 uppercase ml-1 flex items-center gap-1"><Calendar size={12}/> วันหมดอายุของสต็อกนี้</label><input type="date" className="w-full bg-white border-0 rounded-xl p-3 text-sm font-bold mt-1" value={formData.expiryDate} onChange={e => setFormData({ ...formData, expiryDate: e.target.value })} /></div></div>)}</div><div className="flex gap-3"><button onClick={() => setShowModal(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-600">ยกเลิก</button><button onClick={handleSave} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100">บันทึกข้อมูล</button></div></div></div>)}
       {showAdjModal && (<div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 no-print"><div className="bg-white rounded-[40px] p-10 w-full max-w-md shadow-2xl relative animate-in zoom-in-95 duration-200"><h3 className="text-xl font-bold mb-6 text-rose-600 flex items-center gap-2"><AlertTriangle/> ตัดสต็อกชำรุด</h3><div className="space-y-4 mb-8"><div><label className="text-[10px] font-bold text-slate-400 uppercase">สินค้า</label><select className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold" value={adjData.productId} onChange={e => setAdjData({ ...adjData, productId: e.target.value })}><option value="">-- เลือกสินค้า --</option>{products.filter(p=>p.stock > 0).map(p => <option key={p.id} value={p.id}>{p.name} (เหลือ {p.stock})</option>)}</select></div><div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-bold text-slate-400 uppercase">จำนวน</label><input type="number" className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold text-center" value={adjData.qty} onChange={e => setAdjData({ ...adjData, qty: e.target.value })} /></div><div><label className="text-[10px] font-bold text-slate-400 uppercase">เหตุผล</label><select className="w-full bg-slate-50 border-0 rounded-2xl p-3.5 text-sm font-bold" value={adjData.reason} onChange={e => setAdjData({ ...adjData, reason: e.target.value })}><option value="damaged">เสียหาย</option><option value="expired">หมดอายุ</option><option value="lost">สูญหาย</option></select></div></div></div><div className="flex gap-3"><button onClick={() => setShowAdjModal(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold">ยกเลิก</button><button onClick={handleAdjustmentSave} className="flex-1 py-4 bg-rose-600 text-white rounded-2xl font-bold">ยืนยันตัดสต็อก</button></div></div></div>)}
     </div>
   );
@@ -1880,20 +1966,29 @@ export default function App() {
   const removeToast = (id) => { setToasts(prev => prev.filter(t => t.id !== id)); };
   const toggleAppMode = () => { const ids = Object.values(CONSTANTS.IDS); const currentIndex = ids.indexOf(appId); const nextIndex = (currentIndex + 1) % ids.length; const newId = ids[nextIndex]; setAppId(newId); localStorage.setItem('merchant_app_id', newId); setLoading(true); addToast("ฐานข้อมูล: " + newId, 'success'); };
   const currentModeLabel = useMemo(() => { if (appId === CONSTANTS.IDS.DEV) return 'Dev Mode'; if (appId === CONSTANTS.IDS.PROD) return 'Production'; if (appId === CONSTANTS.IDS.Y2026) return 'Database 2026'; return appId; }, [appId]);
-  useEffect(() => { const initAuth = async () => { try { await signInAnonymously(auth); } catch (e) {} }; initAuth(); onAuthStateChanged(auth, setUser); }, []);
+  
+  useEffect(() => { 
+    const initAuth = async () => { 
+      try { await signInAnonymously(authInstance); } catch (e) { console.error(e); } 
+    }; 
+    initAuth(); 
+    onAuthStateChanged(authInstance, setUser); 
+  }, []);
+
   useEffect(() => {
     if (!user) return;
     setLoading(true);
-    const qInc = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_income'));
-    const qExp = query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
-    const qInv = query(collection(db, 'artifacts', appId, 'public', 'data', 'invoices'));
-    const qLots = query(collection(db, 'artifacts', appId, 'public', 'data', 'inventory_lots'));
+    const qInc = query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income'));
+    const qExp = query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+    const qInv = query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'));
+    const qLots = query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_lots'));
     const unsubInc = onSnapshot(qInc, (s) => setTransactions(prev => [...prev.filter(t=>t.type!=='income'), ...s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))]));
     const unsubExp = onSnapshot(qExp, (s) => setTransactions(prev => [...prev.filter(t=>t.type!=='expense'), ...s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))]));
     const unsubInv = onSnapshot(qInv, (s) => setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))));
     const unsubLots = onSnapshot(qLots, (s) => { setInventoryLots(s.docs.map(d=>({id:d.id, ...d.data()}))); setLoading(false); });
     return () => { unsubInc(); unsubExp(); unsubInv(); unsubLots(); };
   }, [user, appId]);
+
   const renderContent = () => {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} />;
@@ -1907,13 +2002,61 @@ export default function App() {
       default: return <Dashboard transactions={transactions} invoices={invoices} />;
     }
   };
+
   if (loading && !user) return <LoadingScreen />;
+
   return (
     <div className="flex h-[100dvh] bg-slate-50 font-sans text-slate-800 overflow-hidden font-sarabun selection:bg-indigo-100 text-left">
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_STYLES }} />
       <ToastContainer toasts={toasts} removeToast={removeToast} />
-      <aside className={"fixed lg:static inset-y-0 left-0 z-30 w-72 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out " + (sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0") + " flex flex-col text-left"}><div className="p-6 border-b border-slate-800 text-left"><h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400 flex items-center gap-2 text-left"><Wallet className="text-indigo-400 text-left"/> MerchantTax</h1></div><nav className="p-4 space-y-8 mt-2 flex-1 overflow-y-auto text-left"><div className="space-y-2"><p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Insights</p><div className="space-y-1"><NavButton active={activeTab === 'dashboard'} onClick={() => {setActiveTab('dashboard'); setSidebarOpen(false);}} icon={<PieChart size={20} />} label="ภาพรวมธุรกิจ (Pro)" /><NavButton active={activeTab === 'analytics'} onClick={() => {setActiveTab('analytics'); setSidebarOpen(false);}} icon={<Layers size={20} />} label="วิเคราะห์ข้ามปี (YoY)" /><NavButton active={activeTab === 'annual_tax'} onClick={() => {setActiveTab('annual_tax'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="ภาษีประจำปี (PIT)" /><NavButton active={activeTab === 'financial_position'} onClick={() => {setActiveTab('financial_position'); setSidebarOpen(false);}} icon={<Briefcase size={20} />} label="สรุปฐานะการเงิน (Financial)" /></div></div><div className="space-y-2"><p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Operations</p><div className="space-y-1"><NavButton active={activeTab === 'records'} onClick={() => {setActiveTab('records'); setSidebarOpen(false);}} icon={<Store size={20} />} label="POS / ขายหน้าร้าน" /><NavButton active={activeTab === 'invoice'} onClick={() => {setActiveTab('invoice'); setSidebarOpen(false);}} icon={<Printer size={20} />} label="ใบกำกับภาษี (Pro)" /></div></div><div className="space-y-2"><p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Back Office</p><div className="space-y-1"><NavButton active={activeTab === 'stock'} onClick={() => {setActiveTab('stock'); setSidebarOpen(false);}} icon={<Package size={20} />} label="สต็อกสินค้า" /><NavButton active={activeTab === 'taxes'} onClick={() => {setActiveTab('taxes'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="รายงานภาษี" /></div></div></nav><div className="p-6 bg-slate-900/50 backdrop-blur-sm border-t border-slate-800 text-left"><div className="mb-2 text-[10px] uppercase font-bold text-slate-500 ml-1">Database Instance</div><button onClick={toggleAppMode} className={"w-full py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all bg-slate-800 text-indigo-300 ring-1 ring-slate-700 hover:bg-slate-700 hover:text-white"}><Database size={14}/> {currentModeLabel}</button></div></aside>
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative w-full text-left"><header className="bg-white/90 backdrop-blur-md shadow-sm border-b border-slate-200 p-4 lg:px-8 flex justify-between items-center z-10 sticky top-0 text-left"><div className="flex items-center gap-3 text-left"><button onClick={() => setSidebarOpen(true)} className="lg:hidden p-1 rounded-md hover:bg-slate-100 transition-colors text-left"><Menu size={24} /></button><h2 className="font-semibold text-slate-800 text-lg text-left">{activeTab.toUpperCase()}</h2></div><div className="flex items-center gap-3 text-right">{loading && <div className="text-xs font-bold text-indigo-600 flex items-center gap-1 animate-pulse text-right"><Loader size={12} className="animate-spin text-right"/> Syncing...</div>}</div></header><div className="flex-1 overflow-auto p-2 lg:p-6 relative scroll-smooth w-full text-left">{renderContent()}</div></main>
+      <aside className={"fixed lg:static inset-y-0 left-0 z-30 w-72 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out " + (sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0") + " flex flex-col text-left"}>
+        <div className="p-6 border-b border-slate-800 text-left">
+          <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400 flex items-center gap-2 text-left"><Wallet className="text-indigo-400 text-left"/> MerchantTax</h1>
+        </div>
+        <nav className="p-4 space-y-8 mt-2 flex-1 overflow-y-auto text-left">
+          <div className="space-y-2">
+            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Performance</p>
+            <div className="space-y-1">
+              <NavButton active={activeTab === 'dashboard'} onClick={() => {setActiveTab('dashboard'); setSidebarOpen(false);}} icon={<PieChart size={20} />} label="แดชบอร์ดผลงาน (Performance)" />
+              <NavButton active={activeTab === 'analytics'} onClick={() => {setActiveTab('analytics'); setSidebarOpen(false);}} icon={<Layers size={20} />} label="วิเคราะห์ข้ามปี (YoY)" />
+              <NavButton active={activeTab === 'annual_tax'} onClick={() => {setActiveTab('annual_tax'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="ภาษีประจำปี (PIT)" />
+              <NavButton active={activeTab === 'financial_position'} onClick={() => {setActiveTab('financial_position'); setSidebarOpen(false);}} icon={<Briefcase size={20} />} label="สรุปฐานะการเงิน (Financial)" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Operations</p>
+            <div className="space-y-1">
+              <NavButton active={activeTab === 'records'} onClick={() => {setActiveTab('records'); setSidebarOpen(false);}} icon={<Store size={20} />} label="POS / ขายหน้าร้าน" />
+              <NavButton active={activeTab === 'invoice'} onClick={() => {setActiveTab('invoice'); setSidebarOpen(false);}} icon={<Printer size={20} />} label="ใบกำกับภาษี (Pro)" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Back Office</p>
+            <div className="space-y-1">
+              <NavButton active={activeTab === 'stock'} onClick={() => {setActiveTab('stock'); setSidebarOpen(false);}} icon={<Package size={20} />} label="สต็อกสินค้า" />
+              <NavButton active={activeTab === 'taxes'} onClick={() => {setActiveTab('taxes'); setSidebarOpen(false);}} icon={<Calculator size={20} />} label="รายงานภาษี" />
+            </div>
+          </div>
+        </nav>
+        <div className="p-6 bg-slate-900/50 backdrop-blur-sm border-t border-slate-800 text-left">
+          <div className="mb-2 text-[10px] uppercase font-bold text-slate-500 ml-1">Database Instance</div>
+          <button onClick={toggleAppMode} className={"w-full py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all bg-slate-800 text-indigo-300 ring-1 ring-slate-700 hover:bg-slate-700 hover:text-white"}><Database size={14}/> {currentModeLabel}</button>
+        </div>
+      </aside>
+      <main className="flex-1 flex flex-col h-full overflow-hidden relative w-full text-left">
+        <header className="bg-white/90 backdrop-blur-md shadow-sm border-b border-slate-200 p-4 lg:px-8 flex justify-between items-center z-10 sticky top-0 text-left">
+          <div className="flex items-center gap-3 text-left">
+            <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-1 rounded-md hover:bg-slate-100 transition-colors text-left"><Menu size={24} /></button>
+            <h2 className="font-semibold text-slate-800 text-lg text-left">{activeTab.toUpperCase()}</h2>
+          </div>
+          <div className="flex items-center gap-3 text-right">
+            {loading && <div className="text-xs font-bold text-indigo-600 flex items-center gap-1 animate-pulse text-right"><Loader size={12} className="animate-spin text-right"/> Syncing...</div>}
+          </div>
+        </header>
+        <div className="flex-1 overflow-auto p-2 lg:p-6 relative scroll-smooth w-full text-left">
+          {renderContent()}
+        </div>
+      </main>
     </div>
   );
 }
