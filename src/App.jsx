@@ -49,6 +49,7 @@ const CONSTANTS = {
       'สัตว์เลี้ยง (Pet Care)',
       'ขนมและของว่าง (Snacks)',
       'เครื่องปรุง/วัตถุดิบ (Cooking Essentials)',
+      'อาหารสดและอาหารแช่แข็ง (Fresh & Frozen Food)',
       'อื่นๆ (Others)'
     ]
   },
