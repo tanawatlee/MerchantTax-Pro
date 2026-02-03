@@ -5,7 +5,7 @@ import {
   CheckCircle, Loader, User, Package, Search, Clock, List, Settings, PlusCircle, Tag,
   Store, Code, Database, Image as ImageIcon, BarChart2, Activity, ShoppingBag, Eye, EyeOff, Inbox, XCircle, ArrowUp, ArrowDown,
   ChevronDown, ChevronUp, AlertTriangle, Calendar, Info, MapPin, Building, Layers, ArrowRightLeft, Percent, ClipboardList, Briefcase,
-  Camera, Sparkles, ScanText, Zap, ChevronRight, Truck, Ticket, CreditCard, Map, BrainCircuit
+  Camera, Sparkles, ScanText, Zap, ChevronRight, Truck, Ticket, CreditCard, Map, BrainCircuit, Share, Send, RotateCcw, LogOut
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -187,20 +187,6 @@ const calculateProgressiveTax = (taxableIncome) => {
   return tax;
 };
 
-const exportToExcel = (fileName, data, headerInfo = []) => {
-    if (!window.XLSX) {
-        const script = document.createElement('script');
-        script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-        script.onload = () => exportToExcel(fileName, data, headerInfo);
-        document.body.appendChild(script);
-        return;
-    }
-    const wb = window.XLSX.utils.book_new();
-    const ws = window.XLSX.utils.aoa_to_sheet([...headerInfo, ...data]);
-    window.XLSX.utils.book_append_sheet(wb, ws, "Report");
-    window.XLSX.writeFile(wb, fileName);
-};
-
 const downloadInvoicePDF = async (elementId, invNo, showToast) => {
     const element = document.getElementById(elementId); 
     if (!element) return;
@@ -244,14 +230,12 @@ const downloadInvoicePDF = async (elementId, invNo, showToast) => {
 const SmartTaxAI = {
   async generate(prompt, imageBase64 = null, expectJSON = false) {
     const apiKey = ""; 
-    // Removed manual validation to allow environment injection
     const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=" + apiKey;
     try {
       const parts = [{ text: prompt }];
       if (imageBase64) parts.push({ inlineData: { mimeType: "image/png", data: imageBase64.split(',')[1] } });
       
       const payload = { contents: [{ parts }] };
-      // Force JSON response if requested
       if (expectJSON) {
         payload.generationConfig = { responseMimeType: "application/json" };
       }
@@ -349,7 +333,31 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
     if (vatType === 'included') { total = afterDisc; preVat = total * 100 / 107; vat = total - preVat; } 
     else if (vatType === 'excluded') { preVat = afterDisc; vat = preVat * 0.07; total = preVat + vat; } 
     else { preVat = afterDisc; vat = 0; total = preVat; }
-    const handleDownload = () => downloadInvoicePDF('invoice-preview-modal-area', transaction.invNo || "DRAFT", showToast);
+    
+    // FIX: Renamed variable to match JSX usage
+    const handleDownloadPDF = () => downloadInvoicePDF('invoice-preview-modal-area', transaction.invNo || "DRAFT", showToast);
+
+    // --- NEW: Share to LINE Function ---
+    const handleShareToLine = () => {
+        const invNo = transaction.invNo || "DRAFT";
+        const date = formatDate(transaction.date);
+        const customer = transaction.customerName || "ลูกค้าทั่วไป";
+        const amount = formatCurrency(total);
+        
+        const message = `🧾 *ใบเสร็จรับเงิน/ใบกำกับภาษี*\n` +
+                        `เลขที่: ${invNo}\n` +
+                        `วันที่: ${date}\n` +
+                        `ลูกค้า: ${customer}\n` +
+                        `----------------------------\n` +
+                        `💰 *ยอดรวมทั้งสิ้น: ${amount} บาท*\n` +
+                        `----------------------------\n` +
+                        `ขอบคุณที่ใช้บริการครับ 🙏`;
+        
+        const encodedMessage = encodeURIComponent(message);
+        window.open(`https://line.me/R/msg/text/?${encodedMessage}`, '_blank');
+        if(showToast) showToast("เปิด LINE เพื่อส่งข้อความแล้ว", "success");
+    };
+
     return (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4 overflow-y-auto font-sarabun text-left">
             <div className="bg-white rounded-[32px] w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl animate-fadeIn overflow-hidden">
@@ -461,8 +469,14 @@ const InvoicePreviewModal = ({ transaction, onClose, showToast }) => {
                     </div>
                 </div>
                 <div className="p-6 border-t bg-white flex flex-wrap gap-4 text-center">
-                    <button onClick={onClose} className="flex-1 min-w-[120px] py-4 rounded-2xl bg-indigo-600 text-white font-bold shadow-lg hover:bg-indigo-700">ปิด</button>
-                    <button onClick={handleDownload} className="flex-1 min-w-[200px] py-4 rounded-2xl bg-slate-800 text-white font-bold flex items-center justify-center gap-2 hover:bg-slate-900 transition-all"><Download size={20}/> Download ZIP</button>
+                    <button onClick={onClose} className="flex-1 min-w-[120px] py-4 rounded-2xl bg-slate-100 text-slate-700 font-bold hover:bg-slate-200">ปิด</button>
+                    {/* --- NEW: LINE SHARE BUTTON --- */}
+                    <button onClick={handleShareToLine} className="flex-1 min-w-[150px] py-4 rounded-2xl bg-[#06C755] text-white font-bold flex items-center justify-center gap-2 hover:bg-[#05a546] transition-all shadow-md">
+                        <Share size={20}/> ส่งเข้า LINE
+                    </button>
+                    <button onClick={handleDownloadPDF} className="flex-1 min-w-[150px] py-4 rounded-2xl bg-slate-800 text-white font-bold flex items-center justify-center gap-2 hover:bg-slate-900 transition-all shadow-md">
+                        <Download size={20}/> Download ZIP
+                    </button>
                 </div>
             </div>
         </div>
@@ -998,6 +1012,7 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
   const [isMagicLoading, setIsMagicLoading] = useState(false);
   const [isEcommerceMode, setIsEcommerceMode] = useState(false);
 
+  // ... (useEffects and other logic identical to previous version) ...
   const groupedProducts = useMemo(() => {
     const filtered = stockProducts.filter(p =>
       p.name.toLowerCase().includes(productSearchTerm.toLowerCase()) ||
@@ -1075,20 +1090,43 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
       let baseAmount = 0;
       if (formData.items.length > 0) { baseAmount = formData.items.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0); } 
       else { baseAmount = parseFloat(formData.amount) || 0; }
+      
       const expDiscount = parseFloat(formData.expenseDiscount) || 0;
       const voucherDiscount = parseFloat(formData.voucherDiscount) || 0;
-      const totalAfterDiscount = baseAmount - expDiscount - voucherDiscount;
+      
+      let totalForTax = 0;
+      if (formData.type === 'expense') {
+          totalForTax = baseAmount - expDiscount; 
+      } else {
+          totalForTax = baseAmount;
+      }
+
       const custShip = parseFloat(formData.customerShipping) || 0;
       const platFee = parseFloat(formData.platformFee) || 0;
       const shipCost = parseFloat(formData.shippingCost) || 0;
       const shopDisc = parseFloat(formData.shopDiscount) || 0;
       const estimatedPayout = (baseAmount + custShip) - (platFee + shipCost + shopDisc);
-      let net = 0, vat = 0; 
-      const finalAmount = formData.type === 'expense' ? totalAfterDiscount : baseAmount;
-      if (formData.vatType === 'included') { net = finalAmount * 100 / 107; vat = finalAmount - net; } 
-      else if (formData.vatType === 'excluded') { net = finalAmount; vat = finalAmount * 0.07; } 
-      else { net = finalAmount; vat = 0; } 
-      return { net, vat, total: formData.vatType === 'excluded' ? net + vat : finalAmount, baseAmount, estimatedPayout, totalAfterDiscount }; 
+      
+      let net = 0, vat = 0, totalRecord = 0; 
+      if (formData.vatType === 'included') { 
+          totalRecord = totalForTax;
+          net = totalRecord * 100 / 107; 
+          vat = totalRecord - net; 
+      } 
+      else if (formData.vatType === 'excluded') { 
+          net = totalForTax; 
+          vat = net * 0.07; 
+          totalRecord = net + vat; 
+      } 
+      else { 
+          net = totalForTax; 
+          vat = 0; 
+          totalRecord = net; 
+      } 
+
+      const netPayable = formData.type === 'expense' ? Math.max(0, totalRecord - voucherDiscount) : 0;
+
+      return { net, vat, total: totalRecord, baseAmount, estimatedPayout, netPayable }; 
   }, [formData]);
   
   const saveVendorProfile = async () => {
@@ -1142,7 +1180,8 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
     reader.readAsDataURL(file);
   };
 
-  const updateStockFIFO = async (items, transactionType, transDate, totalDiscount = 0) => {
+  // --- UPDATED: updateStockFIFO with Transaction ID ---
+  const updateStockFIFO = async (items, transactionType, transDate, totalDiscount = 0, transactionId = null) => {
       const totalLineItemsAmount = items.reduce((sum, i) => sum + (parseFloat(i.amount) || 0), 0);
       for (const item of items) {
           if (!item.desc) continue;
@@ -1167,7 +1206,8 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
               const netItemCost = Math.max(0, itemAmount - allocatedDiscount);
               await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_lots'), { 
                   productId: product.id, productName: product.name, initialQty: qtyChange, remainingQty: qtyChange, 
-                  cost: netItemCost, costPerUnit: netItemCost / qtyChange, lotDate: transDate, createdAt: serverTimestamp() 
+                  cost: netItemCost, costPerUnit: netItemCost / qtyChange, lotDate: transDate, createdAt: serverTimestamp(),
+                  transactionId: transactionId // <--- LINKED TO EXPENSE
               });
               await updateDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'products', product.id), { stock: increment(qtyChange), cost: netItemCost / qtyChange });
           }
@@ -1190,12 +1230,22 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
           const collectionName = formData.type === 'income' ? 'transactions_income' : 'transactions_expense';
           if (editingId) { await setDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', collectionName, editingId), { ...dataToSave, updatedAt: serverTimestamp() }, {merge: true}); } 
           else {
-              await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', collectionName), { ...dataToSave, createdAt: serverTimestamp() });
-              await updateStockFIFO(formData.items, formData.type, dateObj, (parseFloat(formData.expenseDiscount) || 0) + (parseFloat(formData.voucherDiscount) || 0));
+              // --- UPDATED: Capture docRef to get ID ---
+              const docRef = await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', collectionName), { ...dataToSave, createdAt: serverTimestamp() });
+              // --- Pass docRef.id to updateStockFIFO ---
+              await updateStockFIFO(formData.items, formData.type, dateObj, (parseFloat(formData.expenseDiscount) || 0) + (parseFloat(formData.voucherDiscount) || 0), docRef.id);
           }
           showToast("บันทึกสำเร็จ", "success");
-          setFormData(initialForm); setEditingId(null);
+          setFormData(initialForm); setEditingId(null); localStorage.removeItem('merchant_draft_record'); setDraftStatus(null);
       } catch (error) { showToast("บันทึกไม่สำเร็จ", "error"); } 
+  };
+
+  const handleReset = () => {
+      setFormData(initialForm);
+      setEditingId(null);
+      setDraftStatus(null);
+      localStorage.removeItem('merchant_draft_record');
+      showToast("ล้างข้อมูลเรียบร้อย", "success");
   };
 
   const handleEdit = (item) => { 
@@ -1230,10 +1280,49 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
 
   return (
     <div className="flex flex-col h-full lg:h-[calc(100vh-88px)] relative text-left font-sarabun">
-        {deleteId && <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 text-center"><div className="bg-white rounded-3xl p-8 max-sm w-full shadow-2xl animate-fadeIn"><Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/><h3 className="text-xl font-bold mb-6 text-slate-800">ยืนยันการลบ?</h3><div className="flex gap-3 mt-6"><button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold">ยกเลิก</button><button onClick={async ()=>{const item = transactions.find(t=>t.id===deleteId); await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', item.type==='income'?'transactions_income':'transactions_expense', deleteId)); setDeleteId(null); showToast("ลบสำเร็จ", "success");}} className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold">ลบรายการ</button></div></div></div>}
+        {deleteId && (
+            <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 text-center">
+                <div className="bg-white rounded-3xl p-8 max-sm w-full shadow-2xl animate-fadeIn">
+                    <Trash2 size={48} className="mx-auto text-rose-500 mb-4 bg-rose-50 p-3 rounded-full"/>
+                    <h3 className="text-xl font-bold mb-6 text-slate-800">ยืนยันการลบ?</h3>
+                    <div className="flex gap-3 mt-6">
+                        <button onClick={()=>setDeleteId(null)} className="flex-1 py-3 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
+                        <button 
+                            onClick={async ()=>{
+                                const item = transactions.find(t=>t.id===deleteId); 
+                                // 1. Delete the transaction record
+                                await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', item.type==='income'?'transactions_income':'transactions_expense', deleteId)); 
+                                
+                                // 2. NEW LOGIC: If expense, remove associated FIFO lots and revert stock
+                                if (item.type === 'expense') {
+                                    const q = query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_lots'), where('transactionId', '==', deleteId));
+                                    const snap = await getDocs(q);
+                                    const batch = writeBatch(dbInstance);
+                                    snap.docs.forEach(d => {
+                                        const lot = d.data();
+                                        const prodRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'products', lot.productId);
+                                        // Reduce master stock by the amount that was initially added
+                                        batch.update(prodRef, { stock: increment(-lot.initialQty) });
+                                        // Delete the lot entry
+                                        batch.delete(d.ref);
+                                    });
+                                    await batch.commit();
+                                }
+
+                                setDeleteId(null); 
+                                showToast("ลบสำเร็จ", "success");
+                            }} 
+                            className="flex-1 py-3 rounded-xl bg-rose-600 text-white font-bold"
+                        >
+                            ลบรายการ
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+        
         {previewInvoiceTransaction && (<InvoicePreviewModal transaction={previewInvoiceTransaction} onClose={()=>setPreviewInvoiceTransaction(null)} showToast={showToast}/>)}
         
-        {/* Updated Vendor Selection Modal (Performance Style) */}
         {showVendorModal && (
           <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[120] flex items-center justify-center p-4">
             <div className="bg-white rounded-[32px] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200">
@@ -1306,7 +1395,6 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
           </div>
         )}
 
-        {/* Updated Customer Selection Modal (Performance Style) */}
         {showCustomerModal && (
           <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[120] flex items-center justify-center p-4">
             <div className="bg-white rounded-[32px] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200">
@@ -1449,9 +1537,15 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
 
                 <div className="bg-indigo-600 p-6 rounded-[32px] text-white flex items-center justify-between relative overflow-hidden">
                     <div className="relative z-10">
-                        <p className="text-indigo-200 text-xs font-bold uppercase tracking-widest mb-1">ยอดเงินสุทธิที่กำลังบันทึก</p>
+                        <div className="flex items-center gap-2 mb-1">
+                            <p className="text-indigo-200 text-xs font-bold uppercase tracking-widest">ยอดที่ต้องบันทึกบัญชี</p>
+                            {/* --- NEW: Reset Button --- */}
+                            <button onClick={handleReset} className="p-1.5 bg-indigo-500/50 hover:bg-indigo-500 rounded-lg transition-colors text-white" title="ล้างข้อมูล / เริ่มใหม่">
+                                <RotateCcw size={14}/>
+                            </button>
+                        </div>
                         <h3 className="text-4xl font-black">{formatCurrency(calculated.total)}</h3>
-                        <p className="text-indigo-100 text-[10px] mt-2 flex items-center gap-1 opacity-80"><Info size={12}/> รวมส่วนลดและภาษีเรียบร้อยแล้ว</p>
+                        <p className="text-indigo-100 text-[10px] mt-2 flex items-center gap-1 opacity-80"><Info size={12}/> รวม VAT แล้ว (ใช้ยื่นภาษี)</p>
                     </div>
                     <div className="relative z-10 text-right">
                         <button onClick={handleSubmit} className="bg-white text-indigo-600 h-16 w-16 rounded-3xl flex items-center justify-center shadow-2xl hover:scale-105 transition-transform active:scale-95 group">
@@ -1688,14 +1782,14 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                                     <div className="flex justify-between items-center bg-white/5 p-3 rounded-2xl">
                                         <div className="flex items-center gap-2">
                                             <div className="p-1 bg-orange-500/20 text-orange-400 rounded-md"><Tag size={12}/></div>
-                                            <span className="text-xs font-bold">ส่วนลดเงินสด</span>
+                                            <span className="text-xs font-bold">ส่วนลดการค้า</span>
                                         </div>
                                         <input type="number" className="bg-transparent border-b border-white/20 w-24 text-right font-bold text-orange-400 focus:border-orange-400 outline-none" placeholder="0.00" value={formData.expenseDiscount} onChange={e=>setFormData({...formData, expenseDiscount: e.target.value})} />
                                     </div>
                                     <div className="flex justify-between items-center bg-white/5 p-3 rounded-2xl">
                                         <div className="flex items-center gap-2">
                                             <div className="p-1 bg-rose-500/20 text-rose-400 rounded-md"><Ticket size={12}/></div>
-                                            <span className="text-xs font-bold">ส่วนลด Voucher</span>
+                                            <span className="text-xs font-bold">คูปองเงินสด (ไม่ลดฐานภาษี)</span>
                                         </div>
                                         <input type="number" className="bg-transparent border-b border-white/20 w-24 text-right font-bold text-rose-400 focus:border-rose-400 outline-none" placeholder="0.00" value={formData.voucherDiscount} onChange={e=>setFormData({...formData, voucherDiscount: e.target.value})} />
                                     </div>
@@ -1703,18 +1797,44 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
                             )}
 
                             <div className="pt-4 border-t border-white/10 space-y-2">
+                                {/* Breakdown for verification */}
                                 <div className="flex justify-between text-xs text-slate-500">
+                                    <span>ยอดรวมสินค้า (Subtotal)</span>
+                                    <span>{formatCurrency(calculated.baseAmount)}</span>
+                                </div>
+                                {formData.type === 'expense' && parseFloat(formData.expenseDiscount) > 0 && (
+                                    <div className="flex justify-between text-xs text-orange-400">
+                                        <span>หักส่วนลดการค้า</span>
+                                        <span>-{formatCurrency(formData.expenseDiscount)}</span>
+                                    </div>
+                                )}
+                                
+                                <div className="flex justify-between text-xs text-slate-400">
                                     <span>ฐานภาษี (Tax Base)</span>
                                     <span>{formatCurrency(calculated.net)}</span>
                                 </div>
-                                <div className="flex justify-between text-xs text-slate-500">
+                                <div className="flex justify-between text-xs text-slate-400">
                                     <span>ภาษีมูลค่าเพิ่ม (VAT 7%)</span>
                                     <span>{formatCurrency(calculated.vat)}</span>
                                 </div>
-                                <div className="flex justify-between text-lg font-black pt-2 text-white">
-                                    <span>รวมสุทธิ</span>
+                                
+                                <div className="flex justify-between text-lg font-black pt-2 text-white border-t border-white/10 mt-2">
+                                    <span>รวมสุทธิ (บันทึกบัญชี)</span>
                                     <span className="text-indigo-400">{formatCurrency(calculated.total)}</span>
                                 </div>
+
+                                {formData.type === 'expense' && parseFloat(formData.voucherDiscount) > 0 && (
+                                    <>
+                                        <div className="flex justify-between text-xs text-rose-400 mt-1">
+                                            <span>หักคูปองเงินสด</span>
+                                            <span>-{formatCurrency(formData.voucherDiscount)}</span>
+                                        </div>
+                                        <div className="pt-2 border-t border-white/10 flex justify-between text-sm font-bold text-emerald-400 mt-1">
+                                            <span>ยอดชำระจริง (Net Paid)</span>
+                                            <span>{formatCurrency(calculated.netPayable)}</span>
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         </div>
 
@@ -1727,13 +1847,139 @@ const RecordManager = ({ user, transactions, invoices, appId, showToast }) => {
           </div>
         ) : (
           <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 flex flex-col h-full overflow-hidden animate-fadeIn text-left">
-            <div className="p-6 border-b border-slate-100 space-y-4"><div className="flex flex-col md:flex-row justify-between items-center gap-4"><div><h3 className="font-bold text-slate-800 flex items-center gap-2 text-xl"><BarChart2 className="text-indigo-600"/> Performance & History</h3><p className="text-slate-500 text-sm">วิเคราะห์เจาะลึกรายการบันทึกย้อนหลัง</p></div><div className="flex flex-wrap gap-2"><div className="flex bg-slate-100 p-1 rounded-xl"><button onClick={()=>setSelectedYear(currentYear-1)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${selectedYear === currentYear-1 ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีย้อนหลัง ({currentYear-1})</button><button onClick={()=>setSelectedYear(currentYear)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${selectedYear === currentYear ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีปัจจุบัน ({currentYear})</button></div><select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histFilterType} onChange={e=>setHistFilterType(e.target.value)}><option value="all">รวมทุกประเภท</option><option value="income">รายรับ (Income)</option><option value="expense">รายจ่าย (Expense)</option></select><button className="bg-emerald-50 text-emerald-600 p-2 rounded-xl hover:bg-emerald-100 flex items-center gap-2 px-4 text-sm font-bold shadow-sm transition-all"><FileText size={18}/> Export</button></div></div>
-            <div className="flex flex-col md:flex-row gap-4 items-center justify-between"><div className="flex bg-indigo-50/50 p-1 rounded-xl w-full md:w-auto">{['day', 'week', 'month', 'year'].map(m => (<button key={m} onClick={() => setViewMode(m)} className={`flex-1 md:flex-none px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all ${viewMode === m ? 'bg-indigo-600 text-white shadow-md' : 'text-indigo-400 hover:bg-indigo-100'}`}>{m === 'day' ? 'รายวัน' : m === 'week' ? 'รายสัปดาห์' : m === 'month' ? 'รายเดือน' : 'ทั้งปี'}</button>))}</div><div className="relative w-full md:w-64"><Search className="absolute left-3 top-2.5 text-slate-400" size={16}/><input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 transition-all" placeholder="ค้นหาตามรายการ, ยอด, ที่เก็บแฟ้ม..." value={historySearch} onChange={e=>setHistorySearch(e.target.value)}/></div></div></div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-6"><div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6"><div className="p-5 rounded-2xl bg-indigo-50 border border-indigo-100 relative overflow-hidden group"><div className="relative z-10"><p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-1">จำนวนรายการ (Volume)</p><h4 className="text-3xl font-bold text-indigo-700">{formatCompactNumber(historyStats.count)} <span className="text-sm font-medium text-indigo-400">รายการ</span></h4></div><div className="absolute -right-2 -bottom-2 text-indigo-200 opacity-20 group-hover:scale-110 transition-transform"><List size={80}/></div></div><div className="p-5 rounded-2xl bg-emerald-50 border border-emerald-100 relative overflow-hidden group"><div className="relative z-10"><p className="text-xs font-bold text-emerald-500 uppercase tracking-wider mb-1">มูลค่ารวม (Total Value)</p><h4 className="text-3xl font-bold text-emerald-700">{formatCurrency(historyStats.totalAmount)}</h4></div><div className="absolute -right-2 -bottom-2 text-emerald-200 opacity-20 group-hover:scale-110 transition-transform"><Wallet size={80}/></div></div><div className="p-5 rounded-2xl bg-amber-50 border border-amber-100 relative overflow-hidden group"><div className="relative z-10"><p className="text-xs font-bold text-amber-500 uppercase tracking-wider mb-1">เฉลี่ยต่อบิล (Avg. Ticket)</p><h4 className="text-3xl font-bold text-amber-700">{formatCurrency(historyStats.avg)}</h4></div><div className="absolute -right-2 -bottom-2 text-emerald-200 opacity-20 group-hover:scale-110 transition-transform"><Tag size={80}/></div></div></div>
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8"><div className="lg:col-span-2 bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-sm"><div className="flex justify-between items-center mb-6"><h4 className="font-bold text-slate-700 text-sm flex items-center gap-2"><Activity size={16}/> Activity Trend (Filtered)</h4></div><div className="flex items-end gap-3 h-40">{historyStats.trendData.length > 0 ? historyStats.trendData.map((d, i) => { const maxVal = Math.max(...historyStats.trendData.map(x => Math.max(x.income, x.expense))) || 1; return (<div key={i} className="flex-1 flex flex-col justify-end gap-1 h-full group relative"><div className="w-full bg-emerald-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.income/maxVal)*100, 2)}%`}}></div><div className="w-full bg-rose-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.expense/maxVal)*100, 2)}%`}}></div><div className="text-[9px] text-center text-slate-400 font-bold mt-1">{d.date.getDate()}</div><div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-800 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-20 shadow-xl transition-opacity"><div className="font-bold border-b border-slate-600 pb-1 mb-1">{formatDate(d.date)}</div><div className="text-emerald-300">In: {formatCurrency(d.income)}</div><div className="text-rose-300">Ex: {formatCurrency(d.expense)}</div></div></div>) }) : <div className="w-full h-full flex items-center justify-center text-slate-400">ไม่มีข้อมูลในช่วงนี้</div>}</div></div>
-                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm"><h4 className="font-bold text-slate-700 text-sm mb-4 flex items-center gap-2"><PieChart size={16}/> Top Categories</h4></div></div>
-                <h4 className="font-bold text-slate-700 text-lg mb-4 flex items-center gap-2"><List size={20}/> Transaction Logs <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full ml-2">Year: {selectedYear} / View: {viewMode.toUpperCase()}</span></h4>
-                <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm"><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase border-b border-slate-200"><tr><th className="p-4 border-r border-slate-200 w-[50px] text-center">ลำดับ</th><th className="p-4 w-[120px]">Date</th><th className="p-4 w-[100px]">Type</th><th className="p-4">Description</th><th className="p-4 text-right">Amount</th><th className="p-4 text-center w-[120px]">ที่เก็บเอกสาร</th><th className="p-4 text-center w-[100px]">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{historyStats.filtered.sort((a,b) => b.date - a.date).map((t, idx) => (<tr key={t.id + "-hist-" + idx} className="hover:bg-slate-50 transition-colors"><td className="p-4 text-center border-r border-slate-50 text-slate-400 text-xs">{idx + 1}</td><td className="p-4 text-slate-500 text-xs font-mono">{formatDate(t.date)}</td><td className="p-4"><span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${t.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{t.type}</span></td><td className="p-4"><div className="font-bold text-slate-700">{t.description}</div><div className="flex gap-2 mt-1"><span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">{t.category}</span>{t.orderId && <span className="text-[10px] text-indigo-400 font-mono">Ref: {t.orderId}</span>}</div></td><td className={`p-4 text-right font-bold ${t.type==='income'?'text-emerald-600':'text-rose-600'}`}>{t.type === 'income' ? '+' : '-'}{formatCurrency(t.total)}</td><td className="p-4 text-center"><div className="flex items-center justify-center gap-1.5">{t.docLocation ? <><Map size={12} className="text-slate-400"/><span className="text-[10px] font-bold text-slate-600">{t.docLocation}</span></> : <span className="text-[10px] text-slate-300 italic">- ไม่ได้ระบุ -</span>}</div></td><td className="p-4 text-center"><div className="flex justify-center gap-2">{t.type === 'income' && (<button onClick={() => setPreviewInvoiceTransaction(t)} className="text-slate-300 hover:text-indigo-600" title="Reprint Invoice"><Printer size={14}/></button>)}<button onClick={()=>handleEdit(t)} className="text-slate-300 hover:text-orange-500"><Edit size={14}/></button><button onClick={(e)=>setDeleteId(t.id)} className="text-slate-300 hover:text-rose-500"><Trash2 size={14}/></button></div></td></tr>))}{historyStats.filtered.length === 0 && (<tr><td colSpan="7" className="p-8 text-center text-slate-300">ไม่พบรายการในช่วงนี้</td></tr>)}</tbody></table></div>
+            <div className="p-6 border-b border-slate-100 space-y-4">
+              <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                <div>
+                  <h3 className="font-bold text-slate-800 flex items-center gap-2 text-xl"><BarChart2 className="text-indigo-600"/> Performance & History</h3>
+                  <p className="text-slate-500 text-sm">วิเคราะห์เจาะลึกรายการบันทึกย้อนหลัง</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <div className="flex bg-slate-100 p-1 rounded-xl">
+                    <button onClick={()=>setSelectedYear(currentYear-1)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${selectedYear === currentYear-1 ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีย้อนหลัง ({currentYear-1})</button>
+                    <button onClick={()=>setSelectedYear(currentYear)} className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${selectedYear === currentYear ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>ปีปัจจุบัน ({currentYear})</button>
+                  </div>
+                  <select className="bg-slate-50 border-none rounded-xl text-sm font-bold py-2 px-4 text-slate-600" value={histFilterType} onChange={e=>setHistFilterType(e.target.value)}>
+                    <option value="all">รวมทุกประเภท</option>
+                    <option value="income">รายรับ (Income)</option>
+                    <option value="expense">รายจ่าย (Expense)</option>
+                  </select>
+                  <button className="bg-emerald-50 text-emerald-600 p-2 rounded-xl hover:bg-emerald-100 flex items-center gap-2 px-4 text-sm font-bold shadow-sm transition-all"><FileText size={18}/> Export</button>
+                </div>
+              </div>
+              <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                <div className="flex bg-indigo-50/50 p-1 rounded-xl w-full md:w-auto">
+                  {['day', 'week', 'month', 'year'].map(m => (
+                    <button key={m} onClick={() => setViewMode(m)} className={`flex-1 md:flex-none px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all ${viewMode === m ? 'bg-indigo-600 text-white shadow-md' : 'text-indigo-400 hover:bg-indigo-100'}`}>
+                      {m === 'day' ? 'รายวัน' : m === 'week' ? 'รายสัปดาห์' : m === 'month' ? 'รายเดือน' : 'ทั้งปี'}
+                    </button>
+                  ))}
+                </div>
+                <div className="relative w-full md:w-64">
+                  <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
+                  <input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 transition-all" placeholder="ค้นหาตามรายการ, ยอด, ที่เก็บแฟ้ม..." value={historySearch} onChange={e=>setHistorySearch(e.target.value)}/>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div className="p-5 rounded-2xl bg-indigo-50 border border-indigo-100 relative overflow-hidden group">
+                  <div className="relative z-10">
+                    <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-1">จำนวนรายการ (Volume)</p>
+                    <h4 className="text-3xl font-bold text-indigo-700">{formatCompactNumber(historyStats.count)} <span className="text-sm font-medium text-indigo-400">รายการ</span></h4>
+                  </div>
+                  <div className="absolute -right-2 -bottom-2 text-indigo-200 opacity-20 group-hover:scale-110 transition-transform"><List size={80}/></div>
+                </div>
+                <div className="p-5 rounded-2xl bg-emerald-50 border border-emerald-100 relative overflow-hidden group">
+                  <div className="relative z-10">
+                    <p className="text-xs font-bold text-emerald-500 uppercase tracking-wider mb-1">มูลค่ารวม (Total Value)</p>
+                    <h4 className="text-3xl font-bold text-emerald-700">{formatCurrency(historyStats.totalAmount)}</h4>
+                  </div>
+                  <div className="absolute -right-2 -bottom-2 text-emerald-200 opacity-20 group-hover:scale-110 transition-transform"><Wallet size={80}/></div>
+                </div>
+                <div className="p-5 rounded-2xl bg-amber-50 border border-amber-100 relative overflow-hidden group">
+                  <div className="relative z-10">
+                    <p className="text-xs font-bold text-amber-500 uppercase tracking-wider mb-1">เฉลี่ยต่อบิล (Avg. Ticket)</p>
+                    <h4 className="text-3xl font-bold text-amber-700">{formatCurrency(historyStats.avg)}</h4>
+                  </div>
+                  <div className="absolute -right-2 -bottom-2 text-emerald-200 opacity-20 group-hover:scale-110 transition-transform"><Tag size={80}/></div>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                <div className="lg:col-span-2 bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="flex justify-between items-center mb-6">
+                    <h4 className="font-bold text-slate-700 text-sm flex items-center gap-2"><Activity size={16}/> Activity Trend (Filtered)</h4>
+                  </div>
+                  <div className="flex items-end gap-3 h-40">
+                    {historyStats.trendData.length > 0 ? historyStats.trendData.map((d, i) => { 
+                      const maxVal = Math.max(...historyStats.trendData.map(x => Math.max(x.income, x.expense))) || 1; 
+                      return (
+                        <div key={i} className="flex-1 flex flex-col justify-end gap-1 h-full group relative">
+                          <div className="w-full bg-emerald-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.income/maxVal)*100, 2)}%`}}></div>
+                          <div className="w-full bg-rose-400 rounded-t opacity-90 group-hover:opacity-100 transition-all shadow-sm" style={{height: `${Math.max((d.expense/maxVal)*100, 2)}%`}}></div>
+                          <div className="text-[9px] text-center text-slate-400 font-bold mt-1">{d.date.getDate()}</div>
+                          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-800 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-20 shadow-xl transition-opacity">
+                            <div className="font-bold border-b border-slate-600 pb-1 mb-1">{formatDate(d.date)}</div>
+                            <div className="text-emerald-300">In: {formatCurrency(d.income)}</div>
+                            <div className="text-rose-300">Ex: {formatCurrency(d.expense)}</div>
+                          </div>
+                        </div>
+                      ) 
+                    }) : <div className="w-full h-full flex items-center justify-center text-slate-400">ไม่มีข้อมูลในช่วงนี้</div>}
+                  </div>
+                </div>
+                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                  <h4 className="font-bold text-slate-700 text-sm mb-4 flex items-center gap-2"><PieChart size={16}/> Top Categories</h4>
+                </div>
+              </div>
+              
+              <h4 className="font-bold text-slate-700 text-lg mb-4 flex items-center gap-2">
+                <List size={20}/> Transaction Logs <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full ml-2">Year: {selectedYear} / View: {viewMode.toUpperCase()}</span>
+              </h4>
+              
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-500 font-bold text-xs uppercase border-b border-slate-200">
+                    <tr>
+                      <th className="p-4 border-r border-slate-200 w-[50px] text-center">ลำดับ</th>
+                      <th className="p-4 w-[120px]">Date</th>
+                      <th className="p-4 w-[100px]">Type</th>
+                      <th className="p-4">Description</th>
+                      <th className="p-4 text-right">Amount</th>
+                      <th className="p-4 text-center w-[120px]">ที่เก็บเอกสาร</th>
+                      <th className="p-4 text-center w-[100px]">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {historyStats.filtered.sort((a,b) => b.date - a.date).map((t, idx) => (
+                      <tr key={t.id + "-hist-" + idx} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 text-center border-r border-slate-50 text-slate-400 text-xs">{idx + 1}</td>
+                        <td className="p-4 text-slate-500 text-xs font-mono">{formatDate(t.date)}</td>
+                        <td className="p-4"><span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${t.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{t.type}</span></td>
+                        <td className="p-4">
+                          <div className="font-bold text-slate-700">{t.description}</div>
+                          <div className="flex gap-2 mt-1"><span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">{t.category}</span>{t.orderId && <span className="text-[10px] text-indigo-400 font-mono">Ref: {t.orderId}</span>}</div>
+                        </td>
+                        <td className={`p-4 text-right font-bold ${t.type==='income'?'text-emerald-600':'text-rose-600'}`}>{t.type === 'income' ? '+' : '-'}{formatCurrency(t.total)}</td>
+                        <td className="p-4 text-center">
+                          <div className="flex items-center justify-center gap-1.5">{t.docLocation ? <><Map size={12} className="text-slate-400"/><span className="text-[10px] font-bold text-slate-600">{t.docLocation}</span></> : <span className="text-[10px] text-slate-300 italic">- ไม่ได้ระบุ -</span>}</div>
+                        </td>
+                        <td className="p-4 text-center">
+                          <div className="flex justify-center gap-2">
+                            {t.type === 'income' && (
+                              <button onClick={() => setPreviewInvoiceTransaction(t)} className="text-slate-300 hover:text-[#06C755]" title="Send to LINE / Reprint"><Share size={14}/></button>
+                            )}
+                            <button onClick={()=>handleEdit(t)} className="text-slate-300 hover:text-orange-500"><Edit size={14}/></button>
+                            <button onClick={(e)=>setDeleteId(t.id)} className="text-slate-300 hover:text-rose-500"><Trash2 size={14}/></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {historyStats.filtered.length === 0 && (<tr><td colSpan="7" className="p-8 text-center text-slate-300">ไม่พบรายการในช่วงนี้</td></tr>)}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
