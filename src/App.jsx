@@ -687,13 +687,18 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
     try {
       const batch = writeBatch(dbInstance);
       const stockSnap = [...stockBatches]; 
+      
+      let currentIncCount = transactions.filter(t => t.type === 'income' && t.sysDocId && t.sysDocId.startsWith('INC-')).length;
 
       for (const trans of importedData) {
-        // (1) บันทึกรายรับหลักลงฐานข้อมูล
-        const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
-        batch.set(docRef, { ...trans, createdAt: serverTimestamp(), userId: user.uid });
+        
+        // --- Generate System Doc ID ---
+        currentIncCount++;
+        const sysDocId = `INC-${String(currentIncCount).padStart(5, '0')}`;
 
-        // (2) หักลบสต็อกตามรายการสินค้า (FIFO)
+        const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
+        batch.set(docRef, { ...trans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
+
         for (const item of trans.items) {
             let needed = Number(item.qty);
             const batches = stockSnap
@@ -877,6 +882,70 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     setIsProcessing(false);
   };
 
+  const handleRecalculateStock = async () => {
+    if (!window.confirm('ยืนยันการดึงข้อมูลประวัติการขายทั้งหมดมาคำนวณตัดสต็อก (FIFO) ใหม่?')) return;
+    setIsProcessing(true);
+    try {
+      // รีเซ็ตยอดขายของทุกล็อตให้เป็น 0 บนหน่วยความจำก่อน
+      let localBatches = stockBatches.map(b => ({ ...b, sold: 0 }));
+      
+      // ดึงประวัติรายรับทั้งหมดและเรียงจากเก่าไปใหม่
+      const incomeTrans = transactions.filter(t => t.type === 'income').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+
+      // คำนวณหักลบ FIFO ใหม่ทั้งหมด
+      incomeTrans.forEach(trans => {
+        (trans.items || []).forEach(item => {
+          let needed = Number(item.qty);
+          if (needed <= 0) return;
+          
+          const targetBatches = localBatches
+            .filter(b => {
+              const bSku = String(b.sku || '').trim().toLowerCase();
+              const iSku = String(item.sku || '').trim().toLowerCase();
+              const bName = String(b.productName || '').trim().toLowerCase();
+              const iName = String(item.desc || '').trim().toLowerCase();
+              return (iSku !== '-' && iSku !== '' && bSku === iSku) || (bName === iName);
+            })
+            .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+
+          for (let i = 0; i < targetBatches.length; i++) {
+            if (needed <= 0) break;
+            const b = targetBatches[i];
+            const remaining = Number(b.quantity) - Number(b.sold);
+            if (remaining > 0) {
+              const take = Math.min(needed, remaining);
+              b.sold += take;
+              needed -= take;
+            }
+          }
+        });
+      });
+
+      // บันทึกยอดที่คำนวณใหม่ลง Firestore
+      let opsCount = 0;
+      let currentBatch = writeBatch(dbInstance);
+      for (const lb of localBatches) {
+        const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lb.id);
+        currentBatch.update(docRef, { sold: lb.sold });
+        opsCount++;
+        // ป้องกันการ commit เกินขีดจำกัดของ Firebase Batch (500 ops)
+        if (opsCount >= 400) {
+          await currentBatch.commit();
+          currentBatch = writeBatch(dbInstance);
+          opsCount = 0;
+        }
+      }
+      if (opsCount > 0) {
+        await currentBatch.commit();
+      }
+      showToast('ซิงค์และดึงข้อมูลคำนวณสต็อกใหม่เรียบร้อยแล้ว', 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('เกิดข้อผิดพลาดในการคำนวณสต็อก', 'error');
+    }
+    setIsProcessing(false);
+  };
+
   const handleStockImport = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1004,7 +1073,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       const stockRef = await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'), batchData);
       
       if (totalCost > 0) {
+        // --- Generate System Doc ID for Stock Expense ---
+        const prefix = `EXP-`;
+        const currentCount = transactions.filter(t => t.type === 'expense' && t.sysDocId && t.sysDocId.startsWith(prefix)).length;
+        const sysDocId = `${prefix}${String(currentCount + 1).padStart(5, '0')}`;
+
         await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), { 
+          sysDocId,
           type: 'expense', 
           category: 'ต้นทุนสินค้า', 
           description: `ซื้อสต็อก: ${newStock.productName}`, 
@@ -1126,6 +1201,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
             <input className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 outline-none text-slate-800" placeholder="ค้นชื่อสินค้า หรือ SKU..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
           </div>
+          <button onClick={handleRecalculateStock} disabled={isProcessing} className="bg-amber-50 border border-amber-200 text-amber-600 hover:bg-amber-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all text-center" title="ดึงข้อมูลประวัติการขายมาคำนวณยอดคงเหลือใหม่">
+            {isProcessing ? <Loader className="animate-spin" size={18}/> : <RefreshCw size={18}/>} ซิงค์ข้อมูลสต็อก
+          </button>
           <input type="file" ref={importFileInputRef} hidden accept=".xlsx, .xls" onChange={handleStockImport} />
           <button onClick={() => importFileInputRef.current.click()} disabled={isProcessing} className="bg-white border border-indigo-200 text-indigo-600 hover:bg-indigo-50 px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all text-center">
             {isProcessing ? <Loader className="animate-spin" size={18}/> : <FileSpreadsheet size={18}/>} Import Excel
@@ -2036,6 +2114,45 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
             </table>
           )}
 
+          {reportTab === 'inventory' && (
+            <table className="w-full text-sm text-left">
+              <thead className="bg-white text-slate-400 text-[10px] font-bold uppercase sticky top-0 border-b z-10 text-left">
+                <tr>
+                  <th className="p-5 text-left">วันที่</th>
+                  <th className="p-5 text-left">อ้างอิง (Ref)</th>
+                  <th className="p-5 text-left">รายการสินค้า</th>
+                  <th className="p-5 text-center bg-emerald-50/50 text-emerald-600">รับ-จำนวน</th>
+                  <th className="p-5 text-right bg-emerald-50/50 text-emerald-600">รับ-มูลค่า</th>
+                  <th className="p-5 text-center bg-rose-50/50 text-rose-600">จ่าย-จำนวน</th>
+                  <th className="p-5 text-right bg-rose-50/50 text-rose-600">จ่าย-ต้นทุนรวม</th>
+                  <th className="p-5 text-center bg-indigo-50/50 text-indigo-600">คงเหลือ</th>
+                  <th className="p-5 text-right bg-indigo-50/50 text-indigo-600">มูลค่าคงเหลือ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 text-left">
+                {filteredMovement.map((m, i) => (
+                  <tr key={i} className="hover:bg-slate-50/80 transition-colors text-left">
+                    <td className="p-5 text-xs text-slate-500 whitespace-nowrap text-left">{formatDate(m.date)}</td>
+                    <td className="p-5 text-xs font-mono text-slate-500 text-left">{m.refId}</td>
+                    <td className="p-5 text-left">
+                      <p className="font-bold text-slate-700">{m.name}</p>
+                      <p className="text-[10px] text-slate-400">SKU: {m.sku}</p>
+                    </td>
+                    <td className="p-5 text-center font-bold text-emerald-600">{m.receiveQty > 0 ? m.receiveQty : '-'}</td>
+                    <td className="p-5 text-right text-emerald-600">{m.receiveTotal > 0 ? formatCurrency(m.receiveTotal) : '-'}</td>
+                    <td className="p-5 text-center font-bold text-rose-600">{m.issueQty > 0 ? m.issueQty : '-'}</td>
+                    <td className="p-5 text-right text-rose-600">{m.issueTotal > 0 ? formatCurrency(m.issueTotal) : '-'}</td>
+                    <td className="p-5 text-center font-black text-indigo-600">{m.balanceQty}</td>
+                    <td className="p-5 text-right font-black text-indigo-600">{formatCurrency(m.balanceTotal)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              {filteredMovement.length === 0 && (
+                <tbody><tr><td colSpan="9" className="p-10 text-center text-slate-400 font-bold">ไม่พบความเคลื่อนไหวในช่วงเวลานี้</td></tr></tbody>
+              )}
+            </table>
+          )}
+
           {reportTab === 'pp30' && (
             <div className="p-8 max-w-3xl mx-auto my-4 bg-white border border-slate-200 rounded-3xl text-sm shadow-sm font-sarabun">
                 <div className="text-center mb-8 border-b border-slate-200 pb-4">
@@ -2452,6 +2569,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     try {
       const coll = formData.type === 'income' ? 'transactions_income' : 'transactions_expense';
       const { subTotal, totalFees, grandTotal, totalDiscounts, shippingFee } = financialSummary;
+
+      // --- Generate System Doc ID ---
+      const prefix = `${formData.type === 'income' ? 'INC' : 'EXP'}-`;
+      const currentCount = transactions.filter(t => t.type === formData.type && t.sysDocId && t.sysDocId.startsWith(prefix)).length;
+      const sysDocId = `${prefix}${String(currentCount + 1).padStart(5, '0')}`;
       
       const mainRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', coll));
       const dataToSave = { 
@@ -3082,7 +3204,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
              <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full xl:w-auto">
                  <div className="relative w-full md:w-80 text-left shrink-0">
                      <Search className="absolute left-4 top-3 text-slate-400 text-center" size={18}/>
-                     <input className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-11 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100 outline-none transition-all shadow-sm text-left" placeholder="ค้นหา: ชื่อ, Order ID, รายละเอียด..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+                     <input className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-11 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100 outline-none transition-all shadow-sm text-left" placeholder="ค้นหา: ชื่อ, เลขระบบ, Order ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
                  </div>
                  <div className="flex bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto">
                     <button onClick={() => setHistType('all')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${histType === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ทั้งหมด</button>
@@ -3132,7 +3254,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-400 text-left sticky top-0 z-10 border-b">
                         <tr>
                             <th className="p-5 text-left">วันที่ / ช่องทาง</th>
-                            <th className="p-5 text-left">รายการ/เลขที่</th>
+                            <th className="p-5 text-left">รายการ/เลขที่อ้างอิง</th>
                             <th className="p-5 text-left">คู่ค้า</th>
                             <th className="p-5 text-right text-right">ยอดรวม</th>
                             <th className="p-5 text-center text-center">จัดการ</th>
@@ -3143,6 +3265,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         <tr key={t.id} className="group hover:bg-slate-50/80 transition-colors text-left">
                             <td className="p-5 text-left">
                                 <p className="font-black text-slate-700 text-left">{formatDate(t.date)}</p>
+                                <p className="text-[10px] font-mono font-bold text-indigo-600 mt-0.5">{t.sysDocId || 'NO-REF'}</p>
                                 <span className="mt-1 inline-block px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500 uppercase text-center">{t.channel || 'หน้าร้าน'}</span>
                             </td>
                             <td className="p-5 text-left">
@@ -3151,7 +3274,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     {t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
                                 </div>
                                 <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
-                                    <p className="text-[10px] font-mono text-slate-400 text-left">ID: {t.orderId || t.taxInvoiceNo || '-'}</p>
+                                    <p className="text-[10px] font-mono text-slate-400 text-left">Ref/Order: {t.orderId || t.taxInvoiceNo || '-'}</p>
                                     {t.issuedDocs && t.issuedDocs.length > 0 && t.issuedDocs.map((doc, idx) => (<span key={idx} className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase text-center ${doc.type === 'invoice' ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-700'}`}>{doc.type === 'invoice' ? 'ออกใบกำกับแล้ว' : 'ลดหนี้แล้ว'}: {doc.no}</span>))}
                                 </div>
                             </td>
@@ -3199,7 +3322,18 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       {viewItem && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[300] flex items-center justify-center p-4 text-left">
           <div className="bg-white rounded-[40px] w-full max-w-5xl h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 text-left">
-            <div className="p-6 border-b flex justify-between items-center bg-slate-50 text-left"><div className="text-left"><h3 className="text-2xl font-black text-slate-800 flex items-center gap-2 text-left"><Hash className="text-indigo-600"/> รายละเอียดรายการ</h3><div className="flex items-center gap-4 mt-1 text-left"><p className="text-xs text-slate-400 font-mono text-left">ID: {viewItem.orderId || viewItem.taxInvoiceNo || '-'}</p><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold text-center ${viewItem.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{viewItem.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span><span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-[10px] font-bold text-center">{viewItem.channel || 'หน้าร้าน'}</span></div></div><button onClick={()=>setViewItem(null)} className="p-2 hover:bg-slate-200 rounded-full text-center"><X/></button></div>
+            <div className="p-6 border-b flex justify-between items-center bg-slate-50 text-left">
+              <div className="text-left">
+                <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2 text-left"><Hash className="text-indigo-600"/> รายละเอียดรายการ</h3>
+                <div className="flex items-center gap-3 mt-2 text-left">
+                  <span className="text-sm font-black text-indigo-700 bg-indigo-100 border border-indigo-200 px-3 py-1 rounded-lg tracking-wider">SYS ID: {viewItem.sysDocId || 'NO-REF'}</span>
+                  <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.orderId || viewItem.taxInvoiceNo || '-'}</p>
+                  <span className={`px-2 py-1 rounded-md text-[10px] font-bold text-center ${viewItem.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{viewItem.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span>
+                  <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold text-center">{viewItem.channel || 'หน้าร้าน'}</span>
+                </div>
+              </div>
+              <button onClick={()=>setViewItem(null)} className="p-2 hover:bg-slate-200 rounded-full text-center"><X/></button>
+            </div>
             <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-8 text-left">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
                 <div className="space-y-6 text-left"><h4 className="font-bold text-slate-800 border-b pb-2 flex items-center gap-2 text-left"><Info size={18} className="text-indigo-600"/> ข้อมูลพื้นฐาน</h4><div className="bg-slate-50/50 p-6 rounded-3xl border border-slate-100 text-sm space-y-4 text-left"><div className="text-left"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">วันที่ทำรายการ</p><p className="font-bold text-slate-800 text-left">{formatDate(viewItem.date)}</p></div><div className="text-left"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">หมวดหมู่</p><p className="font-bold text-slate-800 text-left">{viewItem.category || '-'}</p></div><div className="pt-2 border-t text-left"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">{viewItem.type === 'income' ? 'ลูกค้า' : 'ผู้ขาย'}</p><p className="font-bold text-slate-800 text-base text-left">{viewItem.partnerName || '-'}</p><div className="flex flex-wrap gap-2 mt-1 text-left"><p className="text-[10px] font-mono text-indigo-500 font-bold text-left">TAX: {viewItem.partnerTaxId || '-'}</p><p className="text-[10px] font-bold text-indigo-400 text-left">สาขา: {viewItem.partnerBranch === '00000' || !viewItem.partnerBranch ? 'สำนักงานใหญ่' : viewItem.partnerBranch} {viewItem.partnerBranchName && `(${viewItem.partnerBranchName})`}</p></div>
@@ -3397,12 +3531,11 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
   useEffect(() => { 
       if (mode === 'create' && !editingDocId) { 
-          const dateStr = invData.date.replace(/-/g, ''); 
           const prefix = invData.docType === 'credit_note' ? 'CN-' : (invData.docType === 'abb' ? 'ABB-' : 'INV-'); 
-          const count = invoices.filter(inv => inv.invNo && inv.invNo.startsWith(prefix + dateStr)).length + 1; 
-          setInvData(prev => ({ ...prev, invNo: prefix + dateStr + "-" + String(count).padStart(3, '0') })); 
+          const count = invoices.filter(inv => inv.invNo && inv.invNo.startsWith(prefix)).length + 1; 
+          setInvData(prev => ({ ...prev, invNo: prefix + String(count).padStart(5, '0') })); 
       } 
-  }, [invData.date, invData.docType, invoices, mode, editingDocId]);
+  }, [invData.docType, invoices, mode, editingDocId]);
   
   useEffect(() => { if (user) { const unsubSellers = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'seller_profiles')), (snap) => setSellerProfiles(snap.docs.map(d=>({id:d.id, ...d.data()})))); const unsubCustomers = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners')), (snap) => setCustomers(snap.docs.map(d=>({id:d.id, ...d.data(), customerName: d.data().name})))); return () => { unsubSellers(); unsubCustomers(); }; } }, [user, appId]);
 
@@ -3911,6 +4044,8 @@ export default function App() {
   const [preFillInvoice, setPreFillInvoice] = useState(null);
   const [showIdDeleteTool, setShowIdDeleteTool] = useState(false);
   const [targetIdToDelete, setTargetIdToDelete] = useState('');
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [showMigrateConfirm, setShowMigrateConfirm] = useState(false);
 
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
@@ -3979,6 +4114,63 @@ export default function App() {
     } catch(e) { addToast("ลบไม่สำเร็จ", "error"); }
   };
 
+  const executeMigration = async () => {
+    setShowMigrateConfirm(false);
+    setIsMigrating(true);
+    try {
+      addToast("กำลังดำเนินการรันเลขเอกสารใหม่...", "success");
+      let batchWriter = writeBatch(dbInstance);
+      let opsCount = 0;
+
+      const safeUpdate = async (collectionName, docId, data) => {
+        const ref = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', collectionName, docId);
+        batchWriter.update(ref, data);
+        opsCount++;
+        if (opsCount >= 400) {
+          await batchWriter.commit();
+          batchWriter = writeBatch(dbInstance);
+          opsCount = 0;
+        }
+      };
+
+      const incs = [...transactions].filter(t => t.type === 'income').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+      for (let i = 0; i < incs.length; i++) {
+        await safeUpdate('transactions_income', incs[i].id, { sysDocId: `INC-${String(i + 1).padStart(5, '0')}` });
+      }
+
+      const exps = [...transactions].filter(t => t.type === 'expense').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+      for (let i = 0; i < exps.length; i++) {
+        await safeUpdate('transactions_expense', exps[i].id, { sysDocId: `EXP-${String(i + 1).padStart(5, '0')}` });
+      }
+
+      const invs = [...invoices].filter(i => i.docType === 'invoice' || !i.docType).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+      for (let i = 0; i < invs.length; i++) {
+        await safeUpdate('invoices', invs[i].id, { invNo: `INV-${String(i + 1).padStart(5, '0')}` });
+      }
+
+      const cns = [...invoices].filter(i => i.docType === 'credit_note').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+      for (let i = 0; i < cns.length; i++) {
+        await safeUpdate('invoices', cns[i].id, { invNo: `CN-${String(i + 1).padStart(5, '0')}` });
+      }
+
+      const abbs = [...invoices].filter(i => i.docType === 'abb').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+      for (let i = 0; i < abbs.length; i++) {
+        await safeUpdate('invoices', abbs[i].id, { invNo: `ABB-${String(i + 1).padStart(5, '0')}` });
+      }
+
+      if (opsCount > 0) {
+        await batchWriter.commit();
+      }
+
+      addToast("อัปเดตเลขเอกสารเก่าเรียบร้อยแล้ว!", "success");
+    } catch (error) {
+      console.error(error);
+      addToast("เกิดข้อผิดพลาดในการอัปเดตข้อมูล", "error");
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
   const renderContent = () => {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
@@ -4003,6 +4195,45 @@ export default function App() {
     <div className="flex w-full h-screen bg-slate-50 font-sarabun text-slate-800 overflow-hidden text-left">
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_STYLES }} />
       <ToastContainer toasts={toasts} removeToast={removeToast} />
+      
+      {/* Migration Loading Modal */}
+      {isMigrating && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-center">
+          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full shadow-2xl animate-in zoom-in-95 flex flex-col items-center text-center">
+            <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-6">
+              <RefreshCw size={40} className="animate-spin" />
+            </div>
+            <h3 className="text-2xl font-black mb-2 text-slate-800">กำลังอัปเดตข้อมูล</h3>
+            <p className="text-sm text-slate-500 leading-relaxed">
+              กำลังจัดเรียงและรันเลขเอกสารใหม่<br/>
+              ให้สอดคล้องกันทั้งหมด...<br/>
+              <span className="text-rose-500 font-bold mt-2 inline-block">กรุณารอสักครู่ ห้ามปิดหน้าต่างนี้</span>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Migration Confirm Modal */}
+      {showMigrateConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+            <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4 text-amber-500 text-center">
+              <RefreshCw size={32}/>
+            </div>
+            <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันรันเลขเอกสารเก่า?</h3>
+            <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
+              ฟังก์ชันนี้จะจัดเรียงและรันเลขที่เอกสารแบบ 5 หลัก<br/>
+              ให้กับข้อมูลเก่าทั้งหมด (เรียงตามวันที่สร้าง)<br/>
+              <span className="text-amber-600 font-bold underline">ต้องการดำเนินการต่อหรือไม่?</span>
+            </p>
+            <div className="flex gap-3 text-center">
+              <button onClick={() => setShowMigrateConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+              <button onClick={executeMigration} className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg text-center transition-colors">ยืนยันรันเลข</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showIdDeleteTool && (
         <div className="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-4 text-left">
           <div className="bg-white rounded-[40px] p-10 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-center"><div className="w-20 h-20 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-6 text-center"><AlertCircle size={40} className="text-center"/></div><h3 className="text-2xl font-black text-center mb-2 text-center text-slate-800 text-center">ระบุ ID ที่ต้องการลบ</h3><input value={targetIdToDelete} onChange={e=>setTargetIdToDelete(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl border-2 border-slate-100 mb-6 font-bold text-center text-lg text-slate-800 text-center" placeholder="ID, INV No. หรือ Tax Invoice No." /><div className="flex gap-4 text-center"><button onClick={()=>setShowIdDeleteTool(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-600 text-center">ยกเลิก</button><button onClick={forceDeleteById} className="flex-1 py-4 bg-rose-600 text-white rounded-2xl font-bold text-center">ยืนยัน</button></div></div>
@@ -4013,7 +4244,13 @@ export default function App() {
         <nav className="p-6 space-y-4 flex-1 overflow-y-auto text-left"><NavButton active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard');}} icon={<PieChart size={18} className="text-center"/>} label="แดชบอร์ด" /><p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Operations</p><NavButton active={activeTab === 'records'} onClick={()=>{setActiveTab('records');}} icon={<Store size={18} className="text-center"/>} label="บันทึกขาย/หน้าร้าน" /><NavButton active={activeTab === 'import'} onClick={()=>{setActiveTab('import');}} icon={<FileUp size={18} className="text-center"/>} label="Bulk Import" /><NavButton active={activeTab === 'stock'} onClick={()=>{setActiveTab('stock');}} icon={<Box size={18} className="text-center"/>} label="คลังสินค้า FIFO" /><NavButton active={activeTab === 'invoice'} onClick={()=>{setActiveTab('invoice'); setPreFillInvoice(null);}} icon={<Printer size={18} className="text-center"/>} label="ใบกำกับภาษี Pro" /><NavButton active={activeTab === 'reports'} onClick={()=>{setActiveTab('reports');}} icon={<ClipboardList size={18} className="text-center"/>} label="รายงานภาษี and บัญชี" /></nav>
         <div className="p-4 bg-black/20 border-t border-slate-800 space-y-2 text-left">
           <button onClick={toggleAppMode} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-slate-800 text-indigo-300 ring-1 ring-slate-700 hover:bg-slate-700 transition-all text-left"><Database size={14} className="text-center"/> DB Instance: {currentAppId}</button>
-          <button onClick={()=>setShowIdDeleteTool(true)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-rose-900/30 text-rose-300 ring-1 ring-rose-800/50 hover:bg-rose-900/50 transition-all text-left"><Trash2 size={14} className="text-center"/> ลบทิ้งด้วย ID</button>
+          
+          <button onClick={() => setShowMigrateConfirm(true)} disabled={isMigrating} className={`w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 ring-1 transition-all text-left mt-2 ${isMigrating ? 'bg-amber-900/50 text-amber-500 ring-amber-800/50 cursor-not-allowed' : 'bg-amber-900/30 text-amber-300 ring-amber-800/50 hover:bg-amber-900/50'}`}>
+            {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} 
+            {isMigrating ? 'กำลังรันเลขเอกสาร...' : 'รันเลขเอกสารเก่า'}
+          </button>
+
+          <button onClick={()=>setShowIdDeleteTool(true)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-rose-900/30 text-rose-300 ring-1 ring-rose-800/50 hover:bg-rose-900/50 transition-all text-left mt-2"><Trash2 size={14} className="text-center"/> ลบทิ้งด้วย ID</button>
           <button onClick={()=>signOut(authInstance)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-slate-800 text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700 transition-all text-left mt-2"><LogOut size={14} className="text-center"/> ออกจากระบบ</button>
         </div>
       </aside>
