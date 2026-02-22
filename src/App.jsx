@@ -1495,7 +1495,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             <div className="flex-1 overflow-auto p-6 space-y-4 text-left">
               {viewHistory.batches
                 .filter(b => b.quantity > 0) 
-                .sort(sortNewestFirst)
+                .sort(sortOldestFirst)
                 .map((b, i) => {
                     const isLowest = b.costPerUnit === Math.min(...viewHistory.batches.map(v => v.costPerUnit));
                     const margin = b.sellPrice > 0 ? ((b.sellPrice - b.costPerUnit) / b.sellPrice) * 100 : 0;
@@ -2605,6 +2605,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [histStartDate, setHistStartDate] = useState('');
   const [histEndDate, setHistEndDate] = useState('');
   const [histPage, setHistPage] = useState(1);
+  const [histSortOrder, setHistSortOrder] = useState('desc');
+  const [histSortBy, setHistSortBy] = useState('date'); // New state
   const histItemsPerPage = 20;
 
   const handleSavePartnerManual = async () => {
@@ -2906,11 +2908,22 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         }
 
         return true;
-    }).map(t => ({ ...t, issuedDocs: docStatusMap[t.orderId] || [] })).sort(sortNewestFirst);
-  }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate]);
+    }).map(t => ({ ...t, issuedDocs: docStatusMap[t.orderId] || [] }));
+
+    return filtered.sort((a, b) => {
+        if (histSortBy === 'id') {
+            const idA = a.sysDocId || '';
+            const idB = b.sysDocId || '';
+            if (histSortOrder === 'asc') return idA.localeCompare(idB);
+            return idB.localeCompare(idA);
+        } else {
+            return histSortOrder === 'asc' ? sortOldestFirst(a, b) : sortNewestFirst(a, b);
+        }
+    });
+  }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate, histSortOrder, histSortBy]);
 
   // Reset page when filters change
-  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate]);
+  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, histSortBy, histSortOrder]);
 
   // History Quick Stats
   const histStats = useMemo(() => {
@@ -3442,9 +3455,21 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           {/* Top Filter & Search Row */}
           <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4">
              <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full xl:w-auto">
-                 <div className="relative w-full md:w-80 text-left shrink-0">
-                     <Search className="absolute left-4 top-3 text-slate-400 text-center" size={18}/>
-                     <input className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-11 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100 outline-none transition-all shadow-sm text-left" placeholder="ค้นหา: ชื่อ, เลขระบบ, Order ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+                 <div className="relative w-full md:w-80 text-left shrink-0 flex gap-2">
+                     <div className="relative flex-1">
+                         <Search className="absolute left-4 top-3 text-slate-400 text-center" size={18}/>
+                         <input className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-11 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100 outline-none transition-all shadow-sm text-left" placeholder="ค้นหา: ชื่อ, เลขระบบ, Order ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+                     </div>
+                     <div className="flex items-center bg-slate-50 border border-slate-200 rounded-2xl shadow-sm shrink-0 px-1">
+                         <select value={histSortBy} onChange={e => setHistSortBy(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-600 cursor-pointer focus:ring-0 pl-2 pr-4 py-2.5">
+                             <option value="date">วันที่</option>
+                             <option value="id">SYS ID</option>
+                         </select>
+                         <div className="w-px h-4 bg-slate-300 mx-1"></div>
+                         <button onClick={() => setHistSortOrder(p => p === 'desc' ? 'asc' : 'desc')} className="p-2 text-slate-500 hover:text-indigo-600 transition-colors flex items-center justify-center" title="สลับการเรียงลำดับ">
+                             {histSortOrder === 'desc' ? <ArrowDown size={16}/> : <ArrowUp size={16}/>}
+                         </button>
+                     </div>
                  </div>
                  <div className="flex bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto">
                     <button onClick={() => setHistType('all')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${histType === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ทั้งหมด</button>
@@ -3687,6 +3712,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [customerTab, setCustomerTab] = useState('buyer');
   const [cancelConfirmId, setCancelConfirmId] = useState(null);
   const [historyFilter, setHistoryFilter] = useState('all');
+  const [invSortOrder, setInvSortOrder] = useState('asc'); // ตั้งค่าเริ่มต้นเป็นเก่าสุดเพื่อให้ออกบิลเรียงตามลำดับง่าย
+  const [invSortBy, setInvSortBy] = useState('date'); // New state
 
   // --- History Filters State ---
   const [historyStartDate, setHistoryStartDate] = useState('2000-01-01');
@@ -3885,9 +3912,21 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       const issuedDocsMap = {};
       invoices.forEach(inv => { if (inv.orderId && inv.status !== 'cancelled') { if (!issuedDocsMap[inv.orderId]) issuedDocsMap[inv.orderId] = []; issuedDocsMap[inv.orderId].push(inv.docType); } });
       const normalizedInvoices = invoices.map(inv => ({ ...inv, source: 'invoice', displayStatus: inv.status === 'cancelled' ? 'ยกเลิกแล้ว' : (inv.docType === 'credit_note' ? 'ใบลดหนี้' : (inv.docType === 'abb' ? 'ใบกำกับอย่างย่อ' : 'ใบกำกับเต็มรูป')), searchStr: (inv.invNo || '') + (inv.customerName || '') + (inv.orderId || '') }));
-      const pendingTransactions = transactions.filter(t => t.type === 'income' && !issuedDocsMap[t.orderId]).map(t => ({ ...t, invNo: t.orderId || '-', customerName: t.partnerName || 'คู่ค้าทั่วไป', total: t.total, displayStatus: 'รอออกใบกำกับ', source: 'transaction', searchStr: (t.orderId || '') + (t.partnerName || '') }));
-      return [...normalizedInvoices, ...pendingTransactions].filter(d => { const searchInput = invoiceSearch.toLowerCase(); return d.searchStr.toLowerCase().includes(searchInput); }).sort(sortNewestFirst); 
-  }, [invoices, transactions, invoiceSearch]);
+      const pendingTransactions = transactions.filter(t => t.type === 'income' && !issuedDocsMap[t.orderId]).map(t => ({ ...t, invNo: t.sysDocId || t.orderId || '-', customerName: t.partnerName || 'คู่ค้าทั่วไป', total: t.total, displayStatus: 'รอออกใบกำกับ', source: 'transaction', searchStr: (t.orderId || '') + (t.partnerName || '') + (t.sysDocId || '') }));
+      
+      const filtered = [...normalizedInvoices, ...pendingTransactions].filter(d => { const searchInput = invoiceSearch.toLowerCase(); return d.searchStr.toLowerCase().includes(searchInput); });
+      
+      return filtered.sort((a, b) => {
+          if (invSortBy === 'id') {
+              const idA = a.invNo || '';
+              const idB = b.invNo || '';
+              if (invSortOrder === 'asc') return idA.localeCompare(idB);
+              return idB.localeCompare(idA);
+          } else {
+              return invSortOrder === 'asc' ? sortOldestFirst(a, b) : sortNewestFirst(a, b);
+          }
+      });
+  }, [invoices, transactions, invoiceSearch, invSortOrder, invSortBy]);
 
   const displayDocs = useMemo(() => {
       const start = new Date(historyStartDate || '2000-01-01');
@@ -4099,7 +4138,22 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
             <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4 mb-6">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                      <h3 className="font-bold text-slate-700 text-lg flex items-center gap-2"><Filter size={18} className="text-indigo-600"/> ตัวกรองประวัติเอกสาร</h3>
-                     <div className="relative w-full md:w-72 text-left shrink-0"><Search className="absolute left-3 top-2.5 text-slate-400 text-center" size={16}/><input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-left" placeholder="ค้นหาชื่อ, เลขที่, Order ID..." value={invoiceSearch} onChange={e => setInvoiceSearch(e.target.value)} /></div>
+                     <div className="relative w-full md:w-80 text-left shrink-0 flex gap-2">
+                         <div className="relative flex-1">
+                             <Search className="absolute left-3 top-2.5 text-slate-400 text-center" size={16}/>
+                             <input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm text-left" placeholder="ค้นหาชื่อ, เลขที่, Order ID..." value={invoiceSearch} onChange={e => setInvoiceSearch(e.target.value)} />
+                         </div>
+                         <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl shrink-0 px-1">
+                             <select value={invSortBy} onChange={e => setInvSortBy(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-600 cursor-pointer focus:ring-0 pl-2 pr-4 py-1.5">
+                                 <option value="date">วันที่</option>
+                                 <option value="id">เลขที่/ID</option>
+                             </select>
+                             <div className="w-px h-3 bg-slate-300 mx-1"></div>
+                             <button onClick={() => setInvSortOrder(p => p === 'desc' ? 'asc' : 'desc')} className="p-1.5 text-slate-500 hover:text-indigo-600 transition-colors flex items-center justify-center" title="สลับการเรียงลำดับ">
+                                 {invSortOrder === 'desc' ? <ArrowDown size={14}/> : <ArrowUp size={14}/>}
+                             </button>
+                         </div>
+                     </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
@@ -4196,7 +4250,29 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       ) : (
         <>
             <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 print:hidden space-y-6 text-left">
-                <div className="flex justify-between border-b border-slate-100 pb-4 text-left"><div className="text-left"><h3 className="font-bold text-slate-800 text-xl flex items-center gap-2 text-left">Document Editor</h3><p className="text-slate-400 text-sm text-left">สร้างเอกสารใบกำกับภาษี หรือ ใบเสนอราคา/ลดหนี้</p></div><div className="text-right flex flex-col items-end gap-2 text-right"><button onClick={handleNewInvoice} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 text-center"><PlusCircle size={14} className="text-center"/> New Document</button><div className="text-right"><p className="text-xs text-slate-400 font-bold uppercase text-right">DOC ID</p><div className="flex items-center gap-2 justify-end text-right"><p className="text-2xl font-bold text-indigo-600 font-mono text-right">{invData.invNo}</p></div></div></div></div>
+                <div className="flex justify-between border-b border-slate-100 pb-4 text-left">
+                  <div className="text-left">
+                    <h3 className="font-bold text-slate-800 text-xl flex items-center gap-2 text-left">Document Editor</h3>
+                    <p className="text-slate-400 text-sm text-left">สร้างเอกสารใบกำกับภาษี หรือ ใบเสนอราคา/ลดหนี้</p>
+                  </div>
+                  <div className="text-right flex flex-col items-end gap-2 text-right">
+                    <button onClick={handleNewInvoice} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 text-center"><PlusCircle size={14} className="text-center"/> New Document</button>
+                    
+                    {/* เปลี่ยนจากแค่ข้อความแสดงผล เป็นช่อง Input ให้แก้ไขเลขได้ */}
+                    <div className="text-right flex flex-col items-end">
+                        <label className="text-xs text-slate-400 font-bold uppercase text-right flex items-center gap-1 mb-1 cursor-pointer" title="คลิกเพื่อแก้ไขเลขเอกสารด้วยตนเอง">
+                          DOC ID <Edit size={10} className="text-indigo-400"/>
+                        </label>
+                        <input 
+                            value={invData.invNo} 
+                            onChange={e => setInvData({...invData, invNo: e.target.value.toUpperCase()})} 
+                            className="w-48 bg-indigo-50/50 border border-indigo-100 rounded-xl p-2 text-xl font-bold text-indigo-600 font-mono text-right outline-none focus:bg-white focus:ring-2 focus:ring-indigo-300 transition-all"
+                            placeholder="INV-XXXXX"
+                        />
+                    </div>
+
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-left">
                     <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 flex flex-col justify-between text-left">
                         <div className="text-left"><div className="flex justify-between items-start mb-4 text-left"><h4 className="font-bold text-indigo-700 flex items-center gap-2 text-left"><Store size={18} className="text-center"/> ข้อมูลผู้ขาย</h4><button onClick={()=>setShowSellerEditModal(true)} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-lg font-bold text-center">แก้ไข/ตั้งค่า</button></div><div className="flex gap-4 items-start text-left">{invData.logo && <div className="w-16 h-16 rounded-lg bg-white p-1 border border-slate-200 flex-shrink-0 text-center"><img src={invData.logo} className="w-full h-full object-contain" alt="Logo"/></div>}<div className="text-sm text-slate-600 text-left flex-1"><p className="font-bold text-slate-800 text-base text-left">{invData.sellerName || 'กรุณาระบุชื่อร้านค้า'}</p><div className="text-xs mt-1 text-left flex-1"><p className="text-left"><b>Tax ID:</b> {invData.sellerTaxId || '-'}</p><p className="text-left"><b>สาขา:</b> {invData.sellerBranchId === '00000' || !invData.sellerBranchId ? 'สำนักงานใหญ่' : invData.sellerBranchId} {invData.sellerBranchName && `(${invData.sellerBranchName})`}</p><p className="text-left">{[invData.sellerAddress, fmtAddr.sub(invData.sellerSubDistrict)].filter(Boolean).join(' ')}</p><p className="text-left">{[fmtAddr.dist(invData.sellerDistrict), fmtAddr.prov(invData.sellerProvince), invData.sellerZipCode].filter(Boolean).join(' ')}</p></div></div></div></div>
