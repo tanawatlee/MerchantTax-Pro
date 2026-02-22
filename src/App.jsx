@@ -954,6 +954,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [targetProductEdit, setTargetProductEdit] = useState(null);
   const [tempCategory, setTempCategory] = useState('');
 
+  const [showEditProductModal, setShowEditProductModal] = useState(false);
+  const [productEditData, setProductEditData] = useState({ newName: '', newSku: '', batches: [] });
+
   const fileInputRef = useRef(null);
   const importFileInputRef = useRef(null);
   const [newStock, setNewStock] = useState({
@@ -970,6 +973,36 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     setTargetProductEdit(item);
     setTempCategory(item.category || CONSTANTS.CATEGORIES.STOCK[0]);
     setShowEditCategoryModal(true);
+  };
+
+  const openEditProduct = (item) => {
+    setProductEditData({
+      newName: item.name,
+      newSku: item.sku === '-' ? '' : item.sku,
+      batches: item.batches
+    });
+    setShowEditProductModal(true);
+  };
+
+  const handleUpdateProduct = async () => {
+    if (!productEditData.newName || !user) return;
+    setIsProcessing(true);
+    try {
+      const batchWriter = writeBatch(dbInstance);
+      productEditData.batches.forEach(b => {
+        const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+        batchWriter.update(docRef, {
+          productName: productEditData.newName.trim(),
+          sku: productEditData.newSku.trim() || '-'
+        });
+      });
+      await batchWriter.commit();
+      showToast(`อัปเดตข้อมูลสินค้า "${productEditData.newName}" เรียบร้อย`, "success");
+      setShowEditProductModal(false);
+    } catch (e) {
+      showToast("เกิดข้อผิดพลาดในการอัปเดตข้อมูล", "error");
+    }
+    setIsProcessing(false);
   };
 
   const handleUpdateCategory = async () => {
@@ -1568,6 +1601,45 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           </div>
         </div>
       )}
+
+      {/* Modal แก้ไขชื่อและ SKU สินค้า */}
+      {showEditProductModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-left">
+            <div className="flex justify-between items-center mb-6 text-left">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 text-left"><Edit className="text-indigo-600"/> แก้ไขข้อมูลสินค้า</h3>
+              <button onClick={() => setShowEditProductModal(false)} className="text-center"><X/></button>
+            </div>
+            <div className="space-y-4 text-left">
+              <div>
+                <label className="text-xs text-slate-400 font-bold uppercase text-left block mb-1">ชื่อสินค้า</label>
+                <input
+                  value={productEditData.newName}
+                  onChange={e => setProductEditData({...productEditData, newName: e.target.value})}
+                  className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold outline-none text-slate-800 text-left"
+                  placeholder="ระบุชื่อสินค้า..."
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 font-bold uppercase text-left block mb-1">รหัส SKU</label>
+                <input
+                  value={productEditData.newSku}
+                  onChange={e => setProductEditData({...productEditData, newSku: e.target.value})}
+                  className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold outline-none text-slate-800 text-left font-mono"
+                  placeholder="ระบุ SKU..."
+                />
+              </div>
+              <div className="flex gap-3 pt-4 text-center">
+                <button onClick={() => setShowEditProductModal(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+                <button onClick={handleUpdateProduct} disabled={isProcessing} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 text-center">
+                  {isProcessing ? <Loader className="animate-spin" size={16}/> : <Save size={16}/>} บันทึกการเปลี่ยนแปลง
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
