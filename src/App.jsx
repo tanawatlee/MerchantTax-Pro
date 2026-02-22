@@ -489,10 +489,10 @@ function Dashboard({ transactions, invoices, stockBatches }) {
   );
 }
 
-function DataImporter({ appId, showToast, user, stockBatches }) {
+function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
   const [platform, setPlatform] = useState('shopee');
   const [importedData, setImportedData] = useState([]);
-  const [stats, setStats] = useState({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0 });
+  const [stats, setStats] = useState({ totalRows: 0, processed: 0, skipped: 0, duplicated: 0, totalAmount: 0, totalFees: 0 });
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
   const fileInputRef = useRef(null);
@@ -610,12 +610,32 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
         const ws = wb.Sheets[wb.SheetNames[0]];
         const raw = window.XLSX.utils.sheet_to_json(ws, { defval: '' }); // ใส่ defval ป้องกัน undefined
         const ordersMap = {};
-        let skipped = 0; let totalAmt = 0; let totalFees = 0;
+        let skipped = 0; let totalAmt = 0; let totalFees = 0; let duplicated = 0;
 
         const schema = PLATFORM_SCHEMAS[platform] || PLATFORM_SCHEMAS.shopee;
+        
+        // รวบรวม Order ID ที่เคยนำเข้าหรือบันทึกแล้วเพื่อป้องกันการนำเข้าซ้ำซ้อน (Duplicate Detection)
+        const existingOrderIds = new Set(transactions.filter(t => t.type === 'income' && t.orderId).map(t => String(t.orderId).trim()));
 
         raw.forEach(row => {
-          const orderId = String(findVal(row, schema.orderId) || '');
+          const orderId = String(findVal(row, schema.orderId) || '').trim();
+          
+          if (!orderId) { skipped++; return; }
+
+          // เช็คว่าออเดอร์นี้มีอยู่ในระบบแล้วหรือไม่ ถ้ามีให้ทำการข้าม
+          if (existingOrderIds.has(orderId)) {
+              if (!ordersMap[orderId]) {
+                  duplicated++;
+                  ordersMap[orderId] = 'DUPLICATE';
+              }
+              skipped++;
+              return;
+          }
+          if (ordersMap[orderId] === 'DUPLICATE') {
+              skipped++;
+              return;
+          }
+
           const status = String(findVal(row, schema.status) || '').toLowerCase();
           
           // เปลี่ยนมาใช้การ "กีดกัน" (Exclude) สถานะที่ยังไม่เกิดรายได้แทนการ "ครอบคลุม" (Include)
@@ -639,6 +659,18 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
           const serv = Math.abs(cleanNum(findVal(row, schema.servFee)));
           const skuVal = String(findVal(row, schema.sku) || '-').trim();
           const infra = parseFloat(fixedInfraFee || 0) || 0;
+          
+          // ดึงชื่อสินค้าจากไฟล์ Excel
+          let rawProductName = String(findVal(row, schema.product) || 'สินค้า').trim();
+          let mappedProductName = rawProductName;
+          
+          // ตรวจสอบกับ Stock เพื่อใช้ชื่อสินค้าหลักของร้านหาก SKU ตรงกัน
+          if (skuVal !== '-' && skuVal !== '') {
+              const matchedStock = stockBatches.find(b => String(b.sku).trim().toLowerCase() === skuVal.toLowerCase());
+              if (matchedStock && matchedStock.productName) {
+                  mappedProductName = matchedStock.productName; // แทนที่ด้วยชื่อจากคลังสินค้า
+              }
+          }
           
           const shippingAddress = String(findVal(row, schema.shipping) || '');
           const buyerName = String(findVal(row, schema.buyer) || 'ลูกค้า ' + platform);
@@ -665,10 +697,10 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
               infrastructureFee: infra, 
               commissionFee: comm, 
               serviceFee: serv,
-              description: String(findVal(row, schema.product) || 'สินค้าจาก ' + platform).substring(0, 100), 
+              description: mappedProductName.substring(0, 100), 
               channel: platform.toUpperCase(), 
               category: 'รายได้จากการขายสินค้า', 
-              items: [{ desc: String(findVal(row, schema.product) || 'สินค้า').trim(), qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal }],
+              items: [{ desc: mappedProductName, qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal }],
               partnerName: buyerName,
               shippingAddress: shippingAddress,
               partnerAddress: shippingAddress,
@@ -686,11 +718,23 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
             // ถ้าออเดอร์นี้มีหลายบรรทัด (เช่น Lazada 1 Order มีหลาย Item)
             ordersMap[orderId].total += lineTotal;
             
-            // นำค่าธรรมเนียมมาบวกทบกัน (กรณีไฟล์แยกค่าธรรมเนียมตามบรรทัด)
-            ordersMap[orderId].transactionFee += transFee;
-            ordersMap[orderId].commissionFee += comm;
-            ordersMap[orderId].serviceFee += serv;
-            ordersMap[orderId].platformFee += (transFee + comm + serv);
+            if (platform === 'shopee') {
+                // สำหรับ Shopee ค่าธรรมเนียมเป็นยอดรวมต่อ 1 ออเดอร์ (ใช้ค่าสูงสุดเพื่อไม่ให้บวกซ้ำซ้อนเวลาที่มีหลาย Item)
+                const oldPlatformFee = ordersMap[orderId].platformFee;
+                ordersMap[orderId].transactionFee = Math.max(ordersMap[orderId].transactionFee, transFee);
+                ordersMap[orderId].commissionFee = Math.max(ordersMap[orderId].commissionFee, comm);
+                ordersMap[orderId].serviceFee = Math.max(ordersMap[orderId].serviceFee, serv);
+                ordersMap[orderId].platformFee = ordersMap[orderId].transactionFee + ordersMap[orderId].commissionFee + ordersMap[orderId].serviceFee + ordersMap[orderId].infrastructureFee;
+                
+                totalFees += (ordersMap[orderId].platformFee - oldPlatformFee);
+            } else {
+                // นำค่าธรรมเนียมมาบวกทบกัน (กรณีไฟล์แยกค่าธรรมเนียมตามบรรทัดสำหรับแพลตฟอร์มอื่น)
+                ordersMap[orderId].transactionFee += transFee;
+                ordersMap[orderId].commissionFee += comm;
+                ordersMap[orderId].serviceFee += serv;
+                ordersMap[orderId].platformFee += (transFee + comm + serv);
+                totalFees += (transFee + comm + serv);
+            }
             
             ordersMap[orderId].grandTotal = ordersMap[orderId].total - ordersMap[orderId].platformFee;
             ordersMap[orderId].shippingFee = Math.max(ordersMap[orderId].shippingFee || 0, shippingFeeByBuyer);
@@ -698,16 +742,15 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
             ordersMap[orderId].estimatedShippingFee = Math.max(ordersMap[orderId].estimatedShippingFee || 0, estimatedShippingFee);
             ordersMap[orderId].returnShippingFee = Math.max(ordersMap[orderId].returnShippingFee || 0, returnShippingFee);
             ordersMap[orderId].items.push({ 
-              desc: String(findVal(row, schema.product) || 'สินค้า').trim(), qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal
+              desc: mappedProductName, qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal
             });
             totalAmt += lineTotal;
-            totalFees += (transFee + comm + serv);
           }
         });
-        const final = Object.values(ordersMap).sort(sortNewestFirst);
+        const final = Object.values(ordersMap).filter(v => v !== 'DUPLICATE').sort(sortNewestFirst);
         setImportedData(final);
-        setStats({ totalRows: raw.length, processed: final.length, skipped, totalAmount: totalAmt, totalFees });
-        showToast(`นำเข้าสำเร็จ ${final.length} รายการ (ข้าม ${skipped} แถว)`, 'success');
+        setStats({ totalRows: raw.length, processed: final.length, skipped, duplicated, totalAmount: totalAmt, totalFees });
+        showToast(`นำเข้าสำเร็จ ${final.length} รายการ (ข้าม/ซ้ำ ${skipped} แถว)`, 'success');
       } catch (e) { 
         console.error("Parse error:", e);
         showToast("ไม่สามารถอ่านไฟล์ได้ โปรดตรวจสอบรูปแบบ Excel", "error"); 
@@ -775,6 +818,7 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
       await batch.commit();
       showToast(`เปิดใช้งานข้อมูล ${importedData.length} รายการ and หักสต็อกเรียบร้อย`, "success");
       setImportedData([]);
+      setStats({ totalRows: 0, processed: 0, skipped: 0, duplicated: 0, totalAmount: 0, totalFees: 0 }); // Reset stats after save
     } catch (e) { showToast("Error: " + e.message, "error"); }
     setLoading(false);
   };
@@ -839,6 +883,28 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
               </button>
             )}
           </div>
+
+          {importedData.length > 0 && (
+            <div className="bg-white border-b grid grid-cols-2 md:grid-cols-4 divide-x divide-y md:divide-y-0 text-center">
+                <div className="p-3">
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">แถวทั้งหมดในไฟล์</p>
+                    <p className="text-lg font-black text-slate-700">{stats.totalRows} <span className="text-[10px] font-normal text-slate-400">รายการ</span></p>
+                </div>
+                <div className="p-3 bg-emerald-50/30">
+                    <p className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider mb-1">ดึงสำเร็จ</p>
+                    <p className="text-lg font-black text-emerald-700">{stats.processed} <span className="text-[10px] font-normal text-emerald-600/60">ออเดอร์</span></p>
+                </div>
+                <div className="p-3 bg-rose-50/30">
+                    <p className="text-[10px] text-rose-600 font-bold uppercase tracking-wider mb-1">ข้าม / ซ้ำ / ยกเลิก</p>
+                    <p className="text-lg font-black text-rose-700">{stats.skipped} <span className="text-[10px] font-normal text-rose-600/60">แถว (ซ้ำ {stats.duplicated || 0} ออเดอร์)</span></p>
+                </div>
+                <div className="p-3 bg-indigo-50/30">
+                    <p className="text-[10px] text-indigo-600 font-bold uppercase tracking-wider mb-1">ยอดรวมสุทธิ</p>
+                    <p className="text-lg font-black text-indigo-700">{formatCurrency(importedData.reduce((sum, item) => sum + (item.grandTotal || 0), 0))} <span className="text-[10px] font-normal text-indigo-600/60">บาท</span></p>
+                </div>
+            </div>
+          )}
+
           <div className="flex-1 overflow-auto max-h-[400px] text-left">
             <table className="w-full text-xs text-left">
               <thead className="bg-white text-slate-400 font-bold uppercase tracking-wider sticky top-0 border-b text-left">
@@ -2642,6 +2708,18 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
     if (!user) return;
+    
+    // Check Duplicate Manual Record (ตรวจสอบการคีย์ซ้ำมือ)
+    const refCheck = formData.type === 'income' ? formData.orderId : formData.taxInvoiceNo;
+    if (refCheck && String(refCheck).trim() !== '') {
+        const exists = transactions.some(t => t.type === formData.type && (t.orderId === refCheck || t.taxInvoiceNo === refCheck));
+        if (exists) {
+            if (!window.confirm(`ระบบพบว่ารหัสอ้างอิง "${refCheck}" นี้ถูกบันทึกไว้ในระบบแล้ว คุณต้องการบันทึกรายการนี้ซ้ำหรือไม่?`)) {
+                return;
+            }
+        }
+    }
+
     try {
       const coll = formData.type === 'income' ? 'transactions_income' : 'transactions_expense';
       const { subTotal, totalFees, grandTotal, totalDiscounts, shippingFee } = financialSummary;
@@ -4337,7 +4415,7 @@ export default function App() {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
       case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={currentAppId} stockBatches={stockBatches} showToast={addToast} onIssueInvoice={(t)=>{setPreFillInvoice(t); setActiveTab('invoice');}} />;
-      case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} />;
+      case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} />;
       case 'stock': return <StockManager appId={currentAppId} stockBatches={stockBatches} showToast={addToast} user={user} transactions={transactions} />;
       case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} transactions={transactions} appId={currentAppId} showToast={addToast} preFillData={preFillInvoice} />;
       case 'reports': return <TaxReports transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} user={user} />;
