@@ -63,12 +63,13 @@ const GLOBAL_STYLES = `
   }
 
   #root {
-    width: 100vw !important;
-    height: 100vh !important;
+    width: 100% !important; /* เปลี่ยนจาก 100vw เป็น 100% ป้องกัน Scrollbar แนวนอน */
+    height: 100% !important; /* เปลี่ยนจาก 100vh เป็น 100% */
     margin: 0 !important;
     padding: 0 !important;
     max-width: none !important;
-    display: block !important;
+    display: flex !important; /* ใช้ flex เพื่อให้โครงสร้างหลักขยายได้เต็มที่ */
+    flex-direction: column;
     text-align: left !important; /* ล้างค่า text-align: center */
   }
 
@@ -3123,8 +3124,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
       {/* Main Tabs Content */}
       {subTab === 'new' ? (
-        <div className="grid grid-cols-1 xl:grid-cols-4 gap-8 items-start text-left">
-          <div className="xl:col-span-3 space-y-8 text-left">
+        <div className="grid grid-cols-1 lg:grid-cols-3 xl:grid-cols-4 gap-6 xl:gap-8 items-start text-left">
+          <div className="lg:col-span-2 xl:col-span-3 space-y-6 xl:space-y-8 text-left">
             <div className="bg-white p-8 rounded-[40px] border shadow-sm space-y-8 text-left">
               <div className="flex flex-col md:flex-row gap-6 items-center text-left">
                 <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit shrink-0 text-left">
@@ -3209,7 +3210,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             </div>
           </div>
           
-          <div className="xl:col-span-1 space-y-6 sticky top-0 text-left">
+          <div className="lg:col-span-1 space-y-6 sticky top-0 text-left">
             <div className="bg-slate-900 rounded-[40px] shadow-2xl overflow-hidden flex flex-col text-left">
               <div className="p-8 bg-indigo-600 text-white flex justify-between items-center text-left">
                 <div>
