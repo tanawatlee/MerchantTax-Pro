@@ -1918,7 +1918,8 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     if (reportTab === 'sales') {
       fileName = `Sales_Tax_Report_${startDate}.xlsx`;
       const tableHeader = ["ลำดับ", "วันที่", "เลขที่ใบกำกับภาษี", "ชื่อผู้ซื้อสินค้า/ผู้รับบริการ", "เลขผู้เสียภาษี", "สถานประกอบการ", "มูลค่าสินค้า/บริการ", "ภาษีมูลค่าเพิ่ม", "ยอดรวม"];
-      const body = filteredInvoices.map((inv, i) => { 
+      const sortedInvoices = [...filteredInvoices].sort(sortOldestFirst);
+      const body = sortedInvoices.map((inv, i) => { 
         const mult = inv.docType === 'credit_note' ? -1 : 1; 
         return [ i + 1, formatDate(inv.date), inv.invNo + (inv.docType === 'credit_note' ? " (ใบลดหนี้)" : ""), inv.customerName, inv.taxId || '-', (inv.branch === '00000' || !inv.branch) ? 'สำนักงานใหญ่' : `สาขา ${inv.branch}`, toFixedNum((inv.preVat || 0) * mult), toFixedNum((inv.vat || 0) * mult), toFixedNum((inv.total || 0) * mult) ]; 
       });
@@ -1927,7 +1928,8 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     } else if (reportTab === 'purchase') {
       fileName = `Purchase_Tax_Report_${startDate}.xlsx`;
       const tableHeader = ["ลำดับ", "วันที่", "เลขระบบ (SYS ID)", "เลขที่ใบกำกับภาษี", "ชื่อผู้ขายสินค้า/ผู้ให้บริการ", "เลขผู้เสียภาษี", "สถานประกอบการ", "มูลค่าสินค้า/บริการ", "ภาษีมูลค่าเพิ่ม", "ยอดรวม"];
-      const body = filteredExpenses.map((row, i) => {
+      const sortedExpenses = [...filteredExpenses].sort(sortOldestFirst);
+      const body = sortedExpenses.map((row, i) => {
         const taxDetails = getExpenseTaxDetails(row);
         return [ i + 1, formatDate(row.date), row.sysDocId || '-', row.taxInvoiceNo || row.orderId || '-', row.partnerName || '-', row.partnerTaxId || '-', (row.partnerBranch === '00000' || !row.partnerBranch) ? 'สำนักงานใหญ่' : `สาขาที่ ${row.partnerBranch}`, toFixedNum(taxDetails.base), toFixedNum(taxDetails.vat), toFixedNum(taxDetails.total) ];
       });
@@ -1936,7 +1938,8 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     } else if (reportTab === 'inventory') {
       fileName = `Stock_Movement_${startDate}.xlsx`;
       const tableHeader = ["วันที่", "อ้างอิง (Ref)", "Product SKU", "รายการสินค้า", "รับ-จำนวน", "รับ-ราคา/หน่วย", "รับ-มูลค่ารวม", "จ่าย-จำนวน", "จ่าย-ต้นทุนรวม", "คงเหลือ-จำนวน", "คงเหลือ-มูลค่ารวม"];
-      dataRows = [...headerRows, tableHeader, ...filteredMovement.map(m => [
+      const sortedMovement = [...filteredMovement].reverse();
+      dataRows = [...headerRows, tableHeader, ...sortedMovement.map(m => [
         formatDate(m.date), m.refId, m.sku, m.name, 
         m.receiveQty > 0 ? m.receiveQty : '-', m.receivePrice > 0 ? toFixedNum(m.receivePrice) : '-', m.receiveTotal > 0 ? toFixedNum(m.receiveTotal) : '-',
         m.issueQty > 0 ? m.issueQty : '-', m.issueTotal > 0 ? toFixedNum(m.issueTotal) : '-',
