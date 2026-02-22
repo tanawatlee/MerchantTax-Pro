@@ -4205,26 +4205,39 @@ export default function App() {
         }
       };
 
+      // 1. อัปเดตรายรับ
       const incs = [...transactions].filter(t => t.type === 'income').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
       for (let i = 0; i < incs.length; i++) {
         await safeUpdate('transactions_income', incs[i].id, { sysDocId: `INC-${String(i + 1).padStart(5, '0')}` });
       }
 
-      const exps = [...transactions].filter(t => t.type === 'expense').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
-      for (let i = 0; i < exps.length; i++) {
-        await safeUpdate('transactions_expense', exps[i].id, { sysDocId: `EXP-${String(i + 1).padStart(5, '0')}` });
+      // 2. อัปเดตรายจ่าย (แยก COG และ EXP)
+      const allExps = [...transactions].filter(t => t.type === 'expense').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+      let cogCount = 0;
+      let expCount = 0;
+      for (const t of allExps) {
+        if (t.category === 'ต้นทุนสินค้า' || t.isFromInventory) {
+          cogCount++;
+          await safeUpdate('transactions_expense', t.id, { sysDocId: `COG-${String(cogCount).padStart(5, '0')}` });
+        } else {
+          expCount++;
+          await safeUpdate('transactions_expense', t.id, { sysDocId: `EXP-${String(expCount).padStart(5, '0')}` });
+        }
       }
 
+      // 3. อัปเดตใบกำกับภาษี (Invoice)
       const invs = [...invoices].filter(i => i.docType === 'invoice' || !i.docType).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
       for (let i = 0; i < invs.length; i++) {
         await safeUpdate('invoices', invs[i].id, { invNo: `INV-${String(i + 1).padStart(5, '0')}` });
       }
 
+      // 4. อัปเดตใบลดหนี้ (CN)
       const cns = [...invoices].filter(i => i.docType === 'credit_note').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
       for (let i = 0; i < cns.length; i++) {
         await safeUpdate('invoices', cns[i].id, { invNo: `CN-${String(i + 1).padStart(5, '0')}` });
       }
 
+      // 5. อัปเดตใบกำกับอย่างย่อ (ABB)
       const abbs = [...invoices].filter(i => i.docType === 'abb').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
       for (let i = 0; i < abbs.length; i++) {
         await safeUpdate('invoices', abbs[i].id, { invNo: `ABB-${String(i + 1).padStart(5, '0')}` });
@@ -4234,7 +4247,7 @@ export default function App() {
         await batchWriter.commit();
       }
 
-      addToast("อัปเดตเลขเอกสารเก่าเรียบร้อยแล้ว!", "success");
+      addToast("อัปเดตและแยกเลขเอกสารเก่าเรียบร้อยแล้ว!", "success");
     } catch (error) {
       console.error(error);
       addToast("เกิดข้อผิดพลาดในการอัปเดตข้อมูล", "error");
