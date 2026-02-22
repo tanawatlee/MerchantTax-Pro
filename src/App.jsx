@@ -49,14 +49,27 @@ const GLOBAL_STYLES = `
   ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; } 
   ::-webkit-scrollbar-thumb:hover { background: #94a3b8; } 
     
-  html, body, #root {
+  /* Global Override เพื่อยกเลิกกรอบจาก Template Vite/React เริ่มต้นแบบ 100% */
+  :root, html, body {
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+    overflow: hidden !important;
+    background-color: #f8fafc !important;
+    display: block !important;
+    place-items: stretch !important; /* ล้างค่า place-items: center */
+  }
+
+  #root {
     width: 100vw !important;
     height: 100vh !important;
     margin: 0 !important;
     padding: 0 !important;
     max-width: none !important;
-    overflow: hidden !important;
-    background-color: #f8fafc;
+    display: block !important;
+    text-align: left !important; /* ล้างค่า text-align: center */
   }
 
   @media print { 
