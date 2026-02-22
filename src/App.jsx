@@ -155,6 +155,24 @@ const sortOldestFirst = (a, b) => {
   return timeA - timeB;
 };
 
+const getYYYYMMDD = (dateInput) => {
+  const date = normalizeDate(dateInput) || new Date();
+  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+};
+
+const generateDateBasedId = (items, basePrefix, date, field) => {
+  const dateStr = getYYYYMMDD(date);
+  const fullPrefix = `${basePrefix}${dateStr}-`;
+  const max = items.reduce((m, item) => {
+    if (item[field] && item[field].startsWith(fullPrefix)) {
+      const num = parseInt(item[field].replace(fullPrefix, ''), 10);
+      return !isNaN(num) && num > m ? num : m;
+    }
+    return m;
+  }, 0);
+  return `${fullPrefix}${String(max + 1).padStart(5, '0')}`;
+};
+
 const generateNextDocId = (items, prefix, field) => {
   const max = items.reduce((m, item) => {
     if (item[field] && item[field].startsWith(prefix)) {
@@ -2942,6 +2960,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const expenseSummary = useMemo(() => {
     let explicitExpenseTotal = 0;
     let platformFeeTotal = 0;
+    
+    // --- New Breakdown Variables ---
+    let feeBreakdown = { trans: 0, comm: 0, serv: 0, infra: 0 };
+    let discountBreakdown = { platform: 0, cash: 0 };
+    
     let estShippingTotal = 0;
     let buyerShippingTotal = 0;
     let subsidyShippingTotal = 0;
@@ -2981,11 +3004,26 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             categories[cat] = (categories[cat] || 0) + amt;
         } else if (t.type === 'income') {
             platformFeeTotal += (Number(t.platformFee) || 0);
+            
+            // Collect fee details
+            feeBreakdown.trans += (Number(t.transactionFee) || 0);
+            feeBreakdown.comm += (Number(t.commissionFee) || 0);
+            feeBreakdown.serv += (Number(t.serviceFee) || 0);
+            feeBreakdown.infra += (Number(t.infrastructureFee) || 0);
+
             estShippingTotal += (Number(t.estimatedShippingFee) || 0);
             buyerShippingTotal += (Number(t.shippingFee) || 0);
             subsidyShippingTotal += (Number(t.shippingFeeSubsidy) || 0);
             returnShippingTotal += (Number(t.returnShippingFee) || 0);
-            discountTotal += (Number(t.couponDiscount) || 0) + (Number(t.cashCoupon) || 0);
+
+            const cDisc = Number(t.couponDiscount) || 0;
+            const cashDisc = Number(t.cashCoupon) || 0;
+            discountTotal += cDisc + cashDisc;
+            
+            // Collect discount details
+            discountBreakdown.platform += cDisc;
+            discountBreakdown.cash += cashDisc;
+
             whtTotal += (Number(t.whtAmount) || 0);
         }
     });
@@ -3001,7 +3039,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     return { 
         explicitExpenseTotal, platformFeeTotal, estShippingTotal, buyerShippingTotal, 
         subsidyShippingTotal, returnShippingTotal, discountTotal, totalBusinessCost, 
-        hiddenCosts, shippingBalance, whtTotal, topCategories, count: transactionCount 
+        hiddenCosts, shippingBalance, whtTotal, topCategories, count: transactionCount,
+        feeBreakdown, discountBreakdown
     };
   }, [transactions, summaryStartDate, summaryEndDate, summaryChannel, summaryCategory]);
 
@@ -3370,69 +3409,69 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-             <div className="bg-gradient-to-br from-rose-500 to-orange-500 p-6 rounded-3xl text-white shadow-xl shadow-rose-200 relative overflow-hidden flex flex-col justify-center">
+             <div className="bg-gradient-to-br from-rose-500 to-orange-500 p-6 rounded-3xl text-white shadow-xl shadow-rose-200 relative overflow-hidden flex flex-col justify-center text-left">
                 <TrendingDown size={80} className="absolute -bottom-4 -right-4 opacity-20"/>
-                <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">Total Business Costs</p>
-                <h3 className="text-3xl font-black mb-1">{formatCurrency(expenseSummary.totalBusinessCost)}</h3>
-                <p className="text-xs opacity-90">ต้นทุนและค่าใช้จ่ายรวมทั้งหมด</p>
+                <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1 text-left">Total Business Costs</p>
+                <h3 className="text-3xl font-black mb-1 text-left">{formatCurrency(expenseSummary.totalBusinessCost)}</h3>
+                <p className="text-xs opacity-90 text-left">ต้นทุนและค่าใช้จ่ายรวมทั้งหมด</p>
              </div>
-             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden">
-                <div className="flex justify-between items-start mb-2">
-                    <div>
-                        <p className="text-[10px] font-black uppercase text-slate-400">Direct Expenses</p>
-                        <h3 className="text-2xl font-black text-slate-800">{formatCurrency(expenseSummary.explicitExpenseTotal)}</h3>
+             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden text-left">
+                <div className="flex justify-between items-start mb-2 text-left">
+                    <div className="text-left">
+                        <p className="text-[10px] font-black uppercase text-slate-400 text-left">Direct Expenses</p>
+                        <h3 className="text-2xl font-black text-slate-800 text-left">{formatCurrency(expenseSummary.explicitExpenseTotal)}</h3>
                     </div>
                     <div className="p-2 bg-rose-50 text-rose-600 rounded-xl"><List size={18}/></div>
                 </div>
-                <p className="text-[10px] text-slate-500">ค่าใช้จ่ายที่บันทึกโดยตรง</p>
+                <p className="text-[10px] text-slate-500 text-left">ค่าใช้จ่ายที่บันทึกโดยตรง</p>
              </div>
-             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden">
-                <div className="flex justify-between items-start mb-2">
-                    <div>
-                        <p className="text-[10px] font-black uppercase text-slate-400">Platform Fees</p>
-                        <h3 className="text-2xl font-black text-indigo-600">{formatCurrency(expenseSummary.platformFeeTotal)}</h3>
+             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden text-left">
+                <div className="flex justify-between items-start mb-2 text-left">
+                    <div className="text-left">
+                        <p className="text-[10px] font-black uppercase text-slate-400 text-left">Platform Fees</p>
+                        <h3 className="text-2xl font-black text-indigo-600 text-left">{formatCurrency(expenseSummary.platformFeeTotal)}</h3>
                     </div>
                     <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl"><Zap size={18}/></div>
                 </div>
-                <p className="text-[10px] text-slate-500">ค่าธรรมเนียมที่แพลตฟอร์มหัก</p>
+                <p className="text-[10px] text-slate-500 text-left">ค่าธรรมเนียมที่แพลตฟอร์มหัก</p>
              </div>
-             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden">
-                <div className="flex justify-between items-start mb-2">
-                    <div>
-                        <p className="text-[10px] font-black uppercase text-slate-400">Shipping Balance</p>
-                        <h3 className={`text-2xl font-black ${expenseSummary.shippingBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden text-left">
+                <div className="flex justify-between items-start mb-2 text-left">
+                    <div className="text-left">
+                        <p className="text-[10px] font-black uppercase text-slate-400 text-left">Shipping Balance</p>
+                        <h3 className={`text-2xl font-black text-left ${expenseSummary.shippingBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                             {expenseSummary.shippingBalance > 0 ? '+' : ''}{formatCurrency(expenseSummary.shippingBalance)}
                         </h3>
                     </div>
                     <div className={`p-2 rounded-xl ${expenseSummary.shippingBalance >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}><Truck size={18}/></div>
                 </div>
-                <p className="text-[10px] text-slate-500">ส่วนต่างค่าจัดส่ง (รับ - จ่ายจริง)</p>
+                <p className="text-[10px] text-slate-500 text-left">ส่วนต่างค่าจัดส่ง (รับ - จ่ายจริง)</p>
              </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
              {/* Left Column: Direct Expenses Breakdown */}
-             <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm flex flex-col">
-                <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4">
+             <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm flex flex-col text-left">
+                <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4 text-left">
                     <div className="p-3 bg-slate-50 text-slate-600 rounded-2xl"><PieChart size={24}/></div>
-                    <div>
-                        <h4 className="text-lg font-black text-slate-800">ค่าใช้จ่ายแยกตามหมวดหมู่</h4>
-                        <p className="text-xs text-slate-400 font-medium">Direct Expense Breakdown</p>
+                    <div className="text-left">
+                        <h4 className="text-lg font-black text-slate-800 text-left">ค่าใช้จ่ายทางตรง (บันทึกมือ)</h4>
+                        <p className="text-xs text-slate-400 font-medium text-left">Direct Expense Breakdown</p>
                     </div>
                 </div>
-                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-5">
+                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-5 text-left">
                     {expenseSummary.topCategories.length > 0 ? expenseSummary.topCategories.map((cat, idx) => (
-                        <div key={idx} className="space-y-2">
-                            <div className="flex justify-between items-end">
-                                <p className="font-bold text-slate-700 text-sm flex items-center gap-2">
+                        <div key={idx} className="space-y-2 text-left">
+                            <div className="flex justify-between items-end text-left">
+                                <p className="font-bold text-slate-700 text-sm flex items-center gap-2 text-left">
                                     <span className="w-2 h-2 rounded-full bg-slate-400"></span>{cat.name}
                                 </p>
-                                <div className="text-right">
-                                    <p className="font-black text-slate-900">{formatCurrency(cat.value)}</p>
-                                    <p className="text-[10px] font-bold text-slate-400">{cat.percentage.toFixed(1)}%</p>
+                                <div className="text-right text-right">
+                                    <p className="font-black text-slate-900 text-right">{formatCurrency(cat.value)}</p>
+                                    <p className="text-[10px] font-bold text-slate-400 text-right">{cat.percentage.toFixed(1)}%</p>
                                 </div>
                             </div>
-                            <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                            <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden text-left">
                                 <div 
                                     className="bg-slate-400 h-2.5 rounded-full transition-all duration-1000 ease-out" 
                                     style={{ width: `${cat.percentage}%` }}
@@ -3440,12 +3479,105 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             </div>
                         </div>
                     )) : (
-                        <div className="flex flex-col items-center justify-center h-full py-10 text-slate-300">
-                            <Inbox size={48} className="opacity-20 mb-3"/>
-                            <p className="text-sm font-bold">ยังไม่มีข้อมูลรายจ่ายทางตรง</p>
+                        <div className="flex flex-col items-center justify-center h-full py-10 text-slate-300 text-center">
+                            <Inbox size={48} className="opacity-20 mb-3 text-center"/>
+                            <p className="text-sm font-bold text-center">ยังไม่มีข้อมูลรายจ่ายทางตรง</p>
                         </div>
                     )}
                 </div>
+             </div>
+
+             {/* Right Column: In-depth Breakdown */}
+             <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6 text-left">
+                
+                {/* Platform Fees Breakdown */}
+                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col text-left">
+                    <div className="flex items-center gap-3 mb-4 text-left">
+                        <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl"><Zap size={20}/></div>
+                        <div className="text-left">
+                            <h4 className="font-bold text-slate-800 text-left">ค่าธรรมเนียม Platform</h4>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase text-left">Platform Fees Breakdown</p>
+                        </div>
+                    </div>
+                    <div className="space-y-3 mt-2 flex-1 text-left">
+                        <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100 text-left">
+                            <span className="text-xs font-bold text-slate-600 text-left">Transaction Fee (ธุรกรรม)</span>
+                            <span className="text-sm font-black text-indigo-600 text-right">{formatCurrency(expenseSummary.feeBreakdown.trans)}</span>
+                        </div>
+                        <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100 text-left">
+                            <span className="text-xs font-bold text-slate-600 text-left">Commission Fee (คอมมิชชั่น)</span>
+                            <span className="text-sm font-black text-indigo-600 text-right">{formatCurrency(expenseSummary.feeBreakdown.comm)}</span>
+                        </div>
+                        <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100 text-left">
+                            <span className="text-xs font-bold text-slate-600 text-left">Service Fee (ค่าบริการโปรแกรม)</span>
+                            <span className="text-sm font-black text-indigo-600 text-right">{formatCurrency(expenseSummary.feeBreakdown.serv)}</span>
+                        </div>
+                        <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100 text-left">
+                            <span className="text-xs font-bold text-slate-600 text-left">Infrastructure / Other Fee</span>
+                            <span className="text-sm font-black text-indigo-600 text-right">{formatCurrency(expenseSummary.feeBreakdown.infra)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Shipping Breakdown */}
+                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col text-left">
+                    <div className="flex items-center gap-3 mb-4 text-left">
+                        <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl"><Truck size={20}/></div>
+                        <div className="text-left">
+                            <h4 className="font-bold text-slate-800 text-left">สรุปค่าจัดส่งสุทธิ</h4>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase text-left">Shipping Analysis</p>
+                        </div>
+                    </div>
+                    <div className="space-y-3 mt-2 flex-1 text-left">
+                        <p className="text-[10px] font-black uppercase text-emerald-600 tracking-wider text-left border-b border-slate-100 pb-1">ฝั่งรายรับ (Income)</p>
+                        <div className="flex justify-between items-center text-left">
+                            <span className="text-xs font-bold text-slate-600 text-left">เรียกเก็บจากลูกค้า</span>
+                            <span className="text-sm font-black text-emerald-600 text-right">+{formatCurrency(expenseSummary.buyerShippingTotal)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-left">
+                            <span className="text-xs font-bold text-slate-600 text-left">Platform ออกให้ (Subsidy)</span>
+                            <span className="text-sm font-black text-emerald-600 text-right">+{formatCurrency(expenseSummary.subsidyShippingTotal)}</span>
+                        </div>
+                        <p className="text-[10px] font-black uppercase text-rose-600 tracking-wider text-left border-b border-slate-100 pb-1 pt-2">ฝั่งรายจ่าย (Expense)</p>
+                        <div className="flex justify-between items-center text-left">
+                            <span className="text-xs font-bold text-slate-600 text-left">ค่าจัดส่งจริง/โดยประมาณ</span>
+                            <span className="text-sm font-black text-rose-600 text-right">-{formatCurrency(expenseSummary.estShippingTotal)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-left">
+                            <span className="text-xs font-bold text-slate-600 text-left">ค่าจัดส่งสินค้าคืน</span>
+                            <span className="text-sm font-black text-rose-600 text-right">-{formatCurrency(expenseSummary.returnShippingTotal)}</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Discounts & Others */}
+                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col md:col-span-2 text-left">
+                    <div className="flex items-center gap-3 mb-4 text-left">
+                        <div className="p-2 bg-amber-50 text-amber-600 rounded-xl"><Tag size={20}/></div>
+                        <div className="text-left">
+                            <h4 className="font-bold text-slate-800 text-left">ส่วนลด และรายการหักอื่นๆ</h4>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase text-left">Discounts & Deductions</p>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2 text-left">
+                        <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100 text-left">
+                            <p className="text-xs font-bold text-rose-600/70 mb-1 text-left">คูปองร้านค้า (Cash Coupon)</p>
+                            <h4 className="text-xl font-black text-rose-600 text-left">-{formatCurrency(expenseSummary.discountBreakdown.cash)}</h4>
+                            <p className="text-[10px] text-rose-500/60 mt-1 text-left">ส่วนลดที่คุณออกเอง</p>
+                        </div>
+                        <div className="p-4 bg-orange-50 rounded-2xl border border-orange-100 text-left">
+                            <p className="text-xs font-bold text-orange-600/70 mb-1 text-left">ส่วนลด Platform</p>
+                            <h4 className="text-xl font-black text-orange-600 text-left">-{formatCurrency(expenseSummary.discountBreakdown.platform)}</h4>
+                            <p className="text-[10px] text-orange-500/60 mt-1 text-left">ส่วนลดที่ถูกหักจากบิล</p>
+                        </div>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-left">
+                            <p className="text-xs font-bold text-slate-500 mb-1 text-left">ภาษีหัก ณ ที่จ่าย (WHT)</p>
+                            <h4 className="text-xl font-black text-slate-700 text-left">-{formatCurrency(expenseSummary.whtTotal)}</h4>
+                            <p className="text-[10px] text-slate-400 mt-1 text-left">เครดิตภาษีสิ้นปี</p>
+                        </div>
+                    </div>
+                </div>
+
              </div>
           </div>
         </div>
@@ -3829,10 +3961,10 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   useEffect(() => { 
       if (mode === 'create' && !editingDocId) { 
           const prefix = invData.docType === 'credit_note' ? 'CN-' : (invData.docType === 'abb' ? 'ABB-' : 'INV-'); 
-          const nextId = generateNextDocId(invoices, prefix, 'invNo');
+          const nextId = generateDateBasedId(invoices, prefix, invData.date, 'invNo');
           setInvData(prev => ({ ...prev, invNo: nextId })); 
       } 
-  }, [invData.docType, invoices, mode, editingDocId]);
+  }, [invData.docType, invData.date, invoices, mode, editingDocId]);
   
   useEffect(() => { if (user) { const unsubSellers = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'seller_profiles')), (snap) => setSellerProfiles(snap.docs.map(d=>({id:d.id, ...d.data()})))); const unsubCustomers = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners')), (snap) => setCustomers(snap.docs.map(d=>({id:d.id, ...d.data(), customerName: d.data().name})))); return () => { unsubSellers(); unsubCustomers(); }; } }, [user, appId]);
 
@@ -3985,6 +4117,11 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
     try {
       const element = document.getElementById('invoice-preview-area');
       const zip = new window.JSZip();
+      
+      // สร้างโฟลเดอร์ภายใน ZIP โดยใช้ชื่อตามเลขที่เอกสาร
+      const folderName = invData.invNo || 'Invoice_Documents';
+      const folder = zip.folder(folderName);
+      
       const opt = {
         margin: 0,
         filename: `${invData.invNo}.pdf`,
@@ -3995,7 +4132,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
       showToast("กำลังสร้างไฟล์ Original...", "success");
       const originalBlob = await window.html2pdf().set(opt).from(element).output('blob');
-      zip.file(`${invData.invNo}_Original.pdf`, originalBlob);
+      // เก็บไฟล์ลงในโฟลเดอร์ที่สร้างขึ้น
+      folder.file(`${invData.invNo}_Original.pdf`, originalBlob);
 
       const badge = element.querySelector('.status-badge');
       const oldText = badge.innerText;
@@ -4003,7 +4141,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       
       showToast("กำลังสร้างไฟล์ Copy...", "success");
       const copyBlob = await window.html2pdf().set(opt).from(element).output('blob');
-      zip.file(`${invData.invNo}_Copy.pdf`, copyBlob);
+      // เก็บไฟล์ลงในโฟลเดอร์ที่สร้างขึ้น
+      folder.file(`${invData.invNo}_Copy.pdf`, copyBlob);
       
       badge.innerText = oldText;
 
@@ -4011,7 +4150,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       const content = await zip.generateAsync({ type: "blob" });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(content);
-      link.download = `${invData.invNo}_Documents.zip`;
+      link.download = `${folderName}.zip`; // ตั้งชื่อไฟล์ ZIP ให้ตรงกับโฟลเดอร์
       link.click();
       
       showToast("ดาวน์โหลดไฟล์ ZIP เรียบร้อยแล้ว", "success");
@@ -4520,31 +4659,45 @@ export default function App() {
         }
       }
 
+      const dateCounters = {};
+      const getNextDateBasedIdLocal = (basePrefix, dateObj) => {
+          const dateStr = getYYYYMMDD(dateObj);
+          const fullPrefix = `${basePrefix}${dateStr}-`;
+          if (dateCounters[fullPrefix] === undefined) {
+              dateCounters[fullPrefix] = invoices.reduce((m, item) => {
+                  if (item.invNo && item.invNo.startsWith(fullPrefix)) {
+                      const num = parseInt(item.invNo.replace(fullPrefix, ''), 10);
+                      return !isNaN(num) && num > m ? num : m;
+                  }
+                  return m;
+              }, 0);
+          }
+          dateCounters[fullPrefix]++;
+          return `${fullPrefix}${String(dateCounters[fullPrefix]).padStart(5, '0')}`;
+      };
+
       // 3. อัปเดตใบกำกับภาษี (Invoice - เฉพาะที่ยังไม่มีเลข)
       const allInvs = invoices.filter(i => i.docType === 'invoice' || !i.docType);
-      let currentInvCount = getMaxId(allInvs, 'INV-', 'invNo');
       const missingInvs = allInvs.filter(i => !i.invNo || !i.invNo.startsWith('INV-')).sort(sortOldestFirst);
       for (const i of missingInvs) {
-        currentInvCount++;
-        await safeUpdate('invoices', i.id, { invNo: `INV-${String(currentInvCount).padStart(5, '0')}` });
+        const nextId = getNextDateBasedIdLocal('INV-', i.date);
+        await safeUpdate('invoices', i.id, { invNo: nextId });
       }
 
       // 4. อัปเดตใบลดหนี้ (CN - เฉพาะที่ยังไม่มีเลข)
       const allCns = invoices.filter(i => i.docType === 'credit_note');
-      let currentCnCount = getMaxId(allCns, 'CN-', 'invNo');
       const missingCns = allCns.filter(i => !i.invNo || !i.invNo.startsWith('CN-')).sort(sortOldestFirst);
       for (const i of missingCns) {
-        currentCnCount++;
-        await safeUpdate('invoices', i.id, { invNo: `CN-${String(currentCnCount).padStart(5, '0')}` });
+        const nextId = getNextDateBasedIdLocal('CN-', i.date);
+        await safeUpdate('invoices', i.id, { invNo: nextId });
       }
 
       // 5. อัปเดตใบกำกับอย่างย่อ (ABB - เฉพาะที่ยังไม่มีเลข)
       const allAbbs = invoices.filter(i => i.docType === 'abb');
-      let currentAbbCount = getMaxId(allAbbs, 'ABB-', 'invNo');
       const missingAbbs = allAbbs.filter(i => !i.invNo || !i.invNo.startsWith('ABB-')).sort(sortOldestFirst);
       for (const i of missingAbbs) {
-        currentAbbCount++;
-        await safeUpdate('invoices', i.id, { invNo: `ABB-${String(currentAbbCount).padStart(5, '0')}` });
+        const nextId = getNextDateBasedIdLocal('ABB-', i.date);
+        await safeUpdate('invoices', i.id, { invNo: nextId });
       }
 
       if (opsCount > 0) {
@@ -4557,6 +4710,57 @@ export default function App() {
       addToast("เกิดข้อผิดพลาดในการอัปเดตข้อมูล", "error");
     } finally {
       setIsMigrating(false);
+    }
+  };
+
+  const reformatInvoiceNumbers = async () => {
+    if (!window.confirm('ยืนยันการจัดรูปแบบเลขใบกำกับภาษีใหม่ทั้งหมด?\n(เอกสารเก่าจะถูกรันเลขใหม่เป็น PREFIX-YYYYMMDD-XXXXX ตามวันที่เรียงตามลำดับเก่าไปใหม่)')) return;
+    setIsMigrating(true);
+    try {
+        let batchWriter = writeBatch(dbInstance);
+        let opsCount = 0;
+        const safeUpdate = async (collectionName, docId, data) => {
+            const ref = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', collectionName, docId);
+            batchWriter.update(ref, data);
+            opsCount++;
+            if (opsCount >= 400) {
+                await batchWriter.commit();
+                batchWriter = writeBatch(dbInstance);
+                opsCount = 0;
+            }
+        };
+
+        const allInvs = [...invoices].sort(sortOldestFirst);
+        const counters = {};
+        
+        for (const inv of allInvs) {
+            const basePrefix = inv.docType === 'credit_note' ? 'CN-' : (inv.docType === 'abb' ? 'ABB-' : 'INV-');
+            const dateStr = getYYYYMMDD(inv.date);
+            const fullPrefix = `${basePrefix}${dateStr}-`;
+            
+            if (counters[fullPrefix] === undefined) counters[fullPrefix] = 0;
+            counters[fullPrefix]++;
+            
+            const newInvNo = `${fullPrefix}${String(counters[fullPrefix]).padStart(5, '0')}`;
+            
+            if (inv.invNo !== newInvNo) {
+                await safeUpdate('invoices', inv.id, { invNo: newInvNo });
+                
+                if (inv.orderId && inv.docType !== 'credit_note') {
+                    const linkedTrans = transactions.filter(t => t.orderId === inv.orderId && t.type === 'income');
+                    for (const t of linkedTrans) {
+                        await safeUpdate('transactions_income', t.id, { invoiceNo: newInvNo });
+                    }
+                }
+            }
+        }
+        if (opsCount > 0) await batchWriter.commit();
+        addToast("ปรับรูปแบบเลขเอกสารใหม่สำเร็จ", "success");
+    } catch(e) {
+        console.error(e);
+        addToast("เกิดข้อผิดพลาดในการปรับรูปแบบ", "error");
+    } finally {
+        setIsMigrating(false);
     }
   };
 
@@ -4638,6 +4842,8 @@ export default function App() {
             {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} 
             {isMigrating ? 'กำลังรันเลขเอกสาร...' : 'รันเลขเอกสารที่ตกหล่น'}
           </button>
+
+          <button onClick={reformatInvoiceNumbers} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-indigo-900/30 text-indigo-300 ring-1 ring-indigo-800/50 hover:bg-indigo-900/50 transition-all text-left mt-2"><FileText size={14} className="text-center"/> อัปเดตฟอร์แมตใบกำกับ (YYYYMMDD)</button>
 
           <button onClick={()=>setShowIdDeleteTool(true)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-rose-900/30 text-rose-300 ring-1 ring-rose-800/50 hover:bg-rose-900/50 transition-all text-left mt-2"><Trash2 size={14} className="text-center"/> ลบทิ้งด้วย ID</button>
           <button onClick={()=>signOut(authInstance)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-slate-800 text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700 transition-all text-left mt-2"><LogOut size={14} className="text-center"/> ออกจากระบบ</button>
