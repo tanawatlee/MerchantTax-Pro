@@ -2418,6 +2418,27 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [histPage, setHistPage] = useState(1);
   const histItemsPerPage = 20;
 
+  const handleSavePartnerManual = async () => {
+    if (!formData.partnerName) {
+      showToast("กรุณาระบุชื่อคู่ค้า/ลูกค้า", "error");
+      return;
+    }
+    try {
+      await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners'), {
+        name: formData.partnerName,
+        taxId: formData.partnerTaxId,
+        address: formData.partnerAddress,
+        branch: formData.partnerBranch,
+        branchName: formData.partnerBranchName,
+        type: formData.type === 'income' ? 'buyer' : 'seller',
+        createdAt: serverTimestamp()
+      });
+      showToast("บันทึกข้อมูลใหม่ลงฐานข้อมูลสำเร็จ", "success");
+    } catch (e) {
+      showToast("บันทึกข้อมูลไม่สำเร็จ", "error");
+    }
+  };
+
   const setSummaryQuickRange = (range) => {
     const now = new Date();
     let start, end = new Date();
@@ -2542,25 +2563,30 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     const totalDiscounts = couponDisc + cashCpn;
     
     let grandTotal = 0;
+    let vatAmount = 0;
 
     if (formData.type === 'income') {
         let vatBase = subTotal + shippingFee - couponDisc;
         if (formData.vatType === 'excluded') {
+            vatAmount = vatBase * 0.07;
             grandTotal = (vatBase * 1.07) - totalFees - cashCpn - wht;
         } else {
+            if (formData.vatType === 'included') vatAmount = vatBase * 7 / 107;
             grandTotal = vatBase - totalFees - cashCpn - wht;
         }
     } else {
         let vatBase = subTotal - couponDisc;
         if (formData.vatType === 'excluded') {
-            let vatAmount = vatBase * 0.07;
-            grandTotal = vatBase + vatAmount - cashCpn - wht;
+            let vatAmt = vatBase * 0.07;
+            vatAmount = vatAmt;
+            grandTotal = vatBase + vatAmt - cashCpn - wht;
         } else {
+            if (formData.vatType === 'included') vatAmount = vatBase * 7 / 107;
             grandTotal = subTotal - totalDiscounts - wht;
         }
     }
     
-    return { subTotal, totalFees, totalDiscounts, wht, grandTotal, shippingFee };
+    return { subTotal, totalFees, totalDiscounts, wht, grandTotal, shippingFee, vatAmount };
   }, [formData]);
 
   const handleSubmit = async (e) => {
@@ -2898,7 +2924,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               <div className="pt-6 border-t space-y-4 text-left">
                 <div className="flex justify-between items-center text-left">
                   <h4 className="text-sm font-black text-slate-800 flex items-center gap-2 text-left"><Users size={18} className="text-indigo-600"/> {formData.type === 'income' ? 'ข้อมูลลูกค้า' : 'ข้อมูลผู้ขาย'}</h4>
-                  <button type="button" onClick={()=>{setShowPartnerModal(true); setPartnerTab(formData.type === 'income' ? 'buyer' : 'seller');}} className="text-[10px] bg-indigo-50 text-indigo-700 px-4 py-2 rounded-full font-bold hover:bg-indigo-100 transition-colors text-center">ดึงจากฐานข้อมูลคู่ค้า</button>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={handleSavePartnerManual} className="text-[10px] bg-emerald-50 text-emerald-700 px-4 py-2 rounded-full font-bold hover:bg-emerald-100 transition-colors text-center flex items-center gap-1"><SaveAll size={12}/> บันทึกข้อมูลใหม่</button>
+                    <button type="button" onClick={()=>{setShowPartnerModal(true); setPartnerTab(formData.type === 'income' ? 'buyer' : 'seller');}} className="text-[10px] bg-indigo-50 text-indigo-700 px-4 py-2 rounded-full font-bold hover:bg-indigo-100 transition-colors text-center">ดึงจากฐานข้อมูลคู่ค้า</button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-3 text-left">
                   <input value={formData.partnerName} onChange={e=>setFormData({...formData, partnerName: e.target.value})} className="bg-slate-50 p-3 rounded-2xl border border-slate-100 text-sm font-bold outline-none text-left" placeholder="ชื่อคู่ค้า..." />
@@ -2979,6 +3008,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     <span className="font-bold text-right">{formatCurrency(financialSummary.subTotal)}</span>
                   </div>
                   
+                  {formData.vatType !== 'none' && (
+                      <div className="flex justify-between items-center text-sm text-indigo-300 mt-2 text-left">
+                          <span className="opacity-80 text-left">{formData.vatType === 'included' ? 'ภาษีมูลค่าเพิ่ม 7% (รวมในยอด)' : '+ ภาษีมูลค่าเพิ่ม 7% (แยกเพิ่ม)'}</span>
+                          <span className="font-bold text-right">{formatCurrency(financialSummary.vatAmount)}</span>
+                      </div>
+                  )}
+
                   {formData.type === 'income' && financialSummary.shippingFee > 0 && (
                       <div className="flex justify-between items-center text-sm text-emerald-300 text-left mt-2">
                           <span className="opacity-80 text-left">+ ค่าจัดส่ง</span>
@@ -3394,7 +3430,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     )}
                   </div>
                 </div>
-                <div className="space-y-6 text-left"><h4 className="font-bold text-slate-800 border-b pb-2 flex items-center gap-2 text-left"><Wallet size={18} className="text-emerald-500"/> สรุปยอดเงินสุทธิ</h4><div className="bg-slate-900 text-white p-7 rounded-[32px] shadow-xl text-left"><div className="flex justify-between items-center text-sm opacity-60 text-left"><span>มูลค่าสินค้ารวม</span><span>{formatCurrency(viewItem.total)}</span></div><div className="flex justify-between items-center text-sm opacity-60 mt-4 text-left"><span>{viewItem.type === 'income' ? 'หักค่าธรรมเนียม and ส่วนลด and WHT' : 'หักส่วนลด and WHT'}</span><span>{formatCurrency((viewItem.type === 'income' ? (Number(viewItem.platformFee) || 0) : 0) + (Number(viewItem.couponDiscount) || 0) + (Number(viewItem.cashCoupon) || 0) + (Number(viewItem.whtAmount) || 0))}</span></div><div className="flex justify-between items-center pt-3 mt-4 border-t-2 border-white/20 text-left"><span className="font-black text-indigo-400 uppercase tracking-wider text-left">{viewItem.type === 'income' ? 'เงินเข้าสุทธิ' : 'ยอดจ่ายสุทธิ'}</span><span className="text-4xl font-black text-right">{formatCurrency(viewItem.grandTotal || viewItem.total)}</span></div><div className="mt-4 pt-4 border-t border-white/10 space-y-3 text-left"><p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest text-left">เอกสารที่ออกแล้ว (Linked Documents)</p>{viewItem.issuedDocs && viewItem.issuedDocs.length > 0 ? viewItem.issuedDocs.map((doc, idx) => (<div key={idx} className="flex justify-between items-center text-xs font-bold border-b border-white/5 pb-1 text-left"><div className="flex items-center gap-2 text-left">{doc.type === 'invoice' ? <FileText size={12} className="text-indigo-400 text-center"/> : <FileType size={12} className="text-rose-400 text-center"/>}<span className={doc.type === 'invoice' ? 'text-indigo-200' : 'text-rose-200'}>{doc.type === 'invoice' ? 'INV' : 'CN'}</span></div><span className="text-white/80 font-mono text-right">{doc.no}</span></div>)) : (<div className="flex items-center gap-2 text-xs font-bold text-slate-500 text-left"><Clock size={14} className="text-center"/> ยังไม่ออกเอกสารภาษี</div>)}</div></div></div>
+                <div className="space-y-6 text-left"><h4 className="font-bold text-slate-800 border-b pb-2 flex items-center gap-2 text-left"><Wallet size={18} className="text-emerald-500"/> สรุปยอดเงินสุทธิ</h4><div className="bg-slate-900 text-white p-7 rounded-[32px] shadow-xl text-left"><div className="flex justify-between items-center text-sm opacity-60 text-left"><span>มูลค่าสินค้ารวม</span><span>{formatCurrency(viewItem.total)}</span></div>
+                
+                {viewItem.vatType && viewItem.vatType !== 'none' && (
+                    <div className="flex justify-between items-center text-sm text-indigo-300 mt-2 text-left">
+                        <span>{viewItem.vatType === 'included' ? 'ภาษีมูลค่าเพิ่ม 7% (รวมในยอด)' : '+ ภาษีมูลค่าเพิ่ม 7% (แยกเพิ่ม)'}</span>
+                        <span>{formatCurrency(viewItem.vatType === 'excluded' ? (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 0.07 : (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 7 / 107)}</span>
+                    </div>
+                )}
+                
+                <div className="flex justify-between items-center text-sm opacity-60 mt-4 text-left"><span>{viewItem.type === 'income' ? 'หักค่าธรรมเนียม and ส่วนลด and WHT' : 'หักส่วนลด and WHT'}</span><span>{formatCurrency((viewItem.type === 'income' ? (Number(viewItem.platformFee) || 0) : 0) + (Number(viewItem.couponDiscount) || 0) + (Number(viewItem.cashCoupon) || 0) + (Number(viewItem.whtAmount) || 0))}</span></div><div className="flex justify-between items-center pt-3 mt-4 border-t-2 border-white/20 text-left"><span className="font-black text-indigo-400 uppercase tracking-wider text-left">{viewItem.type === 'income' ? 'เงินเข้าสุทธิ' : 'ยอดจ่ายสุทธิ'}</span><span className="text-4xl font-black text-right">{formatCurrency(viewItem.grandTotal || viewItem.total)}</span></div><div className="mt-4 pt-4 border-t border-white/10 space-y-3 text-left"><p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest text-left">เอกสารที่ออกแล้ว (Linked Documents)</p>{viewItem.issuedDocs && viewItem.issuedDocs.length > 0 ? viewItem.issuedDocs.map((doc, idx) => (<div key={idx} className="flex justify-between items-center text-xs font-bold border-b border-white/5 pb-1 text-left"><div className="flex items-center gap-2 text-left">{doc.type === 'invoice' ? <FileText size={12} className="text-indigo-400 text-center"/> : <FileType size={12} className="text-rose-400 text-center"/>}<span className={doc.type === 'invoice' ? 'text-indigo-200' : 'text-rose-200'}>{doc.type === 'invoice' ? 'INV' : 'CN'}</span></div><span className="text-white/80 font-mono text-right">{doc.no}</span></div>)) : (<div className="flex items-center gap-2 text-xs font-bold text-slate-500 text-left"><Clock size={14} className="text-center"/> ยังไม่ออกเอกสารภาษี</div>)}</div></div></div>
               </div>
               {viewItem.items && (<div className="space-y-4 text-left"><h4 className="font-bold text-slate-800 flex items-center gap-2 border-b pb-2 text-left"><List size={18} className="text-indigo-600"/> รายการสินค้า/บริการ</h4><div className="overflow-hidden border border-slate-100 rounded-3xl text-left"><table className="w-full text-sm text-left"><thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-400 text-left"><tr><th className="p-4 text-left">SKU / รายละเอียดสินค้า</th><th className="p-4 text-center text-center">จำนวน</th><th className="p-4 text-right text-right">ราคาต่อหน่วย</th><th className="p-4 text-right text-right">ยอดรวม</th></tr></thead><tbody className="divide-y divide-slate-50 text-left">{viewItem.items.map((it, idx) => (<tr key={idx} className="hover:bg-slate-50/50 text-left">
                 <td className="p-4 text-left">
@@ -3443,6 +3488,27 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [historyStartDate, setHistoryStartDate] = useState('2000-01-01');
   const [historyEndDate, setHistoryEndDate] = useState('2099-12-31');
   const [historyChannel, setHistoryChannel] = useState('all');
+
+  const handleSavePartnerManual = async () => {
+    if (!invData.customerName) {
+      showToast("กรุณาระบุชื่อลูกค้า/บริษัท", "error");
+      return;
+    }
+    try {
+      await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners'), {
+        name: invData.customerName,
+        taxId: invData.taxId,
+        address: invData.address,
+        branch: invData.branch,
+        branchName: '',
+        type: 'buyer',
+        createdAt: serverTimestamp()
+      });
+      showToast("บันทึกข้อมูลใหม่ลงฐานข้อมูลสำเร็จ", "success");
+    } catch (e) {
+      showToast("บันทึกข้อมูลไม่สำเร็จ", "error");
+    }
+  };
 
   const setHistoryQuickRange = (range) => {
     const now = new Date();
@@ -3948,7 +4014,13 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                             {invData.docType === 'credit_note' && (<div className="bg-white p-3 rounded-xl border border-rose-200 shadow-sm text-left"><label className="text-[10px] font-bold text-rose-500 mb-1 flex items-center gap-1 text-left">อ้างอิงใบเดิม</label><input className="w-full border-0 p-1 text-sm font-mono text-rose-600 bg-transparent focus:ring-0 text-left" placeholder="INV-XXXXXXXX" value={invData.refInvNo} onChange={e => setInvData({ ...invData, refInvNo: e.target.value })} /></div>)}
                             <div className={`bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left ${invData.docType !== 'credit_note' ? 'col-span-2' : ''}`}><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">Order ID</label><input className="w-full border-0 p-1 text-sm font-mono text-indigo-600 bg-transparent focus:ring-0 text-left" placeholder="เลขคำสั่งซื้อ" value={invData.orderId} onChange={e => setInvData({ ...invData, orderId: e.target.value })} /></div>
                         </div>
-                        <div className="flex justify-between items-center text-left"><h4 className="font-bold text-sm text-rose-600 text-left">ข้อมูลลูกค้า/คู่ค้า</h4><button onClick={()=>setShowCustomerModal(true)} className="text-[10px] bg-rose-100 text-rose-700 px-3 py-1 rounded-full font-bold text-center">เลือกจากฐานข้อมูล</button></div>
+                        <div className="flex justify-between items-center text-left">
+                            <h4 className="font-bold text-sm text-rose-600 text-left">ข้อมูลลูกค้า/คู่ค้า</h4>
+                            <div className="flex items-center gap-2">
+                                <button type="button" onClick={handleSavePartnerManual} className="text-[10px] bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full font-bold text-center flex items-center gap-1"><SaveAll size={12}/> บันทึกข้อมูลใหม่</button>
+                                <button type="button" onClick={()=>setShowCustomerModal(true)} className="text-[10px] bg-rose-100 text-rose-700 px-3 py-1 rounded-full font-bold text-center">เลือกจากฐานข้อมูล</button>
+                            </div>
+                        </div>
                         <div className="grid grid-cols-2 gap-2 text-left">
                             <div className="col-span-2 text-left"><label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">ชื่อลูกค้า / บริษัท</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm text-left" value={invData.customerName} onChange={e=>setInvData({...invData, customerName: e.target.value})} /></div>
                             <div className="text-left"><label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">Tax ID</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm font-mono text-left" value={invData.taxId} onChange={e=>setInvData({...invData, taxId: e.target.value})} /></div>
