@@ -1368,6 +1368,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                             <td className="p-5 text-center">
                                 <div className="flex justify-center gap-2 text-center">
                                     <button onClick={(e) => { e.stopPropagation(); setViewHistory(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-indigo-600 text-center" title="ดูประวัติราคาต้นทุน"><History size={16}/></button>
+                                    <button onClick={(e) => { e.stopPropagation(); openEditProduct(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-blue-600 text-center" title="แก้ไขชื่อ/SKU"><Edit size={16}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); openEditCategory(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-amber-600 text-center" title="แก้ไขหมวดหมู่"><Tag size={16}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); setDeleteStockConfirm(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-rose-600 text-center" title="ลบสินค้า"><Trash2 size={16}/></button>
                                 </div>
@@ -3456,7 +3457,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                 </div>
                             </td>
                             <td className="p-5 text-center">
-                                <div className="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-all text-center">
+                                <div className="flex justify-center gap-2 transition-all text-center">
                                     <button onClick={()=>setViewItem(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-indigo-600 hover:shadow-md transition-all shadow-sm text-center"><Eye size={16}/></button>
                                     {t.type === 'income' && (<button onClick={()=>onIssueInvoice(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-600 hover:shadow-md transition-all shadow-sm text-center" title="ออกใบกำกับภาษี"><Printer size={16}/></button>)}
                                     <button onClick={()=>setDeleteConfirmId({id: t.id, type: t.type})} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-rose-600 hover:shadow-md transition-all shadow-sm text-center" title="ลบทิ้ง (คืนสต็อก)"><Trash2 size={16}/></button>
