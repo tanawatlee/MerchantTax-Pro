@@ -1688,12 +1688,14 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     stockBatches.forEach(b => { 
       const d = normalizeDate(b.date); 
       if (d >= start && d <= end && b.quantity > 0) { 
+        const parentExp = transactions.find(t => t.id === b.parentExpenseId);
+        const refIdToUse = parentExp?.sysDocId || b.parentExpenseId || 'LOT-IN';
         movements.push({ 
           id: b.id,
           sourceType: 'batch',
           date: d, 
           sku: b.sku || '-', 
-          refId: b.parentExpenseId || 'LOT-IN',
+          refId: refIdToUse, 
           name: b.productName, 
           type: 'IN (รับเข้า)', 
           qty: Number(b.quantity), 
@@ -1712,7 +1714,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
             sourceType: 'income',
             date: d, 
             sku: String(item.sku || '-').trim(), 
-            refId: t.orderId || '-', 
+            refId: t.sysDocId || t.orderId || '-', 
             name: String(item.desc || item.description || t.description).trim(), 
             type: 'OUT (จ่ายออก)', 
             qty: Number(item.qty), 
