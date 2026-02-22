@@ -131,6 +131,41 @@ const formatDateISO = (dateInput) => {
   return `${year}-${month}-${day}`;
 };
 
+const sortNewestFirst = (a, b) => {
+  // ยึดลำดับที่บันทึก (เวลาที่ถูกสร้างในระบบ) เป็นหลัก
+  const createdA = a.createdAt?.seconds || 0;
+  const createdB = b.createdAt?.seconds || 0;
+  if (createdA !== createdB && createdA !== 0 && createdB !== 0) return createdB - createdA;
+  
+  // หากไม่มี Timestamp ให้ใช้วันที่ที่ระบุในเอกสาร
+  const timeA = normalizeDate(a.date)?.getTime() || 0;
+  const timeB = normalizeDate(b.date)?.getTime() || 0;
+  return timeB - timeA;
+};
+
+const sortOldestFirst = (a, b) => {
+  // ยึดลำดับที่บันทึก (เวลาที่ถูกสร้างในระบบ) เป็นหลัก
+  const createdA = a.createdAt?.seconds || 0;
+  const createdB = b.createdAt?.seconds || 0;
+  if (createdA !== createdB && createdA !== 0 && createdB !== 0) return createdA - createdB;
+  
+  // หากไม่มี Timestamp ให้ใช้วันที่ที่ระบุในเอกสาร
+  const timeA = normalizeDate(a.date)?.getTime() || 0;
+  const timeB = normalizeDate(b.date)?.getTime() || 0;
+  return timeA - timeB;
+};
+
+const generateNextDocId = (items, prefix, field) => {
+  const max = items.reduce((m, item) => {
+    if (item[field] && item[field].startsWith(prefix)) {
+      const num = parseInt(item[field].replace(prefix, ''), 10);
+      return !isNaN(num) && num > m ? num : m;
+    }
+    return m;
+  }, 0);
+  return `${prefix}${String(max + 1).padStart(5, '0')}`;
+};
+
 const THBText = (amount) => {
     if (!amount || isNaN(amount)) return 'ศูนย์บาทถ้วน';
     amount = parseFloat(amount).toFixed(2);
@@ -669,7 +704,7 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
             totalFees += (transFee + comm + serv);
           }
         });
-        const final = Object.values(ordersMap);
+        const final = Object.values(ordersMap).sort(sortNewestFirst);
         setImportedData(final);
         setStats({ totalRows: raw.length, processed: final.length, skipped, totalAmount: totalAmt, totalFees });
         showToast(`นำเข้าสำเร็จ ${final.length} รายการ (ข้าม ${skipped} แถว)`, 'success');
@@ -688,13 +723,22 @@ function DataImporter({ appId, showToast, user, stockBatches }) {
       const batch = writeBatch(dbInstance);
       const stockSnap = [...stockBatches]; 
       
-      let currentIncCount = transactions.filter(t => t.type === 'income' && t.sysDocId && t.sysDocId.startsWith('INC-')).length;
+      let currentIncMax = transactions.filter(t => t.type === 'income').reduce((m, t) => {
+          if (t.sysDocId && t.sysDocId.startsWith('INC-')) {
+              const num = parseInt(t.sysDocId.replace('INC-', ''), 10);
+              return !isNaN(num) && num > m ? num : m;
+          }
+          return m;
+      }, 0);
 
-      for (const trans of importedData) {
+      // เรียงเก่าไปใหม่ก่อนจ่ายเลข เพื่อให้รายการใหม่สุดได้เลขมากที่สุดเสมอ
+      const sortedForSave = [...importedData].sort(sortOldestFirst);
+
+      for (const trans of sortedForSave) {
         
         // --- Generate System Doc ID ---
-        currentIncCount++;
-        const sysDocId = `INC-${String(currentIncCount).padStart(5, '0')}`;
+        currentIncMax++;
+        const sysDocId = `INC-${String(currentIncMax).padStart(5, '0')}`;
 
         const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
         batch.set(docRef, { ...trans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
@@ -1074,9 +1118,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       
       if (totalCost > 0) {
         // --- Generate System Doc ID for Stock Expense ---
-        const prefix = `EXP-`;
-        const currentCount = transactions.filter(t => t.type === 'expense' && t.sysDocId && t.sysDocId.startsWith(prefix)).length;
-        const sysDocId = `${prefix}${String(currentCount + 1).padStart(5, '0')}`;
+        const sysDocId = generateNextDocId(transactions.filter(t => t.type === 'expense'), 'COG-', 'sysDocId');
 
         await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), { 
           sysDocId,
@@ -1353,7 +1395,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             <div className="flex-1 overflow-auto p-6 space-y-4 text-left">
               {viewHistory.batches
                 .filter(b => b.quantity > 0) 
-                .sort((a,b)=>normalizeDate(a.date)-normalizeDate(b.date))
+                .sort(sortNewestFirst)
                 .map((b, i) => {
                     const isLowest = b.costPerUnit === Math.min(...viewHistory.batches.map(v => v.costPerUnit));
                     const margin = b.sellPrice > 0 ? ((b.sellPrice - b.costPerUnit) / b.sellPrice) * 100 : 0;
@@ -1551,7 +1593,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
                       let toReturn = Number(item.qty);
                       const affectedLots = stockBatches
                         .filter(b => (String(b.sku).trim().toLowerCase() === String(item.sku).trim().toLowerCase() || String(b.productName).trim().toLowerCase() === String(item.desc).trim().toLowerCase()) && Number(b.sold) > 0)
-                        .sort((a,b) => normalizeDate(b.date) - normalizeDate(a.date));
+                        .sort(sortNewestFirst);
 
                       for (const lot of affectedLots) {
                           if (toReturn <= 0) break;
@@ -1586,7 +1628,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       const dateMatch = d >= start && d <= end;
       const branchMatch = selectedBranch === 'all' || (inv.branch || '00000') === selectedBranch;
       return dateMatch && branchMatch;
-    });
+    }).sort(sortNewestFirst);
   }, [invoices, startDate, endDate, selectedBranch]);
 
   const filteredExpenses = useMemo(() => {
@@ -1617,6 +1659,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     // 3. สร้าง Virtual Record สำหรับค่าธรรมเนียมแพลตฟอร์ม
     const autoPlatformFees = incomeWithFees.map(t => ({
         id: `auto-fee-${t.id}`,
+        sysDocId: t.sysDocId ? `FEE-${t.sysDocId.replace('INC-', '')}` : 'AUTO-FEE',
         type: 'expense',
         date: t.date,
         taxInvoiceNo: t.orderId ? `FEE-${t.orderId}` : 'AUTO-FEE',
@@ -1632,7 +1675,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     }));
 
     // นำทั้ง 2 ส่วนมารวมกันและเรียงลำดับตามวันที่
-    return [...normalExpenses, ...autoPlatformFees].sort((a, b) => normalizeDate(b.date) - normalizeDate(a.date));
+    return [...normalExpenses, ...autoPlatformFees].sort(sortNewestFirst);
   }, [transactions, startDate, endDate, selectedBranch]);
 
   const filteredMovement = useMemo(() => {
@@ -1718,7 +1761,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         };
     });
 
-    return enrichedMovements;
+    return enrichedMovements.reverse();
   }, [stockBatches, transactions, startDate, endDate]);
 
   const movementTotals = useMemo(() => {
@@ -1881,12 +1924,12 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       dataRows = [...headerRows, tableHeader, ...body, footer];
     } else if (reportTab === 'purchase') {
       fileName = `Purchase_Tax_Report_${startDate}.xlsx`;
-      const tableHeader = ["ลำดับ", "วันที่", "เลขที่ใบกำกับภาษี", "ชื่อผู้ขายสินค้า/ผู้ให้บริการ", "เลขผู้เสียภาษี", "สถานประกอบการ", "มูลค่าสินค้า/บริการ", "ภาษีมูลค่าเพิ่ม", "ยอดรวม"];
+      const tableHeader = ["ลำดับ", "วันที่", "เลขระบบ (SYS ID)", "เลขที่ใบกำกับภาษี", "ชื่อผู้ขายสินค้า/ผู้ให้บริการ", "เลขผู้เสียภาษี", "สถานประกอบการ", "มูลค่าสินค้า/บริการ", "ภาษีมูลค่าเพิ่ม", "ยอดรวม"];
       const body = filteredExpenses.map((row, i) => {
         const taxDetails = getExpenseTaxDetails(row);
-        return [ i + 1, formatDate(row.date), row.taxInvoiceNo || row.orderId || '-', row.partnerName || '-', row.partnerTaxId || '-', (row.partnerBranch === '00000' || !row.partnerBranch) ? 'สำนักงานใหญ่' : `สาขาที่ ${row.partnerBranch}`, toFixedNum(taxDetails.base), toFixedNum(taxDetails.vat), toFixedNum(taxDetails.total) ];
+        return [ i + 1, formatDate(row.date), row.sysDocId || '-', row.taxInvoiceNo || row.orderId || '-', row.partnerName || '-', row.partnerTaxId || '-', (row.partnerBranch === '00000' || !row.partnerBranch) ? 'สำนักงานใหญ่' : `สาขาที่ ${row.partnerBranch}`, toFixedNum(taxDetails.base), toFixedNum(taxDetails.vat), toFixedNum(taxDetails.total) ];
       });
-      const footer = [ "รวมทั้งสิ้น", "", "", "", "", "", toFixedNum(purchaseFooter.base), toFixedNum(purchaseFooter.vat), toFixedNum(purchaseFooter.total) ];
+      const footer = [ "รวมทั้งสิ้น", "", "", "", "", "", "", toFixedNum(purchaseFooter.base), toFixedNum(purchaseFooter.vat), toFixedNum(purchaseFooter.total) ];
       dataRows = [...headerRows, tableHeader, ...body, footer];
     } else if (reportTab === 'inventory') {
       fileName = `Stock_Movement_${startDate}.xlsx`;
@@ -2075,6 +2118,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
               <thead className="bg-white text-slate-400 text-[10px] font-bold uppercase sticky top-0 border-b z-10 text-left">
                 <tr>
                   <th className="p-5 text-left">วันที่</th>
+                  <th className="p-5 text-left">เลขระบบ (SYS ID)</th>
                   <th className="p-5 text-left">เลขที่ใบกำกับภาษี</th>
                   <th className="p-5 text-left">ชื่อผู้ขายสินค้า/ผู้ให้บริการ</th>
                   <th className="p-5 text-left">เลขผู้เสียภาษี</th>
@@ -2089,6 +2133,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
                   return (
                     <tr key={i} className="hover:bg-slate-50/80 transition-colors text-left">
                       <td className="p-5 text-xs text-slate-500 whitespace-nowrap text-left">{formatDate(row.date)}</td>
+                      <td className="p-5 font-mono text-xs font-bold text-indigo-600 text-left">{row.sysDocId || '-'}</td>
                       <td className="p-5 font-bold text-slate-800 text-left">{row.taxInvoiceNo || row.orderId || '-'}</td>
                       <td className="p-5 text-left">
                         <p className="font-bold text-left">{row.partnerName || '-'}</p>
@@ -2105,7 +2150,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
               {filteredExpenses.length > 0 && (
                 <tfoot className="bg-slate-900 text-white font-bold sticky bottom-0 text-left">
                     <tr>
-                        <td colSpan="5" className="p-5 text-right uppercase tracking-widest text-xs opacity-60 text-right">รวมยอดสุทธิ</td>
+                        <td colSpan="6" className="p-5 text-right uppercase tracking-widest text-xs opacity-60 text-right">รวมยอดสุทธิ</td>
                         <td className="p-5 text-right text-white text-right">{formatCurrency(purchaseFooter.base)}</td>
                         <td className="p-5 text-right text-rose-400 text-right">{formatCurrency(purchaseFooter.vat)}</td>
                     </tr>
@@ -2508,7 +2553,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   let toReturn = Number(item.qty);
                   const affectedLots = stockBatches
                     .filter(b => (String(b.sku).toLowerCase() === String(item.sku).toLowerCase() || String(b.productName).toLowerCase() === String(item.desc).toLowerCase()) && Number(b.sold) > 0)
-                    .sort((a,b) => normalizeDate(b.date) - normalizeDate(a.date));
+                    .sort(sortNewestFirst);
 
                   for (const lot of affectedLots) {
                       if (toReturn <= 0) break;
@@ -2597,12 +2642,15 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       const { subTotal, totalFees, grandTotal, totalDiscounts, shippingFee } = financialSummary;
 
       // --- Generate System Doc ID ---
-      const prefix = `${formData.type === 'income' ? 'INC' : 'EXP'}-`;
-      const currentCount = transactions.filter(t => t.type === formData.type && t.sysDocId && t.sysDocId.startsWith(prefix)).length;
-      const sysDocId = `${prefix}${String(currentCount + 1).padStart(5, '0')}`;
+      let prefix = '';
+      if (formData.type === 'income') prefix = 'INC-';
+      else prefix = (formData.category === 'ต้นทุนสินค้า') ? 'COG-' : 'EXP-';
+      
+      const sysDocId = generateNextDocId(transactions.filter(t => t.type === formData.type), prefix, 'sysDocId');
       
       const mainRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', coll));
       const dataToSave = { 
+        sysDocId, // เพิ่มการบันทึกเลขรันเอกสารลงฐานข้อมูลอัตโนมัติ
         ...formData, 
         shippingFee: parseFloat(formData.shippingFee) || 0,
         estimatedShippingFee: parseFloat(formData.estimatedShippingFee) || 0,
@@ -2702,7 +2750,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         }
 
         return true;
-    }).map(t => ({ ...t, issuedDocs: docStatusMap[t.orderId] || [] })).sort((a,b) => normalizeDate(b.date) - normalizeDate(a.date));
+    }).map(t => ({ ...t, issuedDocs: docStatusMap[t.orderId] || [] })).sort(sortNewestFirst);
   }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate]);
 
   // Reset page when filters change
@@ -3598,8 +3646,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   useEffect(() => { 
       if (mode === 'create' && !editingDocId) { 
           const prefix = invData.docType === 'credit_note' ? 'CN-' : (invData.docType === 'abb' ? 'ABB-' : 'INV-'); 
-          const count = invoices.filter(inv => inv.invNo && inv.invNo.startsWith(prefix)).length + 1; 
-          setInvData(prev => ({ ...prev, invNo: prefix + String(count).padStart(5, '0') })); 
+          const nextId = generateNextDocId(invoices, prefix, 'invNo');
+          setInvData(prev => ({ ...prev, invNo: nextId })); 
       } 
   }, [invData.docType, invoices, mode, editingDocId]);
   
@@ -3682,7 +3730,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       invoices.forEach(inv => { if (inv.orderId && inv.status !== 'cancelled') { if (!issuedDocsMap[inv.orderId]) issuedDocsMap[inv.orderId] = []; issuedDocsMap[inv.orderId].push(inv.docType); } });
       const normalizedInvoices = invoices.map(inv => ({ ...inv, source: 'invoice', displayStatus: inv.status === 'cancelled' ? 'ยกเลิกแล้ว' : (inv.docType === 'credit_note' ? 'ใบลดหนี้' : (inv.docType === 'abb' ? 'ใบกำกับอย่างย่อ' : 'ใบกำกับเต็มรูป')), searchStr: (inv.invNo || '') + (inv.customerName || '') + (inv.orderId || '') }));
       const pendingTransactions = transactions.filter(t => t.type === 'income' && !issuedDocsMap[t.orderId]).map(t => ({ ...t, invNo: t.orderId || '-', customerName: t.partnerName || 'คู่ค้าทั่วไป', total: t.total, displayStatus: 'รอออกใบกำกับ', source: 'transaction', searchStr: (t.orderId || '') + (t.partnerName || '') }));
-      return [...normalizedInvoices, ...pendingTransactions].filter(d => { const searchInput = invoiceSearch.toLowerCase(); return d.searchStr.toLowerCase().includes(searchInput); }).sort((a, b) => normalizeDate(b.date) - normalizeDate(a.date)); 
+      return [...normalizedInvoices, ...pendingTransactions].filter(d => { const searchInput = invoiceSearch.toLowerCase(); return d.searchStr.toLowerCase().includes(searchInput); }).sort(sortNewestFirst); 
   }, [invoices, transactions, invoiceSearch]);
 
   const displayDocs = useMemo(() => {
@@ -4167,7 +4215,7 @@ export default function App() {
                   let toReturn = Number(item.qty);
                   const lots = stockBatches
                     .filter(b => (String(b.sku).toLowerCase() === String(item.sku).toLowerCase() || String(b.productName).toLowerCase() === String(item.desc).toLowerCase()) && Number(b.sold) > 0)
-                    .sort((a,b) => normalizeDate(b.date) - normalizeDate(a.date));
+                    .sort(sortNewestFirst);
                   for (const lot of lots) {
                       if (toReturn <= 0) break;
                       const back = Math.min(toReturn, Number(lot.sold));
@@ -4205,49 +4253,73 @@ export default function App() {
         }
       };
 
-      // 1. อัปเดตรายรับ
-      const incs = [...transactions].filter(t => t.type === 'income').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
-      for (let i = 0; i < incs.length; i++) {
-        await safeUpdate('transactions_income', incs[i].id, { sysDocId: `INC-${String(i + 1).padStart(5, '0')}` });
+      const getMaxId = (items, prefix, field) => {
+        return items.reduce((max, item) => {
+          if (item[field] && item[field].startsWith(prefix)) {
+            const num = parseInt(item[field].replace(prefix, ''), 10);
+            return !isNaN(num) && num > max ? num : max;
+          }
+          return max;
+        }, 0);
+      };
+
+      // 1. อัปเดตรายรับ (เฉพาะที่ยังไม่มีเลขระบบ)
+      const allIncomes = transactions.filter(t => t.type === 'income');
+      let currentIncCount = getMaxId(allIncomes, 'INC-', 'sysDocId');
+      const missingIncomes = allIncomes.filter(t => !t.sysDocId || !t.sysDocId.startsWith('INC-')).sort(sortOldestFirst);
+      for (const t of missingIncomes) {
+        currentIncCount++;
+        await safeUpdate('transactions_income', t.id, { sysDocId: `INC-${String(currentIncCount).padStart(5, '0')}` });
       }
 
-      // 2. อัปเดตรายจ่าย (แยก COG และ EXP)
-      const allExps = [...transactions].filter(t => t.type === 'expense').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
-      let cogCount = 0;
-      let expCount = 0;
-      for (const t of allExps) {
+      // 2. อัปเดตรายจ่าย (แยก COG และ EXP - เฉพาะที่ยังไม่มีเลขระบบ)
+      const allExpenses = transactions.filter(t => t.type === 'expense');
+      let currentCogCount = getMaxId(allExpenses, 'COG-', 'sysDocId');
+      let currentExpCount = getMaxId(allExpenses, 'EXP-', 'sysDocId');
+      const missingExpenses = allExpenses.filter(t => !t.sysDocId || (!t.sysDocId.startsWith('COG-') && !t.sysDocId.startsWith('EXP-'))).sort(sortOldestFirst);
+      
+      for (const t of missingExpenses) {
         if (t.category === 'ต้นทุนสินค้า' || t.isFromInventory) {
-          cogCount++;
-          await safeUpdate('transactions_expense', t.id, { sysDocId: `COG-${String(cogCount).padStart(5, '0')}` });
+          currentCogCount++;
+          await safeUpdate('transactions_expense', t.id, { sysDocId: `COG-${String(currentCogCount).padStart(5, '0')}` });
         } else {
-          expCount++;
-          await safeUpdate('transactions_expense', t.id, { sysDocId: `EXP-${String(expCount).padStart(5, '0')}` });
+          currentExpCount++;
+          await safeUpdate('transactions_expense', t.id, { sysDocId: `EXP-${String(currentExpCount).padStart(5, '0')}` });
         }
       }
 
-      // 3. อัปเดตใบกำกับภาษี (Invoice)
-      const invs = [...invoices].filter(i => i.docType === 'invoice' || !i.docType).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
-      for (let i = 0; i < invs.length; i++) {
-        await safeUpdate('invoices', invs[i].id, { invNo: `INV-${String(i + 1).padStart(5, '0')}` });
+      // 3. อัปเดตใบกำกับภาษี (Invoice - เฉพาะที่ยังไม่มีเลข)
+      const allInvs = invoices.filter(i => i.docType === 'invoice' || !i.docType);
+      let currentInvCount = getMaxId(allInvs, 'INV-', 'invNo');
+      const missingInvs = allInvs.filter(i => !i.invNo || !i.invNo.startsWith('INV-')).sort(sortOldestFirst);
+      for (const i of missingInvs) {
+        currentInvCount++;
+        await safeUpdate('invoices', i.id, { invNo: `INV-${String(currentInvCount).padStart(5, '0')}` });
       }
 
-      // 4. อัปเดตใบลดหนี้ (CN)
-      const cns = [...invoices].filter(i => i.docType === 'credit_note').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
-      for (let i = 0; i < cns.length; i++) {
-        await safeUpdate('invoices', cns[i].id, { invNo: `CN-${String(i + 1).padStart(5, '0')}` });
+      // 4. อัปเดตใบลดหนี้ (CN - เฉพาะที่ยังไม่มีเลข)
+      const allCns = invoices.filter(i => i.docType === 'credit_note');
+      let currentCnCount = getMaxId(allCns, 'CN-', 'invNo');
+      const missingCns = allCns.filter(i => !i.invNo || !i.invNo.startsWith('CN-')).sort(sortOldestFirst);
+      for (const i of missingCns) {
+        currentCnCount++;
+        await safeUpdate('invoices', i.id, { invNo: `CN-${String(currentCnCount).padStart(5, '0')}` });
       }
 
-      // 5. อัปเดตใบกำกับอย่างย่อ (ABB)
-      const abbs = [...invoices].filter(i => i.docType === 'abb').sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
-      for (let i = 0; i < abbs.length; i++) {
-        await safeUpdate('invoices', abbs[i].id, { invNo: `ABB-${String(i + 1).padStart(5, '0')}` });
+      // 5. อัปเดตใบกำกับอย่างย่อ (ABB - เฉพาะที่ยังไม่มีเลข)
+      const allAbbs = invoices.filter(i => i.docType === 'abb');
+      let currentAbbCount = getMaxId(allAbbs, 'ABB-', 'invNo');
+      const missingAbbs = allAbbs.filter(i => !i.invNo || !i.invNo.startsWith('ABB-')).sort(sortOldestFirst);
+      for (const i of missingAbbs) {
+        currentAbbCount++;
+        await safeUpdate('invoices', i.id, { invNo: `ABB-${String(currentAbbCount).padStart(5, '0')}` });
       }
 
       if (opsCount > 0) {
         await batchWriter.commit();
       }
 
-      addToast("อัปเดตและแยกเลขเอกสารเก่าเรียบร้อยแล้ว!", "success");
+      addToast("อัปเดตเลขเอกสารเฉพาะรายการที่ขาดหายเรียบร้อยแล้ว!", "success");
     } catch (error) {
       console.error(error);
       addToast("เกิดข้อผิดพลาดในการอัปเดตข้อมูล", "error");
@@ -4305,11 +4377,11 @@ export default function App() {
             <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4 text-amber-500 text-center">
               <RefreshCw size={32}/>
             </div>
-            <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันรันเลขเอกสารเก่า?</h3>
+            <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันรันเลขเอกสาร?</h3>
             <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
-              ฟังก์ชันนี้จะจัดเรียงและรันเลขที่เอกสารแบบ 5 หลัก<br/>
-              ให้กับข้อมูลเก่าทั้งหมด (เรียงตามวันที่สร้าง)<br/>
-              <span className="text-amber-600 font-bold underline">ต้องการดำเนินการต่อหรือไม่?</span>
+              ฟังก์ชันนี้จะหารายการที่ <b>ยังไม่มีเลขเอกสาร</b><br/>
+              แล้วจัดเรียงเพื่อรันเลขที่เอกสารต่อจากเลขล่าสุด<br/>
+              <span className="text-amber-600 font-bold underline">เลขเอกสารเดิมจะไม่ถูกเปลี่ยนแปลง</span>
             </p>
             <div className="flex gap-3 text-center">
               <button onClick={() => setShowMigrateConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
@@ -4332,7 +4404,7 @@ export default function App() {
           
           <button onClick={() => setShowMigrateConfirm(true)} disabled={isMigrating} className={`w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 ring-1 transition-all text-left mt-2 ${isMigrating ? 'bg-amber-900/50 text-amber-500 ring-amber-800/50 cursor-not-allowed' : 'bg-amber-900/30 text-amber-300 ring-amber-800/50 hover:bg-amber-900/50'}`}>
             {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} 
-            {isMigrating ? 'กำลังรันเลขเอกสาร...' : 'รันเลขเอกสารเก่า'}
+            {isMigrating ? 'กำลังรันเลขเอกสาร...' : 'รันเลขเอกสารที่ตกหล่น'}
           </button>
 
           <button onClick={()=>setShowIdDeleteTool(true)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-rose-900/30 text-rose-300 ring-1 ring-rose-800/50 hover:bg-rose-900/50 transition-all text-left mt-2"><Trash2 size={14} className="text-center"/> ลบทิ้งด้วย ID</button>
