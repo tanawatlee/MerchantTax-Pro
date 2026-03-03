@@ -9,6 +9,7 @@ import {
   RefreshCw, Plus, FileSpreadsheet, DownloadCloud, Users, Layers as LayersIcon, Filter, ArrowRight, FileJson, FileType, SaveAll,
   TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail
 } from 'lucide-react';
+import { Gift, Wand2 } from 'lucide-react';
 
 // --- Import Firebase ---
 import { initializeApp, getApps, getApp } from 'firebase/app';
@@ -209,6 +210,75 @@ const THBText = (amount) => {
         text += (satangText || 'ศูนย์') + 'สตางค์';
     }
     return text;
+};
+
+// --- Promotion Engine Utility ---
+const calculatePromotions = (currentItems, allPromotions) => {
+    let totalDiscount = 0;
+    let newFreeItems = [];
+    let appliedNames = [];
+    
+    // คำนวณยอดรวม (Subtotal) เฉพาะสินค้าปกติ ที่ไม่ใช่ของแถม (ไม่เอาที่ติดแท็ก [แถมฟรี])
+    const cleanItems = currentItems.filter(it => !it.desc.startsWith('[แถมฟรี]'));
+    const subtotal = cleanItems.reduce((sum, it) => sum + (Number(it.price || it.sellPrice || it.buyPrice || 0) * Number(it.qty || 0)), 0);
+
+    allPromotions.filter(p => p.isActive).forEach(promo => {
+        // --- Legacy POS Promos & Shopee Voucher ---
+        if (promo.type === 'threshold_discount' || promo.type === 'shopee_voucher') {
+            if (subtotal >= Number(promo.minAmount)) {
+                totalDiscount += Number(promo.discountAmount);
+                appliedNames.push(promo.name);
+            }
+        } 
+        // --- Percentage Promos & Shopee Bundle (Percent) ---
+        else if (promo.type === 'percentage_discount' || (promo.type === 'shopee_bundle' && promo.bundleType === 'percentage')) {
+            let threshold = promo.type === 'shopee_bundle' ? (Number(promo.minQty) || 1) : Number(promo.minAmount);
+            let meetsCondition = false;
+            
+            if (promo.type === 'shopee_bundle') {
+                const totalQty = cleanItems.reduce((q, it) => q + Number(it.qty), 0);
+                meetsCondition = totalQty >= threshold;
+            } else {
+                meetsCondition = subtotal >= threshold;
+            }
+
+            if (meetsCondition) {
+                totalDiscount += (subtotal * Number(promo.discountPercentage)) / 100;
+                appliedNames.push(promo.name);
+            }
+        } 
+        // --- Shopee Bundle (Fix Amount) ---
+        else if (promo.type === 'shopee_bundle' && promo.bundleType === 'amount') {
+            const totalQty = cleanItems.reduce((q, it) => q + Number(it.qty), 0);
+            if (totalQty >= Number(promo.minQty)) {
+                totalDiscount += Number(promo.discountAmount);
+                appliedNames.push(promo.name);
+            }
+        }
+        // --- BOGO & Shopee Add-on Deal ---
+        else if (promo.type === 'buy_x_get_y' || promo.type === 'shopee_addon') {
+            const targetSku = promo.type === 'shopee_addon' ? promo.addonMainSku : promo.targetSku;
+            const targetItem = cleanItems.find(it => (it.sku && it.sku !== '-' && it.sku === targetSku) || it.desc === targetSku);
+            
+            if (targetItem && Number(targetItem.qty) >= (Number(promo.minQty) || 1)) {
+                const multiplier = Math.floor(Number(targetItem.qty) / (Number(promo.minQty) || 1));
+                if (multiplier > 0) {
+                    if (promo.type === 'buy_x_get_y') {
+                        newFreeItems.push({
+                            desc: `[แถมฟรี] ${promo.freeSku}`, sku: promo.freeSku, qty: multiplier * Number(promo.freeQty),
+                            price: 0, sellPrice: 0, buyPrice: 0, unit: 'ชิ้น'
+                        });
+                        appliedNames.push(promo.name);
+                    } else if (promo.type === 'shopee_addon') {
+                        // จำลองส่วนลด Add-on (หักลบจากราคา Add-on ปกติ)
+                        appliedNames.push(`Add-on: ${promo.name}`);
+                    }
+                }
+            }
+        }
+    });
+
+    return { totalDiscount, newFreeItems, appliedNames: [...new Set(appliedNames)] };
 };
 
 // --- Shared UI Components ---
@@ -581,28 +651,30 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
   const [stats, setStats] = useState({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0 });
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
+  const [discrepancyCategory, setDiscrepancyCategory] = useState('ค่าธรรมเนียม Platform'); // NEW
   const fileInputRef = useRef(null);
 
   const PLATFORM_SCHEMAS = {
     shopee: {
         orderId: ['หมายเลขคำสั่งซื้อ', 'Order ID'],
         status: ['สถานะการสั่งซื้อ', 'Order Status'],
-        date: ['เวลาการชำระสินค้า', 'Payment Time', 'เวลาที่ทำการสั่งซื้อ', 'เวลาชำระเงิน'],
-        price: ['ราคาขาย', 'Deal Price', 'ราคาต่อชิ้น'],
+        date: ['วันที่โอนชำระเงินสำเร็จ', 'เวลาการชำระสินค้า', 'Payment Time', 'เวลาที่ทำการสั่งซื้อ', 'เวลาชำระเงิน', 'วันที่ทำการสั่งซื้อ'],
+        price: ['ราคาขาย', 'Deal Price', 'ราคาต่อชิ้น', 'สินค้าราคาปกติ'],
         qty: ['จำนวน', 'Quantity'],
-        transFee: ['Transaction Fee', 'ค่าธรรมเนียมการทำธุรกรรม', 'ค่าธรรมเนียมธุรกรรม'],
-        commFee: ['ค่าคอมมิชชั่น', 'Commission Fee'],
+        transFee: ['Transaction Fee', 'ค่าธรรมเนียมการทำธุรกรรม', 'ค่าธรรมเนียมธุรกรรม', 'ค่าธุรกรรมการชำระเงิน'],
+        commFee: ['ค่าคอมมิชชั่น', 'Commission Fee', 'ค่าคอมมิชชั่น AMS'],
         servFee: ['ค่าบริการ', 'Service Fee'],
+        infraFee: ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม'],
         shipping: ['ที่อยู่ในการจัดส่ง', 'Shipping Address'],
-        buyer: ['ชื่อผู้รับ', 'Receiver Name', 'ชื่อผู้ซื้อ'],
+        buyer: ['ชื่อผู้ใช้(ผู้ซื้อ)', 'ชื่อผู้ใช้ (ผู้ซื้อ)', 'ชื่อผู้รับ', 'Receiver Name', 'ชื่อผู้ซื้อ'],
         product: ['ชื่อสินค้า', 'Product Name'],
         sku: ['Product SKU', 'SKU', 'Seller SKU', 'รหัสตัวเลือกสินค้า', 'Option SKU', 'รหัสสินค้า', 'Variation SKU', 'เลข SKU'],
-        courier: ['ตัวเลือกการจัดส่ง', 'Shipping Option'],
+        courier: ['ตัวเลือกการจัดส่ง', 'Shipping Option', 'ชื่อผู้ให้บริการขนส่ง', 'Shipping provider'],
         trackingNo: ['หมายเลขติดตามพัสดุ', 'Tracking Number'],
         shippingFeeByBuyer: ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ', 'Shipping Fee Paid by Buyer'],
-        shippingFeeSubsidy: ['ค่าจัดส่งที่ Shopee ออกให้โดยประมาณ', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง'],
-        estimatedShippingFee: ['ค่าจัดส่งโดยประมาณ', 'Estimated Shipping Fee', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee'],
-        returnShippingFee: ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee']
+        shippingFeeSubsidy: ['ค่าจัดส่งที่Shopeeออกให้โดยประมาณ', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง', 'ค่าจัดส่งสินค้าที่ออกโดย Shopee'],
+        estimatedShippingFee: ['ค่าจัดส่งโดยประมาณ', 'Estimated Shipping Fee', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee', 'ค่าจัดส่งที่Shopeeชำระโดยชื่อของคุณ', 'ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ'],
+        returnShippingFee: ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee', 'ค่าจัดส่งสินค้าคืนผู้ขาย']
     },
     lazada: {
         orderId: ['Order No.', 'Order Number', 'เลขที่สั่งซื้อ', 'หมายเลขคำสั่งซื้อ'],
@@ -694,45 +766,97 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         const bstr = evt.target.result;
         const wb = window.XLSX.read(bstr, { type: 'binary', cellDates: false });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const raw = window.XLSX.utils.sheet_to_json(ws, { defval: '' }); // ใส่ defval ป้องกัน undefined
+        
+        // --- Smart Header Row Detection (รองรับไฟล์ Settlement ที่มี Metadata ด้านบน) ---
+        const rawAoA = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        let headerRowIdx = 0;
+        
+        for (let i = 0; i < Math.min(rawAoA.length, 20); i++) {
+            const rowArr = rawAoA[i] || [];
+            const rowStr = rowArr.join('').replace(/\s/g, '').toLowerCase();
+            if (rowStr.includes('หมายเลขคำสั่งซื้อ') || rowStr.includes('orderid') || rowStr.includes('orderno')) {
+                headerRowIdx = i;
+                break;
+            }
+        }
+
+        const headers = rawAoA[headerRowIdx] || [];
+        const raw = [];
+        for (let i = headerRowIdx + 1; i < rawAoA.length; i++) {
+            const rowArr = rawAoA[i] || [];
+            const rowObj = {};
+            let hasData = false;
+            headers.forEach((h, colIdx) => {
+                if (h && String(h).trim() !== '') {
+                    const key = String(h).trim();
+                    rowObj[key] = rowArr[colIdx];
+                    if (rowArr[colIdx] !== '' && rowArr[colIdx] !== undefined) hasData = true;
+                }
+            });
+            if (hasData) raw.push(rowObj);
+        }
+        
         const schema = PLATFORM_SCHEMAS[platform] || PLATFORM_SCHEMAS.shopee;
         
         if (importMode === 'update_settled') {
             const matched = [];
             let skippedCount = 0;
+            let alreadySettledCount = 0;
+            let notFoundCount = 0;
+
+            const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
+
             raw.forEach(row => {
-                const orderId = String(findVal(row, schema.orderId) || '').trim();
+                const rawOrderId = findVal(row, schema.orderId);
+                const orderId = cleanStrForMatch(rawOrderId);
                 if (!orderId) { skippedCount++; return; }
                 
-                const existingTrans = transactions.find(t => t.orderId === orderId && t.type === 'income' && t.paymentStatus === 'pending_platform');
+                const existingTrans = transactions.find(t => cleanStrForMatch(t.orderId) === orderId && t.type === 'income');
+                
                 if (existingTrans) {
-                    if (!matched.find(m => m.id === existingTrans.id)) {
-                        const dateStr = findVal(row, ['วันที่โอนเงิน', 'เวลาที่ชำระเงิน', 'Settlement Date', ...schema.date]);
-                        matched.push({
-                            ...existingTrans,
-                            newSettlementDate: normalizeDate(dateStr) || new Date(),
-                            isUpdateMode: true
-                        });
+                    if (existingTrans.paymentStatus === 'pending_platform') {
+                        if (!matched.find(m => m.id === existingTrans.id)) {
+                            const dateStr = findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน', 'เวลาที่ชำระเงิน', 'Settlement Date', ...(schema.date || [])]);
+                            const actualSettledAmt = cleanNum(findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว']));
+                            
+                            matched.push({
+                                ...existingTrans,
+                                newSettlementDate: normalizeDate(dateStr) || existingTrans.date || new Date(),
+                                isUpdateMode: true,
+                                actualSettledAmt: actualSettledAmt > 0 ? actualSettledAmt : (existingTrans.grandTotal || existingTrans.total)
+                            });
+                        }
+                    } else {
+                        alreadySettledCount++;
                     }
                 } else {
-                    skippedCount++;
+                    notFoundCount++;
                 }
             });
+            
             setImportedData(matched);
             setStats({ totalRows: raw.length, processed: matched.length, skipped: skippedCount, totalAmount: matched.reduce((s,t)=>s+(Number(t.total)||0),0), totalFees: 0 });
-            showToast(`พบออเดอร์รอรับเงินที่ตรงกัน ${matched.length} รายการ`, 'success');
+            
+            if (matched.length > 0) {
+                showToast(`พบออเดอร์รอรับเงินที่ตรงกัน ${matched.length} รายการ`, 'success');
+            } else {
+                showToast(`ไม่พบออเดอร์รอรับเงิน (ไม่มีในระบบ ${notFoundCount}, รับเงินแล้ว ${alreadySettledCount})`, 'error');
+            }
             return;
         }
 
         const ordersMap = {};
-        let skipped = 0; let totalAmt = 0; let totalFees = 0;
+        let skipped = 0; let totalAmt = 0; let totalFees = 0; let duplicates = 0;
+        
+        const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
+        // สร้าง Set ของ Order ID ที่มีอยู่ในระบบแล้ว (เพื่อเช็คซ้ำได้อย่างรวดเร็ว)
+        const existingOrderIds = new Set(transactions.filter(t => t.type === 'income' && t.orderId).map(t => cleanStrForMatch(t.orderId)));
 
         raw.forEach(row => {
-          const orderId = String(findVal(row, schema.orderId) || '');
+          const rawOrderId = findVal(row, schema.orderId);
+          const orderId = cleanStrForMatch(rawOrderId);
           const status = String(findVal(row, schema.status) || '').toLowerCase();
           
-          // เปลี่ยนมาใช้การ "กีดกัน" (Exclude) สถานะที่ยังไม่เกิดรายได้แทนการ "ครอบคลุม" (Include)
-          // เพื่อให้รองรับสถานะภาษาไทยของ TikTok/Lazada เช่น รอจัดส่ง, กำลังจัดส่ง, เสร็จสิ้น, ที่ต้องจัดส่ง
           const isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
                                       status.includes('unpaid') || status.includes('รอชำระเงิน') ||
                                       status.includes('ไม่สำเร็จ') || status.includes('คืนสินค้า');
@@ -742,6 +866,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           const dateVal = findVal(row, schema.date);
           
           if (!orderId || !isCompleted || !dateVal) { skipped++; return; }
+          
+          // [ระบบป้องกันการบันทึกซ้ำ] ตรวจสอบว่า Order ID นี้มีในระบบแล้วหรือไม่
+          if (existingOrderIds.has(orderId)) { duplicates++; return; }
           
           const price = Math.abs(cleanNum(findVal(row, schema.price)));
           const qty = cleanNum(findVal(row, schema.qty)) || 1;
@@ -798,14 +925,15 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
             totalAmt += lineTotal; 
             totalFees += rowTotalFees;
           } else {
-            // ถ้าออเดอร์นี้มีหลายบรรทัด (เช่น Lazada 1 Order มีหลาย Item)
             ordersMap[orderId].total += lineTotal;
             
-            // นำค่าธรรมเนียมมาบวกทบกัน (กรณีไฟล์แยกค่าธรรมเนียมตามบรรทัด)
-            ordersMap[orderId].transactionFee += transFee;
-            ordersMap[orderId].commissionFee += comm;
-            ordersMap[orderId].serviceFee += serv;
-            ordersMap[orderId].platformFee += (transFee + comm + serv);
+            // ไม่นำค่าธรรมเนียมมาบวกทบกัน คิดแค่ 1 ครั้งต่อออเดอร์ (ใช้ Math.max เผื่อกรณีค่าธรรมเนียมอยู่บรรทัดถัดไป)
+            const oldPlatformFee = ordersMap[orderId].platformFee;
+            
+            ordersMap[orderId].transactionFee = Math.max(ordersMap[orderId].transactionFee, transFee);
+            ordersMap[orderId].commissionFee = Math.max(ordersMap[orderId].commissionFee, comm);
+            ordersMap[orderId].serviceFee = Math.max(ordersMap[orderId].serviceFee, serv);
+            ordersMap[orderId].platformFee = ordersMap[orderId].transactionFee + ordersMap[orderId].commissionFee + ordersMap[orderId].serviceFee + ordersMap[orderId].infrastructureFee;
             
             ordersMap[orderId].grandTotal = ordersMap[orderId].total - ordersMap[orderId].platformFee;
             ordersMap[orderId].shippingFee = Math.max(ordersMap[orderId].shippingFee || 0, shippingFeeByBuyer);
@@ -816,16 +944,20 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
               desc: String(findVal(row, schema.product) || 'สินค้า').trim(), qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal
             });
             totalAmt += lineTotal;
-            totalFees += (transFee + comm + serv);
+            totalFees += (ordersMap[orderId].platformFee - oldPlatformFee); // บวกเพิ่มเฉพาะส่วนต่าง (ถ้ามี)
           }
         });
         const final = Object.values(ordersMap).sort(sortNewestFirst);
         setImportedData(final);
-        setStats({ totalRows: raw.length, processed: final.length, skipped, totalAmount: totalAmt, totalFees });
-        showToast(`นำเข้าสำเร็จ ${final.length} รายการ (ข้าม ${skipped} แถว)`, 'success');
+        setStats({ totalRows: raw.length, processed: final.length, skipped, duplicates, totalAmount: totalAmt, totalFees });
+        if (duplicates > 0) {
+            showToast(`นำเข้าสำเร็จ ${final.length} รายการ (ข้าม ${skipped} แถว, ป้องกันข้อมูลซ้ำ ${duplicates} รายการ)`, 'success');
+        } else {
+            showToast(`นำเข้าสำเร็จ ${final.length} รายการ (ข้าม ${skipped} แถว)`, 'success');
+        }
       } catch (e) { 
         console.error("Parse error:", e);
-        showToast("ไม่สามารถอ่านไฟล์ได้ โปรดตรวจสอบรูปแบบ Excel", "error"); 
+        showToast("ไม่สามารถอ่านไฟล์ได้ หรือรูปแบบตารางไม่ถูกต้อง", "error"); 
       }
     };
     reader.readAsBinaryString(file);
@@ -839,17 +971,57 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
       
       if (importMode === 'update_settled') {
           let count = 0;
+          let expCount = transactions.filter(t => t.type === 'expense').reduce((m, t) => {
+              if (t.sysDocId && t.sysDocId.startsWith('EXP-')) {
+                  const num = parseInt(t.sysDocId.replace('EXP-', ''), 10);
+                  return !isNaN(num) && num > m ? num : m;
+              }
+              return m;
+          }, 0);
+
           for (const item of importedData) {
               const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
-              batch.update(ref, {
+              
+              const updateData = {
                   paymentStatus: 'settled',
                   settlementDate: item.newSettlementDate,
                   updatedAt: serverTimestamp()
-              });
+              };
+              
+              let diff = 0;
+              if (item.actualSettledAmt !== undefined) {
+                  updateData.actualSettledAmt = item.actualSettledAmt;
+                  const expectedAmt = item.grandTotal || item.total || 0;
+                  diff = expectedAmt - item.actualSettledAmt;
+              }
+
+              batch.update(ref, updateData);
               count++;
+
+              // Auto-create expense for discrepancy
+              if (diff > 0.01) {
+                  expCount++;
+                  const sysDocId = `EXP-${String(expCount).padStart(5, '0')}`;
+                  const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                  batch.set(expRef, {
+                      sysDocId,
+                      type: 'expense',
+                      category: discrepancyCategory,
+                      description: `ส่วนต่างยอดรับเงิน (ปรับปรุง): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
+                      total: diff,
+                      date: item.newSettlementDate || new Date(),
+                      userId: user.uid,
+                      createdAt: serverTimestamp(),
+                      status: 'paid',
+                      partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
+                      partnerBranch: '00000',
+                      isFromReconciliation: true,
+                      linkedOrderId: item.id
+                  });
+              }
           }
           await batch.commit();
-          showToast(`กระทบยอดรับเงินสำเร็จ ${count} รายการ`, "success");
+          showToast(`กระทบยอดรับเงินสำเร็จ ${count} รายการ (สร้างบิลส่วนต่างอัตโนมัติ)`, "success");
           setImportedData([]);
           setLoading(false);
           return;
@@ -981,8 +1153,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           </div>
         </div>
         <div className="lg:col-span-2 bg-white rounded-3xl border shadow-sm overflow-hidden flex flex-col text-left">
-          <div className="p-4 border-b flex justify-between items-center bg-slate-50 text-left">
-            <span className="font-bold text-slate-800 text-left">Step 2: ยืนยันเพื่อบันทึกและหักสต็อก</span>
+          <div className="p-4 border-b flex flex-col md:flex-row justify-between items-start md:items-center bg-slate-50 gap-4 text-left">
+            <div className="flex flex-col gap-1">
+                <span className="font-bold text-slate-800 text-left">Step 2: ยืนยันเพื่อบันทึกและหักสต็อก</span>
+                {importMode === 'update_settled' && importedData.some(it => (it.grandTotal || it.total) - (it.actualSettledAmt || 0) > 0.01) && (
+                    <div className="flex items-center gap-2 mt-1">
+                        <span className="text-[10px] font-bold text-rose-500">บันทึกส่วนต่างเป็นรายจ่ายหมวด:</span>
+                        <select value={discrepancyCategory} onChange={e=>setDiscrepancyCategory(e.target.value)} className="bg-white border border-rose-200 rounded-md text-[10px] font-bold px-2 py-1 outline-none text-rose-700">
+                            {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                    </div>
+                )}
+            </div>
             {importedData.length > 0 && (
               <button 
                 onClick={saveToFirebase} 
@@ -1022,7 +1204,23 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                         )}
                     </td>
                     <td className="p-4 text-right">
-                      <p className="font-black text-indigo-600 text-right">{formatCurrency(it.grandTotal || it.total)}</p>
+                        {importMode === 'update_settled' ? (
+                            <div className="flex flex-col items-end">
+                                <p className="font-black text-indigo-600 text-right">{formatCurrency(it.actualSettledAmt || 0)}</p>
+                                {Math.abs((it.actualSettledAmt || 0) - (it.grandTotal || it.total)) > 0.01 ? (
+                                    <p className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
+                                        <AlertTriangle size={10}/>
+                                        ส่วนต่าง: {formatCurrency((it.actualSettledAmt || 0) - (it.grandTotal || it.total))} (บันทึกไว้: {formatCurrency(it.grandTotal || it.total)})
+                                    </p>
+                                ) : (
+                                    <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
+                                        <CheckCircle size={10}/> ยอดตรงกัน
+                                    </p>
+                                )}
+                            </div>
+                        ) : (
+                            <p className="font-black text-indigo-600 text-right">{formatCurrency(it.grandTotal || it.total)}</p>
+                        )}
                     </td>
                   </tr>
                 ))}
@@ -2588,7 +2786,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   );
 }
 
-function RecordManager({ user, transactions, invoices, appId, stockBatches, showToast, onIssueInvoice }) {
+function RecordManager({ user, transactions, invoices, appId, stockBatches, showToast, onIssueInvoice, promotions }) {
   const [subTab, setSubTab] = useState('new');
   const [viewItem, setViewItem] = useState(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
@@ -2601,6 +2799,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [searchTerm, setSearchTerm] = useState('');
   const [settleConfirmId, setSettleConfirmId] = useState(null);
   const [settleDate, setSettleDate] = useState(formatDateISO(new Date()));
+  const [settleActualAmt, setSettleActualAmt] = useState(0); 
+  const [settleDiffCategory, setSettleDiffCategory] = useState('ค่าธรรมเนียม Platform'); 
    
   const [formData, setFormData] = useState({ 
     type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', 
@@ -2649,15 +2849,53 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const handleSettleOrder = async () => {
       if (!settleConfirmId || !user) return;
       try {
+          const batch = writeBatch(dbInstance);
           const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', settleConfirmId.id);
-          await updateDoc(docRef, {
+          
+          const expectedAmt = settleConfirmId.grandTotal || settleConfirmId.total || 0;
+          const actualAmt = Number(settleActualAmt) || 0;
+          const diff = expectedAmt - actualAmt;
+
+          batch.update(docRef, {
               paymentStatus: 'settled',
               settlementDate: normalizeDate(settleDate),
+              actualSettledAmt: actualAmt,
               updatedAt: serverTimestamp()
           });
+
+          if (diff > 0.01) {
+              let maxExp = transactions.filter(tx => tx.type === 'expense').reduce((m, tx) => {
+                  if (tx.sysDocId && tx.sysDocId.startsWith('EXP-')) {
+                      const num = parseInt(tx.sysDocId.replace('EXP-', ''), 10);
+                      return !isNaN(num) && num > m ? num : m;
+                  }
+                  return m;
+              }, 0);
+              const expSysDocId = `EXP-${String(maxExp + 1).padStart(5, '0')}`;
+              
+              const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+              batch.set(expRef, {
+                  sysDocId: expSysDocId,
+                  type: 'expense',
+                  category: settleDiffCategory,
+                  description: `ส่วนต่างยอดรับเงิน (ปรับปรุง): ออเดอร์ ${settleConfirmId.orderId || settleConfirmId.sysDocId}`,
+                  total: diff,
+                  date: normalizeDate(settleDate),
+                  userId: user.uid,
+                  createdAt: serverTimestamp(),
+                  status: 'paid',
+                  partnerName: settleConfirmId.channel ? `Platform (${settleConfirmId.channel})` : 'Platform',
+                  partnerBranch: '00000',
+                  isFromReconciliation: true,
+                  linkedOrderId: settleConfirmId.id
+              });
+          }
+
+          await batch.commit();
           showToast("บันทึกรับเงินเข้าบัญชีเรียบร้อย", "success");
           setSettleConfirmId(null);
       } catch (e) {
+          console.error(e);
           showToast("บันทึกรับเงินไม่สำเร็จ", "error");
       }
   };
@@ -2772,6 +3010,24 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const removeLineItem = (index) => { if (formData.items.length === 1) return; const newItems = formData.items.filter((_, i) => i !== index); setFormData({ ...formData, items: newItems }); };
   const updateLineItem = (index, field, value) => { const newItems = [...formData.items]; newItems[index][field] = value; setFormData({ ...formData, items: newItems }); };
 
+  const handleAutoApplyPromo = () => {
+      // ลบรายการแถมเดิมออกก่อนคำนวณใหม่ (Idempotent)
+      const cleanItems = formData.items.filter(it => !it.desc.startsWith('[แถมฟรี]'));
+      const { totalDiscount, newFreeItems, appliedNames } = calculatePromotions(cleanItems, promotions);
+      
+      if (totalDiscount > 0 || newFreeItems.length > 0) {
+          setFormData(prev => ({
+              ...prev,
+              couponDiscount: totalDiscount > 0 ? totalDiscount : 0, // หากเดิมมีส่วนลดอื่นอยู่ จะถูกเขียนทับด้วยระบบโปรโมชั่น
+              items: [...cleanItems, ...newFreeItems]
+          }));
+          showToast(`ใช้โปรโมชั่น: ${appliedNames.join(', ')}`, 'success');
+      } else {
+          setFormData(prev => ({ ...prev, items: cleanItems }));
+          showToast('ไม่มียอดหรือสินค้าที่เข้าเงื่อนไขโปรโมชั่น', 'error');
+      }
+  };
+
   const financialSummary = useMemo(() => {
     const subTotal = formData.items.reduce((sum, item) => sum + ((formData.type === 'income' ? Number(item.sellPrice) : Number(item.buyPrice)) * (Number(item.qty) || 0)), 0);
     const transFee = parseFloat(formData.transactionFee) || 0;
@@ -2815,6 +3071,29 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
     if (!user) return;
+
+    // [ระบบป้องกันการบันทึกซ้ำ] ตรวจสอบ Order ID / เลขที่อ้างอิง ก่อนบันทึก
+    if (formData.type === 'income' && formData.orderId && String(formData.orderId).trim() !== '') {
+        const cleanRef = String(formData.orderId).trim().toLowerCase();
+        const isDuplicate = transactions.some(t => t.type === 'income' && String(t.orderId || '').trim().toLowerCase() === cleanRef);
+        if (isDuplicate) {
+            showToast(`ข้อมูลซ้ำ! Order ID "${formData.orderId}" ถูกบันทึกในระบบไปแล้ว`, "error");
+            return;
+        }
+    } else if (formData.type === 'expense' && formData.taxInvoiceNo && String(formData.taxInvoiceNo).trim() !== '') {
+        const cleanRef = String(formData.taxInvoiceNo).trim().toLowerCase();
+        const cleanPartner = String(formData.partnerName || '').trim().toLowerCase();
+        const isDuplicate = transactions.some(t => 
+            t.type === 'expense' && 
+            String(t.taxInvoiceNo || '').trim().toLowerCase() === cleanRef &&
+            String(t.partnerName || '').trim().toLowerCase() === cleanPartner
+        );
+        if (isDuplicate && cleanPartner !== '') {
+            showToast(`ข้อมูลซ้ำ! ใบกำกับภาษี "${formData.taxInvoiceNo}" ของร้าน "${formData.partnerName}" มีอยู่แล้ว`, "error");
+            return;
+        }
+    }
+
     try {
       const coll = formData.type === 'income' ? 'transactions_income' : 'transactions_expense';
       const { subTotal, totalFees, grandTotal, totalDiscounts, shippingFee } = financialSummary;
@@ -3182,7 +3461,12 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl text-center"><ShoppingCart size={20}/></div>
                   <h4 className="text-lg font-black text-slate-800 text-left">รายการสินค้า</h4>
                 </div>
-                <button type="button" onClick={addLineItem} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all scale-100 hover:scale-[1.02] active:scale-95 text-center"><Plus size={18}/> เพิ่มรายการ</button>
+                <div className="flex items-center gap-2">
+                    {formData.type === 'income' && (
+                        <button type="button" onClick={handleAutoApplyPromo} className="bg-amber-100 text-amber-700 px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-sm hover:bg-amber-200 transition-all text-center"><Wand2 size={18}/> คำนวณโปรโมชั่น</button>
+                    )}
+                    <button type="button" onClick={addLineItem} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all scale-100 hover:scale-[1.02] active:scale-95 text-center"><Plus size={18}/> เพิ่มรายการ</button>
+                </div>
               </div>
               <div className="overflow-x-auto text-left">
                 <table className="w-full text-sm text-left">
@@ -3200,19 +3484,21 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       <tr key={index} className="group transition-colors hover:bg-slate-50/50 text-left">
                         <td className="py-4 pl-2 text-left">
                           <div className="relative text-left">
-                            <input value={item.desc} onChange={e=>updateLineItem(index, 'desc', e.target.value)} className="w-full bg-transparent p-2 rounded-xl text-sm font-bold border-0 focus:ring-0 outline-none text-slate-700 text-left" placeholder="ชื่อสินค้าหรือบริการ..." />
-                            <button type="button" onClick={()=>setShowStockSelectModal(index)} className="absolute -top-3 right-0 text-[9px] text-indigo-600 font-black opacity-0 group-hover:opacity-100 transition-opacity uppercase bg-white border px-2 py-0.5 rounded-full shadow-sm text-center">Pick from Stock</button>
+                            <input value={item.desc} onChange={e=>updateLineItem(index, 'desc', e.target.value)} className="w-full bg-transparent p-2 rounded-xl text-sm font-bold border-0 focus:ring-0 outline-none text-slate-700 text-left" placeholder="ชื่อสินค้าหรือบริการ..." disabled={item.desc.startsWith('[แถมฟรี]')}/>
+                            {!item.desc.startsWith('[แถมฟรี]') && (
+                                <button type="button" onClick={()=>setShowStockSelectModal(index)} className="absolute -top-3 right-0 text-[9px] text-indigo-600 font-black opacity-0 group-hover:opacity-100 transition-opacity uppercase bg-white border px-2 py-0.5 rounded-full shadow-sm text-center">Pick from Stock</button>
+                            )}
                           </div>
                         </td>
                         <td className="py-4 text-center">
                           <div className="flex justify-center text-center">
-                            <input type="number" value={item.qty} onChange={e=>updateLineItem(index, 'qty', e.target.value)} className="w-20 bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-center font-black outline-none text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-center"/>
+                            <input type="number" value={item.qty} onChange={e=>updateLineItem(index, 'qty', e.target.value)} className="w-20 bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-center font-black outline-none text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-center" disabled={item.desc.startsWith('[แถมฟรี]')}/>
                           </div>
                         </td>
                         <td className="py-4 text-right">
                           <div className="relative flex items-center justify-end text-right">
                             <span className="absolute left-3 text-slate-400 font-bold text-xs text-left">฿</span>
-                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className="w-full bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-right font-black outline-none text-slate-800 pl-8 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-right"/>
+                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className="w-full bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-right font-black outline-none text-slate-800 pl-8 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-right" disabled={item.desc.startsWith('[แถมฟรี]')}/>
                           </div>
                         </td>
                         <td className="py-4 text-right pr-2 text-right">
@@ -3549,7 +3835,20 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                 </div>
                                 <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
                                     <p className="text-[10px] font-mono text-slate-400 text-left">Ref/Order: {t.orderId || t.taxInvoiceNo || '-'}</p>
-                                    {t.issuedDocs && t.issuedDocs.length > 0 && t.issuedDocs.map((doc, idx) => (<span key={idx} className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase text-center ${doc.type === 'invoice' ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-700'}`}>{doc.type === 'invoice' ? 'ออกใบกำกับแล้ว' : 'ลดหนี้แล้ว'}: {doc.no}</span>))}
+                                    {t.issuedDocs && t.issuedDocs.length > 0 && t.issuedDocs.map((doc, idx) => {
+                                        let badgeColor = 'bg-slate-100 text-slate-600';
+                                        let docLabel = 'เอกสาร';
+                                        if (doc.type === 'invoice') { badgeColor = 'bg-indigo-100 text-indigo-600'; docLabel = 'ออกใบกำกับแล้ว'; }
+                                        else if (doc.type === 'abb') { badgeColor = 'bg-emerald-100 text-emerald-700'; docLabel = 'ออก ABB แล้ว'; }
+                                        else if (doc.type === 'credit_note') { badgeColor = 'bg-rose-100 text-rose-700'; docLabel = 'ลดหนี้แล้ว'; }
+                                        else if (doc.type === 'quotation') { badgeColor = 'bg-purple-100 text-purple-700'; docLabel = 'เสนอราคา'; }
+                                        else if (doc.type === 'receipt') { badgeColor = 'bg-teal-100 text-teal-700'; docLabel = 'ออกใบเสร็จแล้ว'; }
+                                        return (
+                                            <span key={idx} className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase text-center ${badgeColor}`}>
+                                                {docLabel}: {doc.no}
+                                            </span>
+                                        );
+                                    })}
                                 </div>
                             </td>
                             <td className="p-5 text-left">
@@ -3565,7 +3864,12 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             <td className="p-5 text-center">
                                 <div className="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-all text-center">
                                     {t.type === 'income' && t.paymentStatus === 'pending_platform' && (
-                                        <button onClick={()=>setSettleConfirmId(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-500 hover:shadow-md transition-all shadow-sm text-center" title="รับเงินเข้าบัญชี (Settle)"><CheckCircle size={16}/></button>
+                                        <button onClick={()=>{
+                                            setSettleConfirmId(t); 
+                                            setSettleDate(formatDateISO(new Date())); 
+                                            setSettleActualAmt(t.grandTotal || t.total); 
+                                            setSettleDiffCategory('ค่าธรรมเนียม Platform');
+                                        }} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-500 hover:shadow-md transition-all shadow-sm text-center" title="รับเงินเข้าบัญชี (Settle)"><CheckCircle size={16}/></button>
                                     )}
                                     <button onClick={()=>setViewItem(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-indigo-600 hover:shadow-md transition-all shadow-sm text-center"><Eye size={16}/></button>
                                     {t.type === 'income' && (<button onClick={()=>onIssueInvoice(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-600 hover:shadow-md transition-all shadow-sm text-center" title="ออกใบกำกับภาษี"><Printer size={16}/></button>)}
@@ -3680,7 +3984,25 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     </div>
                 )}
                 
-                <div className="flex justify-between items-center text-sm opacity-60 mt-4 text-left"><span>{viewItem.type === 'income' ? 'หักค่าธรรมเนียม and ส่วนลด and WHT' : 'หักส่วนลด and WHT'}</span><span>{formatCurrency((viewItem.type === 'income' ? (Number(viewItem.platformFee) || 0) : 0) + (Number(viewItem.couponDiscount) || 0) + (Number(viewItem.cashCoupon) || 0) + (Number(viewItem.whtAmount) || 0))}</span></div><div className="flex justify-between items-center pt-3 mt-4 border-t-2 border-white/20 text-left"><span className="font-black text-indigo-400 uppercase tracking-wider text-left">{viewItem.type === 'income' ? 'เงินเข้าสุทธิ' : 'ยอดจ่ายสุทธิ'}</span><span className="text-4xl font-black text-right">{formatCurrency(viewItem.grandTotal || viewItem.total)}</span></div><div className="mt-4 pt-4 border-t border-white/10 space-y-3 text-left"><p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest text-left">เอกสารที่ออกแล้ว (Linked Documents)</p>{viewItem.issuedDocs && viewItem.issuedDocs.length > 0 ? viewItem.issuedDocs.map((doc, idx) => (<div key={idx} className="flex justify-between items-center text-xs font-bold border-b border-white/5 pb-1 text-left"><div className="flex items-center gap-2 text-left">{doc.type === 'invoice' ? <FileText size={12} className="text-indigo-400 text-center"/> : <FileType size={12} className="text-rose-400 text-center"/>}<span className={doc.type === 'invoice' ? 'text-indigo-200' : 'text-rose-200'}>{doc.type === 'invoice' ? 'INV' : 'CN'}</span></div><span className="text-white/80 font-mono text-right">{doc.no}</span></div>)) : (<div className="flex items-center gap-2 text-xs font-bold text-slate-500 text-left"><Clock size={14} className="text-center"/> ยังไม่ออกเอกสารภาษี</div>)}</div></div></div>
+                <div className="flex justify-between items-center text-sm opacity-60 mt-4 text-left"><span>{viewItem.type === 'income' ? 'หักค่าธรรมเนียม and ส่วนลด and WHT' : 'หักส่วนลด and WHT'}</span><span>{formatCurrency((viewItem.type === 'income' ? (Number(viewItem.platformFee) || 0) : 0) + (Number(viewItem.couponDiscount) || 0) + (Number(viewItem.cashCoupon) || 0) + (Number(viewItem.whtAmount) || 0))}</span></div><div className="flex justify-between items-center pt-3 mt-4 border-t-2 border-white/20 text-left"><span className="font-black text-indigo-400 uppercase tracking-wider text-left">{viewItem.type === 'income' ? 'เงินเข้าสุทธิ' : 'ยอดจ่ายสุทธิ'}</span><span className="text-4xl font-black text-right">{formatCurrency(viewItem.grandTotal || viewItem.total)}</span></div><div className="mt-4 pt-4 border-t border-white/10 space-y-3 text-left"><p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest text-left">เอกสารที่ออกแล้ว (Linked Documents)</p>{viewItem.issuedDocs && viewItem.issuedDocs.length > 0 ? viewItem.issuedDocs.map((doc, idx) => {
+                    let docLabel = 'DOC';
+                    let textColor = 'text-slate-200';
+                    let iconColor = 'text-slate-400';
+                    if (doc.type === 'invoice') { docLabel = 'INV'; textColor = 'text-indigo-200'; iconColor = 'text-indigo-400'; }
+                    else if (doc.type === 'abb') { docLabel = 'ABB'; textColor = 'text-emerald-200'; iconColor = 'text-emerald-400'; }
+                    else if (doc.type === 'credit_note') { docLabel = 'CN'; textColor = 'text-rose-200'; iconColor = 'text-rose-400'; }
+                    else if (doc.type === 'quotation') { docLabel = 'QUO'; textColor = 'text-purple-200'; iconColor = 'text-purple-400'; }
+                    else if (doc.type === 'receipt') { docLabel = 'REC'; textColor = 'text-teal-200'; iconColor = 'text-teal-400'; }
+                    return (
+                        <div key={idx} className="flex justify-between items-center text-xs font-bold border-b border-white/5 pb-1 text-left">
+                            <div className="flex items-center gap-2 text-left">
+                                <FileText size={12} className={`${iconColor} text-center`}/>
+                                <span className={textColor}>{docLabel}</span>
+                            </div>
+                            <span className="text-white/80 font-mono text-right">{doc.no}</span>
+                        </div>
+                    );
+                }) : (<div className="flex items-center gap-2 text-xs font-bold text-slate-500 text-left"><Clock size={14} className="text-center"/> ยังไม่ออกเอกสารภาษี</div>)}</div></div></div>
               </div>
               {viewItem.items && (<div className="space-y-4 text-left"><h4 className="font-bold text-slate-800 flex items-center gap-2 border-b pb-2 text-left"><List size={18} className="text-indigo-600"/> รายการสินค้า/บริการ</h4><div className="overflow-hidden border border-slate-100 rounded-3xl text-left"><table className="w-full text-sm text-left"><thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-400 text-left"><tr><th className="p-4 text-left">SKU / รายละเอียดสินค้า</th><th className="p-4 text-center text-center">จำนวน</th><th className="p-4 text-right text-right">ราคาต่อหน่วย</th><th className="p-4 text-right text-right">ยอดรวม</th></tr></thead><tbody className="divide-y divide-slate-50 text-left">{viewItem.items.map((it, idx) => (<tr key={idx} className="hover:bg-slate-50/50 text-left">
                 <td className="p-4 text-left">
@@ -3712,9 +4034,27 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">บันทึกรับเงินจากแพลตฟอร์ม?</h3>
               <p className="text-xs text-slate-400 mb-4 text-center">ออเดอร์: {settleConfirmId.orderId || settleConfirmId.sysDocId}</p>
               
-              <div className="text-left mb-6">
+              <div className="text-left mb-3">
                  <label className="text-xs font-bold text-slate-500 uppercase">วันที่เงินเข้าจริง (Settlement Date)</label>
                  <input type="date" value={settleDate} onChange={e=>setSettleDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100" />
+              </div>
+              
+              <div className="text-left mb-6">
+                 <div className="flex justify-between items-center">
+                     <label className="text-xs font-bold text-slate-500 uppercase">ยอดเงินที่ได้รับจริง (฿)</label>
+                     <span className="text-[10px] text-slate-400">จากยอดเดิม {formatCurrency(settleConfirmId.grandTotal || settleConfirmId.total)}</span>
+                 </div>
+                 <input type="number" step="0.01" value={settleActualAmt} onChange={e=>setSettleActualAmt(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100 text-emerald-600" />
+                 
+                 {((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt) > 0.01 && (
+                     <div className="mt-3 p-3 bg-rose-50 border border-rose-100 rounded-xl animate-fadeIn">
+                         <p className="text-[10px] font-bold text-rose-600 mb-1 flex items-center gap-1"><AlertTriangle size={12}/> พบส่วนต่าง {formatCurrency((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt)} ฿</p>
+                         <label className="text-[9px] font-bold text-rose-500 uppercase">บันทึกส่วนต่างนี้เป็นรายจ่ายหมวด:</label>
+                         <select value={settleDiffCategory} onChange={e=>setSettleDiffCategory(e.target.value)} className="w-full bg-white border border-rose-200 rounded-lg p-2 text-xs font-bold mt-1 outline-none text-slate-700">
+                             {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
+                         </select>
+                     </div>
+                 )}
               </div>
 
               <div className="flex gap-3 text-center">
@@ -3728,10 +4068,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   );
 }
 
-function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant-tax-dev-v1", showToast, preFillData }) {
+function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant-tax-dev-v1", showToast, preFillData, promotions = [] }) {
   const [mode, setMode] = useState('history'); 
   const savedSeller = useMemo(() => { try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } catch (e) { return {}; } }, []);
-  const initialInvData = { docType: 'invoice', refInvNo: '', creditNoteReason: '', customerName: '', address: '', taxId: '', branch: '00000', orderId: '', custSubDistrict: '', custDistrict: '', custProvince: '', custZipCode: '', items: [{ desc: '', qty: 1, unit: 'ชิ้น', price: 0 }], date: formatDateISO(new Date()), invNo: '', sellerName: savedSeller.sellerName || '', sellerAddress: savedSeller.sellerAddress || '', sellerTaxId: savedSeller.sellerTaxId || '', sellerBranchId: savedSeller.sellerBranchId || '00000', sellerBranchName: savedSeller.sellerBranchName || '', sellerPhone: savedSeller.sellerPhone || '', sellerEmail: savedSeller.sellerEmail || '', sellerSubDistrict: savedSeller.sellerSubDistrict || '', sellerDistrict: savedSeller.sellerDistrict || '', sellerProvince: savedSeller.sellerProvince || '', sellerZipCode: savedSeller.sellerZipCode || '', discount: 0, notes: 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน', vatType: 'excluded', logo: '', signature: '', status: 'unpaid' };
+  const initialInvData = { docType: 'invoice', refInvNo: '', creditNoteReason: '', customerName: '', address: '', taxId: '', branch: '00000', orderId: '', orderDate: '', custSubDistrict: '', custDistrict: '', custProvince: '', custZipCode: '', items: [{ desc: '', qty: 1, unit: 'ชิ้น', price: 0 }], date: formatDateISO(new Date()), invNo: '', sellerName: savedSeller.sellerName || '', sellerAddress: savedSeller.sellerAddress || '', sellerTaxId: savedSeller.sellerTaxId || '', sellerBranchId: savedSeller.sellerBranchId || '00000', sellerBranchName: savedSeller.sellerBranchName || '', sellerPhone: savedSeller.sellerPhone || '', sellerEmail: savedSeller.sellerEmail || '', sellerSubDistrict: savedSeller.sellerSubDistrict || '', sellerDistrict: savedSeller.sellerDistrict || '', sellerProvince: savedSeller.sellerProvince || '', sellerZipCode: savedSeller.sellerZipCode || '', discount: 0, notes: 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน', vatType: 'excluded', logo: '', signature: '', status: 'unpaid' };
 
   const [invData, setInvData] = useState(initialInvData);
   const [editingDocId, setEditingDocId] = useState(null);
@@ -3847,6 +4187,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         items: mappedItems.length > 0 ? mappedItems : [{ desc: '', qty: 1, unit: 'ชิ้น', price: 0 }], 
         date: formatDateISO(data.date || new Date()), 
         orderId: data.orderId || '', 
+        orderDate: formatDateISO(data.date),
         discount: totalDisc 
     })); 
     setEditingDocId(null);
@@ -3950,25 +4291,34 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           let opsCount = 0;
 
           const allInvs = invoices.filter(i => i.docType === bulkSettings.docType || (!i.docType && bulkSettings.docType === 'invoice'));
-          const todayStr = formatDateISO(new Date()).replace(/-/g, '');
           const prefixMapBulk = { abb: 'ABB-', receipt: 'REC-', invoice: 'INV-' };
           const prefix = prefixMapBulk[bulkSettings.docType] || 'INV-';
-          const fullPrefix = `${prefix}${todayStr}-`;
           
-          let currentInvCount = allInvs.reduce((max, item) => {
-              if (item.invNo && String(item.invNo).startsWith(fullPrefix)) {
-                  const num = parseInt(String(item.invNo).replace(fullPrefix, ''), 10);
-                  return !isNaN(num) && num > max ? num : max;
-              }
-              return max;
-          }, 0);
+          let counters = {}; // เก็บ Counter รันเลขแยกตามแต่ละวันที่
 
           for (let i = 0; i < docsToIssue.length; i++) {
               const trans = docsToIssue[i];
               setBulkStatus({ current: i + 1, total: docsToIssue.length, message: `กำลังสร้างเอกสาร ${trans.orderId || trans.id}...` });
 
-              currentInvCount++;
-              const newInvNo = `${fullPrefix}${String(currentInvCount).padStart(5, '0')}`;
+              // ใช้วันที่จากรายการ (Transaction Date) แทนวันที่ปัจจุบัน
+              const transDate = normalizeDate(trans.date) || new Date();
+              const dateStr = formatDateISO(transDate).replace(/-/g, '');
+              const fullPrefix = `${prefix}${dateStr}-`;
+
+              // หาเลขล่าสุดของวันที่นั้นๆ (ถ้ายังไม่เคยหา)
+              if (counters[fullPrefix] === undefined) {
+                  counters[fullPrefix] = allInvs.reduce((max, item) => {
+                      if (item.invNo && String(item.invNo).startsWith(fullPrefix)) {
+                          const num = parseInt(String(item.invNo).replace(fullPrefix, ''), 10);
+                          return !isNaN(num) && num > max ? num : max;
+                      }
+                      return max;
+                  }, 0);
+              }
+
+              // รันเลขต่อไปสำหรับวันที่นั้น
+              counters[fullPrefix]++;
+              const newInvNo = `${fullPrefix}${String(counters[fullPrefix]).padStart(5, '0')}`;
 
               const calc = calculateTransactionTotals(trans, bulkSettings.vatType);
               
@@ -3982,7 +4332,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   branch: trans.partnerBranch || trans.branch || '00000',
                   orderId: trans.orderId || '',
                   items: calc.mappedItems,
-                  date: normalizeDate(new Date()), 
+                  date: transDate, // บันทึกตามวันที่เกิดรายการ (Transaction Date) ตามที่ User ต้องการ
+                  orderDate: transDate, // เก็บวันที่ออเดอร์เดิมไว้
                   invNo: newInvNo,
                   sellerName: invData.sellerName || '',
                   sellerAddress: invData.sellerAddress || '',
@@ -4124,6 +4475,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         taxId: invData.taxId || '',
         branch: invData.branch || '00000',
         orderId: invData.orderId || '',
+        orderDate: invData.orderDate ? normalizeDate(invData.orderDate) : null,
         items: (invData.items || []).map(it => ({ desc: it.desc || '', qty: Number(it.qty) || 0, unit: it.unit || 'ชิ้น', price: Number(it.price) || 0 })),
         date: normalizeDate(invData.date) || new Date(),
         invNo: invData.invNo || '',
@@ -4306,6 +4658,27 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const handleCreateCreditNote = (inv) => { setEditingDocId(null); setInvData({ ...inv, id: undefined, docType: 'credit_note', refInvNo: inv.invNo, creditNoteReason: '', date: formatDateISO(new Date()), invNo: '' }); setMode('create'); }
   const updateItem = (i, field, val) => { setInvData(prev => ({ ...prev, items: prev.items.map((it, idx) => idx === i ? { ...it, [field]: val } : it) })); };
 
+  const handleAutoApplyPromo = () => {
+      if (invData.docType !== 'invoice' && invData.docType !== 'abb' && invData.docType !== 'receipt') {
+          showToast("โปรโมชั่นใช้ได้เฉพาะบิลขายเท่านั้น", "error");
+          return;
+      }
+      const cleanItems = invData.items.filter(it => !it.desc.startsWith('[แถมฟรี]'));
+      const { totalDiscount, newFreeItems, appliedNames } = calculatePromotions(cleanItems, promotions);
+      
+      if (totalDiscount > 0 || newFreeItems.length > 0) {
+          setInvData(prev => ({
+              ...prev,
+              discount: totalDiscount > 0 ? totalDiscount : 0,
+              items: [...cleanItems, ...newFreeItems]
+          }));
+          showToast(`ใช้โปรโมชั่น: ${appliedNames.join(', ')}`, 'success');
+      } else {
+          setInvData(prev => ({ ...prev, items: cleanItems }));
+          showToast('ไม่มียอดหรือสินค้าที่เข้าเงื่อนไขโปรโมชั่น', 'error');
+      }
+  };
+
   const handleDeleteProfile = async (id) => {
     try {
       await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'seller_profiles', id));
@@ -4487,7 +4860,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                     checked={selectedDocIds.length > 0 && selectedDocIds.length === displayDocs.length} 
                                 />
                             </th>
-                            <th className="p-4 text-left border-b">Date</th><th className="p-4 text-left border-b">No. / Order ID</th><th className="p-4 text-left border-b">Customer</th><th className="p-4 text-right text-right border-b">Total</th><th className="p-4 text-center text-center border-b">Status</th><th className="p-4 text-center text-center border-b">Action</th>
+                            <th className="p-4 text-left border-b">Date / Order Date</th><th className="p-4 text-left border-b">No. / Order ID</th><th className="p-4 text-left border-b">Customer</th><th className="p-4 text-right text-right border-b">Total</th><th className="p-4 text-center text-center border-b">Status</th><th className="p-4 text-center text-center border-b">Action</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50 text-left">
@@ -4510,7 +4883,12 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                         onChange={() => toggleSelectDoc(docItem.id)} 
                                     />
                                 </td>
-                                <td className="p-4 text-slate-500 text-xs text-left">{formatDate(docItem.date)}</td>
+                                <td className="p-4 text-left">
+                                    <p className="font-bold text-slate-800 text-xs">{formatDate(docItem.date)}</p>
+                                    {(docItem.orderDate || docItem.source === 'transaction') && (
+                                        <p className="text-[10px] text-slate-400 mt-0.5">Order: {formatDate(docItem.orderDate || docItem.date)}</p>
+                                    )}
+                                </td>
                                 <td className="p-4 text-slate-700 font-bold text-left">
                                     <p className={`text-left ${docItem.status === 'cancelled' ? 'line-through' : ''}`}>{docItem.invNo}</p>
                                     {docItem.orderId && <p className="text-[9px] text-slate-400 font-mono text-left">Ref: {docItem.orderId}</p>}
@@ -4518,7 +4896,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                 <td className="p-4 text-left">{docItem.customerName}</td>
                                 <td className="p-4 text-right font-bold text-right">{formatCurrency(docItem.total * (docItem.docType === 'credit_note' ? -1 : 1))}</td>
                                 <td className="p-4 text-center"><span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase text-center ${badgeClass}`}>{docItem.displayStatus}</span></td>
-                                <td className="p-4 text-center"><div className="flex justify-center gap-2 text-center">{docItem.source === 'transaction' ? (<button onClick={() => handleLoadTransaction(docItem)} className="text-white bg-indigo-600 px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 text-center"><PlusCircle size={14} className="text-center"/> สร้างเอกสาร</button>) : (<><button onClick={() => handleEditInvoice(docItem)} className="text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg text-xs font-bold text-center">ดู/พิมพ์</button>{docItem.status !== 'cancelled' && <><button onClick={() => handleCreateCreditNote(docItem)} className="text-slate-600 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-xs font-bold text-center" title="สร้างใบลดหนี้">ลดหนี้</button><button onClick={() => setCancelConfirmId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg text-xs font-bold text-center" title="ยกเลิกเอกสาร">ยกเลิก</button></>}</>)}</div></td>
+                                <td className="p-4 text-center"><div className="flex justify-center gap-2 text-center">{docItem.source === 'transaction' ? (<button onClick={() => handleLoadTransaction(docItem)} className="text-white bg-indigo-600 px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 text-center"><PlusCircle size={14} className="text-center"/> สร้างเอกสาร</button>) : (<><button onClick={() => handleEditInvoice(docItem)} className="text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg text-xs font-bold text-center">แก้ไข/พิมพ์</button>{docItem.status !== 'cancelled' && <><button onClick={() => handleCreateCreditNote(docItem)} className="text-slate-600 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-xs font-bold text-center" title="สร้างใบลดหนี้">ลดหนี้</button><button onClick={() => setCancelConfirmId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg text-xs font-bold text-center" title="ยกเลิกเอกสาร">ยกเลิก</button></>}</>)}</div></td>
                             </tr>
                         )}) : (
                             <tr><td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารในหมวดหมู่นี้ หรือ ในช่วงเวลาที่เลือก</td></tr>
@@ -4625,7 +5003,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                           <div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เลขที่ (No.)</span><span className="font-bold text-right text-[10px]">{currentBulkPrintDoc.invNo}</span></div>
                           <div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(currentBulkPrintDoc.date)}</span></div>
                           {currentBulkPrintDoc.docType === 'credit_note' && currentBulkPrintDoc.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{currentBulkPrintDoc.refInvNo}</span></div>)}
-                          {currentBulkPrintDoc.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{currentBulkPrintDoc.orderId}</span></div>)}
+                          {currentBulkPrintDoc.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{currentBulkPrintDoc.orderId}</span></div>)}
+                          {currentBulkPrintDoc.orderDate && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">วันที่สั่งซื้อ</span><span className="text-right text-[10px] text-right">{formatDate(currentBulkPrintDoc.orderDate)}</span></div>)}
                       </div>
                   </div>
               </div>
@@ -4713,15 +5092,17 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                             <div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm text-left"><label className="text-[10px] font-bold text-indigo-600 mb-1 flex items-center gap-1 text-left">วันที่เอกสาร</label><input type="date" className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left" value={invData.date} onChange={e => setInvData({ ...invData, date: e.target.value })} /></div>
                         </div>
                         <div className="grid grid-cols-2 gap-3 text-left">
-                            {invData.docType === 'credit_note' && (<div className="bg-white p-3 rounded-xl border border-rose-200 shadow-sm text-left"><label className="text-[10px] font-bold text-rose-500 mb-1 flex items-center gap-1 text-left">อ้างอิงใบเดิม</label><input className="w-full border-0 p-1 text-sm font-mono text-rose-600 bg-transparent focus:ring-0 text-left" placeholder="INV-XXXXXXXX" value={invData.refInvNo} onChange={e => setInvData({ ...invData, refInvNo: e.target.value })} /></div>)}
-                            <div className={`bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left ${invData.docType !== 'credit_note' ? 'col-span-2' : ''}`}><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">Order ID</label><input className="w-full border-0 p-1 text-sm font-mono text-indigo-600 bg-transparent focus:ring-0 text-left" placeholder="เลขคำสั่งซื้อ" value={invData.orderId} onChange={e => setInvData({ ...invData, orderId: e.target.value })} /></div>
+                            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left"><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">Order ID</label><input className="w-full border-0 p-1 text-sm font-mono text-indigo-600 bg-transparent focus:ring-0 text-left" placeholder="เลขคำสั่งซื้อ" value={invData.orderId} onChange={e => setInvData({ ...invData, orderId: e.target.value })} /></div>
+                            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left"><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">วันที่สั่งซื้อ (Order Date)</label><input type="date" className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left" value={invData.orderDate || ''} onChange={e => setInvData({ ...invData, orderDate: e.target.value })} /></div>
+                            {invData.docType === 'credit_note' && (<div className="col-span-2 bg-white p-3 rounded-xl border border-rose-200 shadow-sm text-left"><label className="text-[10px] font-bold text-rose-500 mb-1 flex items-center gap-1 text-left">อ้างอิงใบเดิม</label><input className="w-full border-0 p-1 text-sm font-mono text-rose-600 bg-transparent focus:ring-0 text-left" placeholder="INV-XXXXXXXX" value={invData.refInvNo} onChange={e => setInvData({ ...invData, refInvNo: e.target.value })} /></div>)}
                         </div>
                         <div className="flex justify-between items-center text-left">
                             <h4 className="font-bold text-sm text-rose-600 text-left">ข้อมูลลูกค้า/คู่ค้า</h4>
                             <div className="flex items-center gap-2">
                                 <button type="button" onClick={handleSavePartnerManual} className="text-[10px] bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full font-bold text-center flex items-center gap-1"><SaveAll size={12}/> บันทึกข้อมูลใหม่</button>
                                 <button type="button" onClick={()=>setShowCustomerModal(true)} className="text-[10px] bg-rose-100 text-rose-700 px-3 py-1 rounded-full font-bold text-center">เลือกจากฐานข้อมูล</button>
-                            </div>
+                      <div className="text-right w-[30%] flex flex-col items-end text-right"><div className="text-lg font-bold uppercase mb-0 text-right">{invData.docType === 'quotation' ? 'ใบเสนอราคา / QUOTATION' : (invData.docType === 'receipt' ? 'ใบเสร็จรับเงิน / RECEIPT' : (invData.docType === 'credit_note' ? 'ใบลดหนี้ / CREDIT NOTE' : (invData.docType === 'abb' ? 'ใบกำกับภาษีอย่างย่อ' : 'ใบกำกับภาษี / ใบเสร็จรับเงิน')))}</div><div className={`status-badge text-lg font-bold uppercase mb-3 text-right ${invData.status === 'cancelled' ? 'text-rose-600' : ''}`}>{invData.status === 'cancelled' ? 'ยกเลิกแล้ว (Cancelled)' : 'ต้นฉบับ (Original)'}</div><div className="border border-slate-300 p-2 w-full max-w-[200px] text-right"><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เลขที่ (No.)</span><span className="font-bold text-right text-[10px]">{invData.invNo}</span></div><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(invData.date)}</span></div>{invData.docType === 'credit_note' && invData.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{invData.refInvNo}</span></div>)}{invData.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{invData.orderId}</span></div>)}{invData.orderDate && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">วันที่สั่งซื้อ</span><span className="text-right text-[10px] text-right">{formatDate(invData.orderDate)}</span></div>)}</div></div>
+                    </div>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-left">
                             <div className="col-span-2 text-left"><label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">ชื่อลูกค้า / บริษัท</label><input className="w-full border-0 rounded-lg p-2 text-sm shadow-sm text-left" value={invData.customerName} onChange={e=>setInvData({...invData, customerName: e.target.value})} /></div>
@@ -4737,13 +5118,16 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   {invData.items.map((it, i) => (
                     <div key={i} className="flex gap-2 mb-2 items-center text-left">
                       <span className="text-xs text-slate-400 w-4 text-left">{i+1}.</span>
-                      <input className="flex-[3] border-0 rounded p-2 text-sm shadow-sm text-left" value={it.desc} onChange={e=>updateItem(i,'desc',e.target.value)}/>
-                      <input className="w-20 border-0 rounded p-2 text-sm text-center shadow-sm text-center" type="number" value={it.qty} onChange={e=>updateItem(i,'qty',Number(e.target.value))}/>
-                      <input className="w-24 border-0 rounded p-2 text-sm text-right shadow-sm text-right" type="number" value={it.price} onChange={e=>updateItem(i,'price',Number(e.target.value))}/>
+                      <input className="flex-[3] border-0 rounded p-2 text-sm shadow-sm text-left" value={it.desc} onChange={e=>updateItem(i,'desc',e.target.value)} disabled={it.desc.startsWith('[แถมฟรี]')}/>
+                      <input className="w-20 border-0 rounded p-2 text-sm text-center shadow-sm text-center" type="number" value={it.qty} onChange={e=>updateItem(i,'qty',Number(e.target.value))} disabled={it.desc.startsWith('[แถมฟรี]')}/>
+                      <input className="w-24 border-0 rounded p-2 text-sm text-right shadow-sm text-right" type="number" value={it.price} onChange={e=>updateItem(i,'price',Number(e.target.value))} disabled={it.desc.startsWith('[แถมฟรี]')}/>
                       <button onClick={()=>setInvData({...invData, items: invData.items.filter((_,idx)=>idx!==i)})} className="text-rose-400 p-2 text-center"><Trash2 size={16}/></button>
                     </div>
                   ))}
-                  <button onClick={()=>setInvData({...invData, items:[...invData.items, {desc:'', qty:1, unit:'ชิ้น', price:0}]})} className="mt-2 text-[10px] bg-indigo-600 text-white px-4 py-1.5 rounded-lg flex items-center gap-1 w-fit font-bold shadow-md text-center"><PlusCircle size={14}/> เพิ่มรายการ</button>
+                  <div className="flex gap-2 mt-2">
+                      <button onClick={handleAutoApplyPromo} className="text-[10px] bg-amber-100 text-amber-700 px-4 py-1.5 rounded-lg flex items-center gap-1 w-fit font-bold shadow-md hover:bg-amber-200 transition-colors text-center"><Wand2 size={14}/> คำนวณโปรโมชั่น</button>
+                      <button onClick={()=>setInvData({...invData, items:[...invData.items, {desc:'', qty:1, unit:'ชิ้น', price:0}]})} className="text-[10px] bg-indigo-600 text-white px-4 py-1.5 rounded-lg flex items-center gap-1 w-fit font-bold shadow-md text-center"><PlusCircle size={14}/> เพิ่มรายการ</button>
+                  </div>
                 </div>
                 <div className="flex gap-4 text-center">
                   <button onClick={handleSaveInvoice} className={"flex-1 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition-all text-center " + (editingDocId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-emerald-600 hover:bg-emerald-700') + " flex items-center justify-center gap-2 text-center"}><Save size={18}/> {editingDocId ? 'อัปเดตข้อมูล' : 'บันทึกเอกสาร'}</button>
@@ -4804,6 +5188,611 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   );
 }
 
+function PromotionManager({ appId, promotions, showToast, user, stockBatches }) {
+  const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [promoTab, setPromoTab] = useState('ai_team'); // 'list', 'shopee_builder', 'ai_team'
+  
+  // --- Form State ---
+  const [formData, setFormData] = useState({
+    name: '', type: 'shopee_bundle', 
+    minAmount: '', discountAmount: '', discountPercentage: '', targetSku: '', minQty: '', freeSku: '', freeQty: '',
+    // Shopee specific
+    bundleType: 'percentage', // percentage, amount
+    addonMainSku: '', addonSubSku: '', addonPrice: '',
+    voucherCode: '',
+    isActive: true
+  });
+
+  // --- AI War Room State ---
+  const [aiGoal, setAiGoal] = useState('reach_target_sales');
+  const [aiBudget, setAiBudget] = useState(5000);
+  const [aiTargetSales, setAiTargetSales] = useState(100000);
+  const [aiDuration, setAiDuration] = useState(30);
+  const [aiHeroSku, setAiHeroSku] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isAutoBuilding, setIsAutoBuilding] = useState(false);
+  const [teamAnalysis, setTeamAnalysis] = useState([]);
+
+  // ประมวลผลข้อมูลสต็อกส่งให้ AI
+  const uniqueInventory = useMemo(() => {
+      if (!stockBatches) return [];
+      const map = {};
+      stockBatches.forEach(batch => {
+          const name = batch.productName; if (!name) return;
+          const remaining = Number(batch.quantity) - Number(batch.sold || 0);
+          if (!map[name]) map[name] = { name, sku: batch.sku || '-', qty: 0, sellPrice: batch.sellPrice || 0, cost: batch.costPerUnit || 0, category: batch.category || '' };
+          map[name].qty += Math.max(0, remaining);
+          if (batch.sellPrice > 0) map[name].sellPrice = batch.sellPrice;
+          if (batch.costPerUnit > 0) map[name].cost = batch.costPerUnit;
+      });
+      return Object.values(map).sort((a,b) => (b.qty * b.sellPrice) - (a.qty * a.sellPrice));
+  }, [stockBatches]);
+
+  const handleCallTeam = async () => {
+      setIsAnalyzing(true);
+      setTeamAnalysis([]);
+      
+      const apiKey = ""; // <--- จะถูกใส่โดย Environment
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+      
+      const inventoryContext = uniqueInventory.slice(0, 30).map(item => `- ${item.name} (SKU: ${item.sku}) ทุน ${item.cost}฿ ขาย ${item.price}฿ เหลือ ${item.qty} ชิ้น`).join('\n');
+        
+      let goalDetails = "";
+      let specificInstruction = "";
+
+      if (aiGoal === 'reach_target_sales') {
+          goalDetails = `เป้าหมายหลัก: ทำยอดขายให้ถึง ${formatCurrency(aiTargetSales)} บาท ภายในระยะเวลา ${aiDuration} วัน\nสินค้าที่อยากเน้น(ถ้ามี): ${aiHeroSku || 'เลือกให้จากสต็อกได้เลย'}`;
+          specificInstruction = `สิ่งสำคัญที่สุด: คุณต้องคำนวณย้อนกลับ (Reverse Engineering) เพื่อไปให้ถึงเป้ายอดขาย ${formatCurrency(aiTargetSales)} บาท ภายใน ${aiDuration} วัน (เฉลี่ยหาเงินให้ได้วันละ ${formatCurrency(aiTargetSales/aiDuration)} บาท)\nจงระบุมาอย่างละเอียดว่าควรหยิบสินค้าตัวไหนในสต็อกมาจับคู่จัดแคมเปญ "ต้องตั้งราคาชุดละเท่าไหร่" และ "ต้องขายให้ได้รวมกี่ชุด" ตัวเลขคูณกันแล้วต้องได้ยอดรวมใกล้เคียงเป้าหมาย ${formatCurrency(aiTargetSales)} บาทมากที่สุด`;
+      } else {
+          const goalText = aiGoal === 'clear_stock' ? 'ระบายสต็อก/สินค้าเก่า' : aiGoal === 'increase_aov' ? 'เพิ่มยอดซื้อต่อบิล' : 'หาลูกค้ารายใหม่';
+          goalDetails = `เป้าหมายหลัก: ${goalText}\nงบประมาณ: ${aiBudget} บาท\nสินค้าเป้าหมาย: ${aiHeroSku}`;
+          specificInstruction = `กรุณาวิเคราะห์และแนะนำกลยุทธ์โปรโมชั่น ให้สอดคล้องกัน โดยต้องเน้น การเลือกสินค้าเป็นกลุ่ม (Product Grouping) หรือการจับคู่สินค้า (Cross-selling / Bundling) จากข้อมูลสต็อกที่มี เพื่อเพิ่มยอดขายและระบายสต็อกไปพร้อมๆ กัน`;
+      }
+
+      const promptText = `
+      คุณคือทีมผู้เชี่ยวชาญ 3 ด้าน (Data Analyst, Shopee Specialist, Finance) ที่กำลังวางแผนแคมเปญการตลาด
+      ${goalDetails}
+
+      ข้อมูลสต็อกสินค้าปัจจุบัน (Top 30 เรียงตามมูลค่าคงเหลือ):
+      ${inventoryContext || 'ไม่มีข้อมูลสต็อก'}
+
+      ${specificInstruction}
+      
+      ตอบกลับมาในรูปแบบ JSON Array เท่านั้น ตามโครงสร้างนี้ ห้ามมี text อื่นๆ นอกเหนือจาก JSON:
+      [
+        { "role": "Data Analyst", "name": "คุณวิทย์ (Data)", "text": "วิเคราะห์ข้อมูลสต็อก ระบุชื่อสินค้าที่จะนำมาจัดโปร ต้องตั้งราคาเท่าไหร่ และต้องขายกี่ชิ้น/กี่ชุด ให้ได้ยอดรวมตามเป้าหมาย" },
+        { "role": "Shopee Specialist", "name": "คุณเจน (Shopee)", "text": "แนะนำรูปแบบแคมเปญบน Shopee ที่เหมาะสม (เช่น Bundle ซื้อ A+B หรือ Add-on) สำหรับสินค้าที่คุณวิทย์เลือก เพื่อกระตุ้นให้คนซื้อเยอะจนถึงเป้า" },
+        { "role": "Finance", "name": "บอส (Finance)", "text": "คำนวณต้นทุนรวม กำไรสุทธิ (บาท) หลังหักส่วนลดของเป้าหมายนี้ และประเมินความคุ้มค่า" }
+      ]`;
+
+      const payload = {
+          contents: [{ parts: [{ text: promptText }] }],
+          generationConfig: {
+              responseMimeType: "application/json",
+          }
+      };
+
+      const fetchWithRetry = async (fetchUrl, options, retries = 5) => {
+          let delay = 1000;
+          for (let i = 0; i < retries; i++) {
+              try {
+                  const res = await fetch(fetchUrl, options);
+                  if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                  return await res.json();
+              } catch (e) {
+                  if (i === retries - 1) throw e;
+                  await new Promise(resolve => setTimeout(resolve, delay));
+                  delay *= 2;
+              }
+          }
+      };
+
+      try {
+          const result = await fetchWithRetry(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+          });
+
+          let responseText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (responseText) {
+              responseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+              const parsedData = JSON.parse(responseText);
+              
+              const mappedAnalysis = parsedData.map(item => {
+                  let icon = <BarChart2 size={24}/>;
+                  let color = 'text-indigo-400 bg-indigo-900/50';
+                  
+                  if (item.role === 'Shopee Specialist') {
+                      icon = <ShoppingBag size={24}/>;
+                      color = 'text-orange-400 bg-orange-900/50';
+                  } else if (item.role === 'Finance') {
+                      icon = <Wallet size={24}/>;
+                      color = 'text-emerald-400 bg-emerald-900/50';
+                  }
+                  
+                  return { ...item, icon, color };
+              });
+              
+              setTeamAnalysis(mappedAnalysis);
+          } else {
+              throw new Error("No response from AI");
+          }
+      } catch (error) {
+          showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง', 'error');
+      } finally {
+          setIsAnalyzing(false);
+      }
+  };
+
+  // 2. AI Auto-Builder (สร้างฟอร์มตั้งค่าแคมเปญให้อัตโนมัติ)
+  const handleAutoBuildCampaign = async () => {
+      setIsAutoBuilding(true);
+      
+      const apiKey = "";
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+      
+      const inventoryContext = uniqueInventory.slice(0, 30).map(item => `- ${item.name} (SKU: ${item.sku}) ทุน ${item.cost}฿ ขาย ${item.price}฿ เหลือ ${item.qty} ชิ้น`).join('\n');
+
+      const promptText = `
+      เป้าหมาย: สร้างแคมเปญ Shopee เพื่อทำยอดขายให้ถึง ${aiTargetSales} บาท ภายใน ${aiDuration} วัน
+      ข้อมูลสต็อก (เรียงตามมูลค่าสูงสุด):
+      ${inventoryContext || 'ไม่มีข้อมูลสต็อก ให้ใช้ข้อมูลสมมติ'}
+
+      กรุณาวิเคราะห์ข้อมูลสต็อก เลือกรวมกลุ่มสินค้า (Bundle Deal หรือ Add-on Deal) ที่ยอดรวมสต็อกมีมูลค่าเพียงพอที่จะทำยอดขายถึง ${aiTargetSales} บาท และสร้างการตั้งค่าแคมเปญ Shopee ที่ดีที่สุด 1 แคมเปญ
+      ตอบกลับเป็น JSON Object เท่านั้น ห้ามมีข้อความอื่น ตามโครงสร้างนี้:
+      {
+        "name": "ชื่อแคมเปญกลุ่มสินค้า (เช่น ชุดคู่จิ้น A+B ลด 15%)",
+        "type": "shopee_bundle หรือ shopee_addon",
+        "bundleType": "percentage หรือ amount (ใช้กรณี shopee_bundle)",
+        "minQty": จำนวนชิ้นขั้นต่ำ (Number),
+        "discountPercentage": ส่วนลดเปอร์เซ็นต์ (Number),
+        "discountAmount": ส่วนลดเงินสด (Number),
+        "addonMainSku": "SKU สินค้าหลักที่ดึงมาจากสต็อก (กรณี shopee_addon)",
+        "addonSubSku": "SKU สินค้าแลกซื้อที่ดึงมาจากสต็อก (กรณี shopee_addon)",
+        "addonPrice": ราคาแลกซื้อพิเศษ (Number),
+        "voucherCode": "โค้ดส่วนลด (ปล่อยว่างได้ถ้าไม่ใช่ voucher)",
+        "minAmount": ยอดซื้อขั้นต่ำ (Number)
+      }`;
+
+      const payload = {
+          contents: [{ parts: [{ text: promptText }] }],
+          generationConfig: { responseMimeType: "application/json" }
+      };
+
+      try {
+          const result = await fetchWithRetry(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+          let responseText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (responseText) {
+              responseText = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+              const parsedData = JSON.parse(responseText);
+              
+              setFormData({
+                  name: parsedData.name || 'AI Generated Campaign',
+                  type: parsedData.type || 'shopee_bundle',
+                  bundleType: parsedData.bundleType || 'percentage',
+                  minQty: parsedData.minQty || '',
+                  discountPercentage: parsedData.discountPercentage || '',
+                  discountAmount: parsedData.discountAmount || '',
+                  addonMainSku: parsedData.addonMainSku || '',
+                  addonSubSku: parsedData.addonSubSku || '',
+                  addonPrice: parsedData.addonPrice || '',
+                  voucherCode: parsedData.voucherCode || '',
+                  minAmount: parsedData.minAmount || '',
+                  targetSku: '', freeSku: '', freeQty: '', // clear legacy pos fields
+                  isActive: true
+              });
+              setEditingId(null);
+              setShowModal(true);
+              showToast("AI สร้างแผนแคมเปญกลุ่มสินค้าสำเร็จ! กรุณาตรวจสอบและบันทึก", "success");
+          } else { throw new Error("No response from AI"); }
+      } catch (error) {
+          showToast('ไม่สามารถสร้างแคมเปญอัตโนมัติได้ กรุณาลองใหม่', 'error');
+      } finally {
+          setIsAutoBuilding(false);
+      }
+  };
+
+  const createShopeeCampaign = (type) => {
+      setFormData({
+          name: '', type: type, minAmount: '', discountAmount: '', discountPercentage: '', 
+          targetSku: '', minQty: '', freeSku: '', freeQty: '', bundleType: 'percentage', 
+          addonMainSku: '', addonSubSku: '', addonPrice: '', voucherCode: '', isActive: true
+      });
+      setEditingId(null);
+      setShowModal(true);
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if (!user) return;
+    try {
+      if (editingId) {
+        await setDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'promotions', editingId), { ...formData, updatedAt: serverTimestamp() }, { merge: true });
+        showToast("อัปเดตแคมเปญสำเร็จ", "success");
+      } else {
+        await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'promotions'), { ...formData, createdAt: serverTimestamp() });
+        showToast("สร้างแคมเปญ Shopee/POS ใหม่สำเร็จ", "success");
+      }
+      setShowModal(false);
+      setEditingId(null);
+    } catch (error) {
+      showToast("บันทึกไม่สำเร็จ", "error");
+    }
+  };
+
+  const handleEdit = (promo) => {
+    setFormData(promo);
+    setEditingId(promo.id);
+    setShowModal(true);
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm("ยืนยันการลบแคมเปญนี้?")) return;
+    try {
+      await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'promotions', id));
+      showToast("ลบแคมเปญสำเร็จ", "success");
+    } catch (error) {
+      showToast("ลบไม่สำเร็จ", "error");
+    }
+  };
+
+  const toggleStatus = async (promo) => {
+    try {
+      await setDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'promotions', promo.id), { isActive: !promo.isActive }, { merge: true });
+      showToast(`เปลี่ยนสถานะเป็น ${!promo.isActive ? 'เปิดใช้งาน' : 'ปิดใช้งาน'} แล้ว`, "success");
+    } catch (error) {
+      showToast("เปลี่ยนสถานะไม่สำเร็จ", "error");
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-fadeIn text-left font-sarabun w-full h-full pb-10">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-2 border-b pb-4 gap-4">
+        <div className="space-y-1">
+          <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><Sparkles className="text-orange-500"/> Campaign & Promotion Engine</h2>
+          <p className="text-sm text-slate-400 font-medium">ศูนย์ควบคุมและออกแบบแคมเปญการตลาด สำหรับ Shopee และ POS</p>
+        </div>
+      </div>
+
+      <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit mb-4 overflow-x-auto max-w-full">
+          <button onClick={() => setPromoTab('list')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${promoTab === 'list' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><List size={16}/> รายการแคมเปญ</button>
+          <button onClick={() => setPromoTab('shopee_builder')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${promoTab === 'shopee_builder' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-500 hover:text-orange-600'}`}><ShoppingBag size={16}/> Shopee Campaign Builder</button>
+          <button onClick={() => setPromoTab('ai_team')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${promoTab === 'ai_team' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}><Users size={16}/> เรียกทีมงานวิเคราะห์ (AI Team)</button>
+      </div>
+
+      {promoTab === 'list' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {promotions.map(promo => {
+              const isShopee = promo.type.includes('shopee');
+              return (
+              <div key={promo.id} className={`bg-white p-6 rounded-3xl border shadow-sm relative overflow-hidden transition-all ${!promo.isActive ? 'opacity-60 grayscale-[50%]' : 'hover:shadow-md hover:border-indigo-200'}`}>
+                {isShopee && <div className="absolute top-0 right-0 bg-orange-500 text-white text-[9px] font-black uppercase px-3 py-1 rounded-bl-xl">Shopee Format</div>}
+                <div className="flex justify-between items-start mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2.5 rounded-xl ${isShopee ? 'bg-orange-100 text-orange-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                      {promo.type.includes('bundle') ? <Layers size={20}/> : promo.type.includes('addon') ? <PlusCircle size={20}/> : <Percent size={20}/>}
+                    </div>
+                    <div className="mt-1">
+                      <h4 className="font-bold text-slate-800 text-base leading-tight pr-4">{promo.name}</h4>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">
+                          {promo.type === 'shopee_bundle' ? 'Bundle Deal (ซื้อจัดชุด)' : 
+                           promo.type === 'shopee_addon' ? 'Add-on Deal (แลกซื้อ)' : 
+                           promo.type === 'shopee_voucher' ? 'Shop Voucher' : 'POS Local Promo'}
+                      </p>
+                    </div>
+                  </div>
+                  <button onClick={() => toggleStatus(promo)} title="เปิด/ปิด การใช้งาน" className="shrink-0">
+                    {promo.isActive ? <Eye className={isShopee ? "text-orange-500" : "text-indigo-500"} size={20}/> : <EyeOff className="text-slate-400" size={20}/>}
+                  </button>
+                </div>
+                
+                <div className="bg-slate-50 p-4 rounded-xl text-sm mb-4 space-y-2 border border-slate-100">
+                  {promo.type === 'shopee_bundle' && (
+                    <>
+                      <div className="flex justify-between"><span className="text-slate-500">เงื่อนไข:</span><span className="font-bold text-slate-800">ซื้อ {promo.minQty} ชิ้นขึ้นไป</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">ส่วนลด:</span><span className="font-black text-orange-500">{promo.bundleType === 'percentage' ? `ลด ${promo.discountPercentage}%` : `ลด ${formatCurrency(promo.discountAmount)} ฿`}</span></div>
+                    </>
+                  )}
+                  {promo.type === 'shopee_addon' && (
+                    <>
+                      <div className="flex justify-between"><span className="text-slate-500">ซื้อสินค้าหลัก:</span><span className="font-bold text-slate-800">{promo.addonMainSku}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">แลกซื้อสินค้า:</span><span className="font-bold text-slate-800">{promo.addonSubSku}</span></div>
+                      <div className="flex justify-between border-t pt-1"><span className="text-slate-500">ราคาพิเศษ:</span><span className="font-black text-emerald-600">{formatCurrency(promo.addonPrice)} ฿</span></div>
+                    </>
+                  )}
+                  {promo.type === 'shopee_voucher' && (
+                    <>
+                      <div className="flex justify-between"><span className="text-slate-500">รหัสโค้ด:</span><span className="font-mono font-bold bg-slate-200 px-2 rounded text-slate-800">{promo.voucherCode}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">ซื้อขั้นต่ำ:</span><span className="font-bold text-slate-800">{formatCurrency(promo.minAmount)} ฿</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">ลดทันที:</span><span className="font-black text-rose-500">-{formatCurrency(promo.discountAmount)} ฿</span></div>
+                    </>
+                  )}
+                  {/* Legacy Promos */}
+                  {promo.type === 'threshold_discount' && (
+                    <div className="flex justify-between"><span className="text-slate-500">ซื้อครบ {formatCurrency(promo.minAmount)}</span><span className="font-black text-rose-500">ลด {formatCurrency(promo.discountAmount)} ฿</span></div>
+                  )}
+                  {promo.type === 'buy_x_get_y' && (
+                    <div className="flex justify-between"><span className="text-slate-500">แถมฟรี:</span><span className="font-black text-emerald-600">{promo.freeSku}</span></div>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <button onClick={() => handleEdit(promo)} className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-1"><Edit size={14}/> แก้ไข</button>
+                  <button onClick={() => handleDelete(promo.id)} className="px-3 py-2 bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-colors"><Trash2 size={14}/></button>
+                </div>
+              </div>
+            )})}
+            {promotions.length === 0 && (
+              <div className="col-span-full flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">
+                <Gift size={48} className="mb-4 opacity-20"/>
+                <p className="font-bold">ยังไม่มีแคมเปญในระบบ</p>
+                <p className="text-xs mt-1">คลิกปุ่ม "Shopee Campaign Builder" เพื่อเริ่มต้น</p>
+              </div>
+            )}
+          </div>
+      )}
+
+      {promoTab === 'shopee_builder' && (
+          <div className="bg-white p-8 rounded-[40px] border border-orange-100 shadow-sm space-y-8 animate-fadeIn text-left">
+              
+              {/* AI Smart Pricing Banner */}
+              <div className="bg-gradient-to-r from-orange-500 to-rose-500 rounded-3xl p-6 md:p-8 text-white shadow-lg relative overflow-hidden">
+                  <Wand2 size={120} className="absolute -right-5 -bottom-5 opacity-20" />
+                  <h4 className="text-2xl font-black mb-3 flex items-center gap-2 relative z-10"><Sparkles /> AI Smart Pricing & Campaign Builder</h4>
+                  <p className="text-sm opacity-90 mb-6 max-w-2xl leading-relaxed relative z-10">
+                      ให้ AI วิเคราะห์สต็อก ต้นทุน (Cost) และราคาขายทั้งหมดของคุณ เพื่อคำนวณหาสินค้าที่เหมาะสม และตั้ง "ราคาโปรโมชั่น" 
+                      ที่จะช่วยเพิ่มโอกาสปิดการขายให้ถึงเป้าหมายไปพร้อมกับรักษาผลกำไร (Margin) ได้สูงสุด
+                  </p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 max-w-lg relative z-10">
+                      <div>
+                          <label className="text-[10px] font-bold text-white uppercase opacity-80">เป้าหมายยอดขายที่ต้องการ (บาท)</label>
+                          <input type="number" value={aiTargetSales} onChange={e=>setAiTargetSales(Number(e.target.value))} className="w-full mt-1 bg-white/20 border border-white/30 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-white placeholder-white/50 transition-colors" placeholder="เช่น 100000" />
+                      </div>
+                      <div>
+                          <label className="text-[10px] font-bold text-white uppercase opacity-80">ระยะเวลาแคมเปญ (วัน)</label>
+                          <input type="number" value={aiDuration} onChange={e=>setAiDuration(Number(e.target.value))} className="w-full mt-1 bg-white/20 border border-white/30 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-white placeholder-white/50 transition-colors" placeholder="เช่น 30" />
+                      </div>
+                  </div>
+
+                  <button onClick={handleAutoBuildCampaign} disabled={isAutoBuilding} className="relative z-10 bg-white text-orange-600 px-6 py-3.5 rounded-xl font-bold shadow-md hover:bg-orange-50 transition-all flex items-center gap-2 disabled:opacity-80">
+                      {isAutoBuilding ? <Loader size={18} className="animate-spin"/> : <Zap size={18}/>}
+                      {isAutoBuilding ? 'AI กำลังคำนวณโครงสร้างกำไรสูงสุด...' : 'คำนวณโปรโมชั่นกำไรสูงสุดอัตโนมัติ'}
+                  </button>
+              </div>
+
+              <div className="text-center mb-8">
+                  <h3 className="text-2xl font-black text-slate-800">สร้างแคมเปญด้วยตัวเอง (Manual Build)</h3>
+                  <p className="text-slate-500 mt-2">ออกแบบแคมเปญตาม Format ของ Shopee เพื่อนำไปตั้งค่าใน Seller Centre</p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
+                  <div onClick={() => createShopeeCampaign('shopee_bundle')} className="bg-slate-50 hover:bg-orange-50 border-2 border-slate-100 hover:border-orange-500 p-6 rounded-3xl cursor-pointer transition-all group text-center">
+                      <Layers size={32} className="text-slate-400 group-hover:text-orange-500 mx-auto mb-4 transition-colors"/>
+                      <h4 className="font-bold text-slate-800 mb-2">Bundle Deal</h4>
+                      <p className="text-xs text-slate-500">แคมเปญซื้อจัดชุด ยิ่งซื้อเยอะยิ่งลดเยอะ (เช่น ซื้อ 2 ลด 5%)</p>
+                  </div>
+                  <div onClick={() => createShopeeCampaign('shopee_addon')} className="bg-slate-50 hover:bg-orange-50 border-2 border-slate-100 hover:border-orange-500 p-6 rounded-3xl cursor-pointer transition-all group text-center">
+                      <PlusCircle size={32} className="text-slate-400 group-hover:text-orange-500 mx-auto mb-4 transition-colors"/>
+                      <h4 className="font-bold text-slate-800 mb-2">Add-on Deal</h4>
+                      <p className="text-xs text-slate-500">แคมเปญซื้อสินค้าหลัก แลกซื้อสินค้ารองในราคาพิเศษ</p>
+                  </div>
+                  <div onClick={() => createShopeeCampaign('shopee_voucher')} className="bg-slate-50 hover:bg-orange-50 border-2 border-slate-100 hover:border-orange-500 p-6 rounded-3xl cursor-pointer transition-all group text-center">
+                      <Ticket size={32} className="text-slate-400 group-hover:text-orange-500 mx-auto mb-4 transition-colors"/>
+                      <h4 className="font-bold text-slate-800 mb-2">Shop Voucher</h4>
+                      <p className="text-xs text-slate-500">สร้างโค้ดส่วนลดร้านค้า แจกให้ลูกค้าเก็บไปใช้เป็นส่วนลดบิล</p>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {promoTab === 'ai_team' && (
+          <div className="bg-slate-900 p-8 rounded-[40px] shadow-2xl text-white animate-fadeIn">
+              <div className="flex items-center gap-4 mb-8 border-b border-white/10 pb-6">
+                  <div className="bg-indigo-500 p-3 rounded-2xl"><Users size={28} className="text-white"/></div>
+                  <div>
+                      <h3 className="text-2xl font-black text-white">AI Marketing War Room</h3>
+                      <p className="text-indigo-200 text-sm mt-1">ห้องประชุมวิเคราะห์กลยุทธ์ นำทีมโดยผู้เชี่ยวชาญ Data, Marketing และ Finance</p>
+                  </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  <div className="lg:col-span-1 bg-slate-800 p-6 rounded-3xl border border-slate-700 space-y-5 h-fit">
+                      <h4 className="font-bold text-indigo-300 border-b border-slate-700 pb-3 mb-4">กำหนดโจทย์ให้ทีมงาน</h4>
+                      <div>
+                          <label className="text-xs font-bold text-slate-400 uppercase">เป้าหมายหลัก (Objective)</label>
+                          <select value={aiGoal} onChange={e=>setAiGoal(e.target.value)} className="w-full mt-2 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-indigo-500">
+                              <option value="reach_target_sales">ทำยอดขายตามเป้าหมาย (Reach Target Sales)</option>
+                              <option value="increase_aov">เพิ่มยอดซื้อต่อบิล (Increase AOV)</option>
+                              <option value="clear_stock">ระบายสต็อก/สินค้าเก่า (Clear Stock)</option>
+                              <option value="new_customer">หาลูกค้ารายใหม่ (Acquisition)</option>
+                          </select>
+                      </div>
+
+                      {aiGoal === 'reach_target_sales' ? (
+                          <div className="grid grid-cols-2 gap-4 mt-2">
+                              <div>
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase">เป้ายอดขาย (฿)</label>
+                                  <input type="number" value={aiTargetSales} onChange={e=>setAiTargetSales(Number(e.target.value))} className="w-full mt-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm font-bold text-emerald-400 outline-none focus:border-indigo-500" placeholder="100000" />
+                              </div>
+                              <div>
+                                  <label className="text-[10px] font-bold text-slate-400 uppercase">ระยะเวลา (วัน)</label>
+                                  <input type="number" value={aiDuration} onChange={e=>setAiDuration(Number(e.target.value))} className="w-full mt-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm font-bold text-amber-400 outline-none focus:border-indigo-500" placeholder="30" />
+                              </div>
+                          </div>
+                      ) : (
+                          <div className="mt-2">
+                              <label className="text-xs font-bold text-slate-400 uppercase">งบประมาณสำหรับแคมเปญ (฿)</label>
+                              <input type="number" value={aiBudget} onChange={e=>setAiBudget(Number(e.target.value))} className="w-full mt-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm font-bold text-emerald-400 outline-none focus:border-indigo-500" placeholder="เช่น 5000" />
+                          </div>
+                      )}
+
+                      <div>
+                          <label className="text-xs font-bold text-slate-400 uppercase">สินค้าเป้าหมาย (SKU หรือ ชื่อ)</label>
+                          <input type="text" value={aiHeroSku} onChange={e=>setAiHeroSku(e.target.value)} className="w-full mt-2 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-indigo-500" placeholder="เช่น เซรั่มสูตร A (ถ้ามี)" />
+                      </div>
+                      <button onClick={handleCallTeam} disabled={isAnalyzing} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-xl font-black shadow-lg transition-all flex justify-center items-center gap-2 mt-4 disabled:opacity-50">
+                          {isAnalyzing ? <Loader className="animate-spin" size={18}/> : <Activity size={18}/>} เรียกประชุมทีม (Analyze)
+                      </button>
+                  </div>
+
+                  <div className="lg:col-span-2 relative min-h-[400px]">
+                      {isAnalyzing ? (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center text-indigo-400">
+                              <Loader size={48} className="animate-spin mb-4 opacity-50"/>
+                              <p className="font-bold animate-pulse">ทีมงานกำลังถกเถียงและวิเคราะห์ข้อมูล...</p>
+                          </div>
+                      ) : teamAnalysis.length > 0 ? (
+                          <div className="space-y-4 animate-fadeIn">
+                              <h4 className="font-bold text-slate-300 mb-4 flex items-center gap-2"><Sparkles size={16} className="text-amber-400"/> สรุปแผนการตลาด (Action Plan)</h4>
+                              {teamAnalysis.map((chat, idx) => (
+                                  <div key={idx} className="bg-slate-800 p-5 rounded-3xl border border-slate-700 flex gap-4">
+                                      <div className={`w-12 h-12 shrink-0 rounded-2xl flex items-center justify-center ${chat.color}`}>
+                                          {chat.icon}
+                                      </div>
+                                      <div>
+                                          <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1">{chat.name}</p>
+                                          <p className="text-sm text-slate-200 leading-relaxed font-medium">{chat.text}</p>
+                                      </div>
+                                  </div>
+                              ))}
+                              <div className="mt-6 p-5 bg-indigo-900/40 border border-indigo-500/30 rounded-3xl flex justify-between items-center">
+                                  <p className="text-sm font-bold text-indigo-200">พร้อมใช้งานแผนนี้บน Shopee หรือยัง?</p>
+                                  <button onClick={() => setPromoTab('shopee_builder')} className="bg-orange-500 hover:bg-orange-400 px-5 py-2.5 rounded-xl font-bold text-xs text-white shadow-lg transition-colors">
+                                      ไปสร้างแคมเปญ
+                                  </button>
+                              </div>
+                          </div>
+                      ) : (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 border-2 border-dashed border-slate-700 rounded-3xl">
+                              <Users size={64} className="mb-4 opacity-20"/>
+                              <p className="font-bold text-slate-400">ทีมงานพร้อมประชุมแล้ว</p>
+                              <p className="text-xs mt-2">ระบุเป้าหมายด้านซ้ายแล้วกดเรียกประชุมได้เลย</p>
+                          </div>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Shopee Form Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[999] flex items-center justify-center p-4">
+          <div className="bg-white rounded-[32px] w-full max-w-xl shadow-2xl animate-in zoom-in-95 overflow-hidden">
+            <div className={`p-6 border-b flex justify-between items-center ${formData.type.includes('shopee') ? 'bg-orange-50' : 'bg-slate-50'}`}>
+              <h3 className={`text-xl font-black flex items-center gap-2 ${formData.type.includes('shopee') ? 'text-orange-600' : 'text-slate-800'}`}>
+                  {formData.type.includes('shopee') ? <ShoppingBag size={20}/> : <Settings size={20}/>} 
+                  {editingId ? 'แก้ไขแคมเปญ' : 'สร้างแคมเปญใหม่'}
+              </h3>
+              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors"><X size={20}/></button>
+            </div>
+            
+            <form onSubmit={handleSave} className="p-6 space-y-5 max-h-[75vh] overflow-y-auto custom-scrollbar">
+              
+              {formData.rationale && (
+                  <div className="bg-orange-50 border border-orange-200 p-5 rounded-2xl text-orange-800 text-sm shadow-sm">
+                      <p className="font-black mb-2 flex items-center gap-1.5"><Sparkles size={16}/> AI Pricing Strategy (กลยุทธ์ทำกำไร)</p>
+                      <p className="leading-relaxed font-medium">{formData.rationale}</p>
+                  </div>
+              )}
+
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">ชื่อแคมเปญ (Campaign Name)</label>
+                <input required value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-orange-200" placeholder="เช่น PAYDAY ซื้อ 2 ลด 10%" />
+              </div>
+              
+              {!formData.type.includes('shopee') && (
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase">ประเภท (Local POS)</label>
+                  <select value={formData.type} onChange={e=>setFormData({...formData, type: e.target.value})} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none">
+                    <option value="threshold_discount">ลดเงินสด (ซื้อครบ X ลด Y บาท)</option>
+                    <option value="percentage_discount">ลดเปอร์เซ็นต์ (ซื้อครบ X ลด Y%)</option>
+                    <option value="buy_x_get_y">แถมสินค้า (ซื้อ X แถม Y)</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Shopee Bundle Deal */}
+              {formData.type === 'shopee_bundle' && (
+                <div className="space-y-4 bg-orange-50/50 p-5 rounded-2xl border border-orange-100">
+                  <div>
+                      <label className="text-[10px] font-bold text-orange-600 uppercase">ประเภทส่วนลด Bundle</label>
+                      <select value={formData.bundleType} onChange={e=>setFormData({...formData, bundleType: e.target.value})} className="w-full mt-1 bg-white border border-orange-200 rounded-lg p-2 text-sm font-bold outline-none focus:border-orange-400">
+                          <option value="percentage">ส่วนลดเปอร์เซ็นต์ (อิงตาม Shopee)</option>
+                          <option value="amount">ส่วนลดเป็นจำนวนเงิน</option>
+                      </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">ซื้อครบกี่ชิ้น?</label>
+                      <input required type="number" min="2" value={formData.minQty} onChange={e=>setFormData({...formData, minQty: e.target.value})} className="w-full mt-1 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none focus:border-orange-400" placeholder="เช่น 2" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">{formData.bundleType === 'percentage' ? 'ลดกี่เปอร์เซ็นต์ (%)' : 'ลดกี่บาท (฿)'}</label>
+                      <input required type="number" value={formData.bundleType === 'percentage' ? formData.discountPercentage : formData.discountAmount} onChange={e=> formData.bundleType === 'percentage' ? setFormData({...formData, discountPercentage: e.target.value}) : setFormData({...formData, discountAmount: e.target.value})} className="w-full mt-1 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none focus:border-orange-400 text-orange-600" placeholder="ระบุส่วนลด" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Shopee Add-on Deal */}
+              {formData.type === 'shopee_addon' && (
+                <div className="space-y-4 bg-orange-50/50 p-5 rounded-2xl border border-orange-100">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">สินค้าหลัก (Main SKU)</label>
+                    <input required value={formData.addonMainSku} onChange={e=>setFormData({...formData, addonMainSku: e.target.value})} className="w-full mt-1 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none focus:border-orange-400" placeholder="SKU สินค้าที่ต้องซื้อก่อน" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 pt-2 border-t border-orange-200/50">
+                    <div>
+                      <label className="text-[10px] font-bold text-orange-600 uppercase">สินค้า Add-on (แลกซื้อ)</label>
+                      <input required value={formData.addonSubSku} onChange={e=>setFormData({...formData, addonSubSku: e.target.value})} className="w-full mt-1 bg-white border border-orange-200 rounded-lg p-2 text-sm font-bold outline-none focus:border-orange-400" placeholder="SKU สินค้าที่ได้สิทธิ์" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-emerald-600 uppercase">ราคาพิเศษ (Add-on Price)</label>
+                      <input required type="number" value={formData.addonPrice} onChange={e=>setFormData({...formData, addonPrice: e.target.value})} className="w-full mt-1 bg-white border border-emerald-200 rounded-lg p-2 text-sm font-bold outline-none text-emerald-600 focus:border-emerald-400" placeholder="เช่น 99 ฿" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Shopee Voucher */}
+              {formData.type === 'shopee_voucher' && (
+                <div className="space-y-4 bg-orange-50/50 p-5 rounded-2xl border border-orange-100">
+                  <div>
+                    <label className="text-[10px] font-bold text-orange-600 uppercase">รหัสโค้ด (Voucher Code)</label>
+                    <input required value={formData.voucherCode} onChange={e=>setFormData({...formData, voucherCode: e.target.value.toUpperCase()})} className="w-full mt-1 bg-white border border-orange-200 rounded-lg p-3 text-sm font-black font-mono tracking-widest uppercase outline-none focus:border-orange-400 text-orange-700" placeholder="เช่น SHOP123" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">ยอดซื้อขั้นต่ำ (฿)</label>
+                      <input required type="number" value={formData.minAmount} onChange={e=>setFormData({...formData, minAmount: e.target.value})} className="w-full mt-1 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none focus:border-orange-400" placeholder="0 = ไม่มีขั้นต่ำ" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">ส่วนลด (฿)</label>
+                      <input required type="number" value={formData.discountAmount} onChange={e=>setFormData({...formData, discountAmount: e.target.value})} className="w-full mt-1 bg-white border border-rose-200 rounded-lg p-2 text-sm font-bold text-rose-600 outline-none focus:border-rose-400" placeholder="ระบุส่วนลด" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <label className="flex items-center gap-2 cursor-pointer pt-2 bg-slate-50 p-4 rounded-xl">
+                <input type="checkbox" checked={formData.isActive} onChange={e=>setFormData({...formData, isActive: e.target.checked})} className={`w-5 h-5 rounded border-slate-300 ${formData.type.includes('shopee') ? 'text-orange-500' : 'text-indigo-600'}`} />
+                <span className="text-sm font-bold text-slate-700">เปิดใช้งาน (Active)</span>
+              </label>
+
+              <div className="pt-4 flex gap-3">
+                <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600">ยกเลิก</button>
+                <button type="submit" className={`flex-1 py-3 text-white rounded-xl font-bold shadow-lg ${formData.type.includes('shopee') ? 'bg-orange-500 hover:bg-orange-600 shadow-orange-100' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100'}`}>บันทึกแคมเปญ</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Main App Component ---
 export default function App() {
   const [user, setUser] = useState(null);
@@ -4820,6 +5809,7 @@ export default function App() {
   const [targetIdToDelete, setTargetIdToDelete] = useState('');
   const [isMigrating, setIsMigrating] = useState(false);
   const [showMigrateConfirm, setShowMigrateConfirm] = useState(false);
+  const [promotions, setPromotions] = useState([]);
 
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
@@ -4842,7 +5832,8 @@ export default function App() {
     const unsubExp = onSnapshot(query(path('transactions_expense')), (s) => setTransactions(prev => [...prev.filter(t=>t.type!=='expense'), ...s.docs.map(d=>({id:d.id, ...d.data(), type:'expense', date: normalizeDate(d.data().date)}))]), errorFn);
     const unsubInv = onSnapshot(query(path('invoices')), (s) => { setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))); setLoading(false); }, errorFn);
     const unsubStock = onSnapshot(query(path('inventory_batches')), (s) => setStockBatches(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
-    return () => { unsubInc(); unsubExp(); unsubInv(); unsubStock(); };
+    const unsubPromo = onSnapshot(query(path('promotions')), (s) => setPromotions(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
+    return () => { unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubPromo(); };
   }, [user, currentAppId]);
 
   const forceDeleteById = async () => {
@@ -4999,14 +5990,114 @@ export default function App() {
     }
   };
 
+  const syncInvoiceDates = async () => {
+    setIsMigrating(true);
+    try {
+      addToast("กำลังตรวจสอบและแก้ไขเลข ABB/วันที่ ให้ตรงกับออเดอร์...", "success");
+      let batchWriter = writeBatch(dbInstance);
+      let opsCount = 0;
+      let updateCount = 0;
+
+      const prefixMap = { credit_note: 'CN-', abb: 'ABB-', quotation: 'QUO-', receipt: 'REC-', invoice: 'INV-' };
+      let counters = {};
+
+      const getRunningNum = (pfx) => {
+          return invoices.reduce((max, item) => {
+              if (item.invNo && String(item.invNo).startsWith(pfx)) {
+                  const n = parseInt(String(item.invNo).replace(pfx, ''), 10);
+                  return !isNaN(n) && n > max ? n : max;
+              }
+              return max;
+          }, 0);
+      };
+
+      for (const inv of invoices) {
+        if (inv.orderId) {
+          const trans = transactions.find(t => t.orderId === inv.orderId && t.type === 'income');
+          if (trans && trans.date) {
+            const transD = normalizeDate(trans.date);
+            const invD = normalizeDate(inv.date);
+            
+            const dStr = formatDateISO(transD).replace(/-/g, '');
+            const pfx = prefixMap[inv.docType] || 'INV-';
+            const expectedPrefix = `${pfx}${dStr}-`;
+            
+            let needsUpdate = false;
+            let updates = {};
+            let newInvNo = inv.invNo;
+
+            // ถ้าวันที่ในใบกำกับไม่ตรงกับวันที่ทำรายการ
+            if (transD && invD && transD.getTime() !== invD.getTime()) {
+              needsUpdate = true;
+              updates.date = transD;
+              updates.orderDate = transD;
+            }
+
+            // ตรวจสอบเลขที่เอกสารว่า Prefix ตรงกับวันที่ทำรายการไหม (แก้ปัญหาเลข ABB ขึ้นต้นด้วยวันที่ผิด)
+            if (inv.invNo && !String(inv.invNo).startsWith(expectedPrefix)) {
+              needsUpdate = true;
+              if (counters[expectedPrefix] === undefined) {
+                  counters[expectedPrefix] = getRunningNum(expectedPrefix);
+              }
+              counters[expectedPrefix]++;
+              newInvNo = `${expectedPrefix}${String(counters[expectedPrefix]).padStart(5, '0')}`;
+              updates.invNo = newInvNo;
+              
+              // เซ็ตวันที่ให้ชัวร์ว่าตรงกันด้วยเผื่อกรณีมีแค่เลขผิดแต่วันที่ถูก
+              updates.date = transD;
+              updates.orderDate = transD;
+            }
+            
+            if (needsUpdate) {
+              const invRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'invoices', inv.id);
+              batchWriter.update(invRef, updates);
+              opsCount++;
+              
+              // ถ้ามีการเปลี่ยนเลขที่เอกสาร ต้องไปอัปเดตใน transactions ด้วยเพื่อให้ลิงก์กลับมาถูก
+              if (updates.invNo) {
+                  const tRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'transactions_income', trans.id);
+                  batchWriter.update(tRef, { invoiceNo: newInvNo });
+                  opsCount++;
+              }
+
+              updateCount++;
+              
+              if (opsCount >= 400) {
+                await batchWriter.commit();
+                batchWriter = writeBatch(dbInstance);
+                opsCount = 0;
+              }
+            }
+          }
+        }
+      }
+      
+      if (opsCount > 0) {
+        await batchWriter.commit();
+      }
+      
+      if (updateCount > 0) {
+        addToast(`แก้เลขเอกสารและซิงค์วันที่สำเร็จ ${updateCount} รายการ`, "success");
+      } else {
+        addToast("เลข ABB และวันที่ถูกต้องตรงกันกับออเดอร์อยู่แล้ว", "success");
+      }
+    } catch (e) {
+      console.error(e);
+      addToast("เกิดข้อผิดพลาดในการซิงค์ข้อมูล", "error");
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
   const renderContent = () => {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
-      case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={currentAppId} stockBatches={stockBatches} showToast={addToast} onIssueInvoice={(t)=>{setPreFillInvoice(t); setActiveTab('invoice');}} />;
+      case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={currentAppId} stockBatches={stockBatches} showToast={addToast} onIssueInvoice={(t)=>{setPreFillInvoice(t); setActiveTab('invoice');}} promotions={promotions} />;
       case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} />;
       case 'stock': return <StockManager appId={currentAppId} stockBatches={stockBatches} showToast={addToast} user={user} transactions={transactions} />;
-      case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} transactions={transactions} appId={currentAppId} showToast={addToast} preFillData={preFillInvoice} />;
+      case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} transactions={transactions} appId={currentAppId} showToast={addToast} preFillData={preFillInvoice} promotions={promotions} />;
       case 'reports': return <TaxReports transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} user={user} />;
+      case 'promotions': return <PromotionManager appId={currentAppId} promotions={promotions} showToast={addToast} user={user} stockBatches={stockBatches} />;
       default: return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
     }
   };
@@ -5069,13 +6160,17 @@ export default function App() {
       )}
       <aside className="w-72 bg-slate-900 text-white flex flex-col border-r border-slate-800 shadow-2xl h-full shrink-0 text-left">
         <div className="p-8 border-b border-slate-800 flex items-center gap-3 text-left"><div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-center"><Wallet size={20} className="text-white text-center"/></div><h1 className="text-xl font-bold tracking-tight text-left">MerchantTax</h1></div>
-        <nav className="p-6 space-y-4 flex-1 overflow-y-auto text-left"><NavButton active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard');}} icon={<PieChart size={18} className="text-center"/>} label="แดชบอร์ด" /><p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Operations</p><NavButton active={activeTab === 'records'} onClick={()=>{setActiveTab('records');}} icon={<Store size={18} className="text-center"/>} label="บันทึกขาย/หน้าร้าน" /><NavButton active={activeTab === 'import'} onClick={()=>{setActiveTab('import');}} icon={<FileUp size={18} className="text-center"/>} label="Bulk Import" /><NavButton active={activeTab === 'stock'} onClick={()=>{setActiveTab('stock');}} icon={<Box size={18} className="text-center"/>} label="คลังสินค้า FIFO" /><NavButton active={activeTab === 'invoice'} onClick={()=>{setActiveTab('invoice'); setPreFillInvoice(null);}} icon={<Printer size={18} className="text-center"/>} label="ใบกำกับภาษี Pro" /><NavButton active={activeTab === 'reports'} onClick={()=>{setActiveTab('reports');}} icon={<ClipboardList size={18} className="text-center"/>} label="รายงานภาษี and บัญชี" /></nav>
+        <nav className="p-6 space-y-4 flex-1 overflow-y-auto text-left"><NavButton active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard');}} icon={<PieChart size={18} className="text-center"/>} label="แดชบอร์ด" /><p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Operations</p><NavButton active={activeTab === 'records'} onClick={()=>{setActiveTab('records');}} icon={<Store size={18} className="text-center"/>} label="บันทึกขาย/หน้าร้าน" /><NavButton active={activeTab === 'promotions'} onClick={()=>{setActiveTab('promotions');}} icon={<Gift size={18} className="text-center"/>} label="ปรึกษาโปรโมชั่น (AI)" /><NavButton active={activeTab === 'import'} onClick={()=>{setActiveTab('import');}} icon={<FileUp size={18} className="text-center"/>} label="Bulk Import" /><NavButton active={activeTab === 'stock'} onClick={()=>{setActiveTab('stock');}} icon={<Box size={18} className="text-center"/>} label="คลังสินค้า FIFO" /><NavButton active={activeTab === 'invoice'} onClick={()=>{setActiveTab('invoice'); setPreFillInvoice(null);}} icon={<Printer size={18} className="text-center"/>} label="ใบกำกับภาษี Pro" /><NavButton active={activeTab === 'reports'} onClick={()=>{setActiveTab('reports');}} icon={<ClipboardList size={18} className="text-center"/>} label="รายงานภาษี and บัญชี" /></nav>
         <div className="p-4 bg-black/20 border-t border-slate-800 space-y-2 text-left">
           <button onClick={toggleAppMode} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-slate-800 text-indigo-300 ring-1 ring-slate-700 hover:bg-slate-700 transition-all text-left"><Database size={14} className="text-center"/> DB Instance: {currentAppId}</button>
           
           <button onClick={() => setShowMigrateConfirm(true)} disabled={isMigrating} className={`w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 ring-1 transition-all text-left mt-2 ${isMigrating ? 'bg-amber-900/50 text-amber-500 ring-amber-800/50 cursor-not-allowed' : 'bg-amber-900/30 text-amber-300 ring-amber-800/50 hover:bg-amber-900/50'}`}>
             {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} 
             {isMigrating ? 'กำลังรันเลขเอกสาร...' : 'รันเลขเอกสารที่ตกหล่น'}
+          </button>
+
+          <button onClick={syncInvoiceDates} disabled={isMigrating} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-emerald-900/30 text-emerald-300 ring-1 ring-emerald-800/50 hover:bg-emerald-900/50 transition-all text-left mt-2">
+            <RefreshCw size={14} className="text-center"/> ซิงค์วันที่และแก้เลข ABB ให้ตรงออเดอร์
           </button>
 
           <button onClick={()=>setShowIdDeleteTool(true)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-rose-900/30 text-rose-300 ring-1 ring-rose-800/50 hover:bg-rose-900/50 transition-all text-left mt-2"><Trash2 size={14} className="text-center"/> ลบทิ้งด้วย ID</button>
