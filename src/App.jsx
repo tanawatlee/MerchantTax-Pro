@@ -1307,6 +1307,31 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
             )}
           </div>
           
+          {/* NEW: Preview Summary Section */}
+          {importedData.length > 0 && (
+              <div className="p-5 bg-indigo-50/30 border-b border-indigo-50 flex flex-col gap-3">
+                  <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5"><PieChart size={14}/> สรุปข้อมูลรอการยืนยัน (Preview Summary)</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-white p-3 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">รายการพร้อมบันทึก</p>
+                          <p className="text-xl font-black text-indigo-600">{stats.processed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                      </div>
+                      <div className="bg-white p-3 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม (Income)</p>
+                          <p className="text-xl font-black text-emerald-600">{formatCurrency(stats.totalAmount)} <span className="text-[10px] font-bold text-slate-400">฿</span></p>
+                      </div>
+                      <div className="bg-white p-3 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม (Fees)</p>
+                          <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)} <span className="text-[10px] font-bold text-slate-400">฿</span></p>
+                      </div>
+                      <div className="bg-white p-3 rounded-2xl border border-amber-100 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ข้าม / ข้อมูลซ้ำ</p>
+                          <p className="text-xl font-black text-amber-500">{stats.skipped} / {stats.duplicates || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
+                      </div>
+                  </div>
+              </div>
+          )}
+          
           {anomalyAlerts.length > 0 && (
               <div className="bg-rose-50 p-4 border-b border-rose-100">
                   <h4 className="font-bold text-rose-700 text-xs mb-2 flex items-center gap-1"><AlertTriangle size={14}/> AI Detected Anomalies (พบความผิดปกติ)</h4>
@@ -3656,6 +3681,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     let transactionCount = 0;
 
     const categories = {};
+    const dailyData = {}; // NEW: สำหรับเก็บข้อมูลรายจ่ายรายวัน
 
     const start = new Date(summaryStartDate || '2000-01-01');
     start.setHours(0,0,0,0);
@@ -3684,6 +3710,17 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             explicitExpenseTotal += amt;
             const cat = t.category || 'อื่นๆ';
             categories[cat] = (categories[cat] || 0) + amt;
+
+            // NEW: จัดกลุ่มรายจ่ายตามวันที่
+            const dDate = normalizeDate(t.date);
+            if (dDate) {
+                const dStr = formatDateISO(dDate);
+                if (!dailyData[dStr]) {
+                    dailyData[dStr] = { dateObj: dDate, count: 0, amount: 0 };
+                }
+                dailyData[dStr].count += 1;
+                dailyData[dStr].amount += amt;
+            }
         } else if (t.type === 'income') {
             platformFeeTotal += (Number(t.platformFee) || 0);
             estShippingTotal += (Number(t.estimatedShippingFee) || 0);
@@ -3702,11 +3739,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     const topCategories = Object.entries(categories)
         .map(([name, value]) => ({ name, value, percentage: explicitExpenseTotal > 0 ? (value / explicitExpenseTotal) * 100 : 0 }))
         .sort((a, b) => b.value - a.value);
+
+    // NEW: เรียงลำดับข้อมูลรายวันจากใหม่ไปเก่า
+    const dailyExpensesArray = Object.values(dailyData).sort((a, b) => b.dateObj - a.dateObj);
         
     return { 
         explicitExpenseTotal, platformFeeTotal, estShippingTotal, buyerShippingTotal, 
         subsidyShippingTotal, returnShippingTotal, discountTotal, totalBusinessCost, 
-        hiddenCosts, shippingBalance, whtTotal, topCategories, count: transactionCount 
+        hiddenCosts, shippingBalance, whtTotal, topCategories, dailyExpenses: dailyExpensesArray, count: transactionCount 
     };
   }, [transactions, summaryStartDate, summaryEndDate, summaryChannel, summaryCategory]);
 
@@ -4176,7 +4216,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
              {/* Left Column: Direct Expenses Breakdown */}
-             <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm flex flex-col">
+             <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm flex flex-col h-full min-h-[400px]">
                 <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4">
                     <div className="p-3 bg-slate-50 text-slate-600 rounded-2xl"><PieChart size={24}/></div>
                     <div>
@@ -4209,6 +4249,39 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             <p className="text-sm font-bold">ยังไม่มีข้อมูลรายจ่ายทางตรง</p>
                         </div>
                     )}
+                </div>
+             </div>
+
+             {/* Right Column: Daily Expenses Summary */}
+             <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm flex flex-col h-full min-h-[400px]">
+                <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4">
+                    <div className="p-3 bg-rose-50 text-rose-600 rounded-2xl"><Calendar size={24}/></div>
+                    <div>
+                        <h4 className="text-lg font-black text-slate-800">สรุปรายจ่ายรายวัน</h4>
+                        <p className="text-xs text-slate-400 font-medium">Daily Expense Tracking</p>
+                    </div>
+                </div>
+                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-400 sticky top-0 z-10">
+                            <tr>
+                                <th className="p-3 text-left rounded-tl-xl border-b border-slate-100">วันที่</th>
+                                <th className="p-3 text-center border-b border-slate-100">จำนวนบิล</th>
+                                <th className="p-3 text-right rounded-tr-xl border-b border-slate-100">ยอดรวม (฿)</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {expenseSummary.dailyExpenses && expenseSummary.dailyExpenses.length > 0 ? expenseSummary.dailyExpenses.map((day, idx) => (
+                                <tr key={idx} className="hover:bg-rose-50/30 transition-colors">
+                                    <td className="p-3 font-bold text-slate-700">{formatDate(day.dateObj)}</td>
+                                    <td className="p-3 text-center font-bold text-slate-500 bg-slate-50/50">{day.count} ใบ</td>
+                                    <td className="p-3 text-right font-black text-rose-600">{formatCurrency(day.amount)}</td>
+                                </tr>
+                            )) : (
+                                <tr><td colSpan="3" className="p-10 text-center text-slate-300 font-bold">ไม่มีข้อมูลรายจ่ายในช่วงเวลานี้</td></tr>
+                            )}
+                        </tbody>
+                    </table>
                 </div>
              </div>
           </div>
