@@ -35,8 +35,8 @@ const CONSTANTS = {
   SHOPS: ['eats and use', 'bubee bubee', 'ไม่ระบุ'],
   CATEGORIES: {
     INCOME: ['รายได้จากการขายสินค้า', 'รายได้จากการให้บริการ', 'รายได้ค่านายหน้า/ตัวแทน', 'รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'],
-    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าขนส่ง', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า'],
-    STOCK: ['อาหาร and เครื่องดื่ม', 'ของใช้ส่วนตัว', 'ผลิตภัณฑ์ในครัวเรือน', 'ผลิตภัณฑ์ดูแลผ้า', 'แม่ and เด็ก', 'สุขภาพ and ความงาม', 'สัตว์เลี้ยง', 'ขนม and ของว่าง', 'เครื่องปรุง/วัตถุดิบ', 'อื่นๆ']
+    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าแพ็คกิ้ง/บรรจุภัณฑ์', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าขนส่ง', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า'],
+    STOCK: ['อาหาร and เครื่องดื่ม', 'ของใช้ส่วนตัว', 'ผลิตภัณฑ์ในครัวเรือน', 'ผลิตภัณฑ์ดูแลผ้า', 'แม่ and เด็ก', 'สุขภาพ and ความงาม', 'สัตว์เลี้ยง', 'ขนม and ของว่าง', 'เครื่องปรุง/วัตถุดิบ', 'บรรจุภัณฑ์/อุปกรณ์แพ็ค', 'อื่นๆ']
   },
   CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
   VAT_RATES: { INCLUDED: 'included', EXCLUDED: 'excluded', NONE: 'none' }
@@ -1928,10 +1928,16 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                     </div>
                     <input required value={newStock.productName} onChange={e=>setNewStock({...newStock, productName: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold outline-none text-slate-800" placeholder="ระบุชื่อสินค้า..." />
                  </div>
-                 <div className="grid grid-cols-2 gap-4 text-left">
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-left">
                     <div className="space-y-2 text-left">
                         <label className="text-[10px] font-bold uppercase text-slate-400 text-left">เลข SKU / บาร์โค้ด</label>
                         <input value={newStock.skuManual} onChange={e=>setNewStock({...newStock, skuManual: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border-0 font-mono text-sm font-bold outline-none text-indigo-600" placeholder="ระบุ SKU..." />
+                    </div>
+                    <div className="space-y-2 text-left">
+                        <label className="text-[10px] font-bold uppercase text-slate-400 text-left">หมวดหมู่สินค้า</label>
+                        <select value={newStock.category} onChange={e=>setNewStock({...newStock, category: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border-0 font-bold outline-none text-slate-700">
+                            {CONSTANTS.CATEGORIES.STOCK.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
                     </div>
                     <div className="space-y-2 text-left">
                         <label className="text-[10px] font-bold uppercase text-slate-400 text-left">ประเภทการชำระ</label>
