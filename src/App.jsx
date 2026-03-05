@@ -3340,11 +3340,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   
   const selectStockItem = (item, index) => { 
     const newItems = [...formData.items]; 
-    newItems[index].desc = item.name;
+    const isFree = newItems[index].desc.startsWith('[แถมฟรี]');
+    newItems[index].desc = isFree ? `[แถมฟรี] ${item.name}` : item.name;
     newItems[index].sku = item.sku;
     newItems[index].category = item.category;
     if (formData.type === 'income') {
-        newItems[index].sellPrice = item.sellPrice || 0;
+        newItems[index].sellPrice = isFree ? 0 : (item.sellPrice || 0);
+    } else {
+        if (isFree) newItems[index].buyPrice = 0;
     }
     setFormData({ ...formData, items: newItems }); 
     setShowStockSelectModal(false); 
@@ -3352,6 +3355,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   };
 
   const addLineItem = () => { setFormData({ ...formData, items: [...formData.items, { desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }] }); };
+  const addFreeItem = () => { setFormData({ ...formData, items: [...formData.items, { desc: '[แถมฟรี] ', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }] }); };
   const removeLineItem = (index) => { if (formData.items.length === 1) return; const newItems = formData.items.filter((_, i) => i !== index); setFormData({ ...formData, items: newItems }); };
   const updateLineItem = (index, field, value) => { const newItems = [...formData.items]; newItems[index][field] = value; setFormData({ ...formData, items: newItems }); };
 
@@ -3836,9 +3840,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                 </div>
                 <div className="flex items-center gap-2">
                     {formData.type === 'income' && (
-                        <button type="button" onClick={handleAutoApplyPromo} className="bg-amber-100 text-amber-700 px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-sm hover:bg-amber-200 transition-all text-center"><Wand2 size={18}/> คำนวณโปรโมชั่น</button>
+                        <button type="button" onClick={handleAutoApplyPromo} className="bg-amber-100 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-sm hover:bg-amber-200 transition-all text-center"><Wand2 size={16}/> โปรโมชั่น</button>
                     )}
-                    <button type="button" onClick={addLineItem} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all scale-100 hover:scale-[1.02] active:scale-95 text-center"><Plus size={18}/> เพิ่มรายการ</button>
+                    <button type="button" onClick={addFreeItem} className="bg-emerald-100 text-emerald-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-sm hover:bg-emerald-200 transition-all text-center"><Gift size={16}/> เพิ่มของแจก</button>
+                    <button type="button" onClick={addLineItem} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all scale-100 hover:scale-[1.02] active:scale-95 text-center"><Plus size={16}/> เพิ่มรายการ</button>
                 </div>
               </div>
               <div className="overflow-x-auto text-left">
@@ -3849,39 +3854,49 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       <th className="pb-4 font-black text-slate-400 uppercase text-[10px] tracking-widest text-center w-28 text-center">Quantity</th>
                       <th className="pb-4 font-black text-slate-400 uppercase text-[10px] tracking-widest text-right w-40 text-right">Unit Price</th>
                       <th className="pb-4 font-black text-slate-400 uppercase text-[10px] tracking-widest text-right w-40 pr-2 text-right">Total</th>
-                      <th className="pb-4 w-12 text-center"></th>
+                      <th className="pb-4 w-20 text-center"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50 text-left">
-                    {formData.items.map((item, index) => (
-                      <tr key={index} className="group transition-colors hover:bg-slate-50/50 text-left">
+                    {formData.items.map((item, index) => {
+                      const isFreeItem = item.desc.startsWith('[แถมฟรี]');
+                      return (
+                      <tr key={index} className={`group transition-colors ${isFreeItem ? 'bg-emerald-50/70 border-emerald-100' : 'hover:bg-slate-50/50'} text-left`}>
                         <td className="py-4 pl-2 text-left">
                           <div className="relative text-left">
-                            <input value={item.desc} onChange={e=>updateLineItem(index, 'desc', e.target.value)} className="w-full bg-transparent p-2 rounded-xl text-sm font-bold border-0 focus:ring-0 outline-none text-slate-700 text-left" placeholder="ชื่อสินค้าหรือบริการ..." disabled={item.desc.startsWith('[แถมฟรี]')}/>
-                            {!item.desc.startsWith('[แถมฟรี]') && (
-                                <button type="button" onClick={()=>setShowStockSelectModal(index)} className="absolute -top-3 right-0 text-[9px] text-indigo-600 font-black opacity-0 group-hover:opacity-100 transition-opacity uppercase bg-white border px-2 py-0.5 rounded-full shadow-sm text-center">Pick from Stock</button>
-                            )}
+                            <input value={item.desc} onChange={e=>updateLineItem(index, 'desc', e.target.value)} className={`w-full bg-transparent p-2 rounded-xl text-sm font-bold border-0 focus:ring-0 outline-none ${isFreeItem ? 'text-emerald-700' : 'text-slate-700'} text-left`} placeholder="ชื่อสินค้าหรือบริการ..."/>
+                            <button type="button" onClick={()=>setShowStockSelectModal(index)} className="absolute -top-3 right-0 text-[9px] text-indigo-600 font-black opacity-0 group-hover:opacity-100 transition-opacity uppercase bg-white border px-2 py-0.5 rounded-full shadow-sm text-center">Pick from Stock</button>
                           </div>
                         </td>
                         <td className="py-4 text-center">
                           <div className="flex justify-center text-center">
-                            <input type="number" value={item.qty} onChange={e=>updateLineItem(index, 'qty', e.target.value)} className="w-20 bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-center font-black outline-none text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-center" disabled={item.desc.startsWith('[แถมฟรี]')}/>
+                            <input type="number" value={item.qty} onChange={e=>updateLineItem(index, 'qty', e.target.value)} className="w-20 bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-center font-black outline-none text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-center"/>
                           </div>
                         </td>
                         <td className="py-4 text-right">
                           <div className="relative flex items-center justify-end text-right">
-                            <span className="absolute left-3 text-slate-400 font-bold text-xs text-left">฿</span>
-                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className="w-full bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-right font-black outline-none text-slate-800 pl-8 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-right" disabled={item.desc.startsWith('[แถมฟรี]')}/>
+                            <span className={`absolute left-3 font-bold text-xs text-left ${isFreeItem ? 'text-emerald-400' : 'text-slate-400'}`}>฿</span>
+                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className={`w-full bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-right font-black outline-none pl-8 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-right ${isFreeItem ? 'text-emerald-600' : 'text-slate-800'}`} disabled={isFreeItem}/>
                           </div>
                         </td>
                         <td className="py-4 text-right pr-2 text-right">
-                          <p className="font-black text-slate-900 text-sm text-right">{formatCurrency((formData.type === 'income' ? item.sellPrice : item.buyPrice) * item.qty)}</p>
+                          <p className={`font-black text-sm text-right ${isFreeItem ? 'text-emerald-600' : 'text-slate-900'}`}>{formatCurrency((formData.type === 'income' ? item.sellPrice : item.buyPrice) * item.qty)}</p>
                         </td>
                         <td className="py-4 text-center">
-                          <button type="button" onClick={()=>removeLineItem(index)} className="p-2 text-rose-300 hover:text-rose-600 transition-colors disabled:opacity-0 text-center" disabled={formData.items.length === 1}><Trash2 size={16}/></button>
+                          <div className="flex gap-1 justify-center">
+                              <button type="button" onClick={() => {
+                                  updateLineItem(index, 'desc', isFreeItem ? item.desc.replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').trim() : `[แถมฟรี] ${item.desc}`);
+                                  if (!isFreeItem) {
+                                      updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', 0);
+                                  }
+                              }} className={`p-2 transition-colors rounded-lg ${isFreeItem ? 'text-emerald-600 bg-emerald-100' : 'text-slate-400 hover:text-emerald-500 hover:bg-emerald-50'}`} title="ตั้งเป็นของแจก">
+                                  <Gift size={16}/>
+                              </button>
+                              <button type="button" onClick={()=>removeLineItem(index)} className="p-2 text-rose-300 hover:bg-rose-50 hover:text-rose-600 rounded-lg transition-colors disabled:opacity-0 text-center" disabled={formData.items.length === 1} title="ลบรายการนี้"><Trash2 size={16}/></button>
+                          </div>
                         </td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
@@ -5324,7 +5339,10 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const handleNewInvoice = () => { const currentSavedSeller = JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); setEditingDocId(null); setInvData({ ...initialInvData, ...currentSavedSeller }); setMode('create'); }
   const handleEditInvoice = (inv) => { setInvData({ ...inv, date: formatDateISO(inv.date) }); setEditingDocId(inv.id); setMode('create'); }
   const handleCreateCreditNote = (inv) => { setEditingDocId(null); setInvData({ ...inv, id: undefined, docType: 'credit_note', refInvNo: inv.invNo, creditNoteReason: '', date: formatDateISO(new Date()), invNo: '' }); setMode('create'); }
+  
   const updateItem = (i, field, val) => { setInvData(prev => ({ ...prev, items: prev.items.map((it, idx) => idx === i ? { ...it, [field]: val } : it) })); };
+  const addLineItem = () => { setInvData(prev => ({...prev, items:[...prev.items, {desc:'', qty:1, unit:'ชิ้น', price:0}]})) };
+  const addFreeItem = () => { setInvData(prev => ({...prev, items:[...prev.items, {desc:'[แถมฟรี] ', qty:1, unit:'ชิ้น', price:0}]})) };
 
   const handleAutoApplyPromo = () => {
       if (invData.docType !== 'invoice' && invData.docType !== 'abb' && invData.docType !== 'receipt') {
@@ -6040,18 +6058,29 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                 
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-left">
                   <h4 className="font-bold text-sm text-slate-600 mb-2 text-left">รายการสินค้า</h4>
-                  {invData.items.map((it, i) => (
-                    <div key={i} className="flex gap-2 mb-2 items-center text-left">
+                  {invData.items.map((it, i) => {
+                    const isFreeItem = it.desc.startsWith('[แถมฟรี]');
+                    return (
+                    <div key={i} className={`flex gap-2 mb-2 items-center text-left p-2 rounded-xl transition-colors ${isFreeItem ? 'bg-emerald-50/80 border border-emerald-100' : ''}`}>
                       <span className="text-xs text-slate-400 w-4 text-left">{i+1}.</span>
-                      <input className="flex-[3] border-0 rounded p-2 text-sm shadow-sm text-left" value={it.desc} onChange={e=>updateItem(i,'desc',e.target.value)} disabled={it.desc.startsWith('[แถมฟรี]')}/>
-                      <input className="w-20 border-0 rounded p-2 text-sm text-center shadow-sm text-center" type="number" value={it.qty} onChange={e=>updateItem(i,'qty',Number(e.target.value))} disabled={it.desc.startsWith('[แถมฟรี]')}/>
-                      <input className="w-24 border-0 rounded p-2 text-sm text-right shadow-sm text-right" type="number" value={it.price} onChange={e=>updateItem(i,'price',Number(e.target.value))} disabled={it.desc.startsWith('[แถมฟรี]')}/>
-                      <button onClick={()=>setInvData({...invData, items: invData.items.filter((_,idx)=>idx!==i)})} className="text-rose-400 p-2 text-center"><Trash2 size={16}/></button>
+                      <input className={`flex-[3] border-0 rounded p-2 text-sm shadow-sm text-left ${isFreeItem ? 'text-emerald-700 font-bold bg-white/50' : ''}`} value={it.desc} onChange={e=>updateItem(i,'desc',e.target.value)} />
+                      <input className="w-20 border-0 rounded p-2 text-sm text-center shadow-sm text-center" type="number" value={it.qty} onChange={e=>updateItem(i,'qty',Number(e.target.value))} />
+                      <input className={`w-24 border-0 rounded p-2 text-sm text-right shadow-sm text-right ${isFreeItem ? 'text-emerald-600 font-bold bg-white/50' : ''}`} type="number" value={it.price} onChange={e=>updateItem(i,'price',Number(e.target.value))} disabled={isFreeItem}/>
+                      <div className="flex gap-1 shrink-0">
+                          <button onClick={() => {
+                              updateItem(i, 'desc', isFreeItem ? it.desc.replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').trim() : `[แถมฟรี] ${it.desc}`);
+                              if (!isFreeItem) updateItem(i, 'price', 0);
+                          }} className={`p-2 transition-colors rounded-lg ${isFreeItem ? 'text-emerald-600 bg-emerald-100' : 'text-slate-400 hover:text-emerald-500 hover:bg-emerald-50'}`} title="ตั้งเป็นของแจก">
+                              <Gift size={16}/>
+                          </button>
+                          <button onClick={()=>setInvData({...invData, items: invData.items.filter((_,idx)=>idx!==i)})} className="text-rose-400 p-2 text-center hover:bg-rose-50 rounded-lg transition-colors"><Trash2 size={16}/></button>
+                      </div>
                     </div>
-                  ))}
+                  )})}
                   <div className="flex gap-2 mt-2">
                       <button onClick={handleAutoApplyPromo} className="text-[10px] bg-amber-100 text-amber-700 px-4 py-1.5 rounded-lg flex items-center gap-1 w-fit font-bold shadow-md hover:bg-amber-200 transition-colors text-center"><Wand2 size={14}/> คำนวณโปรโมชั่น</button>
-                      <button onClick={()=>setInvData({...invData, items:[...invData.items, {desc:'', qty:1, unit:'ชิ้น', price:0}]})} className="text-[10px] bg-indigo-600 text-white px-4 py-1.5 rounded-lg flex items-center gap-1 w-fit font-bold shadow-md text-center"><PlusCircle size={14}/> เพิ่มรายการ</button>
+                      <button onClick={addFreeItem} className="text-[10px] bg-emerald-100 text-emerald-700 px-4 py-1.5 rounded-lg flex items-center gap-1 w-fit font-bold shadow-md hover:bg-emerald-200 transition-colors text-center"><Gift size={14}/> เพิ่มของแจก</button>
+                      <button onClick={addLineItem} className="text-[10px] bg-indigo-600 text-white px-4 py-1.5 rounded-lg flex items-center gap-1 w-fit font-bold shadow-md text-center"><PlusCircle size={14}/> เพิ่มรายการ</button>
                   </div>
                 </div>
                 <div className="flex gap-4 text-center">
