@@ -283,11 +283,19 @@ const calculatePromotions = (currentItems, allPromotions) => {
 
 // --- Gemini AI Core Utility ---
 const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
-    const apiKey = localStorage.getItem('gemini_api_key') || "";
-    if (!apiKey) {
-        throw new Error("API_KEY_MISSING");
+    const userApiKey = localStorage.getItem('gemini_api_key');
+    let url = "";
+    
+    if (userApiKey && userApiKey.trim() !== "") {
+        const customKey = userApiKey.trim();
+        // กรณีผู้ใช้ใส่ API Key เอง ให้เชื่อมต่อกับ Public Model
+        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${customKey}`;
+    } else {
+        const apiKey = "";
+        // กรณีไม่มี API Key ให้ระบบแทรก Key อัตโนมัติใน Preview Model
+        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
     }
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
     const parts = [{ text: prompt }];
     
     if (imageBase64) {
@@ -578,9 +586,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
           if (res && res.summary) setAiSummary(res.summary);
       } catch (e) {
           console.error(e);
-          if (e.message === "API_KEY_MISSING" && showToast) {
-              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
-          }
+          if (showToast) showToast("เกิดข้อผิดพลาดในการวิเคราะห์ AI (โปรดตรวจสอบ API Key หรือลองใหม่อีกครั้ง)", "error");
       }
       setIsGeneratingAi(false);
   };
@@ -1077,11 +1083,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           }
       } catch (e) {
           console.error(e);
-          if (e.message === "API_KEY_MISSING") {
-              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
-          } else {
-              showToast("ไม่สามารถเรียก AI ตรวจสอบความผิดปกติได้", "error");
-          }
+          showToast("ไม่สามารถเรียก AI ตรวจสอบความผิดปกติได้ (โปรดตรวจสอบ API Key)", "error");
       }
       setIsCheckingAnomaly(false);
   };
@@ -1754,11 +1756,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           setAiInsights(res);
       } catch (e) {
           console.error(e);
-          if (e.message === "API_KEY_MISSING") {
-              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
-          } else {
-              showToast("วิเคราะห์สต็อกด้วย AI ไม่สำเร็จ", "error");
-          }
+          showToast("วิเคราะห์สต็อกด้วย AI ไม่สำเร็จ (โปรดตรวจสอบ API Key)", "error");
       }
       setIsAnalyzingStock(false);
   };
@@ -2476,11 +2474,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
           if (res && res.advice) setAiTaxAdvice(res.advice);
       } catch (e) {
           console.error(e);
-          if (e.message === "API_KEY_MISSING") {
-              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
-          } else {
-              showToast("ไม่สามารถเรียก AI ที่ปรึกษาภาษีได้", "error");
-          }
+          showToast("ไม่สามารถเรียก AI ที่ปรึกษาภาษีได้ (โปรดตรวจสอบ API Key)", "error");
       }
       setIsGettingTaxAdvice(false);
   };
@@ -3125,14 +3119,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           });
 
           if (diff > 0.01) {
-              let maxExp = transactions.filter(tx => tx.type === 'expense').reduce((m, tx) => {
-                  if (tx.sysDocId && tx.sysDocId.startsWith('EXP-')) {
-                      const num = parseInt(tx.sysDocId.replace('EXP-', ''), 10);
-                      return !isNaN(num) && num > m ? num : m;
-                  }
-                  return m;
-              }, 0);
-              const expSysDocId = `EXP-${String(maxExp + 1).padStart(5, '0')}`;
+              const expSysDocId = generateDateBasedDocId(transactions.filter(tx => tx.type === 'expense'), 'EXP-', settleDate, 'sysDocId');
               
               const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
               batch.set(expRef, {
@@ -3205,11 +3192,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               }
           } catch (err) {
               console.error(err);
-              if (err.message === "API_KEY_MISSING") {
-                  showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
-              } else {
-                  showToast("ไม่สามารถสแกนใบเสร็จได้ กรุณากรอกข้อมูลเอง", "error");
-              }
+              showToast("ไม่สามารถสแกนใบเสร็จได้ กรุณากรอกข้อมูลเอง (หรือตรวจสอบ API Key)", "error");
           }
           setIsOcrProcessing(false);
           if (ocrInputRef.current) ocrInputRef.current.value = '';
@@ -3258,14 +3241,32 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     );
   }, [uniqueInventory, stockSearchTerm, formData.type]);
 
-  const filteredPartners = useMemo(() => {
-      return partners.filter(p => {
-          const matchSearch = (p.name || '').toLowerCase().includes(partnerSearchTerm.toLowerCase()) || 
-                              (p.taxId || '').toLowerCase().includes(partnerSearchTerm.toLowerCase());
+  const groupedPartners = useMemo(() => {
+      const filtered = partners.filter(p => {
+          const searchLower = partnerSearchTerm.toLowerCase();
+          const matchSearch = (p.name || '').toLowerCase().includes(searchLower) || 
+                              (p.taxId || '').toLowerCase().includes(searchLower) ||
+                              (p.branch || '').toLowerCase().includes(searchLower) ||
+                              (p.branchName || '').toLowerCase().includes(searchLower);
           const matchTab = partnerTab === 'all' || p.type === partnerTab || (!p.type); 
           return matchSearch && matchTab;
-      }).sort((a,b) => (a.name || '').localeCompare(b.name || ''));
+      });
+
+      // จัดกลุ่มตามชื่อบริษัท/ลูกค้า
+      const groups = {};
+      filtered.forEach(p => {
+          const groupName = p.name || 'ไม่ระบุชื่อบริษัท';
+          if (!groups[groupName]) groups[groupName] = [];
+          groups[groupName].push(p);
+      });
+
+      return Object.keys(groups).sort().map(key => ({
+          companyName: key,
+          branches: groups[key].sort((a,b) => (a.branch || '').localeCompare(b.branch || ''))
+      }));
   }, [partners, partnerSearchTerm, partnerTab]);
+
+  const totalFilteredPartners = useMemo(() => groupedPartners.reduce((sum, g) => sum + g.branches.length, 0), [groupedPartners]);
    
   const handleDelete = async (id, type) => { 
     try { 
@@ -3420,7 +3421,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       if (formData.type === 'income') prefix = 'INC-';
       else prefix = (formData.category === 'ต้นทุนสินค้า') ? 'COG-' : 'EXP-';
       
-      const sysDocId = generateNextDocId(transactions.filter(t => t.type === formData.type), prefix, 'sysDocId');
+      const sysDocId = generateDateBasedDocId(transactions.filter(t => t.type === formData.type), prefix, formData.date, 'sysDocId');
       
       const mainRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', coll));
       const dataToSave = { 
@@ -3642,7 +3643,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             <div className="p-4 bg-white border-b sticky top-0 z-10 text-left">
                 <div className="relative group text-left">
                     <Search className="absolute left-4 top-3 text-slate-300 group-focus-within:text-indigo-500 transition-colors text-center" size={20}/>
-                    <input autoFocus value={partnerSearchTerm} onChange={e=>setPartnerSearchTerm(e.target.value)} className="w-full bg-slate-50 p-3 pl-12 rounded-2xl border-0 font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all text-left" placeholder="ค้นหาชื่อคู่ค้า หรือ เลขผู้เสียภาษี..." />
+                    <input autoFocus value={partnerSearchTerm} onChange={e=>setPartnerSearchTerm(e.target.value)} className="w-full bg-slate-50 p-3 pl-12 rounded-2xl border-0 font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all text-left" placeholder="ค้นหาชื่อคู่ค้า, เลขผู้เสียภาษี, เลขสาขา, ชื่อสาขา..." />
                 </div>
                 <div className="flex bg-slate-100 p-1 mt-3 rounded-xl">
                     <button onClick={() => setPartnerTab('buyer')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all text-center ${partnerTab === 'buyer' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ลูกค้า (รายรับ)</button>
@@ -3650,21 +3651,28 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     <button onClick={() => setPartnerTab('all')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all text-center ${partnerTab === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ทั้งหมด</button>
                 </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar text-left">
-                {filteredPartners.length > 0 ? filteredPartners.map((p, idx) => (
-                    <div key={idx} onClick={()=>selectPartner(p)} className="p-4 rounded-2xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/50 cursor-pointer transition-all group flex justify-between items-center bg-white shadow-sm text-left">
-                        <div className="space-y-1 text-left">
-                            <p className="font-black text-slate-800 group-hover:text-indigo-700 text-sm transition-colors text-left">{p.name}</p>
-                            <div className="flex items-center gap-3 text-left">
-                                <span className="text-[9px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-500 uppercase tracking-tighter text-left">TAX: {p.taxId}</span>
-                                <div className="flex items-center gap-1 text-indigo-500 font-bold text-[10px]">
-                                    <MapPin size={10}/>
-                                    <span>สาขา: {p.branch === '00000' || !p.branch ? 'สำนักงานใหญ่' : p.branch} {p.branchName && `(${p.branchName})`}</span>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar text-left">
+                {groupedPartners.length > 0 ? groupedPartners.map((group, gIdx) => (
+                    <div key={gIdx} className="space-y-2">
+                        <h4 className="font-black text-slate-800 text-sm border-b pb-1">{group.companyName}</h4>
+                        <div className="space-y-2 pl-2">
+                            {group.branches.map((p, idx) => (
+                                <div key={idx} onClick={()=>selectPartner(p)} className="p-3 rounded-2xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/50 cursor-pointer transition-all group flex justify-between items-center bg-white shadow-sm text-left">
+                                    <div className="space-y-1 text-left">
+                                        <div className="flex items-center gap-3 text-left">
+                                            <span className="text-[9px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-500 uppercase tracking-tighter text-left">TAX: {p.taxId || '-'}</span>
+                                            <div className="flex items-center gap-1 text-indigo-500 font-bold text-[10px]">
+                                                <MapPin size={10}/>
+                                                <span>สาขา: {p.branch === '00000' || !p.branch ? 'สำนักงานใหญ่' : p.branch} {p.branchName && `(${p.branchName})`}</span>
+                                            </div>
+                                        </div>
+                                        <p className="text-[10px] text-slate-400 line-clamp-1 text-left">ที่อยู่: {p.address || '-'}</p>
+                                    </div>
+                                    <div className="text-right shrink-0 text-right">
+                                        <ChevronRight size={18} className="text-slate-300 group-hover:text-indigo-500 transition-colors text-center"/>
+                                    </div>
                                 </div>
-                            </div>
-                        </div>
-                        <div className="text-right shrink-0 text-right">
-                            <ChevronRight size={18} className="text-slate-300 group-hover:text-indigo-500 transition-colors text-center"/>
+                            ))}
                         </div>
                     </div>
                 )) : (
@@ -3675,7 +3683,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                 )}
             </div>
             <div className="p-4 border-t bg-slate-50/50 rounded-b-[40px] text-center">
-                <p className="text-[9px] text-slate-400 font-bold uppercase text-center">Showing {filteredPartners.length} of {partners.length} partners</p>
+                <p className="text-[9px] text-slate-400 font-bold uppercase text-center">Showing {totalFilteredPartners} of {partners.length} partners</p>
             </div>
           </div>
         </div>
@@ -4605,11 +4613,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           }
       } catch (error) {
           console.error(error);
-          if (error.message === "API_KEY_MISSING") {
-              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
-          } else {
-              showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง', 'error');
-          }
+          showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง (โปรดตรวจสอบ API Key)', 'error');
       } finally {
           setIsAnalyzingDocs(false);
       }
@@ -4694,14 +4698,31 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   
   useEffect(() => { if (user) { const unsubSellers = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'seller_profiles')), (snap) => setSellerProfiles(snap.docs.map(d=>({id:d.id, ...d.data()})))); const unsubCustomers = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners')), (snap) => setCustomers(snap.docs.map(d=>({id:d.id, ...d.data(), customerName: d.data().name})))); return () => { unsubSellers(); unsubCustomers(); }; } }, [user, appId]);
 
-  const filteredCustomers = useMemo(() => {
-      return customers.filter(c => {
-          const matchSearch = (c.customerName || '').toLowerCase().includes(customerSearchTerm.toLowerCase()) || 
-                              (c.taxId || '').toLowerCase().includes(customerSearchTerm.toLowerCase());
+  const groupedCustomers = useMemo(() => {
+      const filtered = customers.filter(c => {
+          const searchLower = customerSearchTerm.toLowerCase();
+          const matchSearch = (c.customerName || '').toLowerCase().includes(searchLower) || 
+                              (c.taxId || '').toLowerCase().includes(searchLower) ||
+                              (c.branch || '').toLowerCase().includes(searchLower) ||
+                              (c.branchName || '').toLowerCase().includes(searchLower);
           const matchTab = customerTab === 'all' || c.type === customerTab || (!c.type);
           return matchSearch && matchTab;
-      }).sort((a,b) => (a.customerName || '').localeCompare(b.customerName || ''));
+      });
+
+      const groups = {};
+      filtered.forEach(c => {
+          const groupName = c.customerName || 'ไม่ระบุชื่อบริษัท';
+          if (!groups[groupName]) groups[groupName] = [];
+          groups[groupName].push(c);
+      });
+
+      return Object.keys(groups).sort().map(key => ({
+          companyName: key,
+          branches: groups[key].sort((a,b) => (a.branch || '').localeCompare(b.branch || ''))
+      }));
   }, [customers, customerSearchTerm, customerTab]);
+
+  const totalFilteredCustomers = useMemo(() => groupedCustomers.reduce((sum, g) => sum + g.branches.length, 0), [groupedCustomers]);
 
   const toggleSelectAll = (e) => {
       if (e.target.checked) {
@@ -5304,7 +5325,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                 <div className="p-4 bg-white border-b sticky top-0 z-10 text-left">
                     <div className="relative group text-left mb-3">
                         <Search className="absolute left-4 top-3 text-slate-300 group-focus-within:text-indigo-500 transition-colors text-center" size={20}/>
-                        <input autoFocus value={customerSearchTerm} onChange={e=>setCustomerSearchTerm(e.target.value)} className="w-full bg-slate-50 p-3 pl-12 rounded-2xl border-0 font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all text-left" placeholder="ค้นหาชื่อคู่ค้า หรือ เลขผู้เสียภาษี..." />
+                        <input autoFocus value={customerSearchTerm} onChange={e=>setCustomerSearchTerm(e.target.value)} className="w-full bg-slate-50 p-3 pl-12 rounded-2xl border-0 font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all text-left" placeholder="ค้นหาชื่อคู่ค้า, เลขผู้เสียภาษี, เลขสาขา, ชื่อสาขา..." />
                     </div>
                     <div className="flex bg-slate-100 p-1 rounded-xl">
                         <button onClick={() => setCustomerTab('buyer')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all text-center ${customerTab === 'buyer' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ลูกค้า (ผู้ซื้อ)</button>
@@ -5312,21 +5333,27 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                         <button onClick={() => setCustomerTab('all')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all text-center ${customerTab === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ทั้งหมด</button>
                     </div>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar text-left">
-                    {filteredCustomers.length > 0 ? filteredCustomers.map((c, idx) => (
-                        <div key={idx} onClick={()=>{setInvData(p=>({...p, customerName: c.customerName, address: c.address, taxId: c.taxId, branch: c.branch || '00000', sellerBranchName: c.branchName || ''})); setShowCustomerModal(false); setCustomerSearchTerm('');}} className="p-4 rounded-2xl border border-slate-100 hover:border-rose-200 hover:bg-rose-50/50 cursor-pointer transition-all group flex justify-between items-center bg-white shadow-sm text-left">
-                            <div className="space-y-1 text-left">
-                                <p className="font-black text-slate-800 group-hover:text-rose-700 text-sm transition-colors text-left">{c.customerName}</p>
-                                <div className="flex items-center gap-3 text-left">
-                                    <span className="text-[9px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-500 uppercase tracking-tighter text-left">TAX: {c.taxId}</span>
-                                    <div className="flex items-center gap-1 text-indigo-500 font-bold text-[10px]">
-                                        <Building size={10}/>
-                                        <span>สาขา: {c.branch === '00000' || !c.branch ? 'สำนักงานใหญ่' : c.branch} {c.branchName && `(${c.branchName})`}</span>
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar text-left">
+                    {groupedCustomers.length > 0 ? groupedCustomers.map((group, gIdx) => (
+                        <div key={gIdx} className="space-y-2">
+                            <h4 className="font-black text-slate-800 text-sm border-b pb-1">{group.companyName}</h4>
+                            <div className="space-y-2 pl-2">
+                                {group.branches.map((c, idx) => (
+                                    <div key={idx} onClick={()=>{setInvData(p=>({...p, customerName: c.customerName, address: c.address, taxId: c.taxId, branch: c.branch || '00000', sellerBranchName: c.branchName || ''})); setShowCustomerModal(false); setCustomerSearchTerm('');}} className="p-3 rounded-2xl border border-slate-100 hover:border-rose-200 hover:bg-rose-50/50 cursor-pointer transition-all group flex justify-between items-center bg-white shadow-sm text-left">
+                                        <div className="space-y-1 text-left">
+                                            <div className="flex items-center gap-3 text-left">
+                                                <span className="text-[9px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-500 uppercase tracking-tighter text-left">TAX: {c.taxId || '-'}</span>
+                                                <div className="flex items-center gap-1 text-rose-500 font-bold text-[10px]">
+                                                    <Building size={10}/>
+                                                    <span>สาขา: {c.branch === '00000' || !c.branch ? 'สำนักงานใหญ่' : c.branch} {c.branchName && `(${c.branchName})`}</span>
+                                                </div>
+                                            </div>
+                                            <p className="text-[10px] text-slate-400 line-clamp-1 text-left">ที่อยู่: {c.address || '-'}</p>
+                                        </div>
+                                        <ChevronRight size={18} className="text-slate-300 group-hover:text-rose-500 transition-colors text-center"/>
                                     </div>
-                                </div>
-                                <p className="text-[10px] text-slate-400 line-clamp-1 text-left">{c.address}</p>
+                                ))}
                             </div>
-                            <ChevronRight size={18} className="text-slate-300 group-hover:text-rose-500 transition-colors text-center"/>
                         </div>
                     )) : (
                         <div className="flex flex-col items-center justify-center py-20 text-slate-300 text-center">
@@ -5336,7 +5363,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                     )}
                 </div>
                 <div className="p-4 border-t bg-slate-50 rounded-b-3xl text-center">
-                    <p className="text-[9px] text-slate-400 font-bold uppercase text-center">Showing {filteredCustomers.length} of {customers.length} partners</p>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase text-center">Showing {totalFilteredCustomers} of {customers.length} partners</p>
                 </div>
             </div>
         </div>
@@ -6151,11 +6178,7 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
           }
       } catch (error) {
           console.error(error);
-          if (error.message === "API_KEY_MISSING") {
-              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
-          } else {
-              showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง', 'error');
-          }
+          showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง (โปรดตรวจสอบ API Key)', 'error');
       } finally {
           setIsAnalyzing(false);
       }
@@ -6238,11 +6261,7 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
           }
       } catch (error) {
           console.error(error);
-          if (error.message === "API_KEY_MISSING") {
-              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
-          } else {
-              showToast('ไม่สามารถสร้างแคมเปญอัตโนมัติได้ กรุณาลองใหม่', 'error');
-          }
+          showToast('ไม่สามารถสร้างแคมเปญอัตโนมัติได้ กรุณาลองใหม่ (โปรดตรวจสอบ API Key)', 'error');
       } finally {
           setIsAutoBuilding(false);
       }
@@ -6302,11 +6321,7 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
           }
       } catch (error) {
           console.error(error);
-          if (error.message === "API_KEY_MISSING") {
-              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
-          } else {
-              showToast('ไม่สามารถสร้างคอนเทนต์ได้ กรุณาลองใหม่', 'error');
-          }
+          showToast('ไม่สามารถสร้างคอนเทนต์ได้ กรุณาลองใหม่ (โปรดตรวจสอบ API Key)', 'error');
       } finally {
           setIsGeneratingContent(false);
       }
@@ -6930,51 +6945,46 @@ export default function App() {
         }
       };
 
-      const getMaxId = (items, prefix, field) => {
-        return items.reduce((max, item) => {
-          if (item[field] && item[field].startsWith(prefix)) {
-            const num = parseInt(item[field].replace(prefix, ''), 10);
-            return !isNaN(num) && num > max ? num : max;
-          }
-          return max;
-        }, 0);
-      };
-
-      // 1. อัปเดตรายรับ (เฉพาะที่ยังไม่มีเลขระบบ)
-      const allIncomes = transactions.filter(t => t.type === 'income');
-      let currentIncCount = getMaxId(allIncomes, 'INC-', 'sysDocId');
-      const missingIncomes = allIncomes.filter(t => !t.sysDocId || !t.sysDocId.startsWith('INC-')).sort(sortOldestFirst);
-      for (const t of missingIncomes) {
-        currentIncCount++;
-        await safeUpdate('transactions_income', t.id, { sysDocId: `INC-${String(currentIncCount).padStart(5, '0')}` });
-      }
-
-      // 2. อัปเดตรายจ่าย (แยก COG และ EXP - เฉพาะที่ยังไม่มีเลขระบบ)
-      const allExpenses = transactions.filter(t => t.type === 'expense');
-      let currentCogCount = getMaxId(allExpenses, 'COG-', 'sysDocId');
-      let currentExpCount = getMaxId(allExpenses, 'EXP-', 'sysDocId');
-      const missingExpenses = allExpenses.filter(t => !t.sysDocId || (!t.sysDocId.startsWith('COG-') && !t.sysDocId.startsWith('EXP-'))).sort(sortOldestFirst);
-      
-      for (const t of missingExpenses) {
-        if (t.category === 'ต้นทุนสินค้า' || t.isFromInventory) {
-          currentCogCount++;
-          await safeUpdate('transactions_expense', t.id, { sysDocId: `COG-${String(currentCogCount).padStart(5, '0')}` });
-        } else {
-          currentExpCount++;
-          await safeUpdate('transactions_expense', t.id, { sysDocId: `EXP-${String(currentExpCount).padStart(5, '0')}` });
-        }
-      }
-
-      const getRunningNumDateBased = (items, prefix, dStr) => {
+      const getRunningNumDateBased = (items, prefix, dStr, field = 'invNo') => {
           const pfx = `${prefix}${dStr}-`;
           return items.reduce((max, item) => {
-              if (item.invNo && String(item.invNo).startsWith(pfx)) {
-                  const n = parseInt(String(item.invNo).replace(pfx, ''), 10);
+              if (item[field] && String(item[field]).startsWith(pfx)) {
+                  const n = parseInt(String(item[field]).replace(pfx, ''), 10);
                   return !isNaN(n) && n > max ? n : max;
               }
               return max;
           }, 0);
       };
+
+      // 1. อัปเดตรายรับ (เช็คฟอร์แมต INC-YYYYMMDD-XXXXX)
+      const allIncomes = transactions.filter(t => t.type === 'income');
+      const missingIncomes = allIncomes.filter(t => !t.sysDocId || !/^INC-\d{8}-\d{5}$/.test(String(t.sysDocId))).sort(sortOldestFirst);
+      let incCounters = {};
+      for (const t of missingIncomes) {
+        const dStr = formatDateISO(t.date).replace(/-/g, '');
+        if (incCounters[dStr] === undefined) incCounters[dStr] = getRunningNumDateBased(allIncomes, 'INC-', dStr, 'sysDocId');
+        incCounters[dStr]++;
+        await safeUpdate('transactions_income', t.id, { sysDocId: `INC-${dStr}-${String(incCounters[dStr]).padStart(5, '0')}` });
+      }
+
+      // 2. อัปเดตรายจ่าย (แยก COG และ EXP - เช็คฟอร์แมต COG/EXP-YYYYMMDD-XXXXX)
+      const allExpenses = transactions.filter(t => t.type === 'expense');
+      const missingExpenses = allExpenses.filter(t => !t.sysDocId || !/^(COG|EXP)-\d{8}-\d{5}$/.test(String(t.sysDocId))).sort(sortOldestFirst);
+      let expCounters = {};
+      let cogCounters = {};
+      
+      for (const t of missingExpenses) {
+        const dStr = formatDateISO(t.date).replace(/-/g, '');
+        if (t.category === 'ต้นทุนสินค้า' || t.isFromInventory) {
+          if (cogCounters[dStr] === undefined) cogCounters[dStr] = getRunningNumDateBased(allExpenses, 'COG-', dStr, 'sysDocId');
+          cogCounters[dStr]++;
+          await safeUpdate('transactions_expense', t.id, { sysDocId: `COG-${dStr}-${String(cogCounters[dStr]).padStart(5, '0')}` });
+        } else {
+          if (expCounters[dStr] === undefined) expCounters[dStr] = getRunningNumDateBased(allExpenses, 'EXP-', dStr, 'sysDocId');
+          expCounters[dStr]++;
+          await safeUpdate('transactions_expense', t.id, { sysDocId: `EXP-${dStr}-${String(expCounters[dStr]).padStart(5, '0')}` });
+        }
+      }
 
       // 3. อัปเดตใบกำกับภาษี (Invoice)
       const allInvs = invoices.filter(i => i.docType === 'invoice' || !i.docType);
@@ -7173,9 +7183,9 @@ export default function App() {
             </div>
             <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันรันเลขเอกสาร?</h3>
             <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
-              ฟังก์ชันนี้จะหารายการที่ <b>ยังไม่มีเลขเอกสาร</b><br/>
-              แล้วจัดเรียงเพื่อรันเลขที่เอกสารต่อจากเลขล่าสุด<br/>
-              <span className="text-amber-600 font-bold underline">เลขเอกสารเดิมจะไม่ถูกเปลี่ยนแปลง</span>
+              ฟังก์ชันนี้จะหารายการที่ <b>เลขเอกสารไม่อยู่ในฟอร์แมตใหม่ (แบบมีวันที่)</b><br/>
+              เช่น INC-XXXXX จะถูกแปลงเป็น INC-YYYYMMDD-XXXXX<br/>
+              <span className="text-amber-600 font-bold underline">แนะนำให้กดรัน 1 ครั้งเพื่อซิงค์ระบบ</span>
             </p>
             <div className="flex gap-3 text-center">
               <button onClick={() => setShowMigrateConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
