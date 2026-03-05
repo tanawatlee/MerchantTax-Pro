@@ -2282,12 +2282,17 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     stockBatches.forEach(b => { 
       const d = normalizeDate(b.date); 
       if (d >= start && d <= end && b.quantity > 0) { 
+        // ค้นหาข้อมูลรายจ่ายต้นทางเพื่อดึง SYS ID และ เลขใบกำกับภาษี
+        const parentExp = transactions.find(tx => tx.id === b.parentExpenseId);
+        
         movements.push({ 
           id: b.id,
           sourceType: 'batch',
           date: d, 
           sku: b.sku || '-', 
           refId: b.parentExpenseId || 'LOT-IN',
+          sysDocId: parentExp ? parentExp.sysDocId : 'LOT-IN',
+          taxInvoiceNo: parentExp ? (parentExp.taxInvoiceNo || parentExp.orderId || '-') : '-',
           name: b.productName, 
           type: 'IN (รับเข้า)', 
           qty: Number(b.quantity), 
@@ -2307,6 +2312,8 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
             date: d, 
             sku: String(item.sku || '-').trim(), 
             refId: t.orderId || '-', 
+            sysDocId: t.sysDocId || '-',
+            taxInvoiceNo: t.invoiceNo || t.orderId || '-',
             name: String(item.desc || item.description || t.description).trim(), 
             type: 'OUT (จ่ายออก)', 
             qty: Number(item.qty), 
@@ -2554,9 +2561,9 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       dataRows = [...headerRows, tableHeader, ...body, footer];
     } else if (reportTab === 'inventory') {
       fileName = `Stock_Movement_${startDate}.xlsx`;
-      const tableHeader = ["วันที่", "อ้างอิง (Ref)", "Product SKU", "รายการสินค้า", "รับ-จำนวน", "รับ-ราคา/หน่วย", "รับ-มูลค่ารวม", "จ่าย-จำนวน", "จ่าย-ต้นทุนรวม", "คงเหลือ-จำนวน", "คงเหลือ-มูลค่ารวม"];
+      const tableHeader = ["วันที่", "เลขระบบ (SYS ID)", "เลขใบกำกับ/อ้างอิง", "Product SKU", "รายการสินค้า", "รับ-จำนวน", "รับ-ราคา/หน่วย", "รับ-มูลค่ารวม", "จ่าย-จำนวน", "จ่าย-ต้นทุนรวม", "คงเหลือ-จำนวน", "คงเหลือ-มูลค่ารวม"];
       dataRows = [...headerRows, tableHeader, ...filteredMovement.map(m => [
-        formatDate(m.date), m.refId, m.sku, m.name, 
+        formatDate(m.date), m.sysDocId || '-', m.taxInvoiceNo !== '-' ? m.taxInvoiceNo : m.refId, m.sku, m.name, 
         m.receiveQty > 0 ? m.receiveQty : '-', m.receivePrice > 0 ? toFixedNum(m.receivePrice) : '-', m.receiveTotal > 0 ? toFixedNum(m.receiveTotal) : '-',
         m.issueQty > 0 ? m.issueQty : '-', m.issueTotal > 0 ? toFixedNum(m.issueTotal) : '-',
         m.balanceQty, toFixedNum(m.balanceTotal)
@@ -2785,7 +2792,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
               <thead className="bg-white text-slate-400 text-[10px] font-bold uppercase sticky top-0 border-b z-10 text-left">
                 <tr>
                   <th className="p-5 text-left">วันที่</th>
-                  <th className="p-5 text-left">อ้างอิง (Ref)</th>
+                  <th className="p-5 text-left">เลขระบบ / อ้างอิง</th>
                   <th className="p-5 text-left">รายการสินค้า</th>
                   <th className="p-5 text-center bg-emerald-50/50 text-emerald-600">รับ-จำนวน</th>
                   <th className="p-5 text-right bg-emerald-50/50 text-emerald-600">รับ-มูลค่า</th>
@@ -2799,7 +2806,10 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
                 {filteredMovement.map((m, i) => (
                   <tr key={i} className="hover:bg-slate-50/80 transition-colors text-left">
                     <td className="p-5 text-xs text-slate-500 whitespace-nowrap text-left">{formatDate(m.date)}</td>
-                    <td className="p-5 text-xs font-mono text-slate-500 text-left">{m.refId}</td>
+                    <td className="p-5 text-left">
+                      <p className="text-[10px] font-mono font-bold text-indigo-600 mb-0.5">{m.sysDocId || '-'}</p>
+                      <p className="text-[10px] font-mono text-slate-500">REF: {m.taxInvoiceNo !== '-' ? m.taxInvoiceNo : m.refId}</p>
+                    </td>
                     <td className="p-5 text-left">
                       <p className="font-bold text-slate-700">{m.name}</p>
                       <p className="text-[10px] text-slate-400">SKU: {m.sku}</p>
