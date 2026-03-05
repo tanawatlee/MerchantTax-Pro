@@ -1350,12 +1350,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                   <th className="p-4 text-left">{importMode === 'update_settled' ? 'Settlement Date' : 'Date'}</th>
                   <th className="p-4 text-left">Description</th>
                   <th className="p-4 text-left">Status / SKU</th>
+                  <th className="p-4 text-right">Fees (฿)</th>
                   <th className="p-4 text-right">Income (฿)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-left">
                 {importedData.length === 0 ? (
-                  <tr><td colSpan="4" className="p-10 text-center text-slate-300 font-bold text-center">กรุณาเลือกประเภทแพลตฟอร์ม โหมดการนำเข้า และอัปโหลดไฟล์</td></tr>
+                  <tr><td colSpan="5" className="p-10 text-center text-slate-300 font-bold text-center">กรุณาเลือกประเภทแพลตฟอร์ม โหมดการนำเข้า และอัปโหลดไฟล์</td></tr>
                 ) : importedData.map((it, idx) => (
                   <tr key={idx} className="hover:bg-slate-50 group text-left">
                     <td className="p-4 text-slate-500 whitespace-nowrap text-left">{formatDate(it.newSettlementDate || it.date)}</td>
@@ -1369,6 +1370,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                         ) : (
                             <span className="bg-indigo-50 text-indigo-600 px-2 py-1 rounded text-[10px] font-mono font-bold">{it.items?.[0]?.sku || '-'}</span>
                         )}
+                    </td>
+                    <td className="p-4 text-right text-rose-500 font-bold">
+                        -{formatCurrency(it.platformFee || 0)}
                     </td>
                     <td className="p-4 text-right">
                         {importMode === 'update_settled' ? (
