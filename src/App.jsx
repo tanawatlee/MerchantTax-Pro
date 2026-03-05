@@ -3088,6 +3088,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       showToast("กรุณาระบุชื่อคู่ค้า/ลูกค้า", "error");
       return;
     }
+    
+    // ตรวจสอบข้อมูลซ้ำ
+    const isDuplicate = partners.some(p => 
+      (p.name || '').trim() === (formData.partnerName || '').trim() && 
+      (p.taxId || '').trim() === (formData.partnerTaxId || '').trim() && 
+      (p.branch || '').trim() === (formData.partnerBranch || '').trim()
+    );
+
+    if (isDuplicate) {
+      showToast("มีข้อมูลคู่ค้านี้ในระบบแล้ว (ชื่อ, เลขผู้เสียภาษี และสาขาซ้ำกัน)", "error");
+      return;
+    }
+
     try {
       await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners'), {
         name: formData.partnerName,
@@ -3102,6 +3115,17 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     } catch (e) {
       showToast("บันทึกข้อมูลไม่สำเร็จ", "error");
     }
+  };
+
+  const handleDeletePartner = async (e, id) => {
+      e.stopPropagation();
+      if (!window.confirm("ยืนยันการลบข้อมูลคู่ค้านี้ออกจากระบบ?")) return;
+      try {
+          await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'partners', id));
+          showToast("ลบข้อมูลคู่ค้าสำเร็จ", "success");
+      } catch (err) {
+          showToast("ลบข้อมูลไม่สำเร็จ", "error");
+      }
   };
 
   const handleSettleOrder = async () => {
@@ -3679,7 +3703,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                         </div>
                                         <p className="text-[10px] text-slate-400 line-clamp-1 text-left">ที่อยู่: {p.address || '-'}</p>
                                     </div>
-                                    <div className="text-right shrink-0 text-right">
+                                    <div className="text-right shrink-0 text-right flex items-center gap-2">
+                                        <button onClick={(e) => handleDeletePartner(e, p.id)} className="p-2 text-rose-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="ลบข้อมูลคู่ค้า">
+                                            <Trash2 size={16}/>
+                                        </button>
                                         <ChevronRight size={18} className="text-slate-300 group-hover:text-indigo-500 transition-colors text-center"/>
                                     </div>
                                 </div>
@@ -4480,6 +4507,19 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       showToast("กรุณาระบุชื่อลูกค้า/บริษัท", "error");
       return;
     }
+
+    // ตรวจสอบข้อมูลซ้ำ
+    const isDuplicate = customers.some(c => 
+      (c.name || c.customerName || '').trim() === (invData.customerName || '').trim() && 
+      (c.taxId || '').trim() === (invData.taxId || '').trim() && 
+      (c.branch || '').trim() === (invData.branch || '').trim()
+    );
+
+    if (isDuplicate) {
+      showToast("มีข้อมูลลูกค้านี้ในระบบแล้ว (ชื่อ, เลขผู้เสียภาษี และสาขาซ้ำกัน)", "error");
+      return;
+    }
+
     try {
       await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners'), {
         name: invData.customerName,
@@ -4494,6 +4534,17 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
     } catch (e) {
       showToast("บันทึกข้อมูลไม่สำเร็จ", "error");
     }
+  };
+
+  const handleDeleteCustomer = async (e, id) => {
+      e.stopPropagation();
+      if (!window.confirm("ยืนยันการลบข้อมูลลูกค้านี้ออกจากระบบ?")) return;
+      try {
+          await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'partners', id));
+          showToast("ลบข้อมูลลูกค้าสำเร็จ", "success");
+      } catch (err) {
+          showToast("ลบข้อมูลไม่สำเร็จ", "error");
+      }
   };
 
   const setHistoryQuickRange = (range) => {
@@ -5384,7 +5435,12 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                             </div>
                                             <p className="text-[10px] text-slate-400 line-clamp-1 text-left">ที่อยู่: {c.address || '-'}</p>
                                         </div>
-                                        <ChevronRight size={18} className="text-slate-300 group-hover:text-rose-500 transition-colors text-center"/>
+                                        <div className="text-right shrink-0 text-right flex items-center gap-2">
+                                            <button onClick={(e) => handleDeleteCustomer(e, c.id)} className="p-2 text-rose-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="ลบข้อมูลลูกค้า">
+                                                <Trash2 size={16}/>
+                                            </button>
+                                            <ChevronRight size={18} className="text-slate-300 group-hover:text-rose-500 transition-colors text-center"/>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
