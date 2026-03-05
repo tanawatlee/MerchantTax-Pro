@@ -3355,7 +3355,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   };
 
   const addLineItem = () => { setFormData({ ...formData, items: [...formData.items, { desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }] }); };
-  const addFreeItem = () => { setFormData({ ...formData, items: [...formData.items, { desc: '[แถมฟรี] ', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }] }); };
+  const addFreeItem = () => { 
+      if (formData.type === 'income') {
+          setFormData({ ...formData, items: [...formData.items, { desc: '[แถมฟรี] ', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }] }); 
+      } else {
+          setFormData({ ...formData, items: [...formData.items, { desc: '[ของแจก/โปรโมท] ', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }] }); 
+      }
+  };
   const removeLineItem = (index) => { if (formData.items.length === 1) return; const newItems = formData.items.filter((_, i) => i !== index); setFormData({ ...formData, items: newItems }); };
   const updateLineItem = (index, field, value) => { const newItems = [...formData.items]; newItems[index][field] = value; setFormData({ ...formData, items: newItems }); };
 
@@ -3477,6 +3483,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
       if (formData.type === 'expense' && formData.category === 'ต้นทุนสินค้า') {
         for (const item of formData.items) {
+            // ระบบป้องกัน: หากเป็นของแจก/โปรโมท ให้ข้ามการนำเข้าคลังสินค้า FIFO
+            if (String(item.desc).startsWith('[ของแจก/โปรโมท]')) continue;
+
             const itemTotal = Number(item.buyPrice) * Number(item.qty);
             const proportion = subTotal > 0 ? (itemTotal / subTotal) : 0;
             const itemDiscount = totalDiscounts * proportion;
@@ -3842,7 +3851,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     {formData.type === 'income' && (
                         <button type="button" onClick={handleAutoApplyPromo} className="bg-amber-100 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-sm hover:bg-amber-200 transition-all text-center"><Wand2 size={16}/> โปรโมชั่น</button>
                     )}
-                    <button type="button" onClick={addFreeItem} className="bg-emerald-100 text-emerald-700 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-sm hover:bg-emerald-200 transition-all text-center"><Gift size={16}/> เพิ่มของแจก</button>
+                    <button type="button" onClick={addFreeItem} className={`${formData.type === 'income' ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-orange-100 text-orange-700 hover:bg-orange-200'} px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-sm transition-all text-center`}><Gift size={16}/> {formData.type === 'income' ? 'เพิ่มของแจก' : 'เพิ่มของซื้อมาแจก'}</button>
                     <button type="button" onClick={addLineItem} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all scale-100 hover:scale-[1.02] active:scale-95 text-center"><Plus size={16}/> เพิ่มรายการ</button>
                 </div>
               </div>
@@ -3859,13 +3868,18 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   </thead>
                   <tbody className="divide-y divide-slate-50 text-left">
                     {formData.items.map((item, index) => {
-                      const isFreeItem = item.desc.startsWith('[แถมฟรี]');
+                      const isFreeItemIncome = formData.type === 'income' && item.desc.startsWith('[แถมฟรี]');
+                      const isGiveawayExpense = formData.type === 'expense' && item.desc.startsWith('[ของแจก/โปรโมท]');
+                      const isSpecialItem = isFreeItemIncome || isGiveawayExpense;
+                      
                       return (
-                      <tr key={index} className={`group transition-colors ${isFreeItem ? 'bg-emerald-50/70 border-emerald-100' : 'hover:bg-slate-50/50'} text-left`}>
+                      <tr key={index} className={`group transition-colors ${isFreeItemIncome ? 'bg-emerald-50/70 border-emerald-100' : isGiveawayExpense ? 'bg-orange-50/70 border-orange-100' : 'hover:bg-slate-50/50'} text-left`}>
                         <td className="py-4 pl-2 text-left">
                           <div className="relative text-left">
-                            <input value={item.desc} onChange={e=>updateLineItem(index, 'desc', e.target.value)} className={`w-full bg-transparent p-2 rounded-xl text-sm font-bold border-0 focus:ring-0 outline-none ${isFreeItem ? 'text-emerald-700' : 'text-slate-700'} text-left`} placeholder="ชื่อสินค้าหรือบริการ..."/>
-                            <button type="button" onClick={()=>setShowStockSelectModal(index)} className="absolute -top-3 right-0 text-[9px] text-indigo-600 font-black opacity-0 group-hover:opacity-100 transition-opacity uppercase bg-white border px-2 py-0.5 rounded-full shadow-sm text-center">Pick from Stock</button>
+                            <input value={item.desc} onChange={e=>updateLineItem(index, 'desc', e.target.value)} className={`w-full bg-transparent p-2 rounded-xl text-sm font-bold border-0 focus:ring-0 outline-none ${isFreeItemIncome ? 'text-emerald-700' : isGiveawayExpense ? 'text-orange-700' : 'text-slate-700'} text-left`} placeholder="ชื่อสินค้าหรือบริการ..."/>
+                            {!isSpecialItem && (
+                                <button type="button" onClick={()=>setShowStockSelectModal(index)} className="absolute -top-3 right-0 text-[9px] text-indigo-600 font-black opacity-0 group-hover:opacity-100 transition-opacity uppercase bg-white border px-2 py-0.5 rounded-full shadow-sm text-center">Pick from Stock</button>
+                            )}
                           </div>
                         </td>
                         <td className="py-4 text-center">
@@ -3875,21 +3889,25 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         </td>
                         <td className="py-4 text-right">
                           <div className="relative flex items-center justify-end text-right">
-                            <span className={`absolute left-3 font-bold text-xs text-left ${isFreeItem ? 'text-emerald-400' : 'text-slate-400'}`}>฿</span>
-                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className={`w-full bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-right font-black outline-none pl-8 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-right ${isFreeItem ? 'text-emerald-600' : 'text-slate-800'}`} disabled={isFreeItem}/>
+                            <span className={`absolute left-3 font-bold text-xs text-left ${isFreeItemIncome ? 'text-emerald-400' : isGiveawayExpense ? 'text-orange-400' : 'text-slate-400'}`}>฿</span>
+                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className={`w-full bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-right font-black outline-none pl-8 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-right ${isFreeItemIncome ? 'text-emerald-600' : isGiveawayExpense ? 'text-orange-600' : 'text-slate-800'}`} disabled={isFreeItemIncome}/>
                           </div>
                         </td>
                         <td className="py-4 text-right pr-2 text-right">
-                          <p className={`font-black text-sm text-right ${isFreeItem ? 'text-emerald-600' : 'text-slate-900'}`}>{formatCurrency((formData.type === 'income' ? item.sellPrice : item.buyPrice) * item.qty)}</p>
+                          <p className={`font-black text-sm text-right ${isFreeItemIncome ? 'text-emerald-600' : isGiveawayExpense ? 'text-orange-600' : 'text-slate-900'}`}>{formatCurrency((formData.type === 'income' ? item.sellPrice : item.buyPrice) * item.qty)}</p>
                         </td>
                         <td className="py-4 text-center">
                           <div className="flex gap-1 justify-center">
                               <button type="button" onClick={() => {
-                                  updateLineItem(index, 'desc', isFreeItem ? item.desc.replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').trim() : `[แถมฟรี] ${item.desc}`);
-                                  if (!isFreeItem) {
-                                      updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', 0);
+                                  if (formData.type === 'income') {
+                                      updateLineItem(index, 'desc', isFreeItemIncome ? item.desc.replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').trim() : `[แถมฟรี] ${item.desc}`);
+                                      if (!isFreeItemIncome) {
+                                          updateLineItem(index, 'sellPrice', 0);
+                                      }
+                                  } else {
+                                      updateLineItem(index, 'desc', isGiveawayExpense ? item.desc.replace('[ของแจก/โปรโมท] ', '').replace('[ของแจก/โปรโมท]', '').trim() : `[ของแจก/โปรโมท] ${item.desc}`);
                                   }
-                              }} className={`p-2 transition-colors rounded-lg ${isFreeItem ? 'text-emerald-600 bg-emerald-100' : 'text-slate-400 hover:text-emerald-500 hover:bg-emerald-50'}`} title="ตั้งเป็นของแจก">
+                              }} className={`p-2 transition-colors rounded-lg ${isFreeItemIncome ? 'text-emerald-600 bg-emerald-100' : isGiveawayExpense ? 'text-orange-600 bg-orange-100' : 'text-slate-400 hover:text-emerald-500 hover:bg-emerald-50'}`} title={formData.type === 'income' ? "ตั้งเป็นของแถมให้ลูกค้า" : "ตั้งเป็นของซื้อมาแจก/โปรโมท"}>
                                   <Gift size={16}/>
                               </button>
                               <button type="button" onClick={()=>removeLineItem(index)} className="p-2 text-rose-300 hover:bg-rose-50 hover:text-rose-600 rounded-lg transition-colors disabled:opacity-0 text-center" disabled={formData.items.length === 1} title="ลบรายการนี้"><Trash2 size={16}/></button>
