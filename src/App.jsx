@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, AlertTriangle, Calendar, Info, MapPin, Building, Layers, ArrowRightLeft, Percent, ClipboardList, Briefcase,
   Camera, Sparkles, ScanText, Zap, ChevronRight, Truck, Ticket, CreditCard, FileUp, Hash, Copy, FileCheck, Box, History, AlertCircle, ShoppingCart, Truck as TruckIcon,
   RefreshCw, Plus, FileSpreadsheet, DownloadCloud, Users, Layers as LayersIcon, Filter, ArrowRight, FileJson, FileType, SaveAll,
-  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail
+  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail, Key
 } from 'lucide-react';
 import { Gift, Wand2 } from 'lucide-react';
 
@@ -283,7 +283,10 @@ const calculatePromotions = (currentItems, allPromotions) => {
 
 // --- Gemini AI Core Utility ---
 const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
-    const apiKey = ""; // Execution Environment
+    const apiKey = localStorage.getItem('gemini_api_key') || "";
+    if (!apiKey) {
+        throw new Error("API_KEY_MISSING");
+    }
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
     const parts = [{ text: prompt }];
     
@@ -467,7 +470,7 @@ function LoginScreen({ authInstance, addToast }) {
 
 // --- Main Sub Components ---
 
-function Dashboard({ transactions, invoices, stockBatches }) {
+function Dashboard({ transactions, invoices, stockBatches, showToast }) {
   const [selectedChannel, setSelectedChannel] = useState('all');
   const [aiSummary, setAiSummary] = useState(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
@@ -575,6 +578,9 @@ function Dashboard({ transactions, invoices, stockBatches }) {
           if (res && res.summary) setAiSummary(res.summary);
       } catch (e) {
           console.error(e);
+          if (e.message === "API_KEY_MISSING" && showToast) {
+              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
+          }
       }
       setIsGeneratingAi(false);
   };
@@ -1071,7 +1077,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           }
       } catch (e) {
           console.error(e);
-          showToast("ไม่สามารถเรียก AI ตรวจสอบความผิดปกติได้", "error");
+          if (e.message === "API_KEY_MISSING") {
+              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
+          } else {
+              showToast("ไม่สามารถเรียก AI ตรวจสอบความผิดปกติได้", "error");
+          }
       }
       setIsCheckingAnomaly(false);
   };
@@ -1744,7 +1754,11 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           setAiInsights(res);
       } catch (e) {
           console.error(e);
-          showToast("วิเคราะห์สต็อกด้วย AI ไม่สำเร็จ", "error");
+          if (e.message === "API_KEY_MISSING") {
+              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
+          } else {
+              showToast("วิเคราะห์สต็อกด้วย AI ไม่สำเร็จ", "error");
+          }
       }
       setIsAnalyzingStock(false);
   };
@@ -2462,7 +2476,11 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
           if (res && res.advice) setAiTaxAdvice(res.advice);
       } catch (e) {
           console.error(e);
-          showToast("ไม่สามารถเรียก AI ที่ปรึกษาภาษีได้", "error");
+          if (e.message === "API_KEY_MISSING") {
+              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
+          } else {
+              showToast("ไม่สามารถเรียก AI ที่ปรึกษาภาษีได้", "error");
+          }
       }
       setIsGettingTaxAdvice(false);
   };
@@ -3187,7 +3205,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               }
           } catch (err) {
               console.error(err);
-              showToast("ไม่สามารถสแกนใบเสร็จได้ กรุณากรอกข้อมูลเอง", "error");
+              if (err.message === "API_KEY_MISSING") {
+                  showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
+              } else {
+                  showToast("ไม่สามารถสแกนใบเสร็จได้ กรุณากรอกข้อมูลเอง", "error");
+              }
           }
           setIsOcrProcessing(false);
           if (ocrInputRef.current) ocrInputRef.current.value = '';
@@ -4583,7 +4605,11 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           }
       } catch (error) {
           console.error(error);
-          showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง', 'error');
+          if (error.message === "API_KEY_MISSING") {
+              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
+          } else {
+              showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง', 'error');
+          }
       } finally {
           setIsAnalyzingDocs(false);
       }
@@ -6125,7 +6151,11 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
           }
       } catch (error) {
           console.error(error);
-          showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง', 'error');
+          if (error.message === "API_KEY_MISSING") {
+              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
+          } else {
+              showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง', 'error');
+          }
       } finally {
           setIsAnalyzing(false);
       }
@@ -6208,7 +6238,11 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
           }
       } catch (error) {
           console.error(error);
-          showToast('ไม่สามารถสร้างแคมเปญอัตโนมัติได้ กรุณาลองใหม่', 'error');
+          if (error.message === "API_KEY_MISSING") {
+              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
+          } else {
+              showToast('ไม่สามารถสร้างแคมเปญอัตโนมัติได้ กรุณาลองใหม่', 'error');
+          }
       } finally {
           setIsAutoBuilding(false);
       }
@@ -6268,7 +6302,11 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
           }
       } catch (error) {
           console.error(error);
-          showToast('ไม่สามารถสร้างคอนเทนต์ได้ กรุณาลองใหม่', 'error');
+          if (error.message === "API_KEY_MISSING") {
+              showToast("กรุณาตั้งค่า AI API Key ที่แถบเมนูด้านซ้ายล่างก่อนใช้งาน", "error");
+          } else {
+              showToast('ไม่สามารถสร้างคอนเทนต์ได้ กรุณาลองใหม่', 'error');
+          }
       } finally {
           setIsGeneratingContent(false);
       }
@@ -6801,6 +6839,9 @@ export default function App() {
   const [isMigrating, setIsMigrating] = useState(false);
   const [showMigrateConfirm, setShowMigrateConfirm] = useState(false);
   const [promotions, setPromotions] = useState([]);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState('');
+  const [showAdminTools, setShowAdminTools] = useState(false);
 
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
@@ -7082,7 +7123,7 @@ export default function App() {
 
   const renderContent = () => {
     switch(activeTab) {
-      case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
+      case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} />;
       case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={currentAppId} stockBatches={stockBatches} showToast={addToast} onIssueInvoice={(t)=>{setPreFillInvoice(t); setActiveTab('invoice');}} promotions={promotions} />;
       case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} />;
       case 'stock': return <StockManager appId={currentAppId} stockBatches={stockBatches} showToast={addToast} user={user} transactions={transactions} />;
@@ -7155,16 +7196,32 @@ export default function App() {
         <div className="p-4 bg-black/20 border-t border-slate-800 space-y-2 text-left">
           <button onClick={toggleAppMode} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-slate-800 text-indigo-300 ring-1 ring-slate-700 hover:bg-slate-700 transition-all text-left"><Database size={14} className="text-center"/> DB Instance: {currentAppId}</button>
           
-          <button onClick={() => setShowMigrateConfirm(true)} disabled={isMigrating} className={`w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 ring-1 transition-all text-left mt-2 ${isMigrating ? 'bg-amber-900/50 text-amber-500 ring-amber-800/50 cursor-not-allowed' : 'bg-amber-900/30 text-amber-300 ring-amber-800/50 hover:bg-amber-900/50'}`}>
-            {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} 
-            {isMigrating ? 'กำลังรันเลขเอกสาร...' : 'รันเลขเอกสารที่ตกหล่น'}
+          <button onClick={() => setShowAdminTools(!showAdminTools)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-between gap-2 bg-slate-800 text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700 transition-all text-left mt-2">
+            <div className="flex items-center gap-2"><Settings size={14} className="text-center"/> เครื่องมือขั้นสูง (Admin)</div>
+            {showAdminTools ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
           </button>
 
-          <button onClick={syncInvoiceDates} disabled={isMigrating} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-emerald-900/30 text-emerald-300 ring-1 ring-emerald-800/50 hover:bg-emerald-900/50 transition-all text-left mt-2">
-            <RefreshCw size={14} className="text-center"/> ซิงค์วันที่และแก้เลข ABB ให้ตรงออเดอร์
-          </button>
+          {showAdminTools && (
+            <div className="pl-3 py-1 space-y-2 border-l-2 border-slate-700 ml-2 animate-fadeIn">
+              <button onClick={() => setShowMigrateConfirm(true)} disabled={isMigrating} className={`w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 transition-all text-left ${isMigrating ? 'bg-amber-900/50 text-amber-500 cursor-not-allowed' : 'text-amber-400 hover:bg-amber-900/30'}`}>
+                {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} 
+                {isMigrating ? 'กำลังรันเลข...' : 'รันเลขเอกสารที่ตกหล่น'}
+              </button>
 
-          <button onClick={()=>setShowIdDeleteTool(true)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-rose-900/30 text-rose-300 ring-1 ring-rose-800/50 hover:bg-rose-900/50 transition-all text-left mt-2"><Trash2 size={14} className="text-center"/> ลบทิ้งด้วย ID</button>
+              <button onClick={syncInvoiceDates} disabled={isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-emerald-400 hover:bg-emerald-900/30 transition-all text-left">
+                <RefreshCw size={14} className="text-center"/> ซิงค์วันที่และแก้เลข ABB
+              </button>
+
+              <button onClick={() => { setTempApiKey(localStorage.getItem('gemini_api_key') || ''); setShowApiKeyModal(true); }} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-indigo-400 hover:bg-indigo-900/30 transition-all text-left">
+                <Key size={14} className="text-center"/> ตั้งค่า AI API Key
+              </button>
+
+              <button onClick={()=>setShowIdDeleteTool(true)} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-rose-400 hover:bg-rose-900/30 transition-all text-left">
+                <Trash2 size={14} className="text-center"/> ลบทิ้งด้วย ID
+              </button>
+            </div>
+          )}
+
           <button onClick={()=>signOut(authInstance)} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-slate-800 text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700 transition-all text-left mt-2"><LogOut size={14} className="text-center"/> ออกจากระบบ</button>
         </div>
       </aside>
@@ -7172,6 +7229,47 @@ export default function App() {
         <header className="bg-white/95 backdrop-blur-md shadow-sm border-b border-slate-200 p-5 lg:px-10 flex justify-between items-center z-10 h-20 shrink-0 text-left"><div className="flex items-center gap-4 text-left"><h2 className="font-bold text-slate-800 text-sm uppercase tracking-widest text-left">{activeTab.replace('_', ' ')}</h2></div>{loading && <div className="text-[10px] font-black text-indigo-600 flex items-center gap-2 bg-indigo-50 px-4 py-1.5 rounded-full border border-indigo-100 animate-pulse text-left"><Loader size={12} className="animate-spin text-center"/> SYNCING</div>}</header>
         <div className="flex-1 overflow-auto p-6 lg:p-10 relative bg-[#f8fafc] text-left">{renderContent()}</div>
       </main>
+
+      {/* API Key Modal */}
+      {showApiKeyModal && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Key size={20} className="text-indigo-600"/> ตั้งค่า Gemini API Key</h3>
+              <button onClick={() => setShowApiKeyModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+            </div>
+            <div className="space-y-4 text-left">
+              <p className="text-xs text-slate-500 leading-relaxed">
+                ระบบจำเป็นต้องใช้ API Key ของ Google Gemini ในการประมวลผล AI<br/>
+                คุณสามารถรับ Key ฟรีได้ที่ <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-600 underline font-bold">Google AI Studio</a>
+              </p>
+              <div>
+                <label className="text-xs font-bold text-slate-700 uppercase">API Key ของคุณ</label>
+                <input 
+                  type="password" 
+                  value={tempApiKey} 
+                  onChange={e => setTempApiKey(e.target.value)} 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-mono mt-1 outline-none focus:ring-2 focus:ring-indigo-500" 
+                  placeholder="AIzaSy..." 
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-8 text-center">
+              <button onClick={() => setShowApiKeyModal(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
+              <button 
+                onClick={() => { 
+                  localStorage.setItem('gemini_api_key', tempApiKey.trim()); 
+                  addToast("บันทึก API Key สำเร็จ", "success"); 
+                  setShowApiKeyModal(false); 
+                }} 
+                className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg transition-colors"
+              >
+                บันทึก Key
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
