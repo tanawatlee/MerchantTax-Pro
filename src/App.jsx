@@ -3053,6 +3053,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [settleDate, setSettleDate] = useState(formatDateISO(new Date()));
   const [settleActualAmt, setSettleActualAmt] = useState(0); 
   const [settleDiffCategory, setSettleDiffCategory] = useState('ค่าธรรมเนียม Platform'); 
+  
+  // --- NEW: State for showing generated ID ---
+  const [generatedDocId, setGeneratedDocId] = useState(null);
    
   const [formData, setFormData] = useState({ 
     type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', 
@@ -3497,7 +3500,15 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
 
       await batchWriter.commit();
-      showToast("บันทึกสำเร็จ and ประมวลผลสต็อกเรียบร้อย", "success");
+      showToast("บันทึกสำเร็จ", "success");
+      
+      // แสดง Popup แจ้งเลขเอกสารที่เพิ่งสร้าง
+      setGeneratedDocId({
+          id: sysDocId,
+          type: formData.type,
+          isExpense: formData.type === 'expense'
+      });
+
       setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled' });
     } catch (e) { showToast("Error: " + e.message, "error"); }
   };
@@ -4397,6 +4408,29 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                 <button onClick={handleSettleOrder} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-lg transition-colors text-center">ยืนยันรับเงิน</button>
               </div>
             </div>
+          </div>
+      )}
+
+      {/* Generated ID Success Modal */}
+      {generatedDocId && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1500] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center border-t-8 border-indigo-500">
+                  <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 text-emerald-500 text-center shadow-inner">
+                      <CheckCircle size={32}/>
+                  </div>
+                  <h3 className="text-2xl font-black mb-1 text-slate-800 text-center">บันทึกสำเร็จ!</h3>
+                  <p className="text-sm text-slate-500 mb-6 text-center">โปรดจดหมายเลขด้านล่างนี้ลงบนเอกสาร/บิล</p>
+                  
+                  <div className="bg-indigo-50 border-2 border-indigo-100 rounded-2xl p-6 mb-6 relative overflow-hidden">
+                      <Hash size={60} className="absolute -right-4 -bottom-4 text-indigo-500 opacity-10" />
+                      <p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest mb-1 text-center">System Document ID</p>
+                      <p className="text-3xl font-black text-indigo-700 font-mono tracking-wider text-center select-all">{generatedDocId.id}</p>
+                  </div>
+                  
+                  <button onClick={() => setGeneratedDocId(null)} className="w-full py-4 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold shadow-lg transition-colors text-center text-lg">
+                      ปิดหน้าต่าง
+                  </button>
+              </div>
           </div>
       )}
     </div>
