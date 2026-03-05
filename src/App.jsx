@@ -1388,11 +1388,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
   const [targetProductEdit, setTargetProductEdit] = useState(null);
   const [tempCategory, setTempCategory] = useState('');
+  const [tempIsGiveaway, setTempIsGiveaway] = useState(false); // เพิ่ม State สำหรับจัดการของแจก
 
   const fileInputRef = useRef(null);
   const importFileInputRef = useRef(null);
   const [newStock, setNewStock] = useState({
-    productName: '', skuManual: '', category: CONSTANTS.CATEGORIES.STOCK[0], quantity: '', costPerUnit: 0, sellPrice: 0, date: formatDateISO(new Date()), paymentStatus: 'paid'
+    productName: '', skuManual: '', category: CONSTANTS.CATEGORIES.STOCK[0], quantity: '', costPerUnit: 0, sellPrice: 0, date: formatDateISO(new Date()), paymentStatus: 'paid', isGiveaway: false
   });
 
   const generateAutoSKU = () => {
@@ -1404,6 +1405,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const openEditCategory = (item) => {
     setTargetProductEdit(item);
     setTempCategory(item.category || CONSTANTS.CATEGORIES.STOCK[0]);
+    setTempIsGiveaway(item.isGiveaway || false); // ดึงค่าสถานะแจกฟรีเดิมมาแสดง
     setShowEditCategoryModal(true);
   };
 
@@ -1414,11 +1416,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       const batchWriter = writeBatch(dbInstance);
       targetProductEdit.batches.forEach(b => {
             const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
-            batchWriter.update(docRef, { category: tempCategory });
+            const updates = { category: tempCategory, isGiveaway: tempIsGiveaway };
+            if (tempIsGiveaway) updates.sellPrice = 0; // บังคับให้ราคาขายเป็น 0 หากเป็นของแจก
+            batchWriter.update(docRef, updates);
       });
 
       await batchWriter.commit();
-      showToast(`อัปเดตหมวดหมู่ "${targetProductEdit.name}" เรียบร้อย`, "success");
+      showToast(`อัปเดตข้อมูล "${targetProductEdit.name}" เรียบร้อย`, "success");
       setShowEditCategoryModal(false);
       setTargetProductEdit(null);
     } catch (e) {
@@ -1612,7 +1616,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
         sold: 0, 
         userId: user.uid, 
         createdAt: serverTimestamp(),
-        paymentStatus: newStock.paymentStatus || 'paid'
+        paymentStatus: newStock.paymentStatus || 'paid',
+        isGiveaway: newStock.isGiveaway || false
       };
 
       const stockRef = await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'), batchData);
@@ -1638,7 +1643,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
       showToast("บันทึกสินค้าใหม่สำเร็จ", "success");
       setShowAddStockModal(false);
-      setNewStock({ productName: '', skuManual: '', category: CONSTANTS.CATEGORIES.STOCK[0], quantity: '', costPerUnit: 0, sellPrice: 0, date: formatDateISO(new Date()), paymentStatus: 'paid' });
+      setNewStock({ productName: '', skuManual: '', category: CONSTANTS.CATEGORIES.STOCK[0], quantity: '', costPerUnit: 0, sellPrice: 0, date: formatDateISO(new Date()), paymentStatus: 'paid', isGiveaway: false });
     } catch (e) { showToast("บันทึกไม่สำเร็จ", "error"); }
     setIsProcessing(false);
   };
@@ -1712,9 +1717,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               totalValue: 0, 
               totalPotentialProfit: 0,
               batches: [], 
-              category: batch.category || 'ทั่วไป' 
+              category: batch.category || 'ทั่วไป',
+              isGiveaway: false
           }; 
       }
+      
+      if (batch.isGiveaway) map[groupKey].isGiveaway = true;
       
       const remaining = Number(batch.quantity) - Number(batch.sold || 0);
       const costPerUnit = Number(batch.costPerUnit || 0);
@@ -1847,7 +1855,10 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                                     {margin > 30 && <Star size={14} className="text-amber-400 fill-amber-400"/>}
                                     <div>
                                         <p className="text-[10px] font-mono text-indigo-500 font-bold mb-0.5 text-left">{item.sku}</p>
-                                        <p className="font-bold text-slate-800 text-left">{item.name}</p>
+                                        <p className="font-bold text-slate-800 text-left">
+                                            {item.isGiveaway && <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded mr-1 inline-flex items-center gap-0.5"><Gift size={10}/> แจกฟรี</span>}
+                                            {item.name}
+                                        </p>
                                         <p className="text-[9px] text-slate-400 font-bold uppercase text-left">{item.category}</p>
                                     </div>
                                 </div>
@@ -1863,7 +1874,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                             <td className="p-5 text-center">
                                 <div className="flex justify-center gap-2 text-center">
                                     <button onClick={(e) => { e.stopPropagation(); setViewHistory(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-indigo-600 text-center" title="ดูประวัติราคาต้นทุน"><History size={16}/></button>
-                                    <button onClick={(e) => { e.stopPropagation(); openEditCategory(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-amber-600 text-center" title="แก้ไขหมวดหมู่"><Tag size={16}/></button>
+                                    <button onClick={(e) => { e.stopPropagation(); openEditCategory(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-amber-600 text-center" title="แก้ไขข้อมูลสินค้า"><Edit size={16}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); setDeleteStockConfirm(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-rose-600 text-center" title="ลบสินค้า"><Trash2 size={16}/></button>
                                 </div>
                             </td>
@@ -1905,7 +1916,16 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               <div className="p-6 border-b flex justify-between items-center text-left"><h3 className="text-xl font-black text-slate-800 flex items-center gap-2 text-left"><PlusCircle className="text-indigo-600"/> ลงรายการสั่งซื้อเข้าคลัง</h3><button onClick={() => setShowAddStockModal(false)} className="p-2 hover:bg-slate-100 rounded-full text-center"><X/></button></div>
               <form onSubmit={handleAddStock} className="p-8 space-y-6 overflow-y-auto text-left">
                  <div className="space-y-2 text-left">
-                    <label className="text-[10px] font-bold uppercase text-slate-400 text-left">ชื่อสินค้า</label>
+                    <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold uppercase text-slate-400 text-left">ชื่อสินค้า</label>
+                        <label className="flex items-center gap-1.5 cursor-pointer ml-auto bg-emerald-50 px-2 py-1 rounded-lg hover:bg-emerald-100 transition-colors">
+                            <input type="checkbox" checked={newStock.isGiveaway} onChange={e=>{
+                                const checked = e.target.checked;
+                                setNewStock(prev => ({...prev, isGiveaway: checked, sellPrice: checked ? 0 : prev.sellPrice}));
+                            }} className="w-3.5 h-3.5 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer" />
+                            <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1"><Gift size={12}/> สินค้าสำหรับแจกฟรี</span>
+                        </label>
+                    </div>
                     <input required value={newStock.productName} onChange={e=>setNewStock({...newStock, productName: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold outline-none text-slate-800" placeholder="ระบุชื่อสินค้า..." />
                  </div>
                  <div className="grid grid-cols-2 gap-4 text-left">
@@ -1967,6 +1987,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                                 <div className="space-y-1 text-left">
                                     <div className="flex items-center gap-2 text-left">
                                         <p className="text-[10px] font-bold text-indigo-600 uppercase text-left">Lot {i+1} - รับเข้า {formatDate(b.date)}</p>
+                                        {b.isGiveaway && <span className="text-[8px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-black uppercase inline-flex items-center gap-0.5"><Gift size={10}/> แจกฟรี</span>}
                                         {isLowest && <span className="text-[8px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-black uppercase">Best Cost</span>}
                                         {b.paymentStatus === 'credit' && <span className="text-[8px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-black uppercase">Credit</span>}
                                     </div>
@@ -2033,25 +2054,35 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
         </div>
       )}
 
-      {/* Modal แก้ไขหมวดหมู่สินค้า */}
+      {/* Modal แก้ไขข้อมูลสินค้า (หมวดหมู่ & สถานะของแจก) */}
       {showEditCategoryModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
           <div className="bg-white rounded-[32px] p-8 max-md w-full shadow-2xl animate-in zoom-in-95 text-left">
             <div className="flex justify-between items-center mb-6 text-left">
-              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 text-left"><Tag className="text-indigo-600"/> แก้ไขหมวดหมู่</h3>
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 text-left"><Edit className="text-indigo-600"/> แก้ไขข้อมูลสินค้า</h3>
               <button onClick={()=>setShowEditCategoryModal(false)} className="text-center"><X/></button>
             </div>
             <div className="space-y-4 text-left">
               <p className="text-xs text-slate-400 font-bold uppercase text-left">Product: {targetProductEdit?.name}</p>
-              <select 
-                value={tempCategory} 
-                onChange={e=>setTempCategory(e.target.value)}
-                className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold outline-none text-slate-800 text-left"
-              >
-                {CONSTANTS.CATEGORIES.STOCK.map(c => <option key={c} value={c}>{c}</option>)}
-                <option value="Imported">Imported</option>
-                <option value="อื่นๆ">อื่นๆ</option>
-              </select>
+              <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400 mb-1 block">หมวดหมู่สินค้า</label>
+                  <select 
+                    value={tempCategory} 
+                    onChange={e=>setTempCategory(e.target.value)}
+                    className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold outline-none text-slate-800 text-left"
+                  >
+                    {CONSTANTS.CATEGORIES.STOCK.map(c => <option key={c} value={c}>{c}</option>)}
+                    <option value="Imported">Imported</option>
+                    <option value="อื่นๆ">อื่นๆ</option>
+                  </select>
+              </div>
+              <label className="flex items-center gap-3 cursor-pointer bg-emerald-50/50 p-4 rounded-2xl hover:bg-emerald-50 transition-colors border border-emerald-100">
+                  <input type="checkbox" checked={tempIsGiveaway} onChange={e=>setTempIsGiveaway(e.target.checked)} className="w-5 h-5 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer" />
+                  <div>
+                      <span className="text-sm font-bold text-emerald-700 flex items-center gap-1"><Gift size={16}/> ตั้งเป็นสินค้าสำหรับแจกฟรี (Giveaway)</span>
+                      <span className="text-[10px] text-emerald-600/70">ราคาขายของสินค้านี้จะถูกปรับเป็น 0 บาทเสมอ</span>
+                  </div>
+              </label>
               <div className="flex gap-3 pt-4 text-center">
                 <button onClick={() => setShowEditCategoryModal(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
                 <button onClick={handleUpdateCategory} disabled={isProcessing} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 text-center">
@@ -3340,14 +3371,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   
   const selectStockItem = (item, index) => { 
     const newItems = [...formData.items]; 
-    const isFree = newItems[index].desc.startsWith('[แถมฟรี]');
-    newItems[index].desc = isFree ? `[แถมฟรี] ${item.name}` : item.name;
+    const isFreeInc = newItems[index].desc.startsWith('[แถมฟรี]');
+    const isFreeExp = newItems[index].desc.startsWith('[ของแจก/โปรโมท]');
+    
+    newItems[index].desc = isFreeInc ? `[แถมฟรี] ${item.name}` : isFreeExp ? `[ของแจก/โปรโมท] ${item.name}` : item.name;
     newItems[index].sku = item.sku;
     newItems[index].category = item.category;
     if (formData.type === 'income') {
-        newItems[index].sellPrice = isFree ? 0 : (item.sellPrice || 0);
+        newItems[index].sellPrice = isFreeInc ? 0 : (item.sellPrice || 0);
     } else {
-        if (isFree) newItems[index].buyPrice = 0;
+        newItems[index].buyPrice = isFreeExp ? 0 : (item.cost || item.buyPrice || 0);
     }
     setFormData({ ...formData, items: newItems }); 
     setShowStockSelectModal(false); 
@@ -3884,13 +3917,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         </td>
                         <td className="py-4 text-center">
                           <div className="flex justify-center text-center">
-                            <input type="number" value={item.qty} onChange={e=>updateLineItem(index, 'qty', e.target.value)} className="w-20 bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-center font-black outline-none text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-center"/>
+                            <input type="number" value={item.qty} onChange={e=>updateLineItem(index, 'qty', e.target.value)} className={`w-20 p-2 rounded-xl border-0 text-sm text-center font-black outline-none focus:ring-2 focus:ring-indigo-100 text-center ${isFreeItemIncome ? 'bg-emerald-100/50 text-emerald-800' : isGiveawayExpense ? 'bg-orange-100/50 text-orange-800' : 'bg-slate-100/50 text-slate-800 focus:bg-white'}`}/>
                           </div>
                         </td>
                         <td className="py-4 text-right">
                           <div className="relative flex items-center justify-end text-right">
                             <span className={`absolute left-3 font-bold text-xs text-left ${isFreeItemIncome ? 'text-emerald-400' : isGiveawayExpense ? 'text-orange-400' : 'text-slate-400'}`}>฿</span>
-                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className={`w-full bg-slate-100/50 p-2 rounded-xl border-0 text-sm text-right font-black outline-none pl-8 focus:bg-white focus:ring-2 focus:ring-indigo-100 text-right ${isFreeItemIncome ? 'text-emerald-600' : isGiveawayExpense ? 'text-orange-600' : 'text-slate-800'}`} disabled={isFreeItemIncome}/>
+                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className={`w-full p-2 rounded-xl border-0 text-sm text-right font-black outline-none pl-8 focus:ring-2 focus:ring-indigo-100 text-right ${isFreeItemIncome ? 'bg-transparent text-emerald-600' : isGiveawayExpense ? 'bg-transparent text-orange-600' : 'bg-slate-100/50 text-slate-800 focus:bg-white'}`} disabled={isSpecialItem}/>
                           </div>
                         </td>
                         <td className="py-4 text-right pr-2 text-right">
@@ -3906,6 +3939,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                       }
                                   } else {
                                       updateLineItem(index, 'desc', isGiveawayExpense ? item.desc.replace('[ของแจก/โปรโมท] ', '').replace('[ของแจก/โปรโมท]', '').trim() : `[ของแจก/โปรโมท] ${item.desc}`);
+                                      if (!isGiveawayExpense) {
+                                          updateLineItem(index, 'buyPrice', 0);
+                                      }
                                   }
                               }} className={`p-2 transition-colors rounded-lg ${isFreeItemIncome ? 'text-emerald-600 bg-emerald-100' : isGiveawayExpense ? 'text-orange-600 bg-orange-100' : 'text-slate-400 hover:text-emerald-500 hover:bg-emerald-50'}`} title={formData.type === 'income' ? "ตั้งเป็นของแถมให้ลูกค้า" : "ตั้งเป็นของซื้อมาแจก/โปรโมท"}>
                                   <Gift size={16}/>
@@ -6081,9 +6117,9 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                     return (
                     <div key={i} className={`flex gap-2 mb-2 items-center text-left p-2 rounded-xl transition-colors ${isFreeItem ? 'bg-emerald-50/80 border border-emerald-100' : ''}`}>
                       <span className="text-xs text-slate-400 w-4 text-left">{i+1}.</span>
-                      <input className={`flex-[3] border-0 rounded p-2 text-sm shadow-sm text-left ${isFreeItem ? 'text-emerald-700 font-bold bg-white/50' : ''}`} value={it.desc} onChange={e=>updateItem(i,'desc',e.target.value)} />
-                      <input className="w-20 border-0 rounded p-2 text-sm text-center shadow-sm text-center" type="number" value={it.qty} onChange={e=>updateItem(i,'qty',Number(e.target.value))} />
-                      <input className={`w-24 border-0 rounded p-2 text-sm text-right shadow-sm text-right ${isFreeItem ? 'text-emerald-600 font-bold bg-white/50' : ''}`} type="number" value={it.price} onChange={e=>updateItem(i,'price',Number(e.target.value))} disabled={isFreeItem}/>
+                      <input className={`flex-[3] border-0 rounded p-2 text-sm shadow-sm text-left ${isFreeItem ? 'text-emerald-700 font-bold bg-emerald-100/30' : ''}`} value={it.desc} onChange={e=>updateItem(i,'desc',e.target.value)} />
+                      <input className={`w-20 border-0 rounded p-2 text-sm text-center shadow-sm text-center ${isFreeItem ? 'text-emerald-800 bg-emerald-100/30' : ''}`} type="number" value={it.qty} onChange={e=>updateItem(i,'qty',Number(e.target.value))} />
+                      <input className={`w-24 border-0 rounded p-2 text-sm text-right shadow-sm text-right ${isFreeItem ? 'text-emerald-600 font-bold bg-transparent' : ''}`} type="number" value={it.price} onChange={e=>updateItem(i,'price',Number(e.target.value))} disabled={isFreeItem}/>
                       <div className="flex gap-1 shrink-0">
                           <button onClick={() => {
                               updateItem(i, 'desc', isFreeItem ? it.desc.replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').trim() : `[แถมฟรี] ${it.desc}`);
