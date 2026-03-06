@@ -3900,12 +3900,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     </div>
                 )}
                 
-                <div className={`grid grid-cols-2 ${formData.type === 'income' ? 'md:grid-cols-5' : 'md:grid-cols-4'} gap-4 flex-1 w-full text-left mt-2 md:mt-0`}>
+                <div className={`grid grid-cols-2 md:grid-cols-5 gap-4 flex-1 w-full text-left mt-2 md:mt-0`}>
                   <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">วันที่</label><input type="date" value={formData.date} onChange={e=>setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-100 outline-none text-left"/></div>
                   <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">ช่องทาง</label><select value={formData.channel} onChange={e=>setFormData({...formData, channel: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left">{CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                  <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">{formData.type === 'expense' ? 'เลขที่ใบกำกับภาษี (ถ้ามี)' : 'Order ID'}</label><input placeholder="ระบุเลขที่..." value={formData.type === 'expense' ? formData.taxInvoiceNo : formData.orderId} onChange={e=>setFormData({...formData, [formData.type === 'expense' ? 'taxInvoiceNo' : 'orderId']: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left"/></div>
-                  <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">หมวดหมู่</label><select value={formData.category} onChange={e=>setFormData({...formData, category: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left">{(formData.type === 'income' ? CONSTANTS.CATEGORIES.INCOME : CONSTANTS.CATEGORIES.EXPENSE).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                  {formData.type === 'income' && (
+                  <div className="space-y-1 text-left">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">{formData.type === 'expense' ? 'อ้างอิง Order ID (ถ้ามี)' : 'Order ID'}</label>
+                      <input placeholder={formData.type === 'expense' ? "เชื่อมกับรายรับ..." : "ระบุเลขที่..."} value={formData.orderId} onChange={e=>setFormData({...formData, orderId: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left"/>
+                  </div>
+                  {formData.type === 'expense' ? (
+                      <div className="space-y-1 text-left">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">เลขที่ใบกำกับภาษี</label>
+                          <input placeholder="ระบุเลขที่..." value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left"/>
+                      </div>
+                  ) : (
                       <div className="space-y-1 text-left">
                           <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">สถานะรับเงิน</label>
                           <select value={formData.paymentStatus || 'settled'} onChange={e=>setFormData({...formData, paymentStatus: e.target.value})} className={`w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-left ${formData.paymentStatus === 'pending_platform' ? 'text-orange-600' : 'text-emerald-600'}`}>
@@ -3914,6 +3921,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           </select>
                       </div>
                   )}
+                  <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">หมวดหมู่</label><select value={formData.category} onChange={e=>setFormData({...formData, category: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left">{(formData.type === 'income' ? CONSTANTS.CATEGORIES.INCOME : CONSTANTS.CATEGORIES.EXPENSE).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                 </div>
               </div>
               <div className="pt-6 border-t space-y-4 text-left">
@@ -4369,7 +4377,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     {t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
                                 </div>
                                 <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
-                                    <p className="text-[10px] font-mono text-slate-400 text-left">Ref/Order: {t.orderId || t.taxInvoiceNo || '-'}</p>
+                                    <p className="text-[10px] font-mono text-slate-400 text-left">
+                                        {t.type === 'income' ? `Order ID: ${t.orderId || '-'}` : (t.taxInvoiceNo ? `Tax Inv: ${t.taxInvoiceNo}` : `Ref: ${t.orderId || '-'}`)}
+                                        {t.type === 'expense' && t.orderId && t.orderId !== t.taxInvoiceNo && <span className="ml-2 bg-indigo-50 text-indigo-600 px-1.5 rounded">Linked: {t.orderId}</span>}
+                                    </p>
                                     {t.issuedDocs && t.issuedDocs.length > 0 && t.issuedDocs.map((doc, idx) => {
                                         let badgeColor = 'bg-slate-100 text-slate-600';
                                         let docLabel = 'เอกสาร';
