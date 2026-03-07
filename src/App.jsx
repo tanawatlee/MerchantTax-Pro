@@ -3117,7 +3117,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
 function RecordManager({ user, transactions, invoices, appId, stockBatches, showToast, onIssueInvoice, promotions }) {
   const [subTab, setSubTab] = useState('new');
   const [viewItem, setViewItem] = useState(null);
-  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [cancelConfirmId, setCancelConfirmId] = useState(null); // แก้ไขชื่อ State สำหรับยกเลิกรายการ
   const [showPartnerModal, setShowPartnerModal] = useState(false);
   const [showStockSelectModal, setShowStockSelectModal] = useState(false);
   const [stockSearchTerm, setStockSearchTerm] = useState('');
@@ -3372,20 +3372,27 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
   const totalFilteredPartners = useMemo(() => groupedPartners.reduce((sum, g) => sum + g.branches.length, 0), [groupedPartners]);
    
-  const handleDelete = async (id, type) => { 
+  const handleCancelTransaction = async () => { 
+    if (!cancelConfirmId || !user) return;
     try { 
       const batchWriter = writeBatch(dbInstance);
-      const coll = type === 'income' ? 'transactions_income' : 'transactions_expense'; 
+      const coll = cancelConfirmId.type === 'income' ? 'transactions_income' : 'transactions_expense'; 
       
-      batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, id));
+      // Soft Delete: เปลี่ยนสถานะเป็น isCancelled: true แทนการลบทิ้งถาวร
+      batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, cancelConfirmId.id), {
+          isCancelled: true,
+          cancelledAt: serverTimestamp()
+      });
 
-      if (type === 'expense') {
-          const associatedLots = stockBatches.filter(b => b.parentExpenseId === id);
+      if (cancelConfirmId.type === 'expense') {
+          // สำหรับรายจ่าย (ต้นทุนสินค้า) หากยกเลิก ให้ลบสต็อกที่ถูกสร้างขึ้นจากบิลนี้ออก
+          const associatedLots = stockBatches.filter(b => b.parentExpenseId === cancelConfirmId.id);
           associatedLots.forEach(lot => {
               batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
           });
-      } else if (type === 'income') {
-          const saleDoc = transactions.find(t => t.id === id);
+      } else if (cancelConfirmId.type === 'income') {
+          // สำหรับรายรับ หากยกเลิก ให้ดึงสต็อกกลับเข้าคลังอัตโนมัติ
+          const saleDoc = transactions.find(t => t.id === cancelConfirmId.id);
           if (saleDoc && saleDoc.items) {
               for (const item of saleDoc.items) {
                   let toReturn = Number(item.qty);
@@ -3404,9 +3411,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
 
       await batchWriter.commit();
-      showToast("ลบรายการ and คืนยอดสต็อกเรียบร้อย", "success"); 
-      setDeleteConfirmId(null); 
-    } catch (e) { showToast("ไม่สามารถลบได้", "error"); } 
+      showToast("ยกเลิกรายการและคืนยอดสต็อกเรียบร้อย", "success"); 
+      setCancelConfirmId(null); 
+    } catch (e) { showToast("ไม่สามารถยกเลิกรายการได้", "error"); } 
   };
 
   const selectPartner = (p) => { 
@@ -4379,17 +4386,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     </thead>
                     <tbody className="divide-y divide-slate-50 text-left">
                         {currentHistData.length > 0 ? currentHistData.map(t => (
-                        <tr key={t.id} className="group hover:bg-slate-50/80 transition-colors text-left">
+                        <tr key={t.id} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : 'hover:bg-slate-50/80'}`}>
                             <td className="p-5 text-left">
-                                <p className="font-black text-slate-700 text-left">{formatDate(t.date)}</p>
+                                <p className={`font-black text-left ${t.isCancelled ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{formatDate(t.date)}</p>
                                 <p className="text-[10px] font-mono font-bold text-indigo-600 mt-0.5">{t.sysDocId || 'NO-REF'}</p>
                                 <span className="mt-1 inline-block px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500 uppercase text-center">{t.channel || 'หน้าร้าน'}</span>
+                                {t.isCancelled && <span className="ml-2 mt-1 inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
                             </td>
                             <td className="p-5 text-left">
                                 <div className="flex items-center gap-2">
-                                    <p className="font-bold text-slate-800 line-clamp-1 text-left">{t.description || '-'}</p>
-                                    {t.paymentStatus === 'pending_platform' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-orange-100 text-orange-700 border border-orange-200">รอเงินเข้า</span>}
-                                    {t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
+                                    <p className={`font-bold text-slate-800 line-clamp-1 text-left ${t.isCancelled ? 'line-through text-slate-400' : ''}`}>{t.description || '-'}</p>
+                                    {t.isCancelled && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
+                                    {!t.isCancelled && t.paymentStatus === 'pending_platform' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-orange-100 text-orange-700 border border-orange-200">รอเงินเข้า</span>}
+                                    {!t.isCancelled && t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
                                 </div>
                                 <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
                                     <p className="text-[10px] font-mono text-slate-400 text-left">
@@ -4413,18 +4422,18 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                 </div>
                             </td>
                             <td className="p-5 text-left">
-                                <p className="font-bold text-indigo-600 text-left">{t.partnerName || 'คู่ค้าทั่วไป'}</p>
+                                <p className={`font-bold text-left ${t.isCancelled ? 'text-slate-400' : 'text-indigo-600'}`}>{t.partnerName || 'คู่ค้าทั่วไป'}</p>
                                 <p className="text-[10px] text-slate-400 truncate max-w-[150px] text-left">Addr: {t.partnerAddress || '-'}</p>
                             </td>
                             <td className="p-5 text-right">
-                                <div className={`inline-flex flex-col items-end px-3 py-1.5 rounded-2xl text-right ${t.type==='income'?'bg-emerald-50 text-emerald-700':'bg-rose-50 text-rose-700'}`}>
+                                <div className={`inline-flex flex-col items-end px-3 py-1.5 rounded-2xl text-right ${t.isCancelled ? 'bg-slate-50 text-slate-400' : (t.type==='income'?'bg-emerald-50 text-emerald-700':'bg-rose-50 text-rose-700')}`}>
                                     <p className="text-[9px] font-black uppercase opacity-60 leading-none mb-1 text-right">{t.type==='income'?'Income':'Expense'}</p>
-                                    <p className="text-base font-black leading-none text-right">{formatCurrency(t.grandTotal || t.total)}</p>
+                                    <p className={`text-base font-black leading-none text-right ${t.isCancelled ? 'line-through' : ''}`}>{formatCurrency(t.grandTotal || t.total)}</p>
                                 </div>
                             </td>
                             <td className="p-5 text-center">
                                 <div className="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-all text-center">
-                                    {t.type === 'income' && t.paymentStatus === 'pending_platform' && (
+                                    {!t.isCancelled && t.type === 'income' && t.paymentStatus === 'pending_platform' && (
                                         <button onClick={()=>{
                                             setSettleConfirmId(t); 
                                             setSettleDate(formatDateISO(new Date())); 
@@ -4433,8 +4442,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                         }} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-500 hover:shadow-md transition-all shadow-sm text-center" title="รับเงินเข้าบัญชี (Settle)"><CheckCircle size={16}/></button>
                                     )}
                                     <button onClick={()=>setViewItem(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-indigo-600 hover:shadow-md transition-all shadow-sm text-center"><Eye size={16}/></button>
-                                    {t.type === 'income' && (<button onClick={()=>onIssueInvoice(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-600 hover:shadow-md transition-all shadow-sm text-center" title="ออกใบกำกับภาษี"><Printer size={16}/></button>)}
-                                    <button onClick={()=>setDeleteConfirmId({id: t.id, type: t.type})} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-rose-600 hover:shadow-md transition-all shadow-sm text-center" title="ลบทิ้ง (คืนสต็อก)"><Trash2 size={16}/></button>
+                                    {!t.isCancelled && t.type === 'income' && (<button onClick={()=>onIssueInvoice(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-600 hover:shadow-md transition-all shadow-sm text-center" title="ออกใบกำกับภาษี"><Printer size={16}/></button>)}
+                                    {!t.isCancelled && (
+                                        <button onClick={()=>setCancelConfirmId({id: t.id, type: t.type})} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-rose-600 hover:shadow-md transition-all shadow-sm text-center" title="ยกเลิกรายการ (Void)"><XCircle size={16}/></button>
+                                    )}
                                 </div>
                             </td>
                         </tr>
@@ -4574,7 +4585,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             </div>
             <div className="p-6 border-t bg-slate-50 flex gap-4 text-center">
               <button onClick={()=>setViewItem(null)} className="flex-1 py-4 bg-white border border-slate-200 rounded-2xl font-bold hover:bg-slate-50 transition-colors text-center">ปิดหน้านี้</button>
-              {viewItem.type === 'income' && (
+              {!viewItem.isCancelled && viewItem.type === 'income' && (
                 <button onClick={()=>{onIssueInvoice(viewItem); setViewItem(null);}} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 text-center"><Printer size={20}/> ออกเอกสารภาษี (Invoice)</button>
               )}
             </div>
@@ -4582,8 +4593,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         </div>
       )}
       
-      {/* Delete Item Confirm Modal */}
-      {deleteConfirmId && (<div className="fixed inset-0 bg-black/60 z-[900] flex items-center justify-center p-4 text-left"><div className="bg-white rounded-[32px] p-8 max-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center"><Trash2 size={32}/></div><h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันการลบรายการ?</h3><p className="text-xs text-slate-400 mb-8 text-center uppercase tracking-widest font-black">รายการประเภท: {deleteConfirmId.type}</p><div className="flex gap-3 text-center"><button onClick={()=>setDeleteConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button><button onClick={()=>handleDelete(deleteConfirmId.id, deleteConfirmId.type)} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center">ยืนยันลบ</button></div></div></div>)}
+      {/* Cancel Item Confirm Modal */}
+      {cancelConfirmId && (<div className="fixed inset-0 bg-black/60 z-[900] flex items-center justify-center p-4 text-left"><div className="bg-white rounded-[32px] p-8 max-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center"><XCircle size={32}/></div><h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันการยกเลิกรายการ (Void)?</h3><p className="text-xs text-slate-400 mb-8 text-center leading-relaxed">ระบบจะทำเครื่องหมายรายการนี้เป็น "ยกเลิกแล้ว"<br/>และทำการดึงสต็อกสินค้ากลับคืนเข้าคลังให้อัตโนมัติ<br/><span className="font-bold text-rose-600">*เลขเอกสารจะยังคงอยู่เพื่อการตรวจสอบบัญชี</span></p><div className="flex gap-3 text-center"><button onClick={()=>setCancelConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ปิด</button><button onClick={()=>handleCancelTransaction(cancelConfirmId.id, cancelConfirmId.type)} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center">ยืนยันยกเลิก</button></div></div></div>)}
 
       {/* Settlement (รับเงินเข้า) Confirm Modal */}
       {settleConfirmId && (
