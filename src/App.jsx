@@ -3140,7 +3140,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '',
     partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '',
     items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }],
-    paymentStatus: 'settled'
+    paymentStatus: 'settled',
+    isCashBill: false
   });
 
   // --- Summary Filters State ---
@@ -3624,7 +3625,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           isExpense: formData.type === 'expense'
       });
 
-      setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled' });
+      setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled', isCashBill: false });
     } catch (e) { showToast("Error: " + e.message, "error"); }
   };
 
@@ -3909,8 +3910,22 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   </div>
                   {formData.type === 'expense' ? (
                       <div className="space-y-1 text-left">
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">เลขที่ใบกำกับภาษี</label>
-                          <input placeholder="ระบุเลขที่..." value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left"/>
+                          <div className="flex justify-between items-center mb-1">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">เลขที่ใบกำกับภาษี</label>
+                              <label className="flex items-center gap-1 cursor-pointer">
+                                  <input type="checkbox" checked={formData.isCashBill} onChange={e => {
+                                      const checked = e.target.checked;
+                                      setFormData(prev => ({
+                                          ...prev, 
+                                          isCashBill: checked, 
+                                          taxInvoiceNo: checked ? '' : prev.taxInvoiceNo,
+                                          vatType: checked ? 'none' : prev.vatType
+                                      }));
+                                  }} className="w-3 h-3 rounded text-rose-500 focus:ring-rose-500 border-slate-300" />
+                                  <span className="text-[9px] font-bold text-rose-600">บิลเงินสด</span>
+                              </label>
+                          </div>
+                          <input disabled={formData.isCashBill} placeholder={formData.isCashBill ? "ไม่ต้องระบุ (บิลเงินสด)" : "ระบุเลขที่..."} value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} className={`w-full p-2.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-left transition-colors ${formData.isCashBill ? 'bg-slate-100 text-slate-400' : 'bg-slate-50 text-slate-700 focus:ring-2 focus:ring-indigo-100'}`}/>
                       </div>
                   ) : (
                       <div className="space-y-1 text-left">
@@ -4106,8 +4121,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         <label className="text-[9px] font-bold opacity-40 uppercase text-left">ประเภทภาษี (VAT Type)</label>
                         <div className="flex bg-white/5 p-1 rounded-xl w-full text-left">
                           <button type="button" onClick={() => setFormData({...formData, vatType: 'none'})} className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all ${formData.vatType === 'none' ? 'bg-white text-slate-900 shadow-lg' : 'text-white/40'}`}>ไม่มี VAT</button>
-                          <button type="button" onClick={() => setFormData({...formData, vatType: 'included'})} className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all ${formData.vatType === 'included' ? 'bg-white text-slate-900 shadow-lg' : 'text-white/40'}`}>รวม VAT</button>
-                          <button type="button" onClick={() => setFormData({...formData, vatType: 'excluded'})} className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all ${formData.vatType === 'excluded' ? 'bg-white text-slate-900 shadow-lg' : 'text-white/40'}`}>แยก VAT</button>
+                          <button type="button" disabled={formData.isCashBill} onClick={() => setFormData({...formData, vatType: 'included'})} className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all ${formData.vatType === 'included' ? 'bg-white text-slate-900 shadow-lg' : 'text-white/40'} ${formData.isCashBill ? 'opacity-30 cursor-not-allowed' : ''}`}>รวม VAT</button>
+                          <button type="button" disabled={formData.isCashBill} onClick={() => setFormData({...formData, vatType: 'excluded'})} className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all ${formData.vatType === 'excluded' ? 'bg-white text-slate-900 shadow-lg' : 'text-white/40'} ${formData.isCashBill ? 'opacity-30 cursor-not-allowed' : ''}`}>แยก VAT</button>
                         </div>
                       </div>
                       <div className="space-y-1 text-left">
@@ -4378,7 +4393,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                 </div>
                                 <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
                                     <p className="text-[10px] font-mono text-slate-400 text-left">
-                                        {t.type === 'income' ? `Order ID: ${t.orderId || '-'}` : (t.taxInvoiceNo ? `Tax Inv: ${t.taxInvoiceNo}` : `Ref: ${t.orderId || '-'}`)}
+                                        {t.type === 'income' ? `Order ID: ${t.orderId || '-'}` : (t.isCashBill ? 'Ref: บิลเงินสด' : (t.taxInvoiceNo ? `Tax Inv: ${t.taxInvoiceNo}` : `Ref: ${t.orderId || '-'}`))}
                                         {t.type === 'expense' && t.orderId && t.orderId !== t.taxInvoiceNo && <span className="ml-2 bg-indigo-50 text-indigo-600 px-1.5 rounded">Linked: {t.orderId}</span>}
                                     </p>
                                     {t.issuedDocs && t.issuedDocs.length > 0 && t.issuedDocs.map((doc, idx) => {
@@ -4454,7 +4469,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                 <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2 text-left"><Hash className="text-indigo-600"/> รายละเอียดรายการ</h3>
                 <div className="flex items-center gap-3 mt-2 text-left">
                   <span className="text-sm font-black text-indigo-700 bg-indigo-100 border border-indigo-200 px-3 py-1 rounded-lg tracking-wider">SYS ID: {viewItem.sysDocId || 'NO-REF'}</span>
-                  <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.orderId || viewItem.taxInvoiceNo || '-'}</p>
+                  <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.isCashBill ? 'บิลเงินสด' : (viewItem.orderId || viewItem.taxInvoiceNo || '-')}</p>
                   <span className={`px-2 py-1 rounded-md text-[10px] font-bold text-center ${viewItem.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{viewItem.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span>
                   <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold text-center">{viewItem.channel || 'หน้าร้าน'}</span>
                 </div>
