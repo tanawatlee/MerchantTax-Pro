@@ -7,9 +7,8 @@ import {
   ChevronDown, ChevronUp, AlertTriangle, Calendar, Info, MapPin, Building, Layers, ArrowRightLeft, Percent, ClipboardList, Briefcase,
   Camera, Sparkles, ScanText, Zap, ChevronRight, Truck, Ticket, CreditCard, FileUp, Hash, Copy, FileCheck, Box, History, AlertCircle, ShoppingCart, Truck as TruckIcon,
   RefreshCw, Plus, FileSpreadsheet, DownloadCloud, Users, Layers as LayersIcon, Filter, ArrowRight, FileJson, FileType, SaveAll,
-  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail, Key
+  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail, Key, Gift, Wand2, BookOpen, Lightbulb, Receipt
 } from 'lucide-react';
-import { Gift, Wand2 } from 'lucide-react';
 
 // --- Import Firebase ---
 import { initializeApp, getApps, getApp } from 'firebase/app';
@@ -133,24 +132,18 @@ const formatDateISO = (dateInput) => {
 };
 
 const sortNewestFirst = (a, b) => {
-  // ยึดลำดับที่บันทึก (เวลาที่ถูกสร้างในระบบ) เป็นหลัก
   const createdA = a.createdAt?.seconds || 0;
   const createdB = b.createdAt?.seconds || 0;
   if (createdA !== createdB && createdA !== 0 && createdB !== 0) return createdB - createdA;
-  
-  // หากไม่มี Timestamp ให้ใช้วันที่ที่ระบุในเอกสาร
   const timeA = normalizeDate(a.date)?.getTime() || 0;
   const timeB = normalizeDate(b.date)?.getTime() || 0;
   return timeB - timeA;
 };
 
 const sortOldestFirst = (a, b) => {
-  // ยึดลำดับที่บันทึก (เวลาที่ถูกสร้างในระบบ) เป็นหลัก
   const createdA = a.createdAt?.seconds || 0;
   const createdB = b.createdAt?.seconds || 0;
   if (createdA !== createdB && createdA !== 0 && createdB !== 0) return createdA - createdB;
-  
-  // หากไม่มี Timestamp ให้ใช้วันที่ที่ระบุในเอกสาร
   const timeA = normalizeDate(a.date)?.getTime() || 0;
   const timeB = normalizeDate(b.date)?.getTime() || 0;
   return timeA - timeB;
@@ -218,19 +211,16 @@ const calculatePromotions = (currentItems, allPromotions) => {
     let newFreeItems = [];
     let appliedNames = [];
     
-    // คำนวณยอดรวม (Subtotal) เฉพาะสินค้าปกติ ที่ไม่ใช่ของแถม (ไม่เอาที่ติดแท็ก [แถมฟรี])
     const cleanItems = currentItems.filter(it => !it.desc.startsWith('[แถมฟรี]'));
     const subtotal = cleanItems.reduce((sum, it) => sum + (Number(it.price || it.sellPrice || it.buyPrice || 0) * Number(it.qty || 0)), 0);
 
     allPromotions.filter(p => p.isActive).forEach(promo => {
-        // --- Legacy POS Promos & Shopee Voucher ---
         if (promo.type === 'threshold_discount' || promo.type === 'shopee_voucher') {
             if (subtotal >= Number(promo.minAmount)) {
                 totalDiscount += Number(promo.discountAmount);
                 appliedNames.push(promo.name);
             }
         } 
-        // --- Percentage Promos & Shopee Bundle (Percent) ---
         else if (promo.type === 'percentage_discount' || (promo.type === 'shopee_bundle' && promo.bundleType === 'percentage')) {
             let threshold = promo.type === 'shopee_bundle' ? (Number(promo.minQty) || 1) : Number(promo.minAmount);
             let meetsCondition = false;
@@ -247,7 +237,6 @@ const calculatePromotions = (currentItems, allPromotions) => {
                 appliedNames.push(promo.name);
             }
         } 
-        // --- Shopee Bundle (Fix Amount) ---
         else if (promo.type === 'shopee_bundle' && promo.bundleType === 'amount') {
             const totalQty = cleanItems.reduce((q, it) => q + Number(it.qty), 0);
             if (totalQty >= Number(promo.minQty)) {
@@ -255,7 +244,6 @@ const calculatePromotions = (currentItems, allPromotions) => {
                 appliedNames.push(promo.name);
             }
         }
-        // --- BOGO & Shopee Add-on Deal ---
         else if (promo.type === 'buy_x_get_y' || promo.type === 'shopee_addon') {
             const targetSku = promo.type === 'shopee_addon' ? promo.addonMainSku : promo.targetSku;
             const targetItem = cleanItems.find(it => (it.sku && it.sku !== '-' && it.sku === targetSku) || it.desc === targetSku);
@@ -270,7 +258,6 @@ const calculatePromotions = (currentItems, allPromotions) => {
                         });
                         appliedNames.push(promo.name);
                     } else if (promo.type === 'shopee_addon') {
-                        // จำลองส่วนลด Add-on (หักลบจากราคา Add-on ปกติ)
                         appliedNames.push(`Add-on: ${promo.name}`);
                     }
                 }
@@ -288,11 +275,9 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
     
     if (userApiKey && userApiKey.trim() !== "") {
         const customKey = userApiKey.trim();
-        // กรณีผู้ใช้ใส่ API Key เอง ให้เชื่อมต่อกับ Public Model
         url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${customKey}`;
     } else {
         const apiKey = "";
-        // กรณีไม่มี API Key ให้ระบบแทรก Key อัตโนมัติใน Preview Model
         url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
     }
 
@@ -476,7 +461,119 @@ function LoginScreen({ authInstance, addToast }) {
   );
 }
 
-// --- Main Sub Components ---
+// --- Component: Knowledge Base (Guide) ---
+function TaxGuide() {
+    const iconProps = { size: 28 };
+    
+    const colors = {
+        rose: "text-rose-600 bg-rose-50 border-rose-100 shadow-rose-100",
+        indigo: "text-indigo-600 bg-indigo-50 border-indigo-100 shadow-indigo-100",
+        amber: "text-amber-600 bg-amber-50 border-amber-100 shadow-amber-100",
+        emerald: "text-emerald-600 bg-emerald-50 border-emerald-100 shadow-emerald-100",
+        purple: "text-purple-600 bg-purple-50 border-purple-100 shadow-purple-100",
+        teal: "text-teal-600 bg-teal-50 border-teal-100 shadow-teal-100",
+        blue: "text-blue-600 bg-blue-50 border-blue-100 shadow-blue-100" // เพิ่มสีใหม่
+    };
+
+    const textColors = {
+        rose: "text-rose-600",
+        indigo: "text-indigo-600",
+        amber: "text-amber-600",
+        emerald: "text-emerald-600",
+        purple: "text-purple-600",
+        teal: "text-teal-600",
+        blue: "text-blue-600" // เพิ่มสีใหม่
+    };
+
+    const tips = [
+        {
+            title: "การยกเลิกเอกสาร (ห้ามลบทิ้งถาวร)",
+            icon: <Trash2 {...iconProps}/>,
+            color: "rose",
+            content: "ตามหลักสรรพากร การลบเอกสารทิ้งถาวรจะทำให้เกิดปัญหา 'เลขเอกสารฟันหลอ' (Missing Sequence) ซึ่งเป็นจุดที่มักถูกสรรพากรเพ่งเล็ง\n\n✅ วิธีที่ถูกต้อง: ให้ใช้ปุ่ม 'ยกเลิกรายการ (❌)' ที่หน้าประวัติแทน ระบบจะคงเลขเอกสารนั้นไว้ ทำการขีดฆ่า และดึงยอดสต็อกกลับเข้าคลังให้อัตโนมัติ เพื่อให้ตรวจสอบที่มาที่ไปได้เสมอ"
+        },
+        {
+            title: "บันทึกตัดสต็อกผิดรุ่น/ผิดรสชาติ",
+            icon: <ArrowRightLeft {...iconProps}/>,
+            color: "indigo",
+            content: "หากลูกค้าสั่งรสมินต์ แต่คุณเผลอตัดสต็อกรสสตรอว์เบอร์รี ไม่จำเป็นต้องกลับไปไล่ลบหรือแก้ไขบิลเก่าให้เหนื่อยและเสี่ยงข้อมูลรวน\n\n✅ วิธีที่ถูกต้อง: ไปที่เมนู 'คลังสินค้า FIFO' > กดปุ่ม '⇄ ปรับปรุงสต็อก' ที่ท้ายสินค้า > เลือกแท็บ '⇄ สลับ/โอนย้าย' > เลือกจำนวนและระบุสินค้าปลายทางที่ต้องการสลับยอด ระบบจะปรับสต็อกให้ตรง 100% ทันทีโดยไม่กระทบกำไรขาดทุน"
+        },
+        {
+            title: "เปลี่ยนไซส์/แพ็คสินค้า (Repacking)",
+            icon: <Package {...iconProps}/>,
+            color: "amber",
+            content: "กรณีของไซส์ใหญ่หมด แล้วต้องหยิบไซส์เล็กหลายชิ้นส่งไปแทนเพื่อให้ปริมาณเท่าเดิม (เช่น สั่ง 500g 1 ถุง แต่ส่ง 150g 4 ถุง)\n\n✅ วิธีที่ 1: เข้าไปกด 👁️ แก้ไข 'รายการสินค้าในบิลขายใบนั้น' ให้ตรงกับของที่ส่งจริง (สต็อกจะตัดเป๊ะ)\n✅ วิธีที่ 2: หากไม่อยากแก้บิล ให้ไปที่ 'คลังสินค้า FIFO' > กดปรับปรุงสต็อก 2 รอบ (กด '+ เพิ่มสต็อก' ไซส์ใหญ่กลับมา และ กด '- ลบสต็อก' ไซส์เล็กออกไปตามที่ส่งจริง)"
+        },
+        {
+            title: "ค่าน้ำมันรถ สำหรับซื้อของ/ส่งของ",
+            icon: <TruckIcon {...iconProps}/>,
+            color: "emerald",
+            content: "บิลค่าน้ำมันถือเป็นต้นทุนในการบริหารกิจการ แต่ในแง่ของภาษีมูลค่าเพิ่ม (VAT) มีกฎหมายข้อห้ามเฉพาะเอาไว้\n\n⚠️ ข้อควรระวัง: หากรถที่ใช้เป็น 'รถยนต์นั่งส่วนบุคคล' (รถเก๋ง หรือ รถกระบะ 4 ประตู) ภาษีซื้อจากบิลค่าน้ำมันจะไม่สามารถขอคืนได้! ตอนบันทึก ให้เลือกประเภท 'รวม/แยก VAT' ตามบิล แต่ต้องติ๊ก ✅ 'ภาษีซื้อต้องห้าม' เสมอ เพื่อป้องกันสรรพากรประเมินเบี้ยปรับ"
+        },
+        {
+            title: "ค่าอาหารเลี้ยงทีมงาน/สังสรรค์",
+            icon: <Users {...iconProps}/>,
+            color: "purple",
+            content: "การเลี้ยงอาหารพนักงานสามารถนำมาหักเป็นค่าใช้จ่ายของกิจการได้ (เลือกลงหมวด: 'ค่าใช้จ่ายทั่วไป' หรือสวัสดิการ) เพื่อลดหย่อนภาษีเงินได้กำไรสุทธิประจำปี\n\n⚠️ ข้อควรระวัง: ตามกฎหมาย ค่าอาหารและเครื่องดื่มเพื่อการสังสรรค์/เลี้ยงรับรอง ถือเป็น 'ภาษีซื้อต้องห้าม' เด็ดขาด (แม้จะได้ใบกำกับภาษีเต็มรูปมาก็ตาม) ดังนั้นตอนบันทึกบิลนี้ ต้องติ๊ก ✅ 'ภาษีซื้อต้องห้าม' เสมอ"
+        },
+        {
+            title: "การปรับปรุงค่าส่ง/ค่าธรรมเนียมย้อนหลัง",
+            icon: <RefreshCw {...iconProps}/>,
+            color: "blue",
+            content: "เมื่อถูก Platform เรียกเก็บค่าส่งเพิ่ม หรือคืนเงินให้ย้อนหลัง ข้ามเดือนมาแล้ว \n\n✅ วิธีที่ถูกต้อง: ห้ามกลับไปแก้บิลขายเดิม! แต่ให้บันทึกเป็นรายการใหม่ในวันที่เกิดรายการจริง\n- หากถูกเก็บเพิ่ม: ลงเป็น 'รายจ่าย' (หมวดค่าจัดส่ง/ค่าธรรมเนียม) พร้อมระบุอ้างอิง Order ID\n- หากได้เงินคืน: ลงเป็น 'รายรับ' (หมวดรายได้อื่นๆ) พร้อมระบุอ้างอิง Order ID"
+        },
+        {
+            title: "บิลเงินสด / บิลที่ไม่มี VAT",
+            icon: <Receipt {...iconProps}/>,
+            color: "teal",
+            content: "สำหรับการซื้อของจากร้านทั่วไป หรือบิลที่เขียนด้วยมือ ซึ่งไม่มีรูปแบบเป็นใบกำกับภาษีเต็มรูปที่ถูกต้อง\n\n✅ วิธีที่ถูกต้อง: ในหน้า 'บันทึกรายจ่าย' ให้ติ๊กทำเครื่องหมายที่ช่อง ✅ 'บิลเงินสด' ระบบจะทำการปิดช่องกรอกเลขใบกำกับ และบังคับเลือกประเภทภาษีเป็น 'ไม่มี VAT' ให้อัตโนมัติ เพื่อป้องกันการเผลอนำยอดไปยื่นขอคืนภาษีซื้อ"
+        }
+    ];
+
+    return (
+        <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full h-full pb-20">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 border-b pb-4 gap-4">
+                <div className="space-y-1">
+                    <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><BookOpen className="text-indigo-600"/> คู่มือ & เคล็ดลับภาษี</h2>
+                    <p className="text-sm text-slate-400 font-medium">รวมข้อควรระวังและวิธีลงบัญชีที่ถูกต้อง (ตามมาตรฐานกรมสรรพากร)</p>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                {tips.map((tip, idx) => (
+                    <div key={idx} className={`bg-white rounded-3xl p-6 border shadow-sm hover:shadow-lg transition-all relative overflow-hidden group border-slate-100 hover:border-${tip.color}-200`}>
+                        <div className={`absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-10 transition-opacity ${textColors[tip.color]}`}>
+                            {React.cloneElement(tip.icon, { size: 120 })}
+                        </div>
+                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-5 border shadow-sm ${colors[tip.color]}`}>
+                            {tip.icon}
+                        </div>
+                        <h3 className="text-lg font-black text-slate-800 mb-3 leading-tight">{tip.title}</h3>
+                        <div className="text-sm text-slate-600 whitespace-pre-line leading-relaxed">
+                            {tip.content}
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            <div className="mt-8 bg-gradient-to-r from-indigo-50 to-blue-50 p-6 md:p-8 rounded-[32px] border border-indigo-100 flex flex-col md:flex-row items-center gap-6 shadow-sm">
+                <div className="p-4 bg-white rounded-full text-amber-500 shadow-md shrink-0">
+                    <Lightbulb size={40}/>
+                </div>
+                <div>
+                    <h4 className="text-lg font-black text-indigo-900 mb-2">ทำไมระบบบัญชีที่ดีถึงสำคัญ?</h4>
+                    <p className="text-sm text-indigo-800/80 leading-relaxed font-medium">
+                        การจัดการสต็อกและการลงรายการรายรับ-รายจ่ายที่ถูกต้องตั้งแต่ต้น จะช่วยป้องกันการถูกประเมินภาษีและเบี้ยปรับย้อนหลังจามกรมสรรพากร 
+                        และที่สำคัญที่สุดคือ ทำให้เราเห็น <b>"กำไรสุทธิ (Net Profit)"</b> ที่แท้จริงของธุรกิจ 
+                        <br/>ระบบ MerchantTax ถูกออกแบบมาเพื่อเป็นเครื่องมือกั้นข้อผิดพลาดเหล่านี้ และช่วยให้ผู้ประกอบการทำงานได้ง่ายและปลอดภัยที่สุดครับ
+                    </p>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// --- Main Sub Components (Continued) ---
 
 function Dashboard({ transactions, invoices, stockBatches, showToast }) {
   const [selectedChannel, setSelectedChannel] = useState('all');
@@ -747,6 +844,53 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
   const [anomalyAlerts, setAnomalyAlerts] = useState([]);
   const [isCheckingAnomaly, setIsCheckingAnomaly] = useState(false);
   const fileInputRef = useRef(null);
+
+  // --- NEW: Stock Validation System ---
+  const stockValidation = useMemo(() => {
+      if (importedData.length === 0 || importMode === 'update_settled') return null;
+
+      const requiredItems = [];
+      // 1. รวมยอดจำนวนสินค้าทั้งหมดที่ต้องการหักจากไฟล์ Import
+      importedData.forEach(trans => {
+          (trans.items || []).forEach(item => {
+              const existing = requiredItems.find(r => 
+                  (item.sku && item.sku !== '-' && r.sku === item.sku) || 
+                  r.name === item.desc
+              );
+              if (existing) {
+                  existing.required += Number(item.qty);
+              } else {
+                  requiredItems.push({ sku: item.sku || '-', name: item.desc || '', required: Number(item.qty), available: 0 });
+              }
+          });
+      });
+
+      // 2. เช็คจำนวนที่มีอยู่จริงในคลัง (ดึงตรรกะเดียวกับตอนบันทึกเป๊ะๆ)
+      requiredItems.forEach(req => {
+          const batches = stockBatches.filter(b => {
+              const bSku = String(b.sku || '').trim().toLowerCase();
+              const reqSku = String(req.sku || '').trim().toLowerCase();
+              const bName = String(b.productName || '').trim().toLowerCase();
+              const reqName = String(req.name || '').trim().toLowerCase();
+              return (reqSku !== '-' && reqSku !== '' && bSku === reqSku) || (bName === reqName);
+          });
+          req.available = batches.reduce((sum, b) => sum + Math.max(0, Number(b.quantity) - Number(b.sold || 0)), 0);
+      });
+
+      // 3. สรุปปัญหา
+      const issues = [];
+      let okCount = 0;
+      requiredItems.forEach(item => {
+          if (item.available === 0) issues.push({ ...item, status: 'missing' });
+          else if (item.available < item.required) issues.push({ ...item, status: 'insufficient' });
+          else okCount++;
+      });
+
+      // เรียงให้ตัวที่ไม่มีสต็อกขึ้นก่อน
+      issues.sort((a, b) => a.available - b.available);
+
+      return { issues, okCount, totalUniqueItems: requiredItems.length };
+  }, [importedData, stockBatches, importMode]);
 
   const PLATFORM_SCHEMAS = {
     shopee: {
@@ -1332,6 +1476,58 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
               </div>
           )}
           
+          {/* NEW: Stock Validation Display */}
+          {stockValidation && (
+              <div className={`p-5 border-b flex flex-col gap-3 ${stockValidation.issues.length > 0 ? 'bg-orange-50/50 border-orange-100' : 'bg-emerald-50/50 border-emerald-100'}`}>
+                  <h4 className={`font-bold text-sm flex items-center gap-2 ${stockValidation.issues.length > 0 ? 'text-orange-800' : 'text-emerald-800'}`}>
+                      {stockValidation.issues.length > 0 ? <AlertTriangle size={18}/> : <CheckCircle size={18}/>}
+                      ตรวจสอบสต็อกก่อนบันทึก (Pre-Import Validation)
+                  </h4>
+                  <div className="flex flex-wrap gap-4 mb-1">
+                      <span className="text-xs font-bold text-slate-600">วิเคราะห์สินค้ารวม: <span className="text-indigo-600">{stockValidation.totalUniqueItems} SKUs</span></span>
+                      <span className="text-xs font-bold text-emerald-600">สต็อกพร้อมตัด: {stockValidation.okCount} SKUs</span>
+                      {stockValidation.issues.length > 0 && <span className="text-xs font-black text-rose-500 bg-rose-100 px-2 rounded-full">พบปัญหา: {stockValidation.issues.length} SKUs</span>}
+                  </div>
+
+                  {stockValidation.issues.length > 0 && (
+                      <div className="max-h-56 overflow-y-auto custom-scrollbar bg-white rounded-xl border border-orange-200 shadow-sm text-left">
+                          <table className="w-full text-xs text-left">
+                              <thead className="bg-orange-100/50 text-orange-800 uppercase sticky top-0">
+                                  <tr>
+                                      <th className="p-3 pl-4">ชื่อสินค้า / SKU (จากไฟล์)</th>
+                                      <th className="p-3 text-center">ยอดที่ต้องตัด</th>
+                                      <th className="p-3 text-center">มีในคลัง</th>
+                                      <th className="p-3 pr-4 text-right">สถานะ</th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-orange-50">
+                                  {stockValidation.issues.map((issue, idx) => (
+                                      <tr key={idx} className="hover:bg-orange-50/50">
+                                          <td className="p-3 pl-4">
+                                              <p className="font-bold text-slate-700">{issue.name}</p>
+                                              <p className="text-[10px] font-mono text-slate-400">SKU: {issue.sku}</p>
+                                          </td>
+                                          <td className="p-3 text-center font-black text-slate-800">{issue.required}</td>
+                                          <td className="p-3 text-center font-black text-orange-600">{issue.available}</td>
+                                          <td className="p-3 pr-4 text-right">
+                                              <span className={`px-2 py-1 rounded text-[10px] font-bold ${issue.status === 'missing' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                  {issue.status === 'missing' ? 'ไม่มีในคลัง' : 'สต็อกไม่พอ'}
+                                              </span>
+                                          </td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                      </div>
+                  )}
+                  {stockValidation.issues.length > 0 && (
+                      <p className="text-[10px] font-bold text-orange-600 mt-1">
+                          * คำแนะนำ: หากกดบันทึก ระบบจะข้ามการหักสต็อกสำหรับสินค้าที่ไม่มีในคลัง แนะนำให้ไปเพิ่มยอดในเมนู "คลังสินค้า" ให้เรียบร้อยก่อนกดยืนยัน (หรือแก้ชื่อให้ตรงกัน)
+                      </p>
+                  )}
+              </div>
+          )}
+          
           {anomalyAlerts.length > 0 && (
               <div className="bg-rose-50 p-4 border-b border-rose-100">
                   <h4 className="font-bold text-rose-700 text-xs mb-2 flex items-center gap-1"><AlertTriangle size={14}/> AI Detected Anomalies (พบความผิดปกติ)</h4>
@@ -1419,6 +1615,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [tempCategory, setTempCategory] = useState('');
   const [tempIsGiveaway, setTempIsGiveaway] = useState(false); // เพิ่ม State สำหรับจัดการของแจก
 
+  // NEW: State สำหรับระบบปรับปรุงสต็อก (อัปเดตเพิ่ม targetKey สำหรับการโอนย้าย)
+  const [adjustStockItem, setAdjustStockItem] = useState(null);
+  const [adjustData, setAdjustData] = useState({ type: 'add', qty: '', reason: 'บันทึกผิดรสชาติ/ผิดรุ่น', targetKey: '' });
+  const [transferSearchTerm, setTransferSearchTerm] = useState('');
+  const [showTransferList, setShowTransferList] = useState(false);
+
   const fileInputRef = useRef(null);
   const importFileInputRef = useRef(null);
   const [newStock, setNewStock] = useState({
@@ -1458,6 +1660,114 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       showToast("เกิดข้อผิดพลาดในการอัปเดต", "error");
     }
     setIsProcessing(false);
+  };
+
+  // NEW: ฟังก์ชันประมวลผลการปรับปรุงสต็อก (รองรับการ Transfer)
+  const handleAdjustStock = async (e) => {
+      e.preventDefault();
+      if (!adjustStockItem || !user) return;
+      const qty = Number(adjustData.qty);
+      if (qty <= 0) return showToast("กรุณาระบุจำนวนที่มากกว่า 0", "error");
+
+      setIsProcessing(true);
+      try {
+          const batchWriter = writeBatch(dbInstance);
+
+          if (adjustData.type === 'transfer') {
+              // --- โหมดโอนย้าย (Transfer) ---
+              if (!adjustData.targetKey) {
+                  setIsProcessing(false);
+                  return showToast("กรุณาเลือกสินค้าปลายทางที่ต้องการโอนย้าย", "error");
+              }
+              const targetItem = inventory.find(i => i.groupKey === adjustData.targetKey);
+              if (!targetItem) {
+                  setIsProcessing(false);
+                  return showToast("ไม่พบข้อมูลสินค้าปลายทาง", "error");
+              }
+
+              // 1. หักสต็อกออกจากตัวต้นทาง
+              let needed = qty;
+              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+              for (const b of availableBatches) {
+                  if (needed <= 0) break;
+                  const take = Math.min(needed, b.remaining);
+                  const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+                  batchWriter.update(batchRef, { sold: increment(take) });
+                  needed -= take;
+              }
+              
+              if (needed > 0) {
+                  showToast(`สต็อกมีไม่พอให้โอนย้าย (ขาดอีก ${needed} ชิ้น)`, "error");
+                  setIsProcessing(false);
+                  return;
+              }
+
+              // 2. เพิ่มสต็อกไปให้ตัวปลายทาง (สร้างล็อตใหม่ด้วยต้นทุน 0 บาท ไม่กระทบกำไร)
+              const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+              batchWriter.set(newBatchRef, {
+                  productName: targetItem.name,
+                  sku: targetItem.sku,
+                  category: targetItem.category || 'อื่นๆ',
+                  quantity: qty,
+                  costPerUnit: 0, 
+                  sellPrice: targetItem.sellPrice || 0,
+                  date: new Date(),
+                  sold: 0,
+                  userId: user.uid,
+                  createdAt: serverTimestamp(),
+                  paymentStatus: 'paid',
+                  isAdjustment: true,
+                  adjustReason: `โอนย้ายมาจาก: ${adjustStockItem.name}`
+              });
+
+          } else if (adjustData.type === 'add') {
+              // --- โหมดเพิ่มสต็อกปกติ ---
+              const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+              batchWriter.set(newBatchRef, {
+                  productName: adjustStockItem.name,
+                  sku: adjustStockItem.sku,
+                  category: adjustStockItem.category || 'อื่นๆ',
+                  quantity: qty,
+                  costPerUnit: 0, 
+                  sellPrice: adjustStockItem.sellPrice || 0,
+                  date: new Date(),
+                  sold: 0,
+                  userId: user.uid,
+                  createdAt: serverTimestamp(),
+                  paymentStatus: 'paid',
+                  isAdjustment: true,
+                  adjustReason: adjustData.reason
+              });
+          } else {
+              // --- โหมดลดสต็อกปกติ ---
+              let needed = qty;
+              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+
+              for (const b of availableBatches) {
+                  if (needed <= 0) break;
+                  const take = Math.min(needed, b.remaining);
+                  const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+                  batchWriter.update(batchRef, { sold: increment(take) });
+                  needed -= take;
+              }
+              
+              if (needed > 0) {
+                  showToast(`สต็อกมีไม่พอให้ตัด (ขาดอีก ${needed} ชิ้น)`, "error");
+                  setIsProcessing(false);
+                  return;
+              }
+          }
+
+          await batchWriter.commit();
+          showToast(adjustData.type === 'transfer' ? `โอนย้ายสต็อกสำเร็จ!` : `ปรับปรุงสต็อก ${adjustStockItem.name} สำเร็จ`, "success");
+          setAdjustStockItem(null);
+          setAdjustData({ type: 'add', qty: '', reason: 'บันทึกผิดรสชาติ/ผิดรุ่น', targetKey: '' });
+          setTransferSearchTerm('');
+          setShowTransferList(false);
+      } catch (err) {
+          showToast("ปรับปรุงสต็อกไม่สำเร็จ", "error");
+      }
+      setIsProcessing(false);
   };
 
   const handleRecalculateStock = async () => {
@@ -1740,6 +2050,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
       if (!map[groupKey]) { 
           map[groupKey] = { 
+              groupKey: groupKey, // NEW: เพิ่ม groupKey สำหรับใช้อ้างอิงการโอนย้าย
               name: nameKey, 
               sku: batch.sku || '-', 
               totalQty: 0, 
@@ -1902,6 +2213,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                             <td className="p-5 text-right font-black text-slate-900 text-right">{item.totalQty.toLocaleString()}</td>
                             <td className="p-5 text-center">
                                 <div className="flex justify-center gap-2 text-center">
+                                    <button onClick={(e) => { e.stopPropagation(); setAdjustStockItem(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-blue-600 text-center" title="ปรับปรุงสต็อก (+/-)"><ArrowRightLeft size={16}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); setViewHistory(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-indigo-600 text-center" title="ดูประวัติราคาต้นทุน"><History size={16}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); openEditCategory(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-amber-600 text-center" title="แก้ไขข้อมูลสินค้า"><Edit size={16}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); setDeleteStockConfirm(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-rose-600 text-center" title="ลบสินค้า"><Trash2 size={16}/></button>
@@ -2122,6 +2434,106 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                 <button onClick={() => setShowEditCategoryModal(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
                 <button onClick={handleUpdateCategory} disabled={isProcessing} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 text-center">
                   {isProcessing ? <Loader className="animate-spin" size={16}/> : <Save size={16}/>} บันทึกการเปลี่ยนแปลง
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal ปรับปรุงสต็อก (Stock Adjustment) */}
+      {adjustStockItem && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-left">
+            <div className="flex justify-between items-center mb-6 text-left">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><ArrowRightLeft className="text-blue-600"/> ปรับปรุง/โอนย้ายสต็อก</h3>
+              <button onClick={()=>{setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false);}} className="text-center text-slate-400 hover:text-slate-600"><X/></button>
+            </div>
+            
+            <div className="space-y-4 text-left">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">สินค้าต้นทาง (กำลังเลือก)</p>
+                  <p className="font-bold text-slate-800 text-sm leading-tight">{adjustStockItem.name}</p>
+                  <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200">
+                      <p className="text-[10px] text-slate-500 font-mono">SKU: {adjustStockItem.sku || '-'}</p>
+                      <p className="text-xs font-bold text-slate-600">คงเหลือ: <span className="font-black text-indigo-600 text-sm">{adjustStockItem.totalQty}</span></p>
+                  </div>
+              </div>
+              
+              <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+                  <button onClick={()=>setAdjustData({...adjustData, type: 'add'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'add' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>+ เพิ่ม</button>
+                  <button onClick={()=>setAdjustData({...adjustData, type: 'remove'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'remove' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>- ลบ</button>
+                  <button onClick={()=>{setAdjustData({...adjustData, type: 'transfer', targetKey: ''}); setTransferSearchTerm(''); setShowTransferList(false);}} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'transfer' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>⇄ สลับ/โอนย้าย</button>
+              </div>
+
+              <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">จำนวนที่ต้องการ {adjustData.type === 'add' ? 'เพิ่ม' : adjustData.type === 'remove' ? 'ลบ' : 'โอนย้าย'}</label>
+                  <input type="number" min="1" value={adjustData.qty} onChange={e=>setAdjustData({...adjustData, qty: e.target.value})} className="w-full bg-white border-2 border-slate-100 p-4 rounded-2xl text-xl font-black outline-none focus:border-blue-300 text-center text-slate-800" placeholder="ระบุจำนวนชิ้น..." />
+              </div>
+
+              {adjustData.type === 'transfer' ? (
+                  <div className="animate-fadeIn">
+                      <label className="text-[10px] font-bold uppercase text-indigo-600 mb-1 block">โอนจำนวนด้านบน ไปให้สินค้าใด?</label>
+                      <div className="relative">
+                          <Search className="absolute left-3 top-4 text-indigo-300" size={16}/>
+                          <input 
+                              type="text" 
+                              placeholder="ค้นหาชื่อสินค้า หรือ SKU ปลายทาง..." 
+                              value={transferSearchTerm}
+                              onChange={e => {
+                                  setTransferSearchTerm(e.target.value);
+                                  setAdjustData({...adjustData, targetKey: ''});
+                                  setShowTransferList(true);
+                              }}
+                              onFocus={() => setShowTransferList(true)}
+                              className="w-full bg-white border-2 border-indigo-100 p-3.5 pl-10 rounded-xl text-sm font-bold outline-none focus:border-indigo-400 text-indigo-800 shadow-sm transition-all"
+                          />
+                          {adjustData.targetKey && (
+                              <CheckCircle className="absolute right-3 top-3.5 text-emerald-500" size={20}/>
+                          )}
+                          {showTransferList && (
+                              <div className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-52 overflow-y-auto custom-scrollbar">
+                                  {inventory.filter(i => i.groupKey !== adjustStockItem.groupKey && (i.name.toLowerCase().includes(transferSearchTerm.toLowerCase()) || i.sku.toLowerCase().includes(transferSearchTerm.toLowerCase()))).length > 0 ? (
+                                      inventory.filter(i => i.groupKey !== adjustStockItem.groupKey && (i.name.toLowerCase().includes(transferSearchTerm.toLowerCase()) || i.sku.toLowerCase().includes(transferSearchTerm.toLowerCase()))).map(i => (
+                                          <div 
+                                              key={i.groupKey} 
+                                              onClick={() => {
+                                                  setAdjustData({...adjustData, targetKey: i.groupKey});
+                                                  setTransferSearchTerm(i.name);
+                                                  setShowTransferList(false);
+                                              }}
+                                              className="p-3 hover:bg-indigo-50 cursor-pointer border-b border-slate-50 transition-colors flex justify-between items-center"
+                                          >
+                                              <div>
+                                                  <p className="text-sm font-bold text-slate-800">{i.name}</p>
+                                                  <p className="text-[10px] font-mono text-indigo-500 mt-0.5">SKU: {i.sku || '-'}</p>
+                                              </div>
+                                          </div>
+                                      ))
+                                  ) : (
+                                      <div className="p-4 text-center text-xs text-slate-400 font-bold">ไม่พบสินค้าปลายทาง</div>
+                                  )}
+                              </div>
+                          )}
+                      </div>
+                  </div>
+              ) : (
+                  <div className="animate-fadeIn">
+                      <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">เหตุผลการปรับปรุง</label>
+                      <select value={adjustData.reason} onChange={e=>setAdjustData({...adjustData, reason: e.target.value})} className="w-full bg-slate-50 p-3.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-slate-700 cursor-pointer focus:ring-2 focus:ring-blue-100">
+                          <option value="นับสต็อกจริงไม่ตรง">นับสต็อกจริงไม่ตรง (Cycle Count)</option>
+                          <option value="สินค้าชำรุด/สูญหาย">สินค้าชำรุด/สูญหาย</option>
+                          <option value="ได้ของแถมจาก Supplier">ได้ของแถมจาก Supplier</option>
+                          <option value="นำไปใช้ในกิจการ/แจก">นำไปใช้ในกิจการ/แจก</option>
+                          <option value="อื่นๆ">อื่นๆ</option>
+                      </select>
+                  </div>
+              )}
+
+              <div className="flex gap-3 pt-4 text-center">
+                <button onClick={() => {setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false);}} className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+                <button onClick={handleAdjustStock} disabled={isProcessing} className={`flex-1 py-3.5 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 text-center transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50 ${adjustData.type === 'add' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200' : adjustData.type === 'transfer' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200' : 'bg-rose-600 hover:bg-rose-700 shadow-rose-200'}`}>
+                  {isProcessing ? <Loader className="animate-spin" size={16}/> : <CheckCircle size={16}/>} ยืนยัน
                 </button>
               </div>
             </div>
@@ -7443,6 +7855,7 @@ export default function App() {
       case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} transactions={transactions} appId={currentAppId} showToast={addToast} preFillData={preFillInvoice} promotions={promotions} />;
       case 'reports': return <TaxReports transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} user={user} />;
       case 'promotions': return <PromotionManager appId={currentAppId} promotions={promotions} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} />;
+      case 'guide': return <TaxGuide />;
       default: return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
     }
   };
@@ -7505,7 +7918,19 @@ export default function App() {
       )}
       <aside className="w-72 bg-slate-900 text-white flex flex-col border-r border-slate-800 shadow-2xl h-full shrink-0 text-left">
         <div className="p-8 border-b border-slate-800 flex items-center gap-3 text-left"><div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-center"><Wallet size={20} className="text-white text-center"/></div><h1 className="text-xl font-bold tracking-tight text-left">MerchantTax</h1></div>
-        <nav className="p-6 space-y-4 flex-1 overflow-y-auto text-left"><NavButton active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard');}} icon={<PieChart size={18} className="text-center"/>} label="แดชบอร์ด" /><p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Operations</p><NavButton active={activeTab === 'records'} onClick={()=>{setActiveTab('records');}} icon={<Store size={18} className="text-center"/>} label="บันทึกขาย/หน้าร้าน" /><NavButton active={activeTab === 'promotions'} onClick={()=>{setActiveTab('promotions');}} icon={<Gift size={18} className="text-center"/>} label="ปรึกษาโปรโมชั่น (AI)" /><NavButton active={activeTab === 'import'} onClick={()=>{setActiveTab('import');}} icon={<FileUp size={18} className="text-center"/>} label="Bulk Import" /><NavButton active={activeTab === 'stock'} onClick={()=>{setActiveTab('stock');}} icon={<Box size={18} className="text-center"/>} label="คลังสินค้า FIFO" /><NavButton active={activeTab === 'invoice'} onClick={()=>{setActiveTab('invoice'); setPreFillInvoice(null);}} icon={<Printer size={18} className="text-center"/>} label="ใบกำกับภาษี Pro" /><NavButton active={activeTab === 'reports'} onClick={()=>{setActiveTab('reports');}} icon={<ClipboardList size={18} className="text-center"/>} label="รายงานภาษี and บัญชี" /></nav>
+        <nav className="p-6 space-y-4 flex-1 overflow-y-auto text-left">
+            <NavButton active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard');}} icon={<PieChart size={18} className="text-center"/>} label="แดชบอร์ด" />
+            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Operations</p>
+            <NavButton active={activeTab === 'records'} onClick={()=>{setActiveTab('records');}} icon={<Store size={18} className="text-center"/>} label="บันทึกขาย/หน้าร้าน" />
+            <NavButton active={activeTab === 'promotions'} onClick={()=>{setActiveTab('promotions');}} icon={<Gift size={18} className="text-center"/>} label="ปรึกษาโปรโมชั่น (AI)" />
+            <NavButton active={activeTab === 'import'} onClick={()=>{setActiveTab('import');}} icon={<FileUp size={18} className="text-center"/>} label="Bulk Import" />
+            <NavButton active={activeTab === 'stock'} onClick={()=>{setActiveTab('stock');}} icon={<Box size={18} className="text-center"/>} label="คลังสินค้า FIFO" />
+            <NavButton active={activeTab === 'invoice'} onClick={()=>{setActiveTab('invoice'); setPreFillInvoice(null);}} icon={<Printer size={18} className="text-center"/>} label="ใบกำกับภาษี Pro" />
+            <NavButton active={activeTab === 'reports'} onClick={()=>{setActiveTab('reports');}} icon={<ClipboardList size={18} className="text-center"/>} label="รายงานภาษี and บัญชี" />
+            
+            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Help & Support</p>
+            <NavButton active={activeTab === 'guide'} onClick={()=>{setActiveTab('guide');}} icon={<BookOpen size={18} className="text-center"/>} label="คู่มือ & เคล็ดลับภาษี" />
+        </nav>
         <div className="p-4 bg-black/20 border-t border-slate-800 space-y-2 text-left">
           <button onClick={toggleAppMode} className="w-full py-3 px-4 rounded-xl text-[10px] font-bold flex items-center justify-start gap-2 bg-slate-800 text-indigo-300 ring-1 ring-slate-700 hover:bg-slate-700 transition-all text-left"><Database size={14} className="text-center"/> DB Instance: {currentAppId}</button>
           
