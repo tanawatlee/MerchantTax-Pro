@@ -3928,7 +3928,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     // [ระบบป้องกันการบันทึกซ้ำ] ตรวจสอบ Order ID / เลขที่อ้างอิง ก่อนบันทึก
     if (formData.type === 'income' && formData.orderId && String(formData.orderId).trim() !== '') {
         const cleanRef = String(formData.orderId).trim().toLowerCase();
-        const isDuplicate = transactions.some(t => t.type === 'income' && String(t.orderId || '').trim().toLowerCase() === cleanRef);
+        // แก้ไข: ตรวจสอบเฉพาะรายการที่ "ยังไม่ถูกยกเลิก" เท่านั้น
+        const isDuplicate = transactions.some(t => t.type === 'income' && !t.isCancelled && String(t.orderId || '').trim().toLowerCase() === cleanRef);
         if (isDuplicate) {
             showToast(`ข้อมูลซ้ำ! Order ID "${formData.orderId}" ถูกบันทึกในระบบไปแล้ว`, "error");
             return;
@@ -3936,8 +3937,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     } else if (formData.type === 'expense' && formData.taxInvoiceNo && String(formData.taxInvoiceNo).trim() !== '') {
         const cleanRef = String(formData.taxInvoiceNo).trim().toLowerCase();
         const cleanPartner = String(formData.partnerName || '').trim().toLowerCase();
+        // แก้ไข: ตรวจสอบเฉพาะรายการที่ "ยังไม่ถูกยกเลิก" เท่านั้น
         const isDuplicate = transactions.some(t => 
             t.type === 'expense' && 
+            !t.isCancelled && 
             String(t.taxInvoiceNo || '').trim().toLowerCase() === cleanRef &&
             String(t.partnerName || '').trim().toLowerCase() === cleanPartner
         );
