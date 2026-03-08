@@ -205,6 +205,24 @@ const THBText = (amount) => {
     return text;
 };
 
+// --- NEW: Strict SKU Matching Utility ---
+const matchItemToBatch = (itemSku, itemName, batchSku, batchName) => {
+    const iSku = String(itemSku || '').trim().toLowerCase();
+    const bSku = String(batchSku || '').trim().toLowerCase();
+    const iName = String(itemName || '').trim().toLowerCase();
+    const bName = String(batchName || '').trim().toLowerCase();
+
+    const hasValidItemSku = iSku !== '' && iSku !== '-';
+    
+    if (hasValidItemSku) {
+        // ถ้ารายการขายมี SKU -> บังคับให้ SKU ต้องตรงกันเท่านั้น (ไม่สนใจชื่อ)
+        return bSku === iSku;
+    } else {
+        // ถ้ารายการขายไม่มี SKU -> ถึงจะยอมใช้ชื่อสินค้าในการจับคู่
+        return bName === iName;
+    }
+};
+
 // --- Promotion Engine Utility ---
 const calculatePromotions = (currentItems, allPromotions) => {
     let totalDiscount = 0;
@@ -472,7 +490,8 @@ function TaxGuide() {
         emerald: "text-emerald-600 bg-emerald-50 border-emerald-100 shadow-emerald-100",
         purple: "text-purple-600 bg-purple-50 border-purple-100 shadow-purple-100",
         teal: "text-teal-600 bg-teal-50 border-teal-100 shadow-teal-100",
-        blue: "text-blue-600 bg-blue-50 border-blue-100 shadow-blue-100" // เพิ่มสีใหม่
+        blue: "text-blue-600 bg-blue-50 border-blue-100 shadow-blue-100",
+        orange: "text-orange-600 bg-orange-50 border-orange-100 shadow-orange-100" // Added orange color
     };
 
     const textColors = {
@@ -482,10 +501,17 @@ function TaxGuide() {
         emerald: "text-emerald-600",
         purple: "text-purple-600",
         teal: "text-teal-600",
-        blue: "text-blue-600" // เพิ่มสีใหม่
+        blue: "text-blue-600",
+        orange: "text-orange-600" // Added orange color
     };
 
     const tips = [
+        {
+            title: "การจัดแฟ้มเอกสารบัญชี (Filing)",
+            icon: <Briefcase {...iconProps}/>,
+            color: "orange",
+            content: "การจัดเอกสารให้ตรงตามหลักบัญชี ควรแยกเป็น 4 แฟ้มหลักเพื่อความง่ายในการตรวจสอบ:\n\n1. แฟ้มรายได้: ใบกำกับภาษีขาย/บิลขาย (เรียงตามเลขที่), รายงานยอดขาย Shopee\n2. แฟ้มต้นทุนสินค้า: บิลซื้อของมาขาย, ค่าแพ็กเกจจิ้ง (กล่อง/เทป), ค่าน้ำมัน(เฉพาะขาไปรับของ)\n3. แฟ้มค่าใช้จ่าย: ค่าธรรมเนียม, โฆษณา, ค่าน้ำไฟ, เงินเดือน, ค่าน้ำมัน(วิ่งไปส่งของ/บริหาร)\n4. แฟ้มภาษี: แบบ ภ.พ.30, ใบหัก ณ ที่จ่าย (50 ทวิ)\n\n💡 ทริค: บิลรายจ่ายทุกใบ ควรเย็บแม็กติดกับ 'สลิปโอนเงิน' เสมอ เพื่อเป็นหลักฐานว่าจ่ายจริง"
+        },
         {
             title: "การยกเลิกเอกสาร (ห้ามลบทิ้งถาวร)",
             icon: <Trash2 {...iconProps}/>,
@@ -837,7 +863,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
   const [platform, setPlatform] = useState('shopee');
   const [importMode, setImportMode] = useState('new_pending'); // 'new_pending', 'new_settled', 'update_settled'
   const [importedData, setImportedData] = useState([]);
-  const [stats, setStats] = useState({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0 });
+  const [stats, setStats] = useState({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0 });
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
   const [discrepancyCategory, setDiscrepancyCategory] = useState('ค่าธรรมเนียม Platform'); // NEW
@@ -853,10 +879,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
       // 1. รวมยอดจำนวนสินค้าทั้งหมดที่ต้องการหักจากไฟล์ Import
       importedData.forEach(trans => {
           (trans.items || []).forEach(item => {
-              const existing = requiredItems.find(r => 
-                  (item.sku && item.sku !== '-' && r.sku === item.sku) || 
-                  r.name === item.desc
-              );
+              const existing = requiredItems.find(r => matchItemToBatch(item.sku, item.desc, r.sku, r.name));
               if (existing) {
                   existing.required += Number(item.qty);
               } else {
@@ -867,13 +890,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
 
       // 2. เช็คจำนวนที่มีอยู่จริงในคลัง (ดึงตรรกะเดียวกับตอนบันทึกเป๊ะๆ)
       requiredItems.forEach(req => {
-          const batches = stockBatches.filter(b => {
-              const bSku = String(b.sku || '').trim().toLowerCase();
-              const reqSku = String(req.sku || '').trim().toLowerCase();
-              const bName = String(b.productName || '').trim().toLowerCase();
-              const reqName = String(req.name || '').trim().toLowerCase();
-              return (reqSku !== '-' && reqSku !== '' && bSku === reqSku) || (bName === reqName);
-          });
+          const batches = stockBatches.filter(b => matchItemToBatch(req.sku, req.name, b.sku, b.productName));
           req.available = batches.reduce((sum, b) => sum + Math.max(0, Number(b.quantity) - Number(b.sold || 0)), 0);
       });
 
@@ -896,6 +913,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
     shopee: {
         orderId: ['หมายเลขคำสั่งซื้อ', 'Order ID'],
         status: ['สถานะการสั่งซื้อ', 'Order Status'],
+        cancelReason: ['เหตุผลในการยกเลิกคำสั่งซื้อ', 'Cancel Reason'],
         date: ['วันที่โอนชำระเงินสำเร็จ', 'เวลาการชำระสินค้า', 'Payment Time', 'เวลาที่ทำการสั่งซื้อ', 'เวลาชำระเงิน', 'วันที่ทำการสั่งซื้อ'],
         price: ['ราคาขาย', 'Deal Price', 'ราคาต่อชิ้น', 'สินค้าราคาปกติ'],
         qty: ['จำนวน', 'Quantity'],
@@ -917,6 +935,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
     lazada: {
         orderId: ['Order No.', 'Order Number', 'เลขที่สั่งซื้อ', 'หมายเลขคำสั่งซื้อ'],
         status: ['Status', 'สถานะ', 'สถานะคำสั่งซื้อ'],
+        cancelReason: ['เหตุผลในการยกเลิก', 'Cancellation Reason'],
         date: ['Order Creation Date', 'วันที่สร้างคำสั่งซื้อ', 'วันที่ชำระเงิน', 'Create Time'],
         price: ['Unit Price', 'ราคาต่อชิ้น', 'paid_price', 'ราคาขาย'],
         qty: ['Quantity', 'จำนวน', 'Qty'],
@@ -937,6 +956,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
     tiktok: {
         orderId: ['Order ID', 'หมายเลขคำสั่งซื้อ', 'Order number'],
         status: ['Order Status', 'สถานะ', 'สถานะคำสั่งซื้อ'],
+        cancelReason: ['เหตุผลการยกเลิก', 'Cancel Reason'],
         date: ['Payment Time', 'Order Creation Time', 'วันที่ชำระเงิน', 'เวลาชำระเงิน', 'Created Time', 'เวลาที่สร้างคำสั่งซื้อ', 'เวลาที่สร้าง'],
         price: ['Product Price', 'ราคาขาย', 'Unit Price', 'ราคาปกติ'],
         qty: ['Quantity', 'จำนวน', 'Qty'],
@@ -1085,6 +1105,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
 
         const ordersMap = {};
         let skipped = 0; let totalAmt = 0; let totalFees = 0; let duplicates = 0;
+        let cCount = 0; let dfCount = 0;
+        let trackedCancelledOrders = new Set();
         
         const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
         // สร้าง Set ของ Order ID ที่มีอยู่ในระบบแล้ว (เพื่อเช็คซ้ำได้อย่างรวดเร็ว)
@@ -1094,16 +1116,34 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           const rawOrderId = findVal(row, schema.orderId);
           const orderId = cleanStrForMatch(rawOrderId);
           const status = String(findVal(row, schema.status) || '').toLowerCase();
+          const cancelReason = String(findVal(row, schema.cancelReason) || '').toLowerCase();
           
-          const isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
+          const isDeliveryFailed = cancelReason.includes('จัดส่งไม่สำเร็จ') || 
+                                   cancelReason.includes('ตีกลับ') || 
+                                   status.includes('จัดส่งไม่สำเร็จ') ||
+                                   status.includes('ตีกลับ');
+          
+          let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
                                       status.includes('unpaid') || status.includes('รอชำระเงิน') ||
                                       status.includes('ไม่สำเร็จ') || status.includes('คืนสินค้า');
+                                      
+          if (isDeliveryFailed) {
+              isCancelledOrUnpaid = false; // ยกเว้นให้ดึงเข้ามาได้เพื่อหักสต็อก
+          }
                                       
           const isCompleted = status === '' || !isCancelledOrUnpaid;
                               
           const dateVal = findVal(row, schema.date);
           
-          if (!orderId || !isCompleted || !dateVal) { skipped++; return; }
+          if (!orderId || !isCompleted || !dateVal) { 
+              skipped++; 
+              // นับจำนวนออเดอร์ที่ถูกยกเลิก (ป้องกันการนับซ้ำในกรณีที่ออเดอร์เดียวกันมีหลายแถว)
+              if (orderId && !isCompleted && !trackedCancelledOrders.has(orderId)) {
+                  cCount++;
+                  trackedCancelledOrders.add(orderId);
+              }
+              return; 
+          }
           
           // [ระบบป้องกันการบันทึกซ้ำ] ตรวจสอบว่า Order ID นี้มีในระบบแล้วหรือไม่
           if (existingOrderIds.has(orderId)) { duplicates++; return; }
@@ -1132,7 +1172,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           const lineTotal = price * qty;
 
           if (!ordersMap[orderId]) {
+            if (isDeliveryFailed) dfCount++; // นับจำนวนออเดอร์จัดส่งไม่สำเร็จ
+            
             const rowTotalFees = transFee + comm + serv + infra;
+            
+            const baseProdName = String(findVal(row, schema.product) || 'สินค้าจาก ' + platform);
+            const descStr = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdName.substring(0, 80)}` : baseProdName.substring(0, 100);
+            const itemDescStr = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdName.trim()}` : baseProdName.trim();
+            
             ordersMap[orderId] = { 
               type: 'income', 
               date: normalizeDate(dateVal), 
@@ -1143,10 +1190,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
               infrastructureFee: infra, 
               commissionFee: comm, 
               serviceFee: serv,
-              description: String(findVal(row, schema.product) || 'สินค้าจาก ' + platform).substring(0, 100), 
+              description: descStr, 
               channel: platform.toUpperCase(), 
               category: 'รายได้จากการขายสินค้า', 
-              items: [{ desc: String(findVal(row, schema.product) || 'สินค้า').trim(), qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal }],
+              items: [{ desc: itemDescStr, qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal }],
               partnerName: buyerName,
               shippingAddress: shippingAddress,
               partnerAddress: shippingAddress,
@@ -1178,8 +1225,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
             ordersMap[orderId].shippingFeeSubsidy = Math.max(ordersMap[orderId].shippingFeeSubsidy || 0, shippingFeeSubsidy);
             ordersMap[orderId].estimatedShippingFee = Math.max(ordersMap[orderId].estimatedShippingFee || 0, estimatedShippingFee);
             ordersMap[orderId].returnShippingFee = Math.max(ordersMap[orderId].returnShippingFee || 0, returnShippingFee);
+            
+            const baseProdNamePush = String(findVal(row, schema.product) || 'สินค้า').trim();
+            const itemDescStrPush = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdNamePush}` : baseProdNamePush;
+            
             ordersMap[orderId].items.push({ 
-              desc: String(findVal(row, schema.product) || 'สินค้า').trim(), qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal
+              desc: itemDescStrPush, qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal
             });
             totalAmt += lineTotal;
             totalFees += (ordersMap[orderId].platformFee - oldPlatformFee); // บวกเพิ่มเฉพาะส่วนต่าง (ถ้ามี)
@@ -1187,7 +1238,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         });
         const final = Object.values(ordersMap).sort(sortNewestFirst);
         setImportedData(final);
-        setStats({ totalRows: raw.length, processed: final.length, skipped, duplicates, totalAmount: totalAmt, totalFees });
+        setStats({ totalRows: raw.length, processed: final.length, skipped, duplicates, totalAmount: totalAmt, totalFees, deliveryFailed: dfCount, cancelled: cCount });
         if (duplicates > 0) {
             showToast(`นำเข้าสำเร็จ ${final.length} รายการ (ข้าม ${skipped} แถว, ป้องกันข้อมูลซ้ำ ${duplicates} รายการ)`, 'success');
         } else {
@@ -1321,13 +1372,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         for (const item of trans.items) {
             let needed = Number(item.qty);
             const batches = stockSnap
-                .filter(b => {
-                    const bSku = String(b.sku || '').trim().toLowerCase();
-                    const iSku = String(item.sku || '').trim().toLowerCase();
-                    const bName = String(b.productName || '').trim().toLowerCase();
-                    const iName = String(item.desc || '').trim().toLowerCase();
-                    return (iSku !== '-' && iSku !== '' && bSku === iSku) || (bName === iName);
-                })
+                .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
                 .filter(b => (Number(b.quantity) - Number(b.sold || 0) > 0))
                 .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
 
@@ -1357,6 +1402,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
   const handleModeChange = (mode) => {
       setImportMode(mode);
       setImportedData([]);
+      setStats({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0 });
       if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -1455,18 +1501,26 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           {importedData.length > 0 && (
               <div className="p-5 bg-indigo-50/30 border-b border-indigo-50 flex flex-col gap-3">
                   <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5"><PieChart size={14}/> สรุปข้อมูลรอการยืนยัน (Preview Summary)</h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                       <div className="bg-white p-3 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">รายการพร้อมบันทึก</p>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">พร้อมบันทึก</p>
                           <p className="text-xl font-black text-indigo-600">{stats.processed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
                       </div>
                       <div className="bg-white p-3 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม (Income)</p>
-                          <p className="text-xl font-black text-emerald-600">{formatCurrency(stats.totalAmount)} <span className="text-[10px] font-bold text-slate-400">฿</span></p>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม</p>
+                          <p className="text-xl font-black text-emerald-600">{formatCurrency(stats.totalAmount)}</p>
                       </div>
                       <div className="bg-white p-3 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม (Fees)</p>
-                          <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)} <span className="text-[10px] font-bold text-slate-400">฿</span></p>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม</p>
+                          <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)}</p>
+                      </div>
+                      <div className="bg-white p-3 rounded-2xl border border-orange-100 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">จัดส่งไม่สำเร็จ</p>
+                          <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                      </div>
+                      <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ลูกค้ายกเลิก</p>
+                          <p className="text-xl font-black text-slate-500">{stats.cancelled} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
                       </div>
                       <div className="bg-white p-3 rounded-2xl border border-amber-100 shadow-sm flex flex-col justify-center">
                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ข้าม / ข้อมูลซ้ำ</p>
@@ -1787,13 +1841,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           if (needed <= 0) return;
           
           const targetBatches = localBatches
-            .filter(b => {
-              const bSku = String(b.sku || '').trim().toLowerCase();
-              const iSku = String(item.sku || '').trim().toLowerCase();
-              const bName = String(b.productName || '').trim().toLowerCase();
-              const iName = String(item.desc || '').trim().toLowerCase();
-              return (iSku !== '-' && iSku !== '' && bSku === iSku) || (bName === iName);
-            })
+            .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
             .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
 
           for (let i = 0; i < targetBatches.length; i++) {
@@ -2633,7 +2681,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
                   for (const item of saleDoc.items) {
                       let toReturn = Number(item.qty);
                       const affectedLots = stockBatches
-                        .filter(b => (String(b.sku).trim().toLowerCase() === String(item.sku).trim().toLowerCase() || String(b.productName).trim().toLowerCase() === String(item.desc).trim().toLowerCase()) && Number(b.sold) > 0)
+                        .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
                         .sort(sortNewestFirst);
 
                       for (const lot of affectedLots) {
@@ -3809,7 +3857,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               for (const item of saleDoc.items) {
                   let toReturn = Number(item.qty);
                   const affectedLots = stockBatches
-                    .filter(b => (String(b.sku).toLowerCase() === String(item.sku).toLowerCase() || String(b.productName).toLowerCase() === String(item.desc).toLowerCase()) && Number(b.sold) > 0)
+                    .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
                     .sort(sortNewestFirst);
 
                   for (const lot of affectedLots) {
@@ -4019,7 +4067,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           for (const item of formData.items) {
               let needed = Number(item.qty);
               const lots = stockSnap
-                .filter(b => (String(b.sku).trim().toLowerCase() === String(item.sku).trim().toLowerCase() || String(b.productName).trim().toLowerCase() === String(item.desc).trim().toLowerCase()))
+                .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
                 .filter(b => (Number(b.quantity) - Number(b.sold || 0) > 0))
                 .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
 
