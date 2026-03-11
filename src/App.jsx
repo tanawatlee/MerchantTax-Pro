@@ -871,6 +871,92 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
   const [isCheckingAnomaly, setIsCheckingAnomaly] = useState(false);
   const fileInputRef = useRef(null);
 
+  // --- NEW: Quick Transfer States ---
+  const [quickTransferItem, setQuickTransferItem] = useState(null);
+  const [transferData, setTransferData] = useState({ sourceKey: '', qty: 1 });
+  const [transferSearch, setTransferSearch] = useState('');
+  const [showTransferList, setShowTransferList] = useState(false);
+  const [isTransferring, setIsTransferring] = useState(false);
+
+  // --- NEW: Grouped Inventory for Dropdown ---
+  const groupedInventory = useMemo(() => {
+    const map = {};
+    stockBatches.forEach(batch => {
+      const nameKey = batch.productName || 'ไม่ระบุชื่อสินค้า';
+      const skuKey = (batch.sku && batch.sku !== '-') ? batch.sku : '';
+      const groupKey = skuKey ? `${skuKey}::${nameKey}` : nameKey;
+
+      if (!map[groupKey]) { 
+          map[groupKey] = { groupKey, name: nameKey, sku: batch.sku || '-', totalQty: 0, batches: [] }; 
+      }
+      const remaining = Number(batch.quantity) - Number(batch.sold || 0);
+      map[groupKey].totalQty += Math.max(0, remaining);
+      map[groupKey].batches.push({ ...batch, remaining });
+    });
+    return Object.values(map).filter(i => i.totalQty > 0).sort((a,b) => b.totalQty - a.totalQty);
+  }, [stockBatches]);
+
+  // --- NEW: Handle Quick Transfer ---
+  const handleQuickTransfer = async (e) => {
+      e.preventDefault();
+      if (!quickTransferItem || !user) return;
+      if (!transferData.sourceKey) return showToast("กรุณาเลือกสินค้าต้นทางที่ต้องการดึงสต็อกมา", "error");
+      
+      const qty = Number(transferData.qty);
+      if (qty <= 0) return showToast("จำนวนต้องมากกว่า 0", "error");
+
+      const sourceGroup = groupedInventory.find(g => g.groupKey === transferData.sourceKey);
+      if (!sourceGroup || sourceGroup.totalQty < qty) {
+          return showToast(`สต็อกต้นทางไม่พอ (มี ${sourceGroup?.totalQty || 0} ชิ้น)`, "error");
+      }
+
+      setIsTransferring(true);
+      try {
+          const batchWriter = writeBatch(dbInstance);
+
+          // 1. หักสต็อกออกจากตัวต้นทาง
+          let needed = qty;
+          const availableBatches = sourceGroup.batches.filter(b => b.remaining > 0).sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+          for (const b of availableBatches) {
+              if (needed <= 0) break;
+              const take = Math.min(needed, b.remaining);
+              const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+              batchWriter.update(batchRef, { sold: increment(take) });
+              needed -= take;
+          }
+
+          // 2. เพิ่มสต็อกไปให้ตัวปลายทาง (สร้างล็อตใหม่ด้วยต้นทุน 0 บาท ไม่กระทบกำไร)
+          const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+          batchWriter.set(newBatchRef, {
+              productName: quickTransferItem.name,
+              sku: quickTransferItem.sku !== '-' ? quickTransferItem.sku : '',
+              category: 'อื่นๆ', // Default
+              quantity: qty,
+              costPerUnit: 0, 
+              sellPrice: 0,
+              date: new Date(),
+              sold: 0,
+              userId: user.uid,
+              createdAt: serverTimestamp(),
+              paymentStatus: 'paid',
+              isAdjustment: true,
+              adjustReason: `โอนย้ายฉุกเฉิน(ลงสินค้าผิด) จาก: ${sourceGroup.name}`
+          });
+
+          await batchWriter.commit();
+          showToast(`โอนย้าย ${qty} ชิ้น เข้า ${quickTransferItem.name} สำเร็จ!`, "success");
+          
+          setQuickTransferItem(null);
+          setTransferData({ sourceKey: '', qty: 1 });
+          setTransferSearch('');
+          setShowTransferList(false);
+      } catch (err) {
+          console.error(err);
+          showToast("โอนย้ายสต็อกไม่สำเร็จ", "error");
+      }
+      setIsTransferring(false);
+  };
+
   // --- NEW: Stock Validation System ---
   const stockValidation = useMemo(() => {
       if (importedData.length === 0 || importMode === 'update_settled') return null;
@@ -1552,11 +1638,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                                       <th className="p-3 text-center">ยอดที่ต้องตัด</th>
                                       <th className="p-3 text-center">มีในคลัง</th>
                                       <th className="p-3 pr-4 text-right">สถานะ</th>
+                                      <th className="p-3 pr-4 text-center">จัดการ</th>
                                   </tr>
                               </thead>
                               <tbody className="divide-y divide-orange-50">
                                   {stockValidation.issues.map((issue, idx) => (
-                                      <tr key={idx} className="hover:bg-orange-50/50">
+                                      <tr key={idx} className="hover:bg-orange-50/50 group">
                                           <td className="p-3 pl-4">
                                               <p className="font-bold text-slate-700">{issue.name}</p>
                                               <p className="text-[10px] font-mono text-slate-400">SKU: {issue.sku}</p>
@@ -1568,6 +1655,17 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                                                   {issue.status === 'missing' ? 'ไม่มีในคลัง' : 'สต็อกไม่พอ'}
                                               </span>
                                           </td>
+                                          <td className="p-3 text-center">
+                                              <button 
+                                                  onClick={() => {
+                                                      setQuickTransferItem({ ...issue, missing: issue.required - issue.available });
+                                                      setTransferData({ sourceKey: '', qty: issue.required - issue.available });
+                                                  }} 
+                                                  className="bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-bold shadow-sm transition-all flex items-center gap-1 mx-auto"
+                                              >
+                                                  <ArrowRightLeft size={12}/> ดึงสต็อกมาเติม
+                                              </button>
+                                          </td>
                                       </tr>
                                   ))}
                               </tbody>
@@ -1576,7 +1674,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                   )}
                   {stockValidation.issues.length > 0 && (
                       <p className="text-[10px] font-bold text-orange-600 mt-1">
-                          * คำแนะนำ: หากกดบันทึก ระบบจะข้ามการหักสต็อกสำหรับสินค้าที่ไม่มีในคลัง แนะนำให้ไปเพิ่มยอดในเมนู "คลังสินค้า" ให้เรียบร้อยก่อนกดยืนยัน (หรือแก้ชื่อให้ตรงกัน)
+                          * คำแนะนำ: หากกดบันทึก ระบบจะข้ามการหักสต็อกสำหรับสินค้าที่ไม่มีในคลัง แนะนำให้กด "ดึงสต็อกมาเติม" หรือแก้ไขยอดให้เรียบร้อยก่อนกดยืนยัน
                       </p>
                   )}
               </div>
@@ -1650,6 +1748,88 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           </div>
         </div>
       </div>
+
+      {/* --- NEW: Quick Transfer Modal --- */}
+      {quickTransferItem && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-left">
+            <div className="flex justify-between items-center mb-6 text-left">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><ArrowRightLeft className="text-blue-600"/> โอนย้ายสต็อกด่วน (Quick Transfer)</h3>
+              <button onClick={()=>{setQuickTransferItem(null); setTransferSearch(''); setShowTransferList(false);}} className="text-center text-slate-400 hover:text-slate-600"><X/></button>
+            </div>
+            
+            <div className="space-y-5 text-left">
+              <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100">
+                  <p className="text-[10px] text-orange-600 font-bold uppercase tracking-widest mb-1 flex items-center gap-1"><AlertTriangle size={12}/> สินค้าที่ขาดสต็อก (Target)</p>
+                  <p className="font-bold text-slate-800 text-sm leading-tight">{quickTransferItem.name}</p>
+                  <div className="flex justify-between items-center mt-2 pt-2 border-t border-orange-200/50">
+                      <p className="text-[10px] text-slate-500 font-mono">SKU: {quickTransferItem.sku || '-'}</p>
+                      <p className="text-xs font-bold text-slate-600">ต้องการเพิ่ม: <span className="font-black text-rose-600 text-sm">{quickTransferItem.missing} ชิ้น</span></p>
+                  </div>
+              </div>
+
+              <div className="animate-fadeIn relative">
+                  <label className="text-[10px] font-bold uppercase text-indigo-600 mb-1 block">ดึงสต็อกมาจากรสชาติ/รุ่นไหน? (Source)</label>
+                  <div className="relative">
+                      <Search className="absolute left-3 top-4 text-indigo-300" size={16}/>
+                      <input 
+                          type="text" 
+                          placeholder="ค้นหาชื่อสินค้า หรือ SKU ที่มีของอยู่..." 
+                          value={transferSearch}
+                          onChange={e => {
+                              setTransferSearch(e.target.value);
+                              setTransferData({...transferData, sourceKey: ''});
+                              setShowTransferList(true);
+                          }}
+                          onFocus={() => setShowTransferList(true)}
+                          className="w-full bg-white border-2 border-indigo-100 p-3.5 pl-10 rounded-xl text-sm font-bold outline-none focus:border-indigo-400 text-indigo-800 shadow-sm transition-all"
+                      />
+                      {transferData.sourceKey && (
+                          <CheckCircle className="absolute right-3 top-3.5 text-emerald-500" size={20}/>
+                      )}
+                      {showTransferList && (
+                          <div className="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-52 overflow-y-auto custom-scrollbar">
+                              {groupedInventory.filter(i => (i.name.toLowerCase().includes(transferSearch.toLowerCase()) || i.sku.toLowerCase().includes(transferSearch.toLowerCase()))).length > 0 ? (
+                                  groupedInventory.filter(i => (i.name.toLowerCase().includes(transferSearch.toLowerCase()) || i.sku.toLowerCase().includes(transferSearch.toLowerCase()))).map(i => (
+                                      <div 
+                                          key={i.groupKey} 
+                                          onClick={() => {
+                                              setTransferData({...transferData, sourceKey: i.groupKey});
+                                              setTransferSearch(i.name);
+                                              setShowTransferList(false);
+                                          }}
+                                          className="p-3 hover:bg-indigo-50 cursor-pointer border-b border-slate-50 transition-colors flex justify-between items-center"
+                                      >
+                                          <div>
+                                              <p className="text-sm font-bold text-slate-800">{i.name}</p>
+                                              <p className="text-[10px] font-mono text-indigo-500 mt-0.5">SKU: {i.sku || '-'}</p>
+                                          </div>
+                                          <span className="text-[10px] font-black bg-emerald-100 text-emerald-700 px-2 py-1 rounded">มีของ {i.totalQty}</span>
+                                      </div>
+                                  ))
+                              ) : (
+                                  <div className="p-4 text-center text-xs text-slate-400 font-bold">ไม่พบสินค้าในคลัง</div>
+                              )}
+                          </div>
+                      )}
+                  </div>
+              </div>
+
+              <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">จำนวนที่ต้องการดึงมาเติม</label>
+                  <input type="number" min="1" value={transferData.qty} onChange={e=>setTransferData({...transferData, qty: e.target.value})} className="w-full bg-white border-2 border-slate-100 p-4 rounded-2xl text-xl font-black outline-none focus:border-blue-300 text-center text-slate-800" placeholder="ระบุจำนวนชิ้น..." />
+              </div>
+
+              <div className="flex gap-3 pt-4 text-center">
+                <button onClick={() => {setQuickTransferItem(null); setTransferSearch(''); setShowTransferList(false);}} className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+                <button onClick={handleQuickTransfer} disabled={isTransferring || !transferData.sourceKey} className="flex-1 py-3.5 text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl font-bold shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 text-center transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:hover:scale-100">
+                  {isTransferring ? <Loader className="animate-spin" size={16}/> : <CheckCircle size={16}/>} ยืนยันดึงสต็อก
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2377,19 +2557,26 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                     const margin = b.sellPrice > 0 ? ((b.sellPrice - b.costPerUnit) / b.sellPrice) * 100 : 0;
                     
                     return (
-                        <div key={i} className={`p-5 rounded-3xl border transition-all ${isLowest ? 'border-emerald-200 bg-emerald-50/50 shadow-sm' : 'border-slate-100 bg-slate-50/50'}`}>
+                        <div key={i} className={`p-5 rounded-3xl border transition-all ${isLowest && !b.isAdjustment ? 'border-emerald-200 bg-emerald-50/50 shadow-sm' : 'border-slate-100 bg-slate-50/50'}`}>
                             <div className="flex justify-between items-start text-left">
                                 <div className="space-y-1 text-left">
-                                    <div className="flex items-center gap-2 text-left">
+                                    <div className="flex flex-wrap items-center gap-2 text-left mb-1">
                                         <p className="text-[10px] font-bold text-indigo-600 uppercase text-left">Lot {i+1} - รับเข้า {formatDate(b.date)}</p>
                                         {b.isGiveaway && <span className="text-[8px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-black uppercase inline-flex items-center gap-0.5"><Gift size={10}/> แจกฟรี</span>}
-                                        {isLowest && <span className="text-[8px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-black uppercase">Best Cost</span>}
+                                        {isLowest && !b.isAdjustment && <span className="text-[8px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-black uppercase">Best Cost</span>}
                                         {b.paymentStatus === 'credit' && <span className="text-[8px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-black uppercase">Credit</span>}
                                     </div>
+                                    
+                                    {b.isAdjustment && b.adjustReason && (
+                                        <div className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider mb-2">
+                                            <ArrowRightLeft size={10}/> {b.adjustReason}
+                                        </div>
+                                    )}
+                                    
                                     <p className="text-xl font-black text-slate-900 text-left">{formatCurrency(b.costPerUnit)} <span className="text-xs font-bold text-slate-400">/ หน่วย</span></p>
                                     <div className="flex items-center gap-4 text-left">
                                         <p className="text-[10px] text-slate-500 font-bold">ราคาขาย: {formatCurrency(b.sellPrice || 0)}</p>
-                                        <p className={`text-[10px] font-black ${margin > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Margin: {margin.toFixed(1)}%</p>
+                                        {!b.isAdjustment && <p className={`text-[10px] font-black ${margin > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Margin: {margin.toFixed(1)}%</p>}
                                     </div>
                                 </div>
                                 <div className="text-right text-right">
@@ -3615,6 +3802,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [histStartDate, setHistStartDate] = useState('');
   const [histEndDate, setHistEndDate] = useState('');
   const [histPage, setHistPage] = useState(1);
+  const [showDiscrepancyOnly, setShowDiscrepancyOnly] = useState(false); // NEW: กรองเฉพาะยอดที่หายไป
   const histItemsPerPage = 20;
   
   const [isOcrProcessing, setIsOcrProcessing] = useState(false);
@@ -4123,12 +4311,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             if (d > end) return false;
         }
 
+        // NEW: 4. Discrepancy Filter (กรองเฉพาะรายการที่เงินหาย/ส่วนต่าง)
+        if (showDiscrepancyOnly) {
+            const isDiffIncome = t.type === 'income' && t.actualSettledAmt !== undefined && Math.abs((t.grandTotal || t.total) - t.actualSettledAmt) > 0.01;
+            const isDiffExpense = t.type === 'expense' && t.isFromReconciliation;
+            if (!isDiffIncome && !isDiffExpense) return false;
+        }
+
         return true;
     }).map(t => ({ ...t, issuedDocs: docStatusMap[t.orderId] || [] })).sort(sortNewestFirst);
-  }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate]);
+  }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly]);
 
   // Reset page when filters change
-  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate]);
+  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly]);
 
   // History Quick Stats
   const histStats = useMemo(() => {
@@ -4807,6 +5002,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <button onClick={()=>{setHistStartDate(''); setHistEndDate('');}} className="p-1 text-slate-400 hover:text-rose-500 mr-1"><X size={14}/></button>
                       )}
                  </div>
+                 {/* NEW: Toggle button for Auditing Discrepancies */}
+                 <button 
+                    onClick={() => setShowDiscrepancyOnly(!showDiscrepancyOnly)} 
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1.5 shrink-0 ${showDiscrepancyOnly ? 'bg-rose-500 text-white shadow-md shadow-rose-200' : 'bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-100'}`}
+                 >
+                    <AlertTriangle size={14}/> ตรวจสอบยอดดิฟ (หาย)
+                 </button>
              </div>
           </div>
 
@@ -4892,6 +5094,18 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                 <div className={`inline-flex flex-col items-end px-3 py-1.5 rounded-2xl text-right ${t.isCancelled ? 'bg-slate-50 text-slate-400' : (t.type==='income'?'bg-emerald-50 text-emerald-700':'bg-rose-50 text-rose-700')}`}>
                                     <p className="text-[9px] font-black uppercase opacity-60 leading-none mb-1 text-right">{t.type==='income'?'Income':'Expense'}</p>
                                     <p className={`text-base font-black leading-none text-right ${t.isCancelled ? 'line-through' : ''}`}>{formatCurrency(t.grandTotal || t.total)}</p>
+                                    
+                                    {/* NEW: Highlight the exact difference directly under the total */}
+                                    {t.type === 'income' && t.actualSettledAmt !== undefined && Math.abs((t.grandTotal || t.total) - t.actualSettledAmt) > 0.01 && (
+                                        <div className="text-[9px] text-rose-500 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
+                                            <AlertTriangle size={10}/> หายไป {formatCurrency((t.grandTotal || t.total) - t.actualSettledAmt)}
+                                        </div>
+                                    )}
+                                    {t.type === 'expense' && t.isFromReconciliation && (
+                                        <div className="text-[9px] text-amber-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
+                                            <RefreshCw size={10}/> บิลอุดรอยรั่ว
+                                        </div>
+                                    )}
                                 </div>
                             </td>
                             <td className="p-5 text-center">
@@ -7624,6 +7838,13 @@ export default function App() {
   const [tempApiKey, setTempApiKey] = useState('');
   const [showAdminTools, setShowAdminTools] = useState(false);
 
+  // --- NEW: Backup & Restore States ---
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
+  const [restoreFile, setRestoreFile] = useState(null);
+  const restoreFileRef = useRef(null);
+
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
   const toggleAppMode = () => { const ids = Object.values(CONSTANTS.IDS); const nextId = ids[(ids.indexOf(currentAppId) + 1) % ids.length]; setCurrentAppId(nextId); localStorage.setItem('merchant_app_id', nextId); addToast(`ฐานข้อมูล: ${nextId}`, "success"); };
@@ -7690,6 +7911,116 @@ export default function App() {
       await batchWriter.commit();
       setTargetIdToDelete(''); setShowIdDeleteTool(false);
     } catch(e) { addToast("ลบไม่สำเร็จ", "error"); }
+  };
+
+  const handleBackup = async () => {
+    if (!user) return;
+    setIsBackingUp(true);
+    addToast("กำลังรวบรวมข้อมูลเพื่อสำรอง...", "success");
+    try {
+      const collectionsToBackup = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
+      const backupData = {};
+      
+      for (const collName of collectionsToBackup) {
+        const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
+        backupData[collName] = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      }
+      
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `MerchantTax_Backup_${currentAppId}_${formatDateISO(new Date())}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      addToast("สำรองข้อมูล (Backup) สำเร็จ", "success");
+    } catch (error) {
+      console.error(error);
+      addToast("เกิดข้อผิดพลาดในการสำรองข้อมูล", "error");
+    }
+    setIsBackingUp(false);
+  };
+
+  const handleRestoreFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setRestoreFile(file);
+    setShowRestoreConfirm(true);
+    if (restoreFileRef.current) restoreFileRef.current.value = '';
+  };
+
+  const executeRestore = async () => {
+    if (!restoreFile || !user) return;
+    setShowRestoreConfirm(false);
+    setIsRestoring(true);
+    try {
+      const fileText = await restoreFile.text();
+      const restoreData = JSON.parse(fileText);
+      
+      const reviveTimestamps = (obj) => {
+        if (obj === null || typeof obj !== 'object') return obj;
+        if (obj.seconds !== undefined && obj.nanoseconds !== undefined) {
+          return new Date(obj.seconds * 1000);
+        }
+        if (Array.isArray(obj)) return obj.map(reviveTimestamps);
+        const newObj = {};
+        for (const key in obj) newObj[key] = reviveTimestamps(obj[key]);
+        return newObj;
+      };
+
+      const revivedData = reviveTimestamps(restoreData);
+      const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
+
+      let batch = writeBatch(dbInstance);
+      let opsCount = 0;
+      
+      const commitBatch = async () => {
+        if (opsCount > 0) { 
+            await batch.commit(); 
+            batch = writeBatch(dbInstance); 
+            opsCount = 0; 
+        }
+      };
+
+      // 1. ล้างข้อมูลเก่า
+      for (const collName of collectionsToRestore) {
+        const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
+        for (const docSnap of snap.docs) {
+          batch.delete(docSnap.ref);
+          opsCount++;
+          if (opsCount >= 400) await commitBatch();
+        }
+      }
+      await commitBatch();
+
+      // 2. เขียนทับด้วยข้อมูล Backup
+      for (const collName of collectionsToRestore) {
+        if (!revivedData[collName] || !Array.isArray(revivedData[collName])) continue;
+        for (const item of revivedData[collName]) {
+          const docId = item.id;
+          if (!docId) continue;
+          
+          const docRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName, docId);
+          const dataToSet = { ...item };
+          delete dataToSet.id;
+          
+          batch.set(docRef, dataToSet);
+          opsCount++;
+          if (opsCount >= 400) await commitBatch();
+        }
+      }
+      await commitBatch();
+      
+      addToast("กู้คืนข้อมูล (Restore) สำเร็จ!", "success");
+    } catch (error) {
+      console.error("Restore failed:", error);
+      addToast("การกู้คืนล้มเหลว ไฟล์อาจไม่ถูกต้อง", "error");
+    }
+    setRestoreFile(null);
+    setIsRestoring(false);
   };
 
   const executeMigration = async () => {
@@ -7923,6 +8254,7 @@ export default function App() {
     <div className="flex w-full h-screen bg-slate-50 font-sarabun text-slate-800 overflow-hidden text-left">
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_STYLES }} />
       <ToastContainer toasts={toasts} removeToast={removeToast} />
+      <input type="file" ref={restoreFileRef} accept=".json" className="hidden" onChange={handleRestoreFileChange} />
       
       {/* Migration Loading Modal */}
       {isMigrating && (
@@ -7937,6 +8269,43 @@ export default function App() {
               ให้สอดคล้องกันทั้งหมด...<br/>
               <span className="text-rose-500 font-bold mt-2 inline-block">กรุณารอสักครู่ ห้ามปิดหน้าต่างนี้</span>
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Restore Processing Modal */}
+      {isRestoring && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-center">
+          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full shadow-2xl flex flex-col items-center text-center">
+            <div className="w-20 h-20 bg-orange-50 text-orange-500 rounded-full flex items-center justify-center mb-6">
+              <RefreshCw size={40} className="animate-spin" />
+            </div>
+            <h3 className="text-2xl font-black mb-2 text-slate-800">กำลังกู้คืนข้อมูล</h3>
+            <p className="text-sm text-slate-500 leading-relaxed">
+              กำลังล้างข้อมูลเก่าและเขียนทับข้อมูลใหม่...<br/>
+              <span className="text-rose-500 font-bold mt-2 inline-block">กรุณารอสักครู่ ห้ามปิดหน้าต่างนี้</span>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Restore Confirm Modal */}
+      {showRestoreConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+            <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
+              <AlertTriangle size={32}/>
+            </div>
+            <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันการกู้คืนข้อมูล?</h3>
+            <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
+              ระบบจะทำการ <b>"ล้างข้อมูลปัจจุบันทั้งหมด"</b><br/>
+              และเขียนทับด้วยข้อมูลจากไฟล์ Backup ที่คุณเลือก<br/>
+              <span className="text-rose-600 font-bold underline">การกระทำนี้ไม่สามารถย้อนกลับได้</span>
+            </p>
+            <div className="flex gap-3 text-center">
+              <button onClick={() => { setShowRestoreConfirm(false); setRestoreFile(null); }} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+              <button onClick={executeRestore} className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg text-center transition-colors">ยืนยันกู้คืน</button>
+            </div>
           </div>
         </div>
       )}
@@ -7992,6 +8361,15 @@ export default function App() {
 
           {showAdminTools && (
             <div className="pl-3 py-1 space-y-2 border-l-2 border-slate-700 ml-2 animate-fadeIn">
+              {/* NEW: Backup & Restore Buttons */}
+              <button onClick={handleBackup} disabled={isBackingUp || isRestoring || isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-teal-400 hover:bg-teal-900/30 transition-all text-left">
+                {isBackingUp ? <Loader size={14} className="text-center animate-spin"/> : <DownloadCloud size={14} className="text-center"/>} สำรองข้อมูล (Backup)
+              </button>
+
+              <button onClick={() => restoreFileRef.current?.click()} disabled={isBackingUp || isRestoring || isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-orange-400 hover:bg-orange-900/30 transition-all text-left">
+                {isRestoring ? <Loader size={14} className="text-center animate-spin"/> : <FileUp size={14} className="text-center"/>} กู้คืนข้อมูล (Restore)
+              </button>
+
               <button onClick={() => setShowMigrateConfirm(true)} disabled={isMigrating} className={`w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 transition-all text-left ${isMigrating ? 'bg-amber-900/50 text-amber-500 cursor-not-allowed' : 'text-amber-400 hover:bg-amber-900/30'}`}>
                 {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} 
                 {isMigrating ? 'กำลังรันเลข...' : 'รันเลขเอกสารที่ตกหล่น'}
