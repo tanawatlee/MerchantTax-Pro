@@ -4126,6 +4126,27 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
   };
 
+  // --- NEW: Toggle Adjusted Status Function ---
+  const toggleAdjustedStatus = async (item) => {
+      if (!user) return;
+      try {
+          const newStatus = !item.isAdjusted;
+          const coll = item.type === 'income' ? 'transactions_income' : 'transactions_expense';
+          const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, item.id);
+          
+          await updateDoc(docRef, { isAdjusted: newStatus });
+          showToast(`อัปเดตแท็กปรับยอดเป็น ${newStatus ? 'เปิด' : 'ปิด'} แล้ว`, "success");
+          
+          // ถ้าเปิดหน้าต่างรายละเอียดอยู่ ให้มันอัปเดตแบบ Real-time ด้วย
+          if (viewItem && viewItem.id === item.id) {
+              setViewItem(prev => ({ ...prev, isAdjusted: newStatus }));
+          }
+      } catch (e) {
+          console.error(e);
+          showToast("ไม่สามารถอัปเดตแท็กปรับยอดได้", "error");
+      }
+  };
+
   const financialSummary = useMemo(() => {
     const subTotal = formData.items.reduce((sum, item) => sum + ((formData.type === 'income' ? Number(item.sellPrice) : Number(item.buyPrice)) * (Number(item.qty) || 0)), 0);
     const transFee = parseFloat(formData.transactionFee) || 0;
@@ -5137,7 +5158,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                             setSettleDiffCategory('ค่าธรรมเนียม Platform');
                                         }} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-500 hover:shadow-md transition-all shadow-sm text-center" title="รับเงินเข้าบัญชี (Settle)"><CheckCircle size={16}/></button>
                                     )}
-                                    <button onClick={()=>setViewItem(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-indigo-600 hover:shadow-md transition-all shadow-sm text-center"><Eye size={16}/></button>
+                                    {!t.isCancelled && (
+                                        <button onClick={()=>toggleAdjustedStatus(t)} className={`w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl hover:shadow-md transition-all shadow-sm text-center ${t.isAdjusted ? 'text-blue-500 hover:text-slate-400' : 'text-slate-400 hover:text-blue-500'}`} title={t.isAdjusted ? "เอาแท็ก 'ปรับยอด' ออก" : "เพิ่มแท็ก 'ปรับยอด'"}><Tag size={16}/></button>
+                                    )}
+                                    <button onClick={()=>setViewItem(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-indigo-600 hover:shadow-md transition-all shadow-sm text-center" title="ดูรายละเอียด"><Eye size={16}/></button>
                                     {!t.isCancelled && t.type === 'income' && (<button onClick={()=>onIssueInvoice(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-600 hover:shadow-md transition-all shadow-sm text-center" title="ออกใบกำกับภาษี"><Printer size={16}/></button>)}
                                     {!t.isCancelled && (
                                         <button onClick={()=>setCancelConfirmId({id: t.id, type: t.type})} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-rose-600 hover:shadow-md transition-all shadow-sm text-center" title="ยกเลิกรายการ (Void)"><XCircle size={16}/></button>
@@ -5179,8 +5203,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.isCashBill ? 'บิลเงินสด' : (viewItem.orderId || viewItem.taxInvoiceNo || '-')}</p>
                   <span className={`px-2 py-1 rounded-md text-[10px] font-bold text-center ${viewItem.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{viewItem.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span>
                   <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold text-center">{viewItem.channel || 'หน้าร้าน'}</span>
-                  {/* NEW: แสดง Tag มีการปรับยอด ในหน้า Popup รายละเอียด */}
-                  {viewItem.isAdjusted && <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-md text-[10px] font-bold text-center shadow-sm">📌 มีการปรับยอด</span>}
+                  
+                  {/* NEW: Clickable Toggle Badge for Adjusted Status in View Modal */}
+                  <button onClick={() => toggleAdjustedStatus(viewItem)} className={`px-2 py-1 rounded-md text-[10px] font-bold text-center shadow-sm transition-colors flex items-center gap-1 ${viewItem.isAdjusted ? 'bg-blue-100 text-blue-700 hover:bg-slate-100 hover:text-slate-500' : 'bg-slate-100 text-slate-400 hover:bg-blue-50 hover:text-blue-600'}`} title="คลิกเพื่อเปิด/ปิดแท็ก">
+                      <Tag size={12}/> {viewItem.isAdjusted ? '📌 มีการปรับยอด (กดเพื่อเอาออก)' : 'เพิ่มแท็กปรับยอด'}
+                  </button>
                 </div>
               </div>
               <button onClick={()=>setViewItem(null)} className="p-2 hover:bg-slate-200 rounded-full text-center"><X/></button>
