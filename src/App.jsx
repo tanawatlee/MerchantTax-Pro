@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, AlertTriangle, Calendar, Info, MapPin, Building, Layers, ArrowRightLeft, Percent, ClipboardList, Briefcase,
   Camera, Sparkles, ScanText, Zap, ChevronRight, Truck, Ticket, CreditCard, FileUp, Hash, Copy, FileCheck, Box, History, AlertCircle, ShoppingCart, Truck as TruckIcon,
   RefreshCw, Plus, FileSpreadsheet, DownloadCloud, Users, Layers as LayersIcon, Filter, ArrowRight, FileJson, FileType, SaveAll,
-  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail, Key, Gift, Wand2, BookOpen, Lightbulb, Receipt
+  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail, Key, Gift, Wand2, BookOpen, Lightbulb, Receipt, FileMinus
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -491,7 +491,8 @@ function TaxGuide() {
         purple: "text-purple-600 bg-purple-50 border-purple-100 shadow-purple-100",
         teal: "text-teal-600 bg-teal-50 border-teal-100 shadow-teal-100",
         blue: "text-blue-600 bg-blue-50 border-blue-100 shadow-blue-100",
-        orange: "text-orange-600 bg-orange-50 border-orange-100 shadow-orange-100" // Added orange color
+        orange: "text-orange-600 bg-orange-50 border-orange-100 shadow-orange-100",
+        pink: "text-pink-600 bg-pink-50 border-pink-100 shadow-pink-100"
     };
 
     const textColors = {
@@ -502,7 +503,8 @@ function TaxGuide() {
         purple: "text-purple-600",
         teal: "text-teal-600",
         blue: "text-blue-600",
-        orange: "text-orange-600" // Added orange color
+        orange: "text-orange-600",
+        pink: "text-pink-600"
     };
 
     const tips = [
@@ -511,6 +513,12 @@ function TaxGuide() {
             icon: <Briefcase {...iconProps}/>,
             color: "orange",
             content: "การจัดเอกสารให้ตรงตามหลักบัญชี ควรแยกเป็น 4 แฟ้มหลักเพื่อความง่ายในการตรวจสอบ:\n\n1. แฟ้มรายได้: ใบกำกับภาษีขาย/บิลขาย (เรียงตามเลขที่), รายงานยอดขาย Shopee\n2. แฟ้มต้นทุนสินค้า: บิลซื้อของมาขาย, ค่าแพ็กเกจจิ้ง (กล่อง/เทป), ค่าน้ำมัน(เฉพาะขาไปรับของ)\n3. แฟ้มค่าใช้จ่าย: ค่าธรรมเนียม, โฆษณา, ค่าน้ำไฟ, เงินเดือน, ค่าน้ำมัน(วิ่งไปส่งของ/บริหาร)\n4. แฟ้มภาษี: แบบ ภ.พ.30, ใบหัก ณ ที่จ่าย (50 ทวิ)\n\n💡 ทริค: บิลรายจ่ายทุกใบ ควรเย็บแม็กติดกับ 'สลิปโอนเงิน' เสมอ เพื่อเป็นหลักฐานว่าจ่ายจริง"
+        },
+        {
+            title: "บิลที่มี 'ของใช้ส่วนตัว' ปนมาด้วย",
+            icon: <FileMinus {...iconProps}/>,
+            color: "pink",
+            content: "กรณีไปซื้อของเข้าร้าน แล้วเผลอหยิบของส่วนตัวรวมในบิลใบกำกับภาษีเดียวกัน (Mixed Receipt)\n\n✅ วิธีที่ถูกต้อง: สรรพากรห้ามนำของส่วนตัวมาเคลมภาษีเด็ดขาด!\n1. ให้เอาปากกา 'ขีดฆ่า' รายการของส่วนตัวทิ้งในบิลกระดาษ\n2. กดเครื่องคิดเลขบวกเฉพาะยอดเงินของ 'สินค้าที่ใช้ในร้านจริงๆ'\n3. นำยอดใหม่ที่บวกได้มากรอกลงแอป MerchantTax (ไม่ต้องสนใจยอดรวมท้ายบิลกระดาษ) เพื่อให้ระบบคำนวณ VAT ซื้อเฉพาะส่วนที่เคลมได้จริง"
         },
         {
             title: "การยกเลิกเอกสาร (ห้ามลบทิ้งถาวร)",
@@ -3788,7 +3796,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '',
     items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }],
     paymentStatus: 'settled',
-    isCashBill: false
+    isCashBill: false,
+    isAdjusted: false // NEW: เพิ่ม state สำหรับเก็บสถานะการปรับยอด
   });
 
   // --- Summary Filters State ---
@@ -4283,7 +4292,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           isExpense: formData.type === 'expense'
       });
 
-      setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled', isCashBill: false });
+      setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled', isCashBill: false, isAdjusted: false });
     } catch (e) { showToast("Error: " + e.message, "error"); }
   };
 
@@ -4800,6 +4809,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <span className="text-[10px] font-bold opacity-80 group-hover:opacity-100 transition-opacity text-left">ภาษีซื้อต้องห้าม (Non-creditable VAT)</span>
                         </label>
                       )}
+                      
+                      {/* NEW: Checkbox สำหรับ Tag บิลที่มีการปรับยอด */}
+                      <label className="flex items-center gap-2 cursor-pointer mt-3 pt-3 border-t border-white/10 w-fit group text-left">
+                        <input type="checkbox" checked={formData.isAdjusted} onChange={e=>setFormData({...formData, isAdjusted: e.target.checked})} className="w-4 h-4 rounded border-white/20 bg-white/5 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-900 cursor-pointer" />
+                        <span className="text-[10px] font-bold opacity-90 group-hover:opacity-100 transition-opacity text-left text-blue-300 flex items-center gap-1">
+                           📌 รายการนี้มีการปรับยอด/แก้ไขบิล (Adjusted)
+                        </span>
+                      </label>
                     </div>
                   </div>
                 </div>
@@ -5064,6 +5081,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     {t.isCancelled && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
                                     {!t.isCancelled && t.paymentStatus === 'pending_platform' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-orange-100 text-orange-700 border border-orange-200">รอเงินเข้า</span>}
                                     {!t.isCancelled && t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
+                                    {/* NEW: แสดง Tag มีการปรับยอด ในตารางประวัติ */}
+                                    {!t.isCancelled && t.isAdjusted && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-blue-100 text-blue-700 border border-blue-200">มีการปรับยอด</span>}
                                 </div>
                                 <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
                                     <p className="text-[10px] font-mono text-slate-400 text-left">
@@ -5160,6 +5179,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.isCashBill ? 'บิลเงินสด' : (viewItem.orderId || viewItem.taxInvoiceNo || '-')}</p>
                   <span className={`px-2 py-1 rounded-md text-[10px] font-bold text-center ${viewItem.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{viewItem.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span>
                   <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold text-center">{viewItem.channel || 'หน้าร้าน'}</span>
+                  {/* NEW: แสดง Tag มีการปรับยอด ในหน้า Popup รายละเอียด */}
+                  {viewItem.isAdjusted && <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-md text-[10px] font-bold text-center shadow-sm">📌 มีการปรับยอด</span>}
                 </div>
               </div>
               <button onClick={()=>setViewItem(null)} className="p-2 hover:bg-slate-200 rounded-full text-center"><X/></button>
