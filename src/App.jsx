@@ -877,9 +877,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
   // NEW: เพิ่ม state `skippedQty` สำหรับนับจำนวนชิ้นที่ระบบช่วยกรองทิ้งให้
   const [stats, setStats] = useState({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0 });
   
-  // NEW: State สำหรับเก็บข้อมูลและแสดง Popup รายการที่ถูกข้าม
+  // State สำหรับเก็บข้อมูลและแสดง Popup รายการที่ถูกข้าม
   const [skippedDetailsData, setSkippedDetailsData] = useState([]);
   const [showSkippedModal, setShowSkippedModal] = useState(false);
+
+  // NEW: State สำหรับเก็บข้อมูลออเดอร์ที่จัดส่งไม่สำเร็จ/ตีกลับ
+  const [deliveryFailedDetailsData, setDeliveryFailedDetailsData] = useState([]);
+  const [showDeliveryFailedModal, setShowDeliveryFailedModal] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
@@ -1190,7 +1194,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         }
         
         const schema = PLATFORM_SCHEMAS[platform] || PLATFORM_SCHEMAS.shopee;
-        let currentSkippedDetails = []; // NEW: Array เก็บข้อมูลที่ถูกข้าม
+        let currentSkippedDetails = []; // Array เก็บข้อมูลที่ถูกข้าม
+        let currentDeliveryFailedDetails = []; // NEW: Array เก็บออเดอร์ที่ส่งไม่สำเร็จ
         
         if (importMode === 'update_settled') {
             const matched = [];
@@ -1237,6 +1242,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
             setImportedData(matched);
             setStats({ totalRows: raw.length, processed: matched.length, skipped: skippedCount, totalAmount: matched.reduce((s,t)=>s+(Number(t.total)||0),0), totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0 });
             setSkippedDetailsData(currentSkippedDetails);
+            setDeliveryFailedDetailsData([]);
 
             if (matched.length > 0) {
                 showToast(`พบออเดอร์รอรับเงินที่ตรงกัน ${matched.length} รายการ`, 'success');
@@ -1250,6 +1256,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         let skipped = 0; let totalAmt = 0; let totalFees = 0; let duplicates = 0;
         let cCount = 0; let dfCount = 0;
         let trackedCancelledOrders = new Set();
+        let trackedDeliveryFailedOrders = new Set(); // NEW: Tracking set
         let skippedQty = 0; 
         
         const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
@@ -1275,11 +1282,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                                       status.includes('unpaid') || status.includes('รอชำระเงิน') ||
                                       status.includes('ไม่สำเร็จ') || status.includes('คืนสินค้า');
                                       
-          if (isDeliveryFailed) {
-              isCancelledOrUnpaid = false; // ยกเว้นให้ดึงเข้ามาได้เพื่อหักสต็อก
-          }
+          // ลบการทำงานเดิมที่เคยบังคับให้ออเดอร์ตีกลับทะลุผ่านไปได้ (isCancelledOrUnpaid = false)
+          // ตอนนี้ให้ระบบมองออเดอร์จัดส่งไม่สำเร็จ เป็นออเดอร์ที่ต้องถูกข้าม (Skip) เสมอ
                                       
-          const isCompleted = status === '' || !isCancelledOrUnpaid;
+          const isCompleted = status === '' || (!isCancelledOrUnpaid && !isDeliveryFailed);
                               
           const dateVal = findVal(row, schema.date);
           
@@ -1288,23 +1294,42 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
               skippedQty += qty; 
 
               let reasonStr = 'ข้อมูลไม่ครบถ้วน';
-              if (!isCompleted) reasonStr = 'สถานะไม่สำเร็จ / ลูกค้ายกเลิก / ยังไม่จ่ายเงิน';
-              else if (!dateVal) reasonStr = 'ไม่มีวันที่ทำรายการ';
-              else if (!orderId) reasonStr = 'ไม่มีหมายเลขคำสั่งซื้อ';
-
-              currentSkippedDetails.push({
-                  orderId: rawOrderId || '-',
-                  product: String(findVal(row, schema.product) || '-'),
-                  reason: reasonStr,
-                  qty: qty
-              });
-
-              // นับจำนวนออเดอร์ที่ถูกยกเลิก (ป้องกันการนับซ้ำ)
-              if (orderId && !isCompleted && !trackedCancelledOrders.has(orderId)) {
-                  cCount++;
-                  trackedCancelledOrders.add(orderId);
+              
+              if (isDeliveryFailed) {
+                  reasonStr = 'จัดส่งไม่สำเร็จ / ตีกลับ';
+                  currentDeliveryFailedDetails.push({
+                      orderId: rawOrderId || '-',
+                      product: String(findVal(row, schema.product) || '-'),
+                      reason: reasonStr,
+                      qty: qty
+                  });
+                  // นับจำนวนออเดอร์ที่ไม่สำเร็จ (ป้องกันการนับซ้ำ)
+                  if (orderId && !trackedDeliveryFailedOrders.has(orderId)) {
+                      dfCount++;
+                      trackedDeliveryFailedOrders.add(orderId);
+                  }
+              } else if (!isCompleted) {
+                  reasonStr = 'สถานะไม่สำเร็จ / ลูกค้ายกเลิก / ยังไม่จ่ายเงิน';
+                  currentSkippedDetails.push({
+                      orderId: rawOrderId || '-',
+                      product: String(findVal(row, schema.product) || '-'),
+                      reason: reasonStr,
+                      qty: qty
+                  });
+                  // นับจำนวนออเดอร์ที่ถูกยกเลิก (ป้องกันการนับซ้ำ)
+                  if (orderId && !trackedCancelledOrders.has(orderId)) {
+                      cCount++;
+                      trackedCancelledOrders.add(orderId);
+                  }
+              } else if (!dateVal) {
+                  reasonStr = 'ไม่มีวันที่ทำรายการ';
+                  currentSkippedDetails.push({ orderId: rawOrderId || '-', product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
+              } else if (!orderId) {
+                  reasonStr = 'ไม่มีหมายเลขคำสั่งซื้อ';
+                  currentSkippedDetails.push({ orderId: '-', product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
               }
-              return; 
+
+              return; // SKIP IT!
           }
           
           // [ระบบป้องกันการบันทึกซ้ำ] ตรวจสอบว่า Order ID นี้มีในระบบแล้วหรือไม่
@@ -1352,7 +1377,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           const lineTotal = price * qty;
 
           if (!ordersMap[orderId]) {
-            if (isDeliveryFailed) dfCount++; 
+            // ระบบจะไม่มาถึงจุดนี้ถ้าเป็น isDeliveryFailed แล้ว เพราะถูกดัก Skip ไว้ข้างบน
             
             const rowTotalFees = transFee + comm + serv + infra;
             
@@ -1419,6 +1444,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         const final = Object.values(ordersMap).sort(sortNewestFirst);
         setImportedData(final);
         setSkippedDetailsData(currentSkippedDetails); // อัปเดต State รายการที่ถูกข้าม
+        setDeliveryFailedDetailsData(currentDeliveryFailedDetails); // อัปเดต State รายการตีกลับ
         
         // เซ็ตตัวแปรให้ UI นำไปแสดง (รวมถึง skippedQty)
         setStats({ 
@@ -1594,6 +1620,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
       setImportedData([]);
       setStats({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0 });
       setSkippedDetailsData([]);
+      setDeliveryFailedDetailsData([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -1705,10 +1732,15 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม</p>
                           <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)}</p>
                       </div>
-                      <div className="bg-white p-3 rounded-2xl border border-orange-100 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">จัดส่งไม่สำเร็จ</p>
+                      
+                      {/* แก้ไขให้กดคลิกเพื่อดูรายการจัดส่งไม่สำเร็จได้ */}
+                      <div onClick={() => setShowDeliveryFailedModal(true)} className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-orange-50 transition-colors group relative">
+                          <div className="absolute top-2 right-2 text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-orange-600 transition-colors">จัดส่งไม่สำเร็จ</p>
                           <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                          {stats.deliveryFailed > 0 && <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดูรายละเอียด</span>}
                       </div>
+
                       <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ลูกค้ายกเลิก</p>
                           <p className="text-xl font-black text-slate-500">{stats.cancelled} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
@@ -1959,7 +1991,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         </div>
       )}
 
-      {/* --- NEW: Modal แสดงรายการที่ถูกข้าม (Skipped Items Details) --- */}
+      {/* --- Modal แสดงรายการที่ถูกข้าม (Skipped Items Details) --- */}
       {showSkippedModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
             <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
@@ -2001,6 +2033,54 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                 </div>
                 <div className="pt-4 mt-2 border-t border-slate-100 flex justify-end">
                     <button onClick={()=>setShowSkippedModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">รับทราบและปิดหน้าต่าง</button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* --- NEW: Modal แสดงรายการจัดส่งไม่สำเร็จ/ตีกลับ (Delivery Failed Details) --- */}
+      {showDeliveryFailedModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+                <div className="flex justify-between items-center mb-6">
+                    <div>
+                        <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><AlertTriangle className="text-orange-500"/> รายละเอียดออเดอร์ที่จัดส่งไม่สำเร็จ / ตีกลับ</h3>
+                        <p className="text-xs text-slate-400 mt-1">ระบบได้ทำการกรองออเดอร์เหล่านี้ออก ไม่นำมานับเป็นยอดขายและไม่ตัดสต็อก เพื่อป้องกันบัญชีคลาดเคลื่อน</p>
+                    </div>
+                    <button onClick={()=>setShowDeliveryFailedModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                </div>
+                <div className="flex-1 overflow-auto custom-scrollbar border border-orange-200 rounded-2xl">
+                    <table className="w-full text-xs text-left">
+                        <thead className="bg-orange-50 text-orange-800 uppercase sticky top-0 border-b border-orange-200 z-10">
+                            <tr>
+                                <th className="p-4 w-10 text-center">No.</th>
+                                <th className="p-4">Order ID</th>
+                                <th className="p-4">สินค้า (Product)</th>
+                                <th className="p-4 text-center">จำนวน (ชิ้น)</th>
+                                <th className="p-4">สถานะ (Status)</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-orange-100">
+                            {deliveryFailedDetailsData.map((item, i) => (
+                                <tr key={i} className="hover:bg-orange-50/50 transition-colors">
+                                    <td className="p-4 text-center font-bold text-orange-400">{i + 1}</td>
+                                    <td className="p-4 font-mono font-bold text-slate-700">{item.orderId}</td>
+                                    <td className="p-4 truncate max-w-[250px]" title={item.product}>{item.product}</td>
+                                    <td className="p-4 text-center font-black text-slate-800">{item.qty}</td>
+                                    <td className="p-4 text-orange-600 font-bold text-[10px]">
+                                        <span className="bg-orange-100/50 px-2 py-1 rounded-lg border border-orange-200/50">{item.reason}</span>
+                                    </td>
+                                </tr>
+                            ))}
+                            {deliveryFailedDetailsData.length === 0 && (
+                                <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ไม่พบข้อมูลออเดอร์จัดส่งไม่สำเร็จในไฟล์นี้</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+                <div className="pt-4 mt-2 border-t border-slate-100 flex justify-between items-center">
+                    <p className="text-[10px] font-bold text-orange-600">* หากมีสินค้าเสียหายจากการตีกลับ ให้ทำรายการ "ปรับปรุง/ลดสต็อก" ที่หน้าคลังสินค้าทีหลังครับ</p>
+                    <button onClick={()=>setShowDeliveryFailedModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">รับทราบและปิดหน้าต่าง</button>
                 </div>
             </div>
         </div>
