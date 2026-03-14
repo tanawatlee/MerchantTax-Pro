@@ -4759,6 +4759,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [histEndDate, setHistEndDate] = useState('');
   const [histPage, setHistPage] = useState(1);
   const [showDiscrepancyOnly, setShowDiscrepancyOnly] = useState(false); // NEW: กรองเฉพาะยอดที่หายไป
+  const [histPaymentStatus, setHistPaymentStatus] = useState('all'); // NEW: Payment status filter
   const histItemsPerPage = 20;
   
   const [isOcrProcessing, setIsOcrProcessing] = useState(false);
@@ -5353,12 +5354,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             if (!isDiffIncome && !isDiffExpense) return false;
         }
 
+        // NEW: 5. Payment Status Filter
+        if (histPaymentStatus !== 'all') {
+            const isPaid = t.type === 'income' ? (t.paymentStatus === 'settled') : (t.status === 'paid');
+            if (histPaymentStatus === 'paid' && !isPaid) return false;
+            if (histPaymentStatus === 'unpaid' && isPaid) return false;
+        }
+
         return true;
     }).map(t => ({ ...t, issuedDocs: docStatusMap[t.orderId] || [] })).sort(sortNewestFirst);
-  }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly]);
+  }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus]);
 
   // Reset page when filters change
-  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly]);
+  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus]);
 
   // History Quick Stats
   const histStats = useMemo(() => {
@@ -6058,6 +6066,15 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <button onClick={()=>{setHistStartDate(''); setHistEndDate('');}} className="p-1 text-slate-400 hover:text-rose-500 mr-1"><X size={14}/></button>
                       )}
                  </div>
+                 {/* NEW: Payment Status Filter */}
+                 <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
+                    <CreditCard size={14} className="text-slate-400 shrink-0"/>
+                    <select value={histPaymentStatus} onChange={e=>setHistPaymentStatus(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:ring-0">
+                        <option value="all">ทุกสถานะชำระเงิน</option>
+                        <option value="paid">ชำระแล้ว</option>
+                        <option value="unpaid">ค้างชำระ</option>
+                    </select>
+                 </div>
                  {/* NEW: Toggle button for Auditing Discrepancies */}
                  <button 
                     onClick={() => setShowDiscrepancyOnly(!showDiscrepancyOnly)} 
@@ -6463,6 +6480,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [historyStartDate, setHistoryStartDate] = useState('2000-01-01');
   const [historyEndDate, setHistoryEndDate] = useState('2099-12-31');
   const [historyChannel, setHistoryChannel] = useState('all');
+  const [historyPaymentStatus, setHistoryPaymentStatus] = useState('all'); // NEW: Payment Status
   
   // --- Bulk Action States ---
   const [selectedDocIds, setSelectedDocIds] = useState([]);
@@ -7127,9 +7145,16 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           if (historyFilter === 'credit_note') return doc.source === 'invoice' && doc.docType === 'credit_note' && doc.status !== 'cancelled';
           if (historyFilter === 'quotation') return doc.source === 'invoice' && doc.docType === 'quotation' && doc.status !== 'cancelled';
           if (historyFilter === 'receipt') return doc.source === 'invoice' && doc.docType === 'receipt' && doc.status !== 'cancelled';
+          
+          if (historyPaymentStatus !== 'all') {
+              const isPaid = doc.status === 'paid' || doc.paymentStatus === 'settled';
+              if (historyPaymentStatus === 'paid' && !isPaid) return false;
+              if (historyPaymentStatus === 'unpaid' && isPaid) return false;
+          }
+
           return true;
       });
-  }, [combinedDocs, historyFilter, historyStartDate, historyEndDate, historyChannel]);
+  }, [combinedDocs, historyFilter, historyStartDate, historyEndDate, historyChannel, historyPaymentStatus]);
 
   // --- NEW: Toggle Payment Status ---
   const togglePaymentStatus = async (docItem) => {
@@ -7690,6 +7715,15 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                               <option value="all">ทุกช่องทาง</option>
                               {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
                               <option value="IMPORTED">IMPORTED</option>
+                          </select>
+                    </div>
+                    {/* NEW: Payment Status Filter */}
+                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shrink-0 flex-1 min-w-[120px]">
+                          <CreditCard size={14} className="text-slate-400 shrink-0"/>
+                          <select value={historyPaymentStatus} onChange={e=>setHistoryPaymentStatus(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-full cursor-pointer focus:ring-0">
+                              <option value="all">ทุกสถานะชำระเงิน</option>
+                              <option value="paid">ชำระแล้ว</option>
+                              <option value="unpaid">ค้างชำระ</option>
                           </select>
                     </div>
                 </div>
