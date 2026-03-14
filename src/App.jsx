@@ -876,7 +876,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const [importedData, setImportedData] = useState([]);
   
   // NEW: เพิ่ม state `skippedQty` สำหรับนับจำนวนชิ้นที่ระบบช่วยกรองทิ้งให้
-  const [stats, setStats] = useState({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0 });
+  const [stats, setStats] = useState({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0, alreadySettled: 0, notFound: 0 });
   
   // State สำหรับเก็บข้อมูลและแสดง Popup รายการที่ถูกข้าม
   const [skippedDetailsData, setSkippedDetailsData] = useState([]);
@@ -1209,6 +1209,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             let skippedCount = 0;
             let alreadySettledCount = 0;
             let notFoundCount = 0;
+            let totalActualAmt = 0;
+            let totalDiff = 0;
 
             const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
 
@@ -1229,16 +1231,37 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             const dateStr = findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน', 'เวลาที่ชำระเงิน', 'Settlement Date', ...(schema.date || [])]);
                             const actualSettledAmt = cleanNum(findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว']));
                             
+                            const expectedAmt = existingTrans.grandTotal || existingTrans.total || 0;
+                            const finalActualAmt = actualSettledAmt > 0 ? actualSettledAmt : expectedAmt;
+                            
+                            totalActualAmt += finalActualAmt;
+                            if (expectedAmt - actualSettledAmt > 0.01 && actualSettledAmt > 0) {
+                                totalDiff += (expectedAmt - actualSettledAmt);
+                            }
+                            
                             matched.push({
                                 ...existingTrans,
                                 newSettlementDate: normalizeDate(dateStr) || existingTrans.date || new Date(),
                                 isUpdateMode: true,
-                                actualSettledAmt: actualSettledAmt > 0 ? actualSettledAmt : (existingTrans.grandTotal || existingTrans.total)
+                                actualSettledAmt: finalActualAmt
                             });
                         }
                     } else {
                         alreadySettledCount++;
-                        currentSkippedDetails.push({ orderId: orderId, product: '-', qty: 0, reason: 'อัปเดตรับเงินไปแล้ว (ข้อมูลซ้ำ)' });
+                        const actualSettledAmt = cleanNum(findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว']));
+                        const existingGrandTotal = existingTrans.actualSettledAmt !== undefined ? existingTrans.actualSettledAmt : (existingTrans.grandTotal || existingTrans.total || 0);
+                        const newTotal = actualSettledAmt > 0 ? actualSettledAmt : existingGrandTotal;
+
+                        currentSkippedDetails.push({ 
+                            orderId: orderId, 
+                            product: '-', 
+                            qty: 0, 
+                            reason: 'อัปเดตรับเงินไปแล้ว (ข้อมูลซ้ำ)',
+                            isDuplicate: true,
+                            existingTotal: existingGrandTotal,
+                            newTotal: newTotal,
+                            hasDiscrepancy: actualSettledAmt > 0 && Math.abs(existingGrandTotal - actualSettledAmt) > 0.01
+                        });
                     }
                 } else {
                     notFoundCount++;
@@ -1247,7 +1270,19 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             });
             
             setImportedData(matched);
-            setStats({ totalRows: raw.length, processed: matched.length, skipped: skippedCount, totalAmount: matched.reduce((s,t)=>s+(Number(t.total)||0),0), totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0 });
+            setStats({ 
+                totalRows: raw.length, 
+                processed: matched.length, 
+                skipped: skippedCount, 
+                totalAmount: totalActualAmt, 
+                totalFees: totalDiff, 
+                duplicates: 0, 
+                deliveryFailed: 0, 
+                cancelled: 0, 
+                skippedQty: 0,
+                alreadySettled: alreadySettledCount,
+                notFound: notFoundCount
+            });
             setSkippedDetailsData(currentSkippedDetails);
             setDeliveryFailedDetailsData([]);
 
@@ -1267,8 +1302,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         let skippedQty = 0; 
         
         const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
-        // สร้าง Set ของ Order ID ที่มีอยู่ในระบบแล้ว (เช็คซ้ำเฉพาะรายการที่ยังไม่ได้ถูกยกเลิก)
-        const existingOrderIds = new Set(transactions.filter(t => t.type === 'income' && t.orderId && !t.isCancelled).map(t => cleanStrForMatch(t.orderId)));
+        // แผนที่เก็บข้อมูลออเดอร์เดิมเพื่อนำมาเปรียบเทียบ
+        const existingOrdersMap = new Map(transactions.filter(t => t.type === 'income' && t.orderId && !t.isCancelled).map(t => [cleanStrForMatch(t.orderId), t]));
+        const dupOrdersMap = {};
 
         raw.forEach(row => {
           const rawOrderId = findVal(row, schema.orderId);
@@ -1340,16 +1376,36 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           }
           
           // [ระบบป้องกันการบันทึกซ้ำ] ตรวจสอบว่า Order ID นี้มีในระบบแล้วหรือไม่
-          if (existingOrderIds.has(orderId)) { 
+          if (existingOrdersMap.has(orderId)) { 
               duplicates++; 
               skippedQty += qty; 
               
-              currentSkippedDetails.push({
-                  orderId: orderId,
-                  product: String(findVal(row, schema.product) || '-'),
-                  reason: 'มีข้อมูลในระบบแล้ว (ข้ามเพื่อป้องกันข้อมูลซ้ำ)',
-                  qty: qty
-              });
+              const price = Math.abs(cleanNum(findVal(row, schema.price)));
+              const transFee = Math.abs(cleanNum(findVal(row, schema.transFee)));
+              const comm = Math.abs(cleanNum(findVal(row, schema.commFee)));
+              const serv = Math.abs(cleanNum(findVal(row, schema.servFee)));
+              const infra = parseFloat(fixedInfraFee || 0) || 0;
+              
+              const lineTotal = price * qty;
+              const rowTotalFees = transFee + comm + serv + infra;
+              const productName = String(findVal(row, schema.product) || '-').trim();
+
+              if (!dupOrdersMap[orderId]) {
+                  dupOrdersMap[orderId] = {
+                      orderId,
+                      product: productName,
+                      qty: qty,
+                      total: lineTotal,
+                      platformFee: rowTotalFees
+                  };
+              } else {
+                  dupOrdersMap[orderId].qty += qty;
+                  dupOrdersMap[orderId].total += lineTotal;
+                  dupOrdersMap[orderId].platformFee += rowTotalFees;
+                  if (!dupOrdersMap[orderId].product.includes(productName)) {
+                      dupOrdersMap[orderId].product += `, ${productName}`;
+                  }
+              }
               
               return; 
           }
@@ -1442,6 +1498,25 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             totalFees += (ordersMap[orderId].platformFee - oldPlatformFee);
           }
         });
+
+        // เปรียบเทียบข้อมูลที่ซ้ำและเก็บลง Log
+        Object.values(dupOrdersMap).forEach(dup => {
+            const existingTrans = existingOrdersMap.get(dup.orderId);
+            const newGrandTotal = dup.total - dup.platformFee;
+            const existingGrandTotal = existingTrans ? (existingTrans.grandTotal || existingTrans.total || 0) : 0;
+            const hasDiscrepancy = Math.abs(existingGrandTotal - newGrandTotal) > 0.01;
+            
+            currentSkippedDetails.push({
+                orderId: dup.orderId,
+                product: dup.product,
+                reason: 'มีข้อมูลในระบบแล้ว (ข้อมูลซ้ำ)',
+                qty: dup.qty,
+                isDuplicate: true,
+                existingTotal: existingGrandTotal,
+                newTotal: newGrandTotal,
+                hasDiscrepancy: hasDiscrepancy
+            });
+        });
         
         const final = Object.values(ordersMap).sort(sortNewestFirst);
         setImportedData(final);
@@ -1458,7 +1533,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             totalFees, 
             deliveryFailed: dfCount, 
             cancelled: cCount,
-            skippedQty // เก็บจำนวนชิ้นที่ข้ามลง State
+            skippedQty, // เก็บจำนวนชิ้นที่ข้ามลง State
+            alreadySettled: 0,
+            notFound: 0
         });
         
         if (duplicates > 0) {
@@ -1685,7 +1762,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const handleModeChange = (mode) => {
       setImportMode(mode);
       setImportedData([]);
-      setStats({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0 });
+      setStats({ totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0, alreadySettled: 0, notFound: 0 });
       setSkippedDetailsData([]);
       setDeliveryFailedDetailsData([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1799,39 +1876,124 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5"><PieChart size={14}/> สรุปข้อมูลรอการยืนยัน (Preview Summary)</h4>
                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                           <div className="bg-white p-3 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-center">
-                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">พร้อมบันทึก</p>
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{importMode === 'update_settled' ? 'พร้อมอัปเดต' : 'พร้อมบันทึก'}</p>
                               <p className="text-xl font-black text-indigo-600">{stats.processed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
                           </div>
                           <div className="bg-white p-3 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-center">
-                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม</p>
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{importMode === 'update_settled' ? 'ยอดรับเงินจริงรวม' : 'ยอดขายรวม'}</p>
                               <p className="text-xl font-black text-emerald-600">{formatCurrency(stats.totalAmount)}</p>
                           </div>
                           <div className="bg-white p-3 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-center">
-                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม</p>
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{importMode === 'update_settled' ? 'ส่วนต่างรวม (ดิฟ)' : 'ค่าธรรมเนียมรวม'}</p>
                               <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)}</p>
                           </div>
                           
-                          {/* แก้ไขให้กดคลิกเพื่อดูรายการจัดส่งไม่สำเร็จได้ */}
-                          <div onClick={() => setShowDeliveryFailedModal(true)} className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-orange-50 transition-colors group relative">
-                              <div className="absolute top-2 right-2 text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
-                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-orange-600 transition-colors">จัดส่งไม่สำเร็จ</p>
-                              <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                              {stats.deliveryFailed > 0 && <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดูรายละเอียด</span>}
-                          </div>
+                          {importMode === 'update_settled' ? (
+                              <>
+                                  <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-blue-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-blue-50 transition-colors group relative">
+                                      <div className="absolute top-2 right-2 text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-blue-600 transition-colors">รับเงินไปแล้ว (ซ้ำ)</p>
+                                      <p className="text-xl font-black text-blue-500">{stats.alreadySettled || 0} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                                  </div>
+                                  <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-amber-50 transition-colors group relative">
+                                      <div className="absolute top-2 right-2 text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-amber-600 transition-colors">ไม่พบออเดอร์ตั้งต้น</p>
+                                      <p className="text-xl font-black text-amber-500">{stats.notFound || 0} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                                  </div>
+                                  <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-slate-50 transition-colors group relative">
+                                      <div className="absolute top-2 right-2 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-slate-600 transition-colors">ไม่มี Order ID / ข้าม</p>
+                                      <p className="text-xl font-black text-slate-500">{stats.skipped || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
+                                  </div>
+                              </>
+                          ) : (
+                              <>
+                                  <div onClick={() => setShowDeliveryFailedModal(true)} className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-orange-50 transition-colors group relative">
+                                      <div className="absolute top-2 right-2 text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-orange-600 transition-colors">จัดส่งไม่สำเร็จ</p>
+                                      <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                                      {stats.deliveryFailed > 0 && <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดูรายละเอียด</span>}
+                                  </div>
 
-                          <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
-                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ลูกค้ายกเลิก</p>
-                              <p className="text-xl font-black text-slate-500">{stats.cancelled} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                          </div>
-                          
-                          {/* แก้ไขให้กดคลิกเพื่อดูรายการที่ถูกข้ามได้ */}
-                          <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-amber-50 transition-colors group relative">
-                              <div className="absolute top-2 right-2 text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
-                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-amber-600 transition-colors">ข้าม / ข้อมูลซ้ำ</p>
-                              <p className="text-xl font-black text-amber-500">{stats.skipped} / {stats.duplicates || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
-                              {stats.skippedQty > 0 && <span className="text-[9px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดู {stats.skippedQty} ชิ้น</span>}
-                          </div>
+                                  <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ลูกค้ายกเลิก</p>
+                                      <p className="text-xl font-black text-slate-500">{stats.cancelled} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                                  </div>
+                                  
+                                  <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-amber-50 transition-colors group relative">
+                                      <div className="absolute top-2 right-2 text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-amber-600 transition-colors">ข้าม / ข้อมูลซ้ำ</p>
+                                      <p className="text-xl font-black text-amber-500">{stats.skipped} / {stats.duplicates || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
+                                      {stats.skippedQty > 0 && <span className="text-[9px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดู {stats.skippedQty} ชิ้น</span>}
+                                  </div>
+                              </>
+                          )}
                       </div>
+
+                      {/* --- NEW: Preview Error Logs Section --- */}
+                      {(skippedDetailsData.length > 0 || deliveryFailedDetailsData.length > 0) && (
+                          <div className="mt-4 bg-white border border-rose-100 rounded-2xl overflow-hidden shadow-sm">
+                              <div className="bg-rose-50 px-4 py-3 border-b border-rose-100 flex items-center gap-2">
+                                  <AlertTriangle size={16} className="text-rose-500" />
+                                  <h4 className="font-bold text-sm text-rose-700">รายการที่ไม่สามารถนำเข้าได้ (รอตรวจสอบ)</h4>
+                              </div>
+                              <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                                  <table className="w-full text-xs text-left">
+                                      <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0">
+                                          <tr>
+                                              <th className="p-3 pl-4">Order ID</th>
+                                              <th className="p-3">สินค้า (Product)</th>
+                                              <th className="p-3 text-center">จำนวน</th>
+                                              <th className="p-3 text-center">ยอดในระบบ vs ในไฟล์</th>
+                                              <th className="p-3 text-center">สถานะ/เหตุผล</th>
+                                          </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                          {deliveryFailedDetailsData.map((item, i) => (
+                                              <tr key={`failed-${i}`} className="hover:bg-orange-50/30">
+                                                  <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
+                                                  <td className="p-3 truncate max-w-[200px]" title={item.product}>{item.product}</td>
+                                                  <td className="p-3 text-center font-black">{item.qty}</td>
+                                                  <td className="p-3 text-center text-slate-300">-</td>
+                                                  <td className="p-3 text-center">
+                                                      <span className="bg-orange-100 text-orange-700 px-2 py-1 rounded-md text-[10px] font-bold">
+                                                          {item.reason}
+                                                      </span>
+                                                  </td>
+                                              </tr>
+                                          ))}
+                                          {skippedDetailsData.map((item, i) => (
+                                              <tr key={`skipped-${i}`} className="hover:bg-amber-50/30">
+                                                  <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
+                                                  <td className="p-3 truncate max-w-[200px]" title={item.product}>{item.product}</td>
+                                                  <td className="p-3 text-center font-black">{item.qty}</td>
+                                                  <td className="p-3 text-center">
+                                                      {item.isDuplicate ? (
+                                                          <div className="flex flex-col items-center gap-0.5">
+                                                              <span className="text-[10px] text-slate-500">ระบบ: <span className="font-bold text-indigo-600">{formatCurrency(item.existingTotal)}</span></span>
+                                                              <span className="text-[10px] text-slate-500">ไฟล์: <span className="font-bold text-slate-700">{formatCurrency(item.newTotal)}</span></span>
+                                                              {item.hasDiscrepancy ? (
+                                                                  <span className="bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 mt-0.5"><AlertTriangle size={10}/> คลาดเคลื่อน!</span>
+                                                              ) : (
+                                                                  <span className="bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 mt-0.5"><CheckCircle size={10}/> ตรงกัน</span>
+                                                              )}
+                                                          </div>
+                                                      ) : (
+                                                          <span className="text-slate-300">-</span>
+                                                      )}
+                                                  </td>
+                                                  <td className="p-3 text-center">
+                                                      <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded-md text-[10px] font-bold">
+                                                          {item.reason}
+                                                      </span>
+                                                  </td>
+                                              </tr>
+                                          ))}
+                                      </tbody>
+                                  </table>
+                              </div>
+                          </div>
+                      )}
                   </div>
               )}
               
@@ -2097,7 +2259,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                           <th className="p-3 pl-4">Order ID</th>
                                           <th className="p-3">สินค้า (Product)</th>
                                           <th className="p-3 text-center">จำนวน</th>
-                                          <th className="p-3">สาเหตุ</th>
+                                          <th className="p-3 text-center">ยอดในระบบ vs ในไฟล์</th>
+                                          <th className="p-3 text-center">สาเหตุ</th>
                                       </tr>
                                   </thead>
                                   <tbody className="divide-y divide-slate-100">
@@ -2107,11 +2270,26 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                                   <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
                                                   <td className="p-3 truncate max-w-[200px]">{item.product}</td>
                                                   <td className="p-3 text-center font-black">{item.qty}</td>
-                                                  <td className="p-3 text-amber-600 text-[10px]"><span className="bg-amber-100/50 px-2 py-1 rounded">{item.reason}</span></td>
+                                                  <td className="p-3 text-center">
+                                                      {item.isDuplicate ? (
+                                                          <div className="flex flex-col items-center gap-0.5">
+                                                              <span className="text-[10px] text-slate-500">ระบบ: <span className="font-bold text-indigo-600">{formatCurrency(item.existingTotal)}</span></span>
+                                                              <span className="text-[10px] text-slate-500">ไฟล์: <span className="font-bold text-slate-700">{formatCurrency(item.newTotal)}</span></span>
+                                                              {item.hasDiscrepancy ? (
+                                                                  <span className="bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 mt-0.5"><AlertTriangle size={10}/> คลาดเคลื่อน!</span>
+                                                              ) : (
+                                                                  <span className="bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 mt-0.5"><CheckCircle size={10}/> ตรงกัน</span>
+                                                              )}
+                                                          </div>
+                                                      ) : (
+                                                          <span className="text-slate-300">-</span>
+                                                      )}
+                                                  </td>
+                                                  <td className="p-3 text-center"><span className="bg-amber-100/50 text-amber-600 px-2 py-1 rounded text-[10px] font-bold">{item.reason}</span></td>
                                               </tr>
                                           ))
                                       ) : (
-                                          <tr><td colSpan="4" className="p-6 text-center text-slate-400">ไม่มีข้อมูลที่ถูกข้ามในรอบนี้</td></tr>
+                                          <tr><td colSpan="5" className="p-6 text-center text-slate-400">ไม่มีข้อมูลที่ถูกข้ามในรอบนี้</td></tr>
                                       )}
                                   </tbody>
                               </table>
