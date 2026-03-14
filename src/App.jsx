@@ -1272,6 +1272,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                 ...existingTrans,
                                 isUpdateMode: true,
                                 needsReturn: true, // แจ้งให้ saveToFirebase รู้ว่าต้องยกเลิกบิลและคืนสต็อก
+                                returnAction: 'restock', // <-- กำหนดค่าเริ่มต้นเป็น คืนเข้าคลัง
                                 reason: `คืนสินค้า/คืนเงิน (ยอด: ${formatCurrency(refundAmt || existingTrans.total)})`
                             });
                             accumulateDetails();
@@ -1616,11 +1617,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       isCancelled: true,
                       cancelledAt: serverTimestamp(),
                       paymentStatus: 'refunded',
-                      cancelReason: item.reason
+                      cancelReason: item.reason + (item.returnAction === 'discard' ? ' [สินค้าชำรุด/ตัดทิ้ง ไม่คืนคลัง]' : ' [คืนสต็อกแล้ว]')
                   });
                   
-                  // ดึงสต็อกกลับเข้าคลัง
-                  if (item.items) {
+                  // ดึงสต็อกกลับเข้าคลัง เฉพาะกรณีที่เลือก "คืนเข้าคลัง"
+                  if (item.returnAction !== 'discard' && item.items) {
                       for (const lineItem of item.items) {
                           let toReturn = Number(lineItem.qty);
                           const affectedLots = stockBatches
@@ -2228,7 +2229,21 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                         <td className="p-4 text-left">
                             {it.isUpdateMode ? (
                                 it.needsReturn ? (
-                                    <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 w-fit"><ArrowRightLeft size={10}/> อัปเดตคืนสินค้า</span>
+                                    <div className="flex flex-col gap-1 items-start">
+                                        <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 w-fit"><ArrowRightLeft size={10}/> อัปเดตคืนสินค้า</span>
+                                        <select 
+                                            value={it.returnAction || 'restock'} 
+                                            onChange={(e) => {
+                                                const newData = [...importedData];
+                                                newData[idx].returnAction = e.target.value;
+                                                setImportedData(newData);
+                                            }}
+                                            className="bg-white border border-rose-200 text-rose-700 text-[10px] rounded p-1 outline-none focus:ring-1 focus:ring-rose-400 font-bold mt-1"
+                                        >
+                                            <option value="restock">📦 คืนเข้าคลัง (ขายใหม่)</option>
+                                            <option value="discard">🗑️ สินค้าชำรุด (ตัดทิ้ง)</option>
+                                        </select>
+                                    </div>
                                 ) : (
                                     <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[10px] font-bold">อัปเดตรับเงิน</span>
                                 )
