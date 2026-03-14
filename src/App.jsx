@@ -1000,10 +1000,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           });
       });
 
-      // 2. เช็คจำนวนที่มีอยู่จริงในคลัง
+      // 2. เช็คจำนวนที่มีอยู่จริงในคลัง (รองรับยอดติดลบ)
       requiredItems.forEach(req => {
           const batches = stockBatches.filter(b => matchItemToBatch(req.sku, req.name, b.sku, b.productName));
-          req.available = batches.reduce((sum, b) => sum + Math.max(0, Number(b.quantity) - Number(b.sold || 0)), 0);
+          req.available = batches.reduce((sum, b) => sum + (Number(b.quantity) - Number(b.sold || 0)), 0);
       });
 
       // 3. สรุปปัญหา
@@ -1589,21 +1589,61 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
             let needed = Number(item.qty);
             const batches = stockSnap
                 .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
-                .filter(b => (Number(b.quantity) - Number(b.sold || 0) > 0))
                 .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
 
-            for (const b of batches) {
+            for (let i = 0; i < batches.length; i++) {
+                const b = batches[i];
                 if (needed <= 0) break;
                 const remaining = Number(b.quantity) - Number(b.sold || 0);
-                const take = Math.min(needed, remaining);
                 
-                const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
-                batch.update(batchRef, { sold: increment(take) });
+                let take = 0;
+                // ถ้าเป็นล็อตสุดท้าย ยอมให้หักจนติดลบได้เลย
+                if (i === batches.length - 1) {
+                    take = needed; 
+                } else {
+                    take = Math.min(needed, Math.max(0, remaining));
+                }
                 
-                const snapIdx = stockSnap.findIndex(s => s.id === b.id);
-                if (snapIdx !== -1) stockSnap[snapIdx].sold = (Number(stockSnap[snapIdx].sold) || 0) + take;
+                if (take > 0) {
+                    const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+                    batch.update(batchRef, { sold: increment(take) });
+                    
+                    const snapIdx = stockSnap.findIndex(s => s.id === b.id);
+                    if (snapIdx !== -1) stockSnap[snapIdx].sold = (Number(stockSnap[snapIdx].sold) || 0) + take;
+                    
+                    needed -= take;
+                }
+            }
+            
+            // กรณีไม่มีในคลังเลย สร้าง Dummy Batch เพื่อบันทึกยอดติดลบ
+            if (needed > 0) {
+                const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+                batch.set(dummyRef, {
+                    productName: item.desc,
+                    sku: item.sku || '-',
+                    category: 'อื่นๆ',
+                    quantity: 0,
+                    costPerUnit: 0, 
+                    sellPrice: item.sellPrice || item.price || 0,
+                    date: trans.date || new Date(),
+                    sold: needed,
+                    userId: user.uid,
+                    createdAt: serverTimestamp(),
+                    paymentStatus: 'paid',
+                    isAdjustment: true,
+                    adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
+                });
                 
-                needed -= take;
+                stockSnap.push({
+                    id: dummyRef.id,
+                    productName: item.desc,
+                    sku: item.sku || '-',
+                    category: 'อื่นๆ',
+                    quantity: 0,
+                    sold: needed,
+                    costPerUnit: 0,
+                    date: trans.date || new Date()
+                });
             }
         }
       }
@@ -2291,11 +2331,41 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             if (needed <= 0) break;
             const b = targetBatches[i];
             const remaining = Number(b.quantity) - Number(b.sold);
-            if (remaining > 0) {
-              const take = Math.min(needed, remaining);
+            
+            let take = 0;
+            // ล็อตสุดท้ายอนุญาตให้ตัดจนติดลบ
+            if (i === targetBatches.length - 1) {
+                take = needed;
+            } else {
+                take = Math.min(needed, Math.max(0, remaining));
+            }
+            
+            if (take > 0) {
               b.sold += take;
               needed -= take;
             }
+          }
+          
+          // ถ้าไม่มีล็อตเหลือเลย ให้สร้าง Dummy จำลองเพื่อไม่ให้ข้อมูลหายระหว่าง Recalculate
+          if (needed > 0) {
+              const dummyId = `dummy_${Date.now()}_${Math.random()}`;
+              localBatches.push({
+                  id: dummyId,
+                  isNewDummy: true,
+                  productName: item.desc,
+                  sku: item.sku || '-',
+                  category: 'อื่นๆ',
+                  quantity: 0,
+                  costPerUnit: 0,
+                  sellPrice: item.sellPrice || item.price || 0,
+                  date: trans.date,
+                  sold: needed,
+                  userId: user.uid,
+                  createdAt: new Date(),
+                  paymentStatus: 'paid',
+                  isAdjustment: true,
+                  adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
+              });
           }
         });
       });
@@ -2304,8 +2374,17 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       let opsCount = 0;
       let currentBatch = writeBatch(dbInstance);
       for (const lb of localBatches) {
-        const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lb.id);
-        currentBatch.update(docRef, { sold: lb.sold });
+        if (lb.isNewDummy) {
+            const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+            const dataToSave = {...lb};
+            delete dataToSave.id;
+            delete dataToSave.isNewDummy;
+            currentBatch.set(dummyRef, dataToSave);
+        } else {
+            const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lb.id);
+            currentBatch.update(docRef, { sold: lb.sold });
+        }
+        
         opsCount++;
         // ป้องกันการ commit เกินขีดจำกัดของ Firebase Batch (500 ops)
         if (opsCount >= 400) {
@@ -2555,7 +2634,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               totalSold: 0, 
               totalValue: 0, 
               totalPotentialProfit: 0,
-              periodInbound: 0, // NEW: สำหรับเก็บยอดรับเข้าตามช่วงเวลาที่เลือก
+              periodInbound: 0,
               batches: [], 
               category: batch.category || 'ทั่วไป',
               isGiveaway: false
@@ -2573,11 +2652,10 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       // ตรวจสอบว่า Lot นี้นำเข้าในช่วงเวลาที่เลือกหรือไม่
       const bDate = normalizeDate(batch.date);
       if ((!start || bDate >= start) && (!end || bDate <= end)) {
-          // ถ้าอยู่ช่วงเวลาที่เลือก ให้นับยอด "รับเข้า" เฉพาะช่วงนี้
           map[groupKey].periodInbound += Number(batch.quantity);
       }
 
-      map[groupKey].totalQty += Math.max(0, remaining);
+      map[groupKey].totalQty += remaining; // รองรับยอดติดลบ
       map[groupKey].totalSold += sold; 
       map[groupKey].totalValue += (Math.max(0, remaining) * costPerUnit);
       map[groupKey].totalPotentialProfit += (Math.max(0, remaining) * profitPerUnit);
@@ -2743,7 +2821,10 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                                 </span>
                             </td>
                             <td className="p-5 text-right font-bold text-emerald-600">{item.totalSold.toLocaleString()}</td>
-                            <td className="p-5 text-right font-black text-slate-900 text-right">{item.totalQty.toLocaleString()}</td>
+                            <td className="p-5 text-right text-right">
+                                <span className={`font-black ${item.totalQty < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{item.totalQty.toLocaleString()}</span>
+                                {item.totalQty < 0 && <span className="ml-2 text-[8px] bg-rose-100 text-rose-700 px-2 py-0.5 rounded uppercase font-black shadow-sm">ติดลบ</span>}
+                            </td>
                             <td className="p-5 text-center">
                                 <div className="flex justify-center gap-2 text-center">
                                     <button onClick={(e) => { e.stopPropagation(); setAdjustStockItem(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-blue-600 text-center" title="ปรับปรุงสต็อก (+/-)"><ArrowRightLeft size={16}/></button>
@@ -4586,19 +4667,47 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               let needed = Number(item.qty);
               const lots = stockSnap
                 .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
-                .filter(b => (Number(b.quantity) - Number(b.sold || 0) > 0))
                 .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
 
-              for (const lot of lots) {
+              for (let i = 0; i < lots.length; i++) {
+                  const lot = lots[i];
                   if (needed <= 0) break;
                   const remaining = Number(lot.quantity) - Number(lot.sold || 0);
-                  const take = Math.min(needed, remaining);
-                  const lotRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id);
-                  batchWriter.update(lotRef, { sold: increment(take) });
                   
-                  const snapIdx = stockSnap.findIndex(s => s.id === lot.id);
-                  if (snapIdx !== -1) stockSnap[snapIdx].sold = (Number(stockSnap[snapIdx].sold) || 0) + take;
-                  needed -= take;
+                  let take = 0;
+                  if (i === lots.length - 1) {
+                      take = needed;
+                  } else {
+                      take = Math.min(needed, Math.max(0, remaining));
+                  }
+                  
+                  if (take > 0) {
+                      const lotRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id);
+                      batchWriter.update(lotRef, { sold: increment(take) });
+                      
+                      const snapIdx = stockSnap.findIndex(s => s.id === lot.id);
+                      if (snapIdx !== -1) stockSnap[snapIdx].sold = (Number(stockSnap[snapIdx].sold) || 0) + take;
+                      needed -= take;
+                  }
+              }
+              
+              if (needed > 0) {
+                  const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+                  batchWriter.set(dummyRef, {
+                      productName: item.desc,
+                      sku: item.sku || '-',
+                      category: item.category || 'อื่นๆ',
+                      quantity: 0,
+                      costPerUnit: 0,
+                      sellPrice: item.sellPrice || item.price || 0,
+                      date: normalizeDate(formData.date) || new Date(),
+                      sold: needed,
+                      userId: user.uid,
+                      createdAt: serverTimestamp(),
+                      paymentStatus: 'paid',
+                      isAdjustment: true,
+                      adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
+                  });
               }
           }
       }
