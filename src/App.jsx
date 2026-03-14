@@ -4879,6 +4879,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     };
   }, [transactions, summaryStartDate, summaryEndDate, summaryChannel, summaryCategory]);
 
+  // --- Calculate VAT Base safely for viewItem Modal ---
+  const viewItemBaseAmount = viewItem ? (viewItem.total || 0) + (viewItem.type === 'income' ? (Number(viewItem.shippingFee) || 0) : 0) - (Number(viewItem.couponDiscount) || 0) : 0;
+  const viewItemTrueVatBase = viewItem ? (viewItem.vatType === 'excluded' ? viewItemBaseAmount : (viewItemBaseAmount * 100 / 107)) : 0;
+  const viewItemVatAmt = viewItem ? (viewItem.vatType === 'excluded' ? viewItemBaseAmount * 0.07 : (viewItemBaseAmount * 7 / 107)) : 0;
+
   return (
     <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full h-full pb-10">
       
@@ -5717,11 +5722,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     <>
                         <div className="flex justify-between items-center text-sm text-blue-300 mt-2 text-left">
                             <span>มูลค่าสินค้าที่เสียภาษี (VAT Base)</span>
-                            <span>{formatCurrency(viewItem.vatType === 'excluded' ? (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) : (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 100 / 107)}</span>
+                            <span>{formatCurrency(viewItemTrueVatBase)}</span>
                         </div>
                         <div className="flex justify-between items-center text-sm text-indigo-300 mt-2 text-left">
                             <span>{viewItem.vatType === 'included' ? 'ภาษีมูลค่าเพิ่ม 7% (รวมในยอด)' : '+ ภาษีมูลค่าเพิ่ม 7% (แยกเพิ่ม)'}</span>
-                            <span>{formatCurrency(viewItem.vatType === 'excluded' ? (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 0.07 : (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 7 / 107)}</span>
+                            <span>{formatCurrency(viewItemVatAmt)}</span>
                         </div>
                     </>
                 )}
