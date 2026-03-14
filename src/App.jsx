@@ -904,6 +904,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const [isCheckingAnomaly, setIsCheckingAnomaly] = useState(false);
   const fileInputRef = useRef(null);
 
+  // --- NEW: ฟังก์ชันลบประวัติการนำเข้า ---
+  const handleDeleteLog = async (id) => {
+      if (!window.confirm("ยืนยันการลบประวัติการนำเข้านี้?")) return;
+      try {
+          await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'import_logs', id));
+          showToast("ลบประวัติการนำเข้าสำเร็จ", "success");
+      } catch (error) {
+          console.error("Delete log error:", error);
+          showToast("ลบประวัติไม่สำเร็จ", "error");
+      }
+  };
+
   // --- Quick Transfer States ---
   const [quickTransferItem, setQuickTransferItem] = useState(null);
   const [transferData, setTransferData] = useState({ sourceKey: '', qty: 1 });
@@ -2394,13 +2406,21 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                               <th className="p-4 text-center border-b border-slate-100 text-emerald-600">สำเร็จ</th>
                               <th className="p-4 text-center border-b border-slate-100 text-amber-500">ถูกข้าม/ข้อมูลซ้ำ</th>
                               <th className="p-4 text-center border-b border-slate-100 text-orange-500">จัดส่งไม่สำเร็จ/ตีกลับ</th>
-                              <th className="p-4 text-center rounded-tr-xl border-b border-slate-100">ดูรายละเอียด</th>
+                              <th className="p-4 text-center rounded-tr-xl border-b border-slate-100">จัดการ</th>
                           </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                          {importLogs && importLogs.length > 0 ? importLogs.map(log => (
+                          {importLogs && importLogs.length > 0 ? [...importLogs].sort((a,b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0)).map((log, index) => (
                               <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                                  <td className="p-4 font-bold text-slate-700">{formatDate(log.date)}</td>
+                                  <td className="p-4 font-bold text-slate-700">
+                                      <div className="flex items-center gap-2">
+                                          <span>{formatDate(log.date)}</span>
+                                          {index === 0 && <span className="bg-rose-100 text-rose-600 px-2 py-0.5 rounded-full text-[9px] uppercase tracking-widest font-black">ล่าสุด</span>}
+                                      </div>
+                                      <span className="text-[10px] font-normal text-slate-400 mt-0.5 inline-block">
+                                          เวลา {log.date ? new Date(log.date).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'}) : '-'} น.
+                                      </span>
+                                  </td>
                                   <td className="p-4">
                                       <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${log.mode === 'update_settled' ? 'bg-amber-100 text-amber-700' : log.mode === 'new_settled' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
                                           {log.mode === 'update_settled' ? 'กระทบยอดรับเงิน' : log.mode === 'new_settled' ? 'นำเข้าแบบรับเงินแล้ว' : 'นำเข้าแบบรอเงินเข้า'}
@@ -2410,9 +2430,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                   <td className="p-4 text-center font-black text-amber-500">{log.stats?.skipped || 0}</td>
                                   <td className="p-4 text-center font-black text-orange-500">{log.stats?.deliveryFailed || 0}</td>
                                   <td className="p-4 text-center">
-                                      <button onClick={() => setViewLogDetails(log)} className="px-3 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold transition-colors">
-                                          ดูรายละเอียด
-                                      </button>
+                                      <div className="flex justify-center items-center gap-2">
+                                          <button onClick={() => setViewLogDetails(log)} className="px-3 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold transition-colors">
+                                              ดูรายละเอียด
+                                          </button>
+                                          <button onClick={() => handleDeleteLog(log.id)} className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors" title="ลบประวัติ">
+                                              <Trash2 size={16} />
+                                          </button>
+                                      </div>
                                   </td>
                               </tr>
                           )) : (
@@ -4126,6 +4151,71 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     return { totalIncome, actualExpense, standardExpense, usedExpense, totalDeductions, netIncome, calculatedTax, grossTax: actualGrossTax, finalTax, isGrossTaxApplied, totalWHT, payableTax, steps };
   }, [transactions, startDate, endDate, selectedBranch, expenseMode, pitDeductions]);
 
+  // --- NEW: สรุปยอดขายรายร้านค้า แยกตามเดือน ---
+  const shopSummaryData = useMemo(() => {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    start.setHours(0,0,0,0);
+    end.setHours(23,59,59,999);
+
+    const summary = {};
+
+    transactions.forEach(t => {
+        if (t.type !== 'income' || t.isCancelled) return;
+        const d = normalizeDate(t.date);
+        if (!d || d < start || d > end) return;
+        
+        // กรองตามสาขาที่เลือกด้วย เพื่อให้สอดคล้องกับ filter ตัวอื่น
+        if (selectedBranch !== 'all' && (t.branch || '00000') !== selectedBranch && (t.partnerBranch || '00000') !== selectedBranch) return;
+
+        const monthKey = d.toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
+        const sortKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const shopKey = t.shopName || 'ไม่ระบุ';
+
+        const mapKey = `${sortKey}_${shopKey}`;
+
+        if (!summary[mapKey]) {
+            summary[mapKey] = {
+                sortKey,
+                monthLabel: monthKey,
+                shop: shopKey,
+                orders: 0,
+                productSales: 0,
+                shippingFeeByBuyer: 0,
+                platformFee: 0,
+                discount: 0,
+                netIncome: 0,
+                settledIncome: 0, // NEW
+                unpaidIncome: 0   // NEW
+            };
+        }
+
+        const s = summary[mapKey];
+        s.orders += 1;
+        s.productSales += (Number(t.total) || 0);
+        s.shippingFeeByBuyer += (Number(t.shippingFee) || 0);
+        s.platformFee += (Number(t.platformFee) || 0);
+        s.discount += (Number(t.couponDiscount) || 0) + (Number(t.cashCoupon) || 0);
+        
+        // ถ้ารายการนี้ปรับปรุงรับเงินแล้ว (actualSettledAmt) ให้ใช้ยอดนั้นเป็นสุทธิ ถ้ายังให้ใช้ grandTotal
+        const net = t.actualSettledAmt !== undefined ? Number(t.actualSettledAmt) : (Number(t.grandTotal) || (Number(t.total) - Number(t.platformFee)));
+        s.netIncome += net;
+
+        if (t.paymentStatus === 'settled') {
+            s.settledIncome += net;
+        } else {
+            s.unpaidIncome += net;
+        }
+    });
+
+    return Object.values(summary).sort((a,b) => {
+        // เรียงจากเดือนใหม่ล่าสุดไปเก่า
+        if (b.sortKey !== a.sortKey) return b.sortKey.localeCompare(a.sortKey);
+        // เรียงชื่อร้านค้าตามตัวอักษร
+        return a.shop.localeCompare(b.shop);
+    });
+  }, [transactions, startDate, endDate, selectedBranch]);
+
   const getTaxAdvice = async () => {
       setIsGettingTaxAdvice(true);
       try {
@@ -4204,6 +4294,24 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         m.issueQty > 0 ? m.issueQty : '-', m.issueTotal > 0 ? toFixedNum(m.issueTotal) : '-',
         m.balanceQty, toFixedNum(m.balanceTotal)
       ])];
+    } else if (reportTab === 'shop_summary') {
+      fileName = `Shop_Summary_${startDate}.xlsx`;
+      const tableHeader = ["ลำดับ", "เดือน", "ร้านค้า", "จำนวนออเดอร์", "ยอดขายสินค้า", "ค่าส่ง (ลูกค้าจ่าย)", "ส่วนลด/อื่นๆ", "ค่าธรรมเนียมรวม", "ยอดเงินสุทธิ", "รับเงินแล้ว", "ค้างชำระ"];
+      const body = shopSummaryData.map((row, i) => [
+        i + 1, row.monthLabel, row.shop, row.orders, toFixedNum(row.productSales), toFixedNum(row.shippingFeeByBuyer), toFixedNum(row.discount), toFixedNum(row.platformFee), toFixedNum(row.netIncome), toFixedNum(row.settledIncome), toFixedNum(row.unpaidIncome)
+      ]);
+      const footer = [
+        "รวมทั้งสิ้น", "", "", 
+        shopSummaryData.reduce((s, r) => s + r.orders, 0), 
+        toFixedNum(shopSummaryData.reduce((s, r) => s + r.productSales, 0)), 
+        toFixedNum(shopSummaryData.reduce((s, r) => s + r.shippingFeeByBuyer, 0)), 
+        toFixedNum(shopSummaryData.reduce((s, r) => s + r.discount, 0)), 
+        toFixedNum(shopSummaryData.reduce((s, r) => s + r.platformFee, 0)), 
+        toFixedNum(shopSummaryData.reduce((s, r) => s + r.netIncome, 0)),
+        toFixedNum(shopSummaryData.reduce((s, r) => s + r.settledIncome, 0)),
+        toFixedNum(shopSummaryData.reduce((s, r) => s + r.unpaidIncome, 0))
+      ];
+      dataRows = [...headerRows, tableHeader, ...body, footer];
     }
 
     try {
@@ -4324,6 +4432,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         <TabBtn id="sales" label="ภาษีขาย (Sales Tax)" icon={<FileText size={18}/>} />
         <TabBtn id="purchase" label="ภาษีซื้อ (Purchase Tax)" icon={<ShoppingCart size={18}/>} />
         <TabBtn id="inventory" label="คุมสินค้า (Stock)" icon={<Box size={18}/>} />
+        <TabBtn id="shop_summary" label="สรุปรายร้านค้า" icon={<Store size={18}/>} />
         <TabBtn id="pp30" label="สรุป ภ.พ.30" icon={<Calculator size={18}/>} />
         <TabBtn id="pit90" label="ภ.ง.ด. 90/94 (บุคคลธรรมดา)" icon={<User size={18}/>} />
       </div>
@@ -4461,6 +4570,59 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
               </tbody>
               {filteredMovement.length === 0 && (
                 <tbody><tr><td colSpan="9" className="p-10 text-center text-slate-400 font-bold">ไม่พบความเคลื่อนไหวในช่วงเวลานี้</td></tr></tbody>
+              )}
+            </table>
+          )}
+
+          {reportTab === 'shop_summary' && (
+            <table className="w-full text-sm text-left">
+              <thead className="bg-white text-slate-400 text-[10px] font-bold uppercase sticky top-0 border-b z-10 text-left">
+                <tr>
+                  <th className="p-5 text-left">เดือน (Month)</th>
+                  <th className="p-5 text-left">ร้านค้า (Shop)</th>
+                  <th className="p-5 text-center">จำนวนออเดอร์</th>
+                  <th className="p-5 text-right">ยอดขายสินค้า</th>
+                  <th className="p-5 text-right">ค่าส่ง (ลูกค้าจ่าย)</th>
+                  <th className="p-5 text-right">ส่วนลด/อื่นๆ</th>
+                  <th className="p-5 text-right text-rose-500">ค่าธรรมเนียมรวม</th>
+                  <th className="p-5 text-right text-indigo-600">ยอดเงินสุทธิ</th>
+                  <th className="p-5 text-right text-emerald-600">รับแล้ว (Settled)</th>
+                  <th className="p-5 text-right text-amber-500">ค้างรับ (Unpaid)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 text-left">
+                {shopSummaryData.map((row, i) => (
+                  <tr key={i} className="hover:bg-slate-50/80 transition-colors text-left">
+                    <td className="p-5 font-bold text-slate-700 text-left">{row.monthLabel}</td>
+                    <td className="p-5 font-bold text-indigo-600 text-left">{row.shop}</td>
+                    <td className="p-5 text-center font-bold text-slate-800">{row.orders.toLocaleString()}</td>
+                    <td className="p-5 text-right">{formatCurrency(row.productSales)}</td>
+                    <td className="p-5 text-right text-emerald-600">+{formatCurrency(row.shippingFeeByBuyer)}</td>
+                    <td className="p-5 text-right text-amber-500">-{formatCurrency(row.discount)}</td>
+                    <td className="p-5 text-right text-rose-500 font-bold">-{formatCurrency(row.platformFee)}</td>
+                    <td className="p-5 text-right font-black text-indigo-600">{formatCurrency(row.netIncome)}</td>
+                    <td className="p-5 text-right font-bold text-emerald-600">{formatCurrency(row.settledIncome)}</td>
+                    <td className="p-5 text-right font-bold text-amber-500">{formatCurrency(row.unpaidIncome)}</td>
+                  </tr>
+                ))}
+                {shopSummaryData.length === 0 && (
+                    <tr><td colSpan="10" className="p-10 text-center text-slate-400 font-bold">ไม่พบข้อมูลในช่วงเวลาที่เลือก</td></tr>
+                )}
+              </tbody>
+              {shopSummaryData.length > 0 && (
+                <tfoot className="bg-slate-900 text-white font-bold sticky bottom-0 text-left">
+                    <tr>
+                        <td colSpan="2" className="p-5 text-right uppercase tracking-widest text-xs opacity-60">รวมทั้งสิ้น</td>
+                        <td className="p-5 text-center">{shopSummaryData.reduce((s, r) => s + r.orders, 0).toLocaleString()}</td>
+                        <td className="p-5 text-right">{formatCurrency(shopSummaryData.reduce((s, r) => s + r.productSales, 0))}</td>
+                        <td className="p-5 text-right text-emerald-400">+{formatCurrency(shopSummaryData.reduce((s, r) => s + r.shippingFeeByBuyer, 0))}</td>
+                        <td className="p-5 text-right text-amber-400">-{formatCurrency(shopSummaryData.reduce((s, r) => s + r.discount, 0))}</td>
+                        <td className="p-5 text-right text-rose-400">-{formatCurrency(shopSummaryData.reduce((s, r) => s + r.platformFee, 0))}</td>
+                        <td className="p-5 text-right text-indigo-400">{formatCurrency(shopSummaryData.reduce((s, r) => s + r.netIncome, 0))}</td>
+                        <td className="p-5 text-right text-emerald-400">{formatCurrency(shopSummaryData.reduce((s, r) => s + r.settledIncome, 0))}</td>
+                        <td className="p-5 text-right text-amber-400">{formatCurrency(shopSummaryData.reduce((s, r) => s + r.unpaidIncome, 0))}</td>
+                    </tr>
+                </tfoot>
               )}
             </table>
           )}
@@ -5340,21 +5502,27 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
         // 3. Date Filter
         const d = normalizeDate(t.date);
-        if (histStartDate && d < new Date(histStartDate)) return false;
+        if (!d) return false;
+        
+        if (histStartDate) {
+            const start = new Date(histStartDate);
+            start.setHours(0,0,0,0);
+            if (d < start) return false;
+        }
         if (histEndDate) {
             const end = new Date(histEndDate);
             end.setHours(23,59,59,999);
             if (d > end) return false;
         }
 
-        // NEW: 4. Discrepancy Filter (กรองเฉพาะรายการที่เงินหาย/ส่วนต่าง)
+        // 4. Discrepancy Filter (กรองเฉพาะรายการที่เงินหาย/ส่วนต่าง)
         if (showDiscrepancyOnly) {
             const isDiffIncome = t.type === 'income' && t.actualSettledAmt !== undefined && Math.abs((t.grandTotal || t.total) - t.actualSettledAmt) > 0.01;
             const isDiffExpense = t.type === 'expense' && t.isFromReconciliation;
             if (!isDiffIncome && !isDiffExpense) return false;
         }
 
-        // NEW: 5. Payment Status Filter
+        // 5. Payment Status Filter
         if (histPaymentStatus !== 'all') {
             const isPaid = t.type === 'income' ? (t.paymentStatus === 'settled') : (t.status === 'paid');
             if (histPaymentStatus === 'paid' && !isPaid) return false;
@@ -7133,19 +7301,24 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       end.setHours(23,59,59,999);
 
       return combinedDocs.filter(doc => {
+          // 1. Date Filter
           const d = normalizeDate(doc.date);
           if (!d || d < start || d > end) return false;
 
+          // 2. Channel Filter
           if (historyChannel !== 'all' && (doc.channel || 'หน้าร้าน').toUpperCase() !== historyChannel.toUpperCase()) return false;
 
-          if (historyFilter === 'all') return true;
-          if (historyFilter === 'pending') return doc.source === 'transaction';
-          if (historyFilter === 'cancelled') return doc.status === 'cancelled';
-          if (historyFilter === 'invoice') return doc.source === 'invoice' && doc.docType !== 'credit_note' && doc.docType !== 'quotation' && doc.docType !== 'receipt' && doc.status !== 'cancelled';
-          if (historyFilter === 'credit_note') return doc.source === 'invoice' && doc.docType === 'credit_note' && doc.status !== 'cancelled';
-          if (historyFilter === 'quotation') return doc.source === 'invoice' && doc.docType === 'quotation' && doc.status !== 'cancelled';
-          if (historyFilter === 'receipt') return doc.source === 'invoice' && doc.docType === 'receipt' && doc.status !== 'cancelled';
+          // 3. Document Type & Status Filter
+          if (historyFilter !== 'all') {
+              if (historyFilter === 'pending' && doc.source !== 'transaction') return false;
+              if (historyFilter === 'cancelled' && doc.status !== 'cancelled') return false;
+              if (historyFilter === 'invoice' && !(doc.source === 'invoice' && doc.docType !== 'credit_note' && doc.docType !== 'quotation' && doc.docType !== 'receipt' && doc.status !== 'cancelled')) return false;
+              if (historyFilter === 'credit_note' && !(doc.source === 'invoice' && doc.docType === 'credit_note' && doc.status !== 'cancelled')) return false;
+              if (historyFilter === 'quotation' && !(doc.source === 'invoice' && doc.docType === 'quotation' && doc.status !== 'cancelled')) return false;
+              if (historyFilter === 'receipt' && !(doc.source === 'invoice' && doc.docType === 'receipt' && doc.status !== 'cancelled')) return false;
+          }
           
+          // 4. Payment Status Filter
           if (historyPaymentStatus !== 'all') {
               const isPaid = doc.status === 'paid' || doc.paymentStatus === 'settled';
               if (historyPaymentStatus === 'paid' && !isPaid) return false;
