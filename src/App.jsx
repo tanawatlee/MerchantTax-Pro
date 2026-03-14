@@ -33,11 +33,11 @@ const CONSTANTS = {
   IDS: { PROD: PROD_APP_ID, DEV: TEST_APP_ID },
   SHOPS: ['eats and use', 'bubee bubee', 'ไม่ระบุ'],
   CATEGORIES: {
-    INCOME: ['รายได้จากการขายสินค้า', 'รายได้จากการให้บริการ', 'รายได้ค่านายหน้า/ตัวแทน', 'รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'],
+    INCOME: ['รายได้จากการขายสินค้า', 'รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)', 'รายได้จากการให้บริการ', 'รายได้ค่านายหน้า/ตัวแทน', 'รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'],
     EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าแพ็คกิ้ง/บรรจุภัณฑ์', 'อุปกรณ์/เครื่องใช้สำนักงาน', 'ค่าน้ำมัน (ซื้อของเข้าร้าน)', 'ค่าขนส่งพัสดุ (ส่งลูกค้า)', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า'],
     STOCK: ['อาหาร and เครื่องดื่ม', 'ของใช้ส่วนตัว', 'ผลิตภัณฑ์ในครัวเรือน', 'ผลิตภัณฑ์ดูแลผ้า', 'แม่ and เด็ก', 'สุขภาพ and ความงาม', 'สัตว์เลี้ยง', 'ขนม and ของว่าง', 'เครื่องปรุง/วัตถุดิบ', 'บรรจุภัณฑ์/อุปกรณ์แพ็ค', 'อื่นๆ']
   },
-  CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
+  CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line্্রLine Shopping', 'Facebook', 'หน้าร้าน'],
   VAT_RATES: { INCLUDED: 'included', EXCLUDED: 'excluded', NONE: 'none' }
 };
 
@@ -898,8 +898,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
-  const [discrepancyCategory, setDiscrepancyCategory] = useState('ค่าธรรมเนียม Platform'); 
-  const [surplusCategory, setSurplusCategory] = useState('รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'); // NEW: หมวดหมู่รายรับส่วนเกิน
+  const [discrepancyCategory, setDiscrepancyCategory] = useState('ค่าขนส่งพัสดุ (ส่งลูกค้า)'); // แก้ไขค่าเริ่มต้นเป็น ค่าขนส่งพัสดุ
+  const [surplusCategory, setSurplusCategory] = useState('รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)'); // แก้ไขค่าเริ่มต้นเป็นรายได้ค่าส่ง
   const [anomalyAlerts, setAnomalyAlerts] = useState([]);
   const [isCheckingAnomaly, setIsCheckingAnomaly] = useState(false);
   const fileInputRef = useRef(null);
@@ -4734,7 +4734,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [settleConfirmId, setSettleConfirmId] = useState(null);
   const [settleDate, setSettleDate] = useState(formatDateISO(new Date()));
   const [settleActualAmt, setSettleActualAmt] = useState(0); 
-  const [settleDiffCategory, setSettleDiffCategory] = useState('ค่าธรรมเนียม Platform'); 
+  const [settleDiffCategory, setSettleDiffCategory] = useState('ค่าขนส่งพัสดุ (ส่งลูกค้า)'); // แก้ไขค่าเริ่มต้นเป็น ค่าขนส่งพัสดุ
   const [settleSurplusCategory, setSettleSurplusCategory] = useState('รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'); // NEW: หมวดหมู่รายรับส่วนเกิน
   
   // --- NEW: State for showing generated ID ---
@@ -6192,7 +6192,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                             setSettleConfirmId(t); 
                                             setSettleDate(formatDateISO(new Date())); 
                                             setSettleActualAmt(t.grandTotal || t.total); 
-                                            setSettleDiffCategory('ค่าธรรมเนียม Platform');
+                                            setSettleDiffCategory('ค่าขนส่งพัสดุ (ส่งลูกค้า)'); // แก้ไขให้ตอนกดปุ่มตั้งค่าเริ่มต้นเป็นค่าขนส่งพัสดุ
                                         }} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-500 hover:shadow-md transition-all shadow-sm text-center" title="รับเงินเข้าบัญชี (Settle)"><CheckCircle size={16}/></button>
                                     )}
                                     {!t.isCancelled && (
