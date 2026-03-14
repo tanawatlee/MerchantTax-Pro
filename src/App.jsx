@@ -4178,7 +4178,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [generatedDocId, setGeneratedDocId] = useState(null);
    
   const [formData, setFormData] = useState({ 
-    type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', 
+    type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', shopName: CONSTANTS.SHOPS[0],
     transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '',
     whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '',
     category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '',
@@ -4551,14 +4551,20 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     
     let grandTotal = 0;
     let vatAmount = 0;
+    let trueVatBase = 0;
 
     if (formData.type === 'income') {
         let vatBase = subTotal + shippingFee - couponDisc;
         if (formData.vatType === 'excluded') {
             vatAmount = vatBase * 0.07;
+            trueVatBase = vatBase;
             grandTotal = (vatBase * 1.07) - totalFees - cashCpn - wht;
+        } else if (formData.vatType === 'included') {
+            vatAmount = vatBase * 7 / 107;
+            trueVatBase = vatBase * 100 / 107;
+            grandTotal = vatBase - totalFees - cashCpn - wht;
         } else {
-            if (formData.vatType === 'included') vatAmount = vatBase * 7 / 107;
+            trueVatBase = vatBase;
             grandTotal = vatBase - totalFees - cashCpn - wht;
         }
     } else {
@@ -4566,14 +4572,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         if (formData.vatType === 'excluded') {
             let vatAmt = vatBase * 0.07;
             vatAmount = vatAmt;
+            trueVatBase = vatBase;
             grandTotal = vatBase + vatAmt - cashCpn - wht;
+        } else if (formData.vatType === 'included') {
+            vatAmount = vatBase * 7 / 107;
+            trueVatBase = vatBase * 100 / 107;
+            grandTotal = subTotal - totalDiscounts - wht;
         } else {
-            if (formData.vatType === 'included') vatAmount = vatBase * 7 / 107;
+            trueVatBase = vatBase;
             grandTotal = subTotal - totalDiscounts - wht;
         }
     }
     
-    return { subTotal, totalFees, totalDiscounts, wht, grandTotal, shippingFee, vatAmount };
+    return { subTotal, totalFees, totalDiscounts, wht, grandTotal, shippingFee, vatAmount, trueVatBase };
   }, [formData]);
 
   const handleSubmit = async (e) => {
@@ -4730,7 +4741,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           isExpense: formData.type === 'expense'
       });
 
-      setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled', isCashBill: false, isAdjusted: false });
+      setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', shopName: CONSTANTS.SHOPS[0], transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled', isCashBill: false, isAdjusted: false });
     } catch (e) { showToast("Error: " + e.message, "error"); }
   };
 
@@ -5014,8 +5025,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     </div>
                 )}
                 
-                <div className={`grid grid-cols-2 md:grid-cols-5 gap-4 flex-1 w-full text-left mt-2 md:mt-0`}>
+                <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 flex-1 w-full text-left mt-2 md:mt-0`}>
                   <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">วันที่</label><input type="date" value={formData.date} onChange={e=>setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-100 outline-none text-left"/></div>
+                  <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">ร้านค้า</label><select value={formData.shopName || CONSTANTS.SHOPS[0]} onChange={e=>setFormData({...formData, shopName: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left">{CONSTANTS.SHOPS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                   <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">ช่องทาง</label><select value={formData.channel} onChange={e=>setFormData({...formData, channel: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left">{CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                   <div className="space-y-1 text-left">
                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">{formData.type === 'expense' ? 'อ้างอิง Order ID (ถ้ามี)' : 'Order ID'}</label>
@@ -5170,10 +5182,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   </div>
                   
                   {formData.vatType !== 'none' && (
-                      <div className="flex justify-between items-center text-sm text-indigo-300 mt-2 text-left">
-                          <span className="opacity-80 text-left">{formData.vatType === 'included' ? 'ภาษีมูลค่าเพิ่ม 7% (รวมในยอด)' : '+ ภาษีมูลค่าเพิ่ม 7% (แยกเพิ่ม)'}</span>
-                          <span className="font-bold text-right">{formatCurrency(financialSummary.vatAmount)}</span>
-                      </div>
+                      <>
+                          <div className="flex justify-between items-center text-sm text-blue-300 mt-2 text-left">
+                              <span className="opacity-80 text-left">มูลค่าสินค้าที่เสียภาษี (VAT Base)</span>
+                              <span className="font-bold text-right">{formatCurrency(financialSummary.trueVatBase)}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-sm text-indigo-300 mt-2 text-left">
+                              <span className="opacity-80 text-left">{formData.vatType === 'included' ? 'ภาษีมูลค่าเพิ่ม 7% (รวมในยอด)' : '+ ภาษีมูลค่าเพิ่ม 7% (แยกเพิ่ม)'}</span>
+                              <span className="font-bold text-right">{formatCurrency(financialSummary.vatAmount)}</span>
+                          </div>
+                      </>
                   )}
 
                   {formData.type === 'income' && financialSummary.shippingFee > 0 && (
@@ -5511,7 +5529,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             <td className="p-5 text-left">
                                 <p className={`font-black text-left ${t.isCancelled ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{formatDate(t.date)}</p>
                                 <p className="text-[10px] font-mono font-bold text-indigo-600 mt-0.5">{t.sysDocId || 'NO-REF'}</p>
-                                <span className="mt-1 inline-block px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500 uppercase text-center">{t.channel || 'หน้าร้าน'}</span>
+                                <div className="flex gap-1 mt-1 flex-wrap">
+                                    <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500 uppercase text-center">{t.channel || 'หน้าร้าน'}</span>
+                                    {t.shopName && t.shopName !== 'ไม่ระบุ' && <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 text-indigo-600 uppercase text-center">{t.shopName}</span>}
+                                </div>
                                 {t.isCancelled && <span className="ml-2 mt-1 inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
                             </td>
                             <td className="p-5 text-left">
@@ -5693,10 +5714,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                 <div className="space-y-6 text-left"><h4 className="font-bold text-slate-800 border-b pb-2 flex items-center gap-2 text-left"><Wallet size={18} className="text-emerald-500"/> สรุปยอดเงินสุทธิ</h4><div className="bg-slate-900 text-white p-7 rounded-[32px] shadow-xl text-left"><div className="flex justify-between items-center text-sm opacity-60 text-left"><span>มูลค่าสินค้ารวม</span><span>{formatCurrency(viewItem.total)}</span></div>
                 
                 {viewItem.vatType && viewItem.vatType !== 'none' && (
-                    <div className="flex justify-between items-center text-sm text-indigo-300 mt-2 text-left">
-                        <span>{viewItem.vatType === 'included' ? 'ภาษีมูลค่าเพิ่ม 7% (รวมในยอด)' : '+ ภาษีมูลค่าเพิ่ม 7% (แยกเพิ่ม)'}</span>
-                        <span>{formatCurrency(viewItem.vatType === 'excluded' ? (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 0.07 : (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 7 / 107)}</span>
-                    </div>
+                    <>
+                        <div className="flex justify-between items-center text-sm text-blue-300 mt-2 text-left">
+                            <span>มูลค่าสินค้าที่เสียภาษี (VAT Base)</span>
+                            <span>{formatCurrency(viewItem.vatType === 'excluded' ? (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) : (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 100 / 107)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm text-indigo-300 mt-2 text-left">
+                            <span>{viewItem.vatType === 'included' ? 'ภาษีมูลค่าเพิ่ม 7% (รวมในยอด)' : '+ ภาษีมูลค่าเพิ่ม 7% (แยกเพิ่ม)'}</span>
+                            <span>{formatCurrency(viewItem.vatType === 'excluded' ? (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 0.07 : (viewItem.total + (viewItem.type === 'income' ? (viewItem.shippingFee||0) : 0) - (viewItem.couponDiscount||0)) * 7 / 107)}</span>
+                        </div>
+                    </>
                 )}
                 
                 <div className="flex justify-between items-center text-sm opacity-60 mt-4 text-left"><span>{viewItem.type === 'income' ? 'หักค่าธรรมเนียม and ส่วนลด and WHT' : 'หักส่วนลด and WHT'}</span><span>{formatCurrency((viewItem.type === 'income' ? (Number(viewItem.platformFee) || 0) : 0) + (Number(viewItem.couponDiscount) || 0) + (Number(viewItem.cashCoupon) || 0) + (Number(viewItem.whtAmount) || 0))}</span></div><div className="flex justify-between items-center pt-3 mt-4 border-t-2 border-white/20 text-left"><span className="font-black text-indigo-400 uppercase tracking-wider text-left">{viewItem.type === 'income' ? 'เงินเข้าสุทธิ' : 'ยอดจ่ายสุทธิ'}</span><span className="text-4xl font-black text-right">{formatCurrency(viewItem.grandTotal || viewItem.total)}</span></div><div className="mt-4 pt-4 border-t border-white/10 space-y-3 text-left"><p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest text-left">เอกสารที่ออกแล้ว (Linked Documents)</p>{viewItem.issuedDocs && viewItem.issuedDocs.length > 0 ? viewItem.issuedDocs.map((doc, idx) => {
