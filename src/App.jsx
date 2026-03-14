@@ -877,7 +877,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   
   // NEW: เพิ่ม state `skippedQty` สำหรับนับจำนวนชิ้นที่ระบบช่วยกรองทิ้งให้
   const [stats, setStats] = useState({ 
-      totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0, totalActualSettled: 0, totalDiff: 0,
+      totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0, totalActualSettled: 0, totalDiffShort: 0, totalDiffSurplus: 0,
       detailedSummary: { productPrice: 0, sellerDiscount: 0, refundAmount: 0, shipBuyer: 0, shipShopee: 0, shipActual: 0, shipReturn: 0, feeComm: 0, feeServ: 0, feeInfra: 0, feeTrans: 0, totalSettled: 0 }
   });
   
@@ -899,6 +899,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
   const [discrepancyCategory, setDiscrepancyCategory] = useState('ค่าธรรมเนียม Platform'); 
+  const [surplusCategory, setSurplusCategory] = useState('รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'); // NEW: หมวดหมู่รายรับส่วนเกิน
   const [anomalyAlerts, setAnomalyAlerts] = useState([]);
   const [isCheckingAnomaly, setIsCheckingAnomaly] = useState(false);
   const fileInputRef = useRef(null);
@@ -1307,7 +1308,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             
             let totalExpected = 0;
             let totalActual = 0;
-            let totalDiff = 0;
+            let totalDiffShort = 0;
+            let totalDiffSurplus = 0;
             let currentDiffDetails = [];
 
             matched.forEach(m => {
@@ -1317,13 +1319,26 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                     totalExpected += expected;
                     totalActual += actual;
                     const diff = expected - actual;
+                    
                     if (diff > 0.01) {
-                        totalDiff += diff;
+                        // ขาดทุน (เงินหาย)
+                        totalDiffShort += diff;
                         currentDiffDetails.push({
                             orderId: m.orderId || m.sysDocId,
                             expected,
                             actual,
-                            diff
+                            diff: diff,
+                            type: 'short'
+                        });
+                    } else if (diff < -0.01) {
+                        // กำไร (เงินเกินมา)
+                        totalDiffSurplus += Math.abs(diff);
+                        currentDiffDetails.push({
+                            orderId: m.orderId || m.sysDocId,
+                            expected,
+                            actual,
+                            diff: Math.abs(diff),
+                            type: 'surplus'
                         });
                     }
                 }
@@ -1332,7 +1347,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             setImportedData(matched);
             setStats({ 
                 totalRows: raw.length, processed: matched.length, skipped: skippedCount, 
-                totalAmount: totalExpected, totalActualSettled: totalActual, totalDiff: totalDiff, 
+                totalAmount: totalExpected, totalActualSettled: totalActual, totalDiffShort: totalDiffShort, totalDiffSurplus: totalDiffSurplus, 
                 totalFees: matched.reduce((s,t)=>s+(Number(t.platformFee)||0),0), 
                 duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0,
                 detailedSummary: detailedStats
@@ -1609,6 +1624,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               }
               return m;
           }, 0);
+          let incCount = transactions.filter(t => t.type === 'income').reduce((m, t) => {
+              if (t.sysDocId && t.sysDocId.startsWith('INC-')) {
+                  const num = parseInt(t.sysDocId.replace('INC-', ''), 10);
+                  return !isNaN(num) && num > m ? num : m;
+              }
+              return m;
+          }, 0);
 
           for (const item of importedData) {
               const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
@@ -1657,7 +1679,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   batch.update(ref, updateData);
                   count++;
 
-                  // Auto-create expense for discrepancy
+                  // Auto-create expense for discrepancy (เงินหาย/ขาด)
                   if (diff > 0.01) {
                       expCount++;
                       const sysDocId = `EXP-${String(expCount).padStart(5, '0')}`;
@@ -1666,12 +1688,33 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           sysDocId,
                           type: 'expense',
                           category: discrepancyCategory,
-                          description: `ส่วนต่างยอดรับเงิน (ปรับปรุง): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
+                          description: `ส่วนต่างยอดรับเงิน (ยอดขาด): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
                           total: diff,
                           date: item.newSettlementDate || new Date(),
                           userId: user.uid,
                           createdAt: serverTimestamp(),
                           status: 'paid',
+                          partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
+                          partnerBranch: '00000',
+                          isFromReconciliation: true,
+                          linkedOrderId: item.id
+                      });
+                  } 
+                  // Auto-create income for surplus (เงินเกิน/ได้เพิ่ม)
+                  else if (diff < -0.01) {
+                      incCount++;
+                      const sysDocId = `INC-${String(incCount).padStart(5, '0')}`;
+                      const incRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income'));
+                      batch.set(incRef, {
+                          sysDocId,
+                          type: 'income',
+                          category: surplusCategory,
+                          description: `ส่วนต่างยอดรับเงิน (ยอดได้เพิ่ม): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
+                          total: Math.abs(diff),
+                          date: item.newSettlementDate || new Date(),
+                          userId: user.uid,
+                          createdAt: serverTimestamp(),
+                          paymentStatus: 'settled',
                           partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
                           partnerBranch: '00000',
                           isFromReconciliation: true,
@@ -1805,7 +1848,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       setImportMode(mode);
       setImportedData([]);
       setStats({ 
-          totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0, totalActualSettled: 0, totalDiff: 0,
+          totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0, totalActualSettled: 0, totalDiffShort: 0, totalDiffSurplus: 0,
           detailedSummary: { productPrice: 0, sellerDiscount: 0, refundAmount: 0, shipBuyer: 0, shipShopee: 0, shipActual: 0, shipReturn: 0, feeComm: 0, feeServ: 0, feeInfra: 0, feeTrans: 0, totalSettled: 0 }
       });
       setSkippedDetailsData([]);
@@ -1890,12 +1933,24 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               <div className="p-4 border-b flex flex-col md:flex-row justify-between items-start md:items-center bg-slate-50 gap-4 text-left">
                 <div className="flex flex-col gap-1">
                     <span className="font-bold text-slate-800 text-left">Step 2: ยืนยันเพื่อบันทึกและหักสต็อก</span>
-                    {importMode === 'update_settled' && importedData.some(it => (it.grandTotal || it.total) - (it.actualSettledAmt || 0) > 0.01) && (
-                        <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[10px] font-bold text-rose-500">บันทึกส่วนต่างเป็นรายจ่ายหมวด:</span>
-                            <select value={discrepancyCategory} onChange={e=>setDiscrepancyCategory(e.target.value)} className="bg-white border border-rose-200 rounded-md text-[10px] font-bold px-2 py-1 outline-none text-rose-700">
-                                {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
-                            </select>
+                    {importMode === 'update_settled' && (
+                        <div className="flex flex-col gap-1 mt-1">
+                            {stats.totalDiffShort > 0 && (
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-bold text-rose-500">ลงบิลส่วนต่าง (ขาด) เป็นรายจ่ายหมวด:</span>
+                                    <select value={discrepancyCategory} onChange={e=>setDiscrepancyCategory(e.target.value)} className="bg-white border border-rose-200 rounded-md text-[10px] font-bold px-2 py-1 outline-none text-rose-700">
+                                        {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                </div>
+                            )}
+                            {stats.totalDiffSurplus > 0 && (
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-bold text-emerald-600">ลงบิลส่วนต่าง (เกิน) เป็นรายรับหมวด:</span>
+                                    <select value={surplusCategory} onChange={e=>setSurplusCategory(e.target.value)} className="bg-white border border-emerald-200 rounded-md text-[10px] font-bold px-2 py-1 outline-none text-emerald-700">
+                                        {CONSTANTS.CATEGORIES.INCOME.map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -1930,9 +1985,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                       <p className="text-xs text-slate-500 mt-1">จำแนกโครงสร้างรายได้และรายจ่ายตามรายงานการโอนเงิน</p>
                                   </div>
                                   {/* Diff Alert Button */}
-                                  {stats.totalDiff > 0 ? (
+                                  {(stats.totalDiffShort > 0 || stats.totalDiffSurplus > 0) ? (
                                       <button onClick={() => setShowDiscrepancyModal(true)} className="flex items-center gap-1 text-rose-600 font-bold bg-rose-50 px-3 py-2 rounded-lg hover:bg-rose-100 transition-colors border border-rose-200 text-xs shadow-sm">
-                                          <AlertTriangle size={14}/> พบส่วนต่าง: {formatCurrency(stats.totalDiff)} ฿ (คลิกดู)
+                                          <AlertTriangle size={14}/> ตรวจพบส่วนต่าง (คลิกดู)
                                       </button>
                                   ) : (
                                       <span className="flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 px-3 py-2 rounded-lg border border-emerald-200 text-xs shadow-sm">
@@ -1984,6 +2039,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                   <span className="text-xl font-black">{formatCurrency(stats.detailedSummary?.totalSettled)}</span>
                               </div>
                               
+                              {/* Extra Mini-Cards for specific discrepancy */}
+                              <div className="grid grid-cols-2 gap-px bg-slate-200">
+                                  <div onClick={() => setShowDiscrepancyModal(true)} className="bg-white p-3 cursor-pointer hover:bg-rose-50 transition-colors group">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-rose-600 transition-colors">ส่วนต่าง (เงินขาด)</p>
+                                      <p className="text-base font-black text-rose-500">{formatCurrency(stats.totalDiffShort)}</p>
+                                  </div>
+                                  <div onClick={() => setShowDiscrepancyModal(true)} className="bg-white p-3 cursor-pointer hover:bg-emerald-50 transition-colors group">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-emerald-600 transition-colors">ส่วนต่าง (ได้เพิ่ม)</p>
+                                      <p className="text-base font-black text-emerald-500">{formatCurrency(stats.totalDiffSurplus)}</p>
+                                  </div>
+                              </div>
+
                               {/* Small summary of missing/skipped at the bottom */}
                               {(stats.skipped > 0 || stats.deliveryFailed > 0) && (
                                   <div className="bg-amber-50 p-3 text-xs flex justify-between items-center border-t border-amber-100">
@@ -2086,30 +2153,32 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
                           <div className="flex justify-between items-center mb-6">
                               <div>
-                                  <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><AlertTriangle className="text-rose-500"/> รายละเอียดออเดอร์ที่มีส่วนต่าง (ยอดเงินหาย)</h3>
-                                  <p className="text-xs text-slate-400 mt-1">ระบบจะทำการสร้างรายจ่ายอัตโนมัติในหมวด "{discrepancyCategory}" สำหรับรายการเหล่านี้เมื่อกดบันทึก</p>
+                                  <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><AlertTriangle className="text-indigo-500"/> รายละเอียดออเดอร์ที่มีส่วนต่าง (เงินขาด/เงินเกิน)</h3>
+                                  <p className="text-xs text-slate-400 mt-1">ระบบจะทำการสร้างบิลรายรับ/รายจ่ายอัตโนมัติ เพื่อปรับปรุงยอดให้ถูกต้อง</p>
                               </div>
                               <button onClick={()=>setShowDiscrepancyModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
                           </div>
-                          <div className="flex-1 overflow-auto custom-scrollbar border border-rose-200 rounded-2xl">
+                          <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl">
                               <table className="w-full text-xs text-left">
-                                  <thead className="bg-rose-50 text-rose-800 uppercase sticky top-0 border-b border-rose-200 z-10">
+                                  <thead className="bg-slate-50 text-slate-800 uppercase sticky top-0 border-b border-slate-200 z-10">
                                       <tr>
                                           <th className="p-4 w-10 text-center">No.</th>
                                           <th className="p-4">Order ID</th>
                                           <th className="p-4 text-right">ยอดในระบบ (ตั้งต้น)</th>
                                           <th className="p-4 text-right">ยอดรับจริง (ไฟล์)</th>
-                                          <th className="p-4 text-right">ส่วนต่าง (ขาด)</th>
+                                          <th className="p-4 text-right">ส่วนต่าง</th>
                                       </tr>
                                   </thead>
-                                  <tbody className="divide-y divide-rose-100">
+                                  <tbody className="divide-y divide-slate-100">
                                       {discrepancyDetailsData.map((item, i) => (
-                                          <tr key={i} className="hover:bg-rose-50/50 transition-colors">
-                                              <td className="p-4 text-center font-bold text-rose-400">{i + 1}</td>
+                                          <tr key={i} className={`transition-colors ${item.type === 'short' ? 'hover:bg-rose-50/50' : 'hover:bg-emerald-50/50'}`}>
+                                              <td className={`p-4 text-center font-bold ${item.type === 'short' ? 'text-rose-400' : 'text-emerald-400'}`}>{i + 1}</td>
                                               <td className="p-4 font-mono font-bold text-slate-700">{item.orderId}</td>
                                               <td className="p-4 text-right font-medium text-slate-500">{formatCurrency(item.expected)}</td>
-                                              <td className="p-4 text-right font-black text-emerald-600">{formatCurrency(item.actual)}</td>
-                                              <td className="p-4 text-right font-black text-rose-600">-{formatCurrency(item.diff)}</td>
+                                              <td className="p-4 text-right font-black text-slate-800">{formatCurrency(item.actual)}</td>
+                                              <td className={`p-4 text-right font-black ${item.type === 'short' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                  {item.type === 'short' ? '-' : '+'}{formatCurrency(item.diff)}
+                                              </td>
                                           </tr>
                                       ))}
                                       {discrepancyDetailsData.length === 0 && (
@@ -2283,10 +2352,17 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                         <>
                                             <p className="font-black text-indigo-600 text-right">{formatCurrency(it.actualSettledAmt || 0)}</p>
                                             {Math.abs((it.actualSettledAmt || 0) - (it.grandTotal || it.total)) > 0.01 ? (
-                                                <p className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
-                                                    <AlertTriangle size={10}/>
-                                                    ส่วนต่าง: {formatCurrency((it.actualSettledAmt || 0) - (it.grandTotal || it.total))} (บันทึกไว้: {formatCurrency(it.grandTotal || it.total)})
-                                                </p>
+                                                ((it.grandTotal || it.total) > (it.actualSettledAmt || 0)) ? (
+                                                    <p className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
+                                                        <AlertTriangle size={10}/>
+                                                        ส่วนต่าง (ขาด): {formatCurrency((it.grandTotal || it.total) - (it.actualSettledAmt || 0))} (บันทึกไว้: {formatCurrency(it.grandTotal || it.total)})
+                                                    </p>
+                                                ) : (
+                                                    <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
+                                                        <ArrowUp size={10}/>
+                                                        ส่วนต่าง (เกิน): {formatCurrency((it.actualSettledAmt || 0) - (it.grandTotal || it.total))} (บันทึกไว้: {formatCurrency(it.grandTotal || it.total)})
+                                                    </p>
+                                                )
                                             ) : (
                                                 <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
                                                     <CheckCircle size={10}/> ยอดตรงกัน
@@ -4659,6 +4735,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [settleDate, setSettleDate] = useState(formatDateISO(new Date()));
   const [settleActualAmt, setSettleActualAmt] = useState(0); 
   const [settleDiffCategory, setSettleDiffCategory] = useState('ค่าธรรมเนียม Platform'); 
+  const [settleSurplusCategory, setSettleSurplusCategory] = useState('รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'); // NEW: หมวดหมู่รายรับส่วนเกิน
   
   // --- NEW: State for showing generated ID ---
   const [generatedDocId, setGeneratedDocId] = useState(null);
@@ -4762,12 +4839,31 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   sysDocId: expSysDocId,
                   type: 'expense',
                   category: settleDiffCategory,
-                  description: `ส่วนต่างยอดรับเงิน (ปรับปรุง): ออเดอร์ ${settleConfirmId.orderId || settleConfirmId.sysDocId}`,
+                  description: `ส่วนต่างยอดรับเงิน (ยอดขาด): ออเดอร์ ${settleConfirmId.orderId || settleConfirmId.sysDocId}`,
                   total: diff,
                   date: normalizeDate(settleDate),
                   userId: user.uid,
                   createdAt: serverTimestamp(),
                   status: 'paid',
+                  partnerName: settleConfirmId.channel ? `Platform (${settleConfirmId.channel})` : 'Platform',
+                  partnerBranch: '00000',
+                  isFromReconciliation: true,
+                  linkedOrderId: settleConfirmId.id
+              });
+          } else if (diff < -0.01) {
+              const incSysDocId = generateDateBasedDocId(transactions.filter(tx => tx.type === 'income'), 'INC-', settleDate, 'sysDocId');
+              
+              const incRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income'));
+              batch.set(incRef, {
+                  sysDocId: incSysDocId,
+                  type: 'income',
+                  category: settleSurplusCategory,
+                  description: `ส่วนต่างยอดรับเงิน (ยอดได้เพิ่ม): ออเดอร์ ${settleConfirmId.orderId || settleConfirmId.sysDocId}`,
+                  total: Math.abs(diff),
+                  date: normalizeDate(settleDate),
+                  userId: user.uid,
+                  createdAt: serverTimestamp(),
+                  paymentStatus: 'settled',
                   partnerName: settleConfirmId.channel ? `Platform (${settleConfirmId.channel})` : 'Platform',
                   partnerBranch: '00000',
                   isFromReconciliation: true,
@@ -6067,13 +6163,24 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     
                                     {/* NEW: Highlight the exact difference directly under the total */}
                                     {t.type === 'income' && t.actualSettledAmt !== undefined && Math.abs((t.grandTotal || t.total) - t.actualSettledAmt) > 0.01 && (
-                                        <div className="text-[9px] text-rose-500 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
-                                            <AlertTriangle size={10}/> หายไป {formatCurrency((t.grandTotal || t.total) - t.actualSettledAmt)}
-                                        </div>
+                                        (t.grandTotal || t.total) > t.actualSettledAmt ? (
+                                            <div className="text-[9px] text-rose-500 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
+                                                <AlertTriangle size={10}/> หายไป {formatCurrency((t.grandTotal || t.total) - t.actualSettledAmt)}
+                                            </div>
+                                        ) : (
+                                            <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
+                                                <ArrowUp size={10}/> ได้เพิ่ม {formatCurrency(t.actualSettledAmt - (t.grandTotal || t.total))}
+                                            </div>
+                                        )
                                     )}
                                     {t.type === 'expense' && t.isFromReconciliation && (
-                                        <div className="text-[9px] text-amber-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
-                                            <RefreshCw size={10}/> บิลอุดรอยรั่ว
+                                        <div className="text-[9px] text-rose-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
+                                            <RefreshCw size={10}/> บิลอุดรอยรั่ว (ขาด)
+                                        </div>
+                                    )}
+                                    {t.type === 'income' && t.isFromReconciliation && (
+                                        <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
+                                            <RefreshCw size={10}/> บิลรายรับเพิ่ม (เกิน)
                                         </div>
                                     )}
                                 </div>
@@ -6281,10 +6388,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                  
                  {((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt) > 0.01 && (
                      <div className="mt-3 p-3 bg-rose-50 border border-rose-100 rounded-xl animate-fadeIn">
-                         <p className="text-[10px] font-bold text-rose-600 mb-1 flex items-center gap-1"><AlertTriangle size={12}/> พบส่วนต่าง {formatCurrency((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt)} ฿</p>
+                         <p className="text-[10px] font-bold text-rose-600 mb-1 flex items-center gap-1"><AlertTriangle size={12}/> พบส่วนต่าง (เงินขาด) {formatCurrency((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt)} ฿</p>
                          <label className="text-[9px] font-bold text-rose-500 uppercase">บันทึกส่วนต่างนี้เป็นรายจ่ายหมวด:</label>
                          <select value={settleDiffCategory} onChange={e=>setSettleDiffCategory(e.target.value)} className="w-full bg-white border border-rose-200 rounded-lg p-2 text-xs font-bold mt-1 outline-none text-slate-700">
                              {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
+                         </select>
+                     </div>
+                 )}
+                 {((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt) < -0.01 && (
+                     <div className="mt-3 p-3 bg-emerald-50 border border-emerald-100 rounded-xl animate-fadeIn">
+                         <p className="text-[10px] font-bold text-emerald-600 mb-1 flex items-center gap-1"><ArrowUp size={12}/> พบส่วนต่าง (เงินเกิน) {formatCurrency(settleActualAmt - (settleConfirmId.grandTotal || settleConfirmId.total))} ฿</p>
+                         <label className="text-[9px] font-bold text-emerald-600 uppercase">บันทึกส่วนต่างนี้เป็นรายรับหมวด:</label>
+                         <select value={settleSurplusCategory} onChange={e=>setSettleSurplusCategory(e.target.value)} className="w-full bg-white border border-emerald-200 rounded-lg p-2 text-xs font-bold mt-1 outline-none text-slate-700">
+                             {CONSTANTS.CATEGORIES.INCOME.map(c => <option key={c} value={c}>{c}</option>)}
                          </select>
                      </div>
                  )}
