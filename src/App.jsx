@@ -1246,20 +1246,22 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 const isReturned = statusStr.includes('คืน') || statusStr.includes('refund') || statusStr.includes('return') || refundAmt > 0;
 
                 const accumulateDetails = () => {
+                    const getRowValAbs = (keywords) => Math.abs(cleanNum(findVal(row, keywords)));
                     const getRowVal = (keywords) => cleanNum(findVal(row, keywords));
-                    detailedStats.productPrice += getRowVal(['สินค้าราคาปกติ', 'Original Price', 'Product Price']);
-                    detailedStats.sellerDiscount += getRowVal(['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount']);
-                    detailedStats.refundAmount += getRowVal(['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน', 'ยอดเงินคืน']);
                     
-                    detailedStats.shipBuyer += getRowVal(['ค่าจัดส่งที่ชำระโดยผู้ซื้อ']);
-                    detailedStats.shipShopee += getRowVal(['ค่าจัดส่งสินค้าที่ออกโดย Shopee']);
-                    detailedStats.shipActual += getRowVal(['ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ', 'ค่าจัดส่งตามที่เกิดขึ้นจริง']);
-                    detailedStats.shipReturn += getRowVal(['ค่าจัดส่งสินค้าคืน']);
+                    detailedStats.productPrice += getRowValAbs(['สินค้าราคาปกติ', 'Original Price', 'Product Price']);
+                    detailedStats.sellerDiscount += getRowValAbs(['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount']);
+                    detailedStats.refundAmount += getRowValAbs(['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน', 'ยอดเงินคืน']);
                     
-                    detailedStats.feeComm += getRowVal(['ค่าคอมมิชชั่น', 'Commission Fee']) + getRowVal(['ค่าคอมมิชชั่น AMS']);
-                    detailedStats.feeServ += getRowVal(['ค่าบริการ', 'Service Fee']);
-                    detailedStats.feeInfra += getRowVal(['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
-                    detailedStats.feeTrans += getRowVal(['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
+                    detailedStats.shipBuyer += getRowValAbs(['ค่าจัดส่งที่ชำระโดยผู้ซื้อ']);
+                    detailedStats.shipShopee += getRowValAbs(['ค่าจัดส่งสินค้าที่ออกโดย Shopee']);
+                    detailedStats.shipActual += getRowValAbs(['ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ', 'ค่าจัดส่งตามที่เกิดขึ้นจริง']);
+                    detailedStats.shipReturn += getRowValAbs(['ค่าจัดส่งสินค้าคืน']);
+                    
+                    detailedStats.feeComm += getRowValAbs(['ค่าคอมมิชชั่น', 'Commission Fee']) + getRowValAbs(['ค่าคอมมิชชั่น AMS']);
+                    detailedStats.feeServ += getRowValAbs(['ค่าบริการ', 'Service Fee']);
+                    detailedStats.feeInfra += getRowValAbs(['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
+                    detailedStats.feeTrans += getRowValAbs(['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
                     
                     detailedStats.totalSettled += getRowVal(['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว', 'จำนวนเงินที่โอน']);
                 };
@@ -1945,7 +1947,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                   <span className="text-base">{formatCurrency((stats.detailedSummary?.productPrice || 0) - (stats.detailedSummary?.sellerDiscount || 0) - (stats.detailedSummary?.refundAmount || 0))}</span>
                               </div>
                               <div className="px-4 py-3 space-y-2 text-xs">
-                                  <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ยอดขายสินค้า</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.productPrice)}</span></div>
+                                  <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">สินค้าราคาปกติ</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.productPrice)}</span></div>
                                   <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ส่วนลดสินค้าจากผู้ขาย</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.sellerDiscount)}</span></div>
                                   <div className="flex justify-between"><span className="text-slate-600">จำนวนเงินที่ทำการคืนให้ผู้ซื้อ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.refundAmount)}</span></div>
                               </div>
@@ -1953,9 +1955,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                               {/* 2. ค่าใช้จ่ายทั้งหมด */}
                               <div className="bg-slate-400 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center border-t border-white/20">
                                   <span>2. ค่าใช้จ่ายทั้งหมด (Total Expenses)</span>
-                                  <span className="text-base">-{formatCurrency(
-                                      (stats.detailedSummary?.shipBuyer || 0) + (stats.detailedSummary?.shipShopee || 0) + (stats.detailedSummary?.shipActual || 0) + (stats.detailedSummary?.shipReturn || 0) +
-                                      (stats.detailedSummary?.feeComm || 0) + (stats.detailedSummary?.feeServ || 0) + (stats.detailedSummary?.feeInfra || 0) + (stats.detailedSummary?.feeTrans || 0)
+                                  <span className="text-base">{formatCurrency(
+                                      (stats.detailedSummary?.shipBuyer || 0) + (stats.detailedSummary?.shipShopee || 0) - (stats.detailedSummary?.shipActual || 0) - (stats.detailedSummary?.shipReturn || 0) -
+                                      (stats.detailedSummary?.feeComm || 0) - (stats.detailedSummary?.feeServ || 0) - (stats.detailedSummary?.feeInfra || 0) - (stats.detailedSummary?.feeTrans || 0)
                                   )}</span>
                               </div>
                               <div className="px-4 py-3 text-xs bg-slate-50">
