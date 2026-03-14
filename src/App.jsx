@@ -1048,7 +1048,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         shippingFeeByBuyer: ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ', 'Shipping Fee Paid by Buyer'],
         shippingFeeSubsidy: ['ค่าจัดส่งที่Shopeeออกให้โดยประมาณ', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง', 'ค่าจัดส่งสินค้าที่ออกโดย Shopee'],
         estimatedShippingFee: ['ค่าจัดส่งโดยประมาณ', 'Estimated Shipping Fee', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee', 'ค่าจัดส่งที่Shopeeชำระโดยชื่อของคุณ', 'ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ'],
-        returnShippingFee: ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee', 'ค่าจัดส่งสินค้าคืนผู้ขาย']
+        returnShippingFee: ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee', 'ค่าจัดส่งสินค้าคืนผู้ขาย'],
+        shopName: ['ชื่อร้านค้า', 'Shop Name', 'ร้านค้า']
     },
     lazada: {
         orderId: ['Order No.', 'Order Number', 'เลขที่สั่งซื้อ', 'หมายเลขคำสั่งซื้อ'],
@@ -1069,7 +1070,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         shippingFeeByBuyer: ['Shipping Fee (Paid By Customer)', 'ค่าจัดส่งที่ลูกค้าชำระ', 'ค่าจัดส่ง (ชำระโดยลูกค้า)', 'Customer Shipping Fee'],
         shippingFeeSubsidy: ['Shipping Fee Voucher (by Lazada)', 'คูปองส่วนลดค่าจัดส่ง (จากลาซาด้า)', 'Promotional Value'],
         estimatedShippingFee: ['ค่าจัดส่งโดยประมาณ', 'Estimated Shipping Fee', 'Shipping Fee (Paid By Seller)', 'ค่าจัดส่ง (ชำระโดยผู้ขาย)', 'ค่าจัดส่งที่ผู้ขายชำระ'],
-        returnShippingFee: ['Return Shipping Fee', 'ค่าจัดส่งสินค้าคืน']
+        returnShippingFee: ['Return Shipping Fee', 'ค่าจัดส่งสินค้าคืน'],
+        shopName: ['ชื่อร้านค้า', 'Shop Name', 'ร้านค้า']
     },
     tiktok: {
         orderId: ['Order ID', 'หมายเลขคำสั่งซื้อ', 'Order number'],
@@ -1090,7 +1092,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         shippingFeeByBuyer: ['Customer Shipping Fee', 'ค่าจัดส่งที่ลูกค้าชำระ', 'Shipping Fee Paid by Customer'],
         shippingFeeSubsidy: ['Platform Shipping Subsidy', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม', 'Shipping Discount'],
         estimatedShippingFee: ['Estimated Shipping Fee', 'ค่าจัดส่งโดยประมาณ', 'Shipping fee borne by seller', 'ค่าจัดส่งที่เรียกเก็บจากผู้ขาย'],
-        returnShippingFee: ['Return Shipping Fee', 'ค่าจัดส่งสินค้าคืน']
+        returnShippingFee: ['Return Shipping Fee', 'ค่าจัดส่งสินค้าคืน'],
+        shopName: ['ชื่อร้านค้า', 'Shop Name', 'ร้านค้า']
     }
   };
 
@@ -1372,6 +1375,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
           const shippingFeeSubsidy = Math.abs(cleanNum(findVal(row, schema.shippingFeeSubsidy)));
           const estimatedShippingFee = Math.abs(cleanNum(findVal(row, schema.estimatedShippingFee)));
           const returnShippingFee = Math.abs(cleanNum(findVal(row, schema.returnShippingFee)));
+          const shopName = String(findVal(row, schema.shopName) || 'ไม่ระบุ').trim();
 
           // รวมยอดสินค้าในแถวนี้
           const lineTotal = price * qty;
@@ -1410,7 +1414,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
               returnShippingFee: returnShippingFee,
               grandTotal: lineTotal - rowTotalFees,
               paymentStatus: importMode === 'new_pending' ? 'pending_platform' : 'settled',
-              settlementDate: importMode === 'new_pending' ? null : normalizeDate(dateVal)
+              settlementDate: importMode === 'new_pending' ? null : normalizeDate(dateVal),
+              shopName: shopName !== 'ไม่ระบุ' ? shopName : undefined
             };
             totalAmt += lineTotal; 
             totalFees += rowTotalFees;
@@ -1896,6 +1901,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                     <td className="p-4 text-left">
                       <p className="font-bold text-slate-700 text-left">{it.orderId}</p>
                       <p className="text-[10px] text-slate-400 truncate max-w-[200px] text-left">{it.description}</p>
+                      {it.shopName && (
+                          <span className="inline-block mt-1 bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><Store size={10}/> {it.shopName}</span>
+                      )}
                     </td>
                     <td className="p-4 text-left">
                         {it.isUpdateMode ? (
