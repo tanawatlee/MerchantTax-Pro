@@ -1392,12 +1392,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           
           let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
                                       status.includes('unpaid') || status.includes('รอชำระเงิน') ||
-                                      status.includes('ไม่สำเร็จ') || status.includes('คืนสินค้า');
+                                      (status.includes('ไม่สำเร็จ') && !status.includes('จัดส่งไม่สำเร็จ')) || 
+                                      status.includes('คืนสินค้า');
                                       
-          // ลบการทำงานเดิมที่เคยบังคับให้ออเดอร์ตีกลับทะลุผ่านไปได้ (isCancelledOrUnpaid = false)
-          // ตอนนี้ให้ระบบมองออเดอร์จัดส่งไม่สำเร็จ เป็นออเดอร์ที่ต้องถูกข้าม (Skip) เสมอ
-                                      
-          const isCompleted = status === '' || (!isCancelledOrUnpaid && !isDeliveryFailed);
+          const isCompleted = status === '' || !isCancelledOrUnpaid;
                               
           const dateVal = findVal(row, schema.date);
           
@@ -1407,20 +1405,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
               let reasonStr = 'ข้อมูลไม่ครบถ้วน';
               
-              if (isDeliveryFailed) {
-                  reasonStr = 'จัดส่งไม่สำเร็จ / ตีกลับ';
-                  currentDeliveryFailedDetails.push({
-                      orderId: rawOrderId || '-',
-                      product: String(findVal(row, schema.product) || '-'),
-                      reason: reasonStr,
-                      qty: qty
-                  });
-                  // นับจำนวนออเดอร์ที่ไม่สำเร็จ (ป้องกันการนับซ้ำ)
-                  if (orderId && !trackedDeliveryFailedOrders.has(orderId)) {
-                      dfCount++;
-                      trackedDeliveryFailedOrders.add(orderId);
-                  }
-              } else if (!isCompleted) {
+              if (!isCompleted) {
                   reasonStr = 'สถานะไม่สำเร็จ / ลูกค้ายกเลิก / ยังไม่จ่ายเงิน';
                   currentSkippedDetails.push({
                       orderId: rawOrderId || '-',
@@ -1428,7 +1413,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       reason: reasonStr,
                       qty: qty
                   });
-                  // นับจำนวนออเดอร์ที่ถูกยกเลิก (ป้องกันการนับซ้ำ)
                   if (orderId && !trackedCancelledOrders.has(orderId)) {
                       cCount++;
                       trackedCancelledOrders.add(orderId);
@@ -1483,8 +1467,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const lineTotal = price * qty;
 
           if (!ordersMap[orderId]) {
-            // ระบบจะไม่มาถึงจุดนี้ถ้าเป็น isDeliveryFailed แล้ว เพราะถูกดัก Skip ไว้ข้างบน
-            
             const rowTotalFees = transFee + comm + serv + infra;
             
             const baseProdName = String(findVal(row, schema.product) || 'สินค้าจาก ' + platform);
@@ -1517,10 +1499,16 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               grandTotal: lineTotal - rowTotalFees,
               paymentStatus: importMode === 'new_pending' ? 'pending_platform' : 'settled',
               settlementDate: importMode === 'new_pending' ? null : normalizeDate(dateVal),
-              shopName: shopName !== 'ไม่ระบุ' ? shopName : undefined
+              shopName: shopName !== 'ไม่ระบุ' ? shopName : undefined,
+              isDeliveryFailed: isDeliveryFailed
             };
             totalAmt += lineTotal; 
             totalFees += rowTotalFees;
+
+            if (isDeliveryFailed && !trackedDeliveryFailedOrders.has(orderId)) {
+                dfCount++;
+                trackedDeliveryFailedOrders.add(orderId);
+            }
           } else {
             ordersMap[orderId].total += lineTotal;
             
@@ -2052,13 +2040,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                               </div>
 
                               {/* Small summary of missing/skipped at the bottom */}
-                              {(stats.skipped > 0 || stats.deliveryFailed > 0) && (
+                              {stats.skipped > 0 && (
                                   <div className="bg-amber-50 p-3 text-xs flex justify-between items-center border-t border-amber-100">
-                                      <span className="font-bold text-amber-700 flex items-center gap-1"><Info size={14}/> มีรายการที่ถูกข้าม หรือ จัดส่งไม่สำเร็จ</span>
-                                      <div className="flex gap-2">
-                                          {stats.deliveryFailed > 0 && <button onClick={() => setShowDeliveryFailedModal(true)} className="text-orange-600 underline font-bold">ดูรายการจัดส่งไม่สำเร็จ ({stats.deliveryFailed})</button>}
-                                          {stats.skipped > 0 && <button onClick={() => setShowSkippedModal(true)} className="text-amber-600 underline font-bold">ดูรายการที่ข้าม/ซ้ำ ({stats.skipped})</button>}
-                                      </div>
+                                      <span className="font-bold text-amber-700 flex items-center gap-1"><Info size={14}/> มีรายการที่ถูกข้าม/ซ้ำ ({stats.skipped} แถว)</span>
+                                      <button onClick={() => setShowSkippedModal(true)} className="text-amber-600 underline font-bold">ดูรายการที่ข้าม</button>
                                   </div>
                               )}
                           </div>
@@ -2077,12 +2062,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                   <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)}</p>
                               </div>
                               
-                              {/* แก้ไขให้กดคลิกเพื่อดูรายการจัดส่งไม่สำเร็จได้ */}
-                              <div onClick={() => setShowDeliveryFailedModal(true)} className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-orange-50 transition-colors group relative">
-                                  <div className="absolute top-2 right-2 text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-orange-600 transition-colors">จัดส่งไม่สำเร็จ</p>
+                              {/* เปลี่ยนเป็นแสดงตัวเลขจัดส่งไม่สำเร็จ (นำเข้าแล้ว) */}
+                              <div className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center relative">
+                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 text-orange-600">นำเข้าจัดส่งไม่สำเร็จ</p>
                                   <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                                  {stats.deliveryFailed > 0 && <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดูรายละเอียด</span>}
+                                  {stats.deliveryFailed > 0 && <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">ดูหมายเหตุในตาราง</span>}
                               </div>
 
                               <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
@@ -2097,6 +2081,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                   <p className="text-xl font-black text-amber-500">{stats.skipped} / {stats.duplicates || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
                                   {stats.skippedQty > 0 && <span className="text-[9px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดู {stats.skippedQty} ชิ้น</span>}
                               </div>
+                          </div>
+                      )}
+
+                      {/* Small summary of missing/skipped at the bottom */}
+                      {importMode !== 'update_settled' && stats.skipped > 0 && (
+                          <div className="bg-amber-50 p-3 text-xs flex justify-between items-center border-t border-amber-100 mt-3">
+                              <span className="font-bold text-amber-700 flex items-center gap-1"><Info size={14}/> มีรายการที่ถูกข้าม/ซ้ำ ({stats.skipped} แถว)</span>
+                              <button onClick={() => setShowSkippedModal(true)} className="text-amber-600 underline font-bold">ดูรายการที่ข้าม</button>
                           </div>
                       )}
 
@@ -2293,6 +2285,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                         <td className="p-4 text-left">
                           <p className="font-bold text-slate-700 text-left">{it.orderId}</p>
                           <p className="text-[10px] text-slate-400 truncate max-w-[200px] text-left">{it.description}</p>
+                          {it.isDeliveryFailed && (
+                              <span className="inline-block mt-1 bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><AlertTriangle size={10}/> นำเข้าพร้อมหมายเหตุ: จัดส่งไม่สำเร็จ</span>
+                          )}
                           {it.shopName && (
                               <span className="inline-block mt-1 bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><Store size={10}/> {it.shopName}</span>
                           )}
