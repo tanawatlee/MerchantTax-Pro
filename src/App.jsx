@@ -869,7 +869,8 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
   );
 }
 
-function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
+function DataImporter({ appId, showToast, user, stockBatches, transactions, importLogs }) {
+  const [importerTab, setImporterTab] = useState('import'); // 'import', 'logs'
   const [platform, setPlatform] = useState('shopee');
   const [importMode, setImportMode] = useState('new_pending'); // 'new_pending', 'new_settled', 'update_settled'
   const [importedData, setImportedData] = useState([]);
@@ -884,6 +885,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
   // NEW: State สำหรับเก็บข้อมูลออเดอร์ที่จัดส่งไม่สำเร็จ/ตีกลับ
   const [deliveryFailedDetailsData, setDeliveryFailedDetailsData] = useState([]);
   const [showDeliveryFailedModal, setShowDeliveryFailedModal] = useState(false);
+
+  // NEW: State สำหรับการดูรายละเอียด Log ย้อนหลัง
+  const [viewLogDetails, setViewLogDetails] = useState(null);
 
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
@@ -1350,13 +1354,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
               return; 
           }
           
-          // [ระบบป้องกันการบันทึกซ้ำ] ตรวจสอบว่า Order ID นี้มีในระบบแล้วหรือไม่
-          if (existingOrderIds.has(orderId)) { 
-              duplicates++; 
-              skippedQty += qty; // นับยอดชิ้นที่ระบบข้าม (เพราะข้อมูลซ้ำ เคยดึงไปแล้ว)
-              return; 
-          }
-          
           const price = Math.abs(cleanNum(findVal(row, schema.price)));
           
           // ดึงค่าธรรมเนียมและแปลงเป็นบวก ป้องกัน NaN
@@ -1564,6 +1561,19 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
                   });
               }
           }
+          
+          // บันทึก Log ก่อน Commit ในสาขานี้
+          const logRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'import_logs'));
+          batch.set(logRef, {
+              createdAt: serverTimestamp(),
+              date: new Date(),
+              userId: user.uid,
+              mode: importMode,
+              stats: stats,
+              skippedDetails: skippedDetailsData,
+              failedDetails: deliveryFailedDetailsData
+          });
+          
           await batch.commit();
           showToast(`กระทบยอดรับเงินสำเร็จ ${count} รายการ (สร้างบิลส่วนต่างอัตโนมัติ)`, "success");
           setImportedData([]);
@@ -1653,6 +1663,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
         }
       }
 
+      // บันทึก Log ก่อน Commit
+      const logRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'import_logs'));
+      batch.set(logRef, {
+          createdAt: serverTimestamp(),
+          date: new Date(),
+          userId: user.uid,
+          mode: importMode,
+          stats: stats,
+          skippedDetails: skippedDetailsData,
+          failedDetails: deliveryFailedDetailsData
+      });
+
       await batch.commit();
       showToast(`เปิดใช้งานข้อมูล ${importedData.length} รายการ and หักสต็อกเรียบร้อย`, "success");
       setImportedData([]);
@@ -1681,281 +1703,428 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions }) {
             ))}
         </div>
       </div>
-        
-      <div className="bg-indigo-50/50 p-6 rounded-3xl border border-indigo-100 flex flex-col gap-6 text-left">
-        <div className="flex items-center gap-2 mb-2">
-            <Settings size={20} className="text-indigo-600"/>
-            <h4 className="font-bold text-indigo-800">ตั้งค่าการนำเข้าข้อมูล (Import Mode)</h4>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <button onClick={()=>handleModeChange('new_pending')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'new_pending' ? 'border-indigo-600 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
-                <p className="font-black text-indigo-700 text-sm mb-1">1. นำเข้าออเดอร์ใหม่ (รอเงินเข้า)</p>
-                <p className="text-xs text-slate-500 leading-relaxed">สร้างรายการขายใหม่ และตั้งสถานะเป็น <span className="text-orange-600 font-bold">"รอเงินโอนจากแพลตฟอร์ม"</span></p>
-            </button>
-            <button onClick={()=>handleModeChange('new_settled')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'new_settled' ? 'border-emerald-500 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
-                <p className="font-black text-emerald-700 text-sm mb-1">2. นำเข้าออเดอร์ใหม่ (รับเงินแล้ว)</p>
-                <p className="text-xs text-slate-500 leading-relaxed">สร้างรายการขายใหม่ และตั้งสถานะเป็น <span className="text-emerald-600 font-bold">"รับเงินเข้าบัญชีเรียบร้อยแล้ว"</span> ทันที</p>
-            </button>
-            <button onClick={()=>handleModeChange('update_settled')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'update_settled' ? 'border-amber-500 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
-                <p className="font-black text-amber-700 text-sm mb-1">3. กระทบยอด (Reconcile)</p>
-                <p className="text-xs text-slate-500 leading-relaxed">อัปเดตออเดอร์เดิมที่ค้างอยู่ ให้เปลี่ยนสถานะเป็น <span className="text-amber-600 font-bold">"รับเงินแล้ว"</span> (ไม่สร้างรายการซ้ำ)</p>
-            </button>
-        </div>
-
-        <div className="pt-4 border-t border-indigo-100 flex items-center gap-3 text-left">
-          <label className="text-sm font-bold text-slate-600 whitespace-nowrap text-left">ค่าธรรมเนียม PLATFORM เพิ่มเติม (ถ้ามี):</label>
-          <div className="relative text-left w-40">
-            <input 
-              type="number" 
-              value={fixedInfraFee} 
-              onChange={(e) => setFixedInfraFee(e.target.value)} 
-              className="w-full bg-white border border-indigo-200 rounded-xl px-4 py-2 text-sm font-bold focus:ring-2 focus:ring-indigo-200 outline-none text-right pr-8 text-slate-800"
-              placeholder="0.00"
-              disabled={importMode === 'update_settled'}
-            />
-            <span className="absolute right-3 top-2 text-slate-400 text-xs font-bold text-right">฿</span>
-          </div>
-        </div>
+      
+      <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit mb-4 text-left">
+        <button onClick={() => setImporterTab('import')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${importerTab === 'import' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+          นำเข้าข้อมูล
+        </button>
+        <button onClick={() => setImporterTab('logs')} className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${importerTab === 'logs' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+          ประวัติการนำเข้าและข้อผิดพลาด
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
-        <div className="bg-white p-6 rounded-3xl border shadow-sm flex flex-col gap-4 text-left">
-          <div className="space-y-2 text-left">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider text-left">Step 1: Upload Excel File</p>
-            <input type="file" ref={fileInputRef} hidden onChange={handleFileUpload} />
-            <button onClick={() => fileInputRef.current.click()} className="w-full py-10 border-2 border-dashed border-indigo-200 rounded-3xl flex flex-col items-center justify-center text-indigo-600 hover:bg-indigo-50 transition-colors text-center">
-              <FileUp size={48} className="mb-2"/>
-              <p className="font-bold">คลิกเพื่ออัปโหลดไฟล์ Excel</p>
-            </button>
-          </div>
-        </div>
-        <div className="lg:col-span-2 bg-white rounded-3xl border shadow-sm overflow-hidden flex flex-col text-left">
-          <div className="p-4 border-b flex flex-col md:flex-row justify-between items-start md:items-center bg-slate-50 gap-4 text-left">
-            <div className="flex flex-col gap-1">
-                <span className="font-bold text-slate-800 text-left">Step 2: ยืนยันเพื่อบันทึกและหักสต็อก</span>
-                {importMode === 'update_settled' && importedData.some(it => (it.grandTotal || it.total) - (it.actualSettledAmt || 0) > 0.01) && (
-                    <div className="flex items-center gap-2 mt-1">
-                        <span className="text-[10px] font-bold text-rose-500">บันทึกส่วนต่างเป็นรายจ่ายหมวด:</span>
-                        <select value={discrepancyCategory} onChange={e=>setDiscrepancyCategory(e.target.value)} className="bg-white border border-rose-200 rounded-md text-[10px] font-bold px-2 py-1 outline-none text-rose-700">
-                            {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                    </div>
-                )}
+      {importerTab === 'import' && (
+        <>
+          <div className="bg-indigo-50/50 p-6 rounded-3xl border border-indigo-100 flex flex-col gap-6 text-left">
+            <div className="flex items-center gap-2 mb-2">
+                <Settings size={20} className="text-indigo-600"/>
+                <h4 className="font-bold text-indigo-800">ตั้งค่าการนำเข้าข้อมูล (Import Mode)</h4>
             </div>
-            {importedData.length > 0 && (
-              <div className="flex flex-col md:flex-row items-center gap-2">
-                  <button onClick={checkAnomalies} disabled={isCheckingAnomaly} className="text-amber-700 bg-amber-50 hover:bg-amber-100 px-4 py-2 rounded-xl text-xs font-bold shadow-sm flex items-center gap-2 transition-all disabled:opacity-50">
-                      {isCheckingAnomaly ? <Loader className="animate-spin" size={14}/> : <ScanText size={14}/>} AI ตรวจจับค่าธรรมเนียมแพง
-                  </button>
-                  <button 
-                    onClick={saveToFirebase} 
-                    disabled={loading} 
-                    className={`text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50 text-center ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100'}`}
-                  >
-                    {loading ? <Loader className="animate-spin" size={14}/> : <CheckCircle size={14}/>}
-                    {importMode === 'update_settled' ? 'ยืนยันการรับเงิน (Settle)' : 'บันทึกและเปิดใช้งาน (Activate)'}
-                  </button>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button onClick={()=>handleModeChange('new_pending')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'new_pending' ? 'border-indigo-600 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
+                    <p className="font-black text-indigo-700 text-sm mb-1">1. นำเข้าออเดอร์ใหม่ (รอเงินเข้า)</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">สร้างรายการขายใหม่ และตั้งสถานะเป็น <span className="text-orange-600 font-bold">"รอเงินโอนจากแพลตฟอร์ม"</span></p>
+                </button>
+                <button onClick={()=>handleModeChange('new_settled')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'new_settled' ? 'border-emerald-500 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
+                    <p className="font-black text-emerald-700 text-sm mb-1">2. นำเข้าออเดอร์ใหม่ (รับเงินแล้ว)</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">สร้างรายการขายใหม่ และตั้งสถานะเป็น <span className="text-emerald-600 font-bold">"รับเงินเข้าบัญชีเรียบร้อยแล้ว"</span> ทันที</p>
+                </button>
+                <button onClick={()=>handleModeChange('update_settled')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'update_settled' ? 'border-amber-500 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
+                    <p className="font-black text-amber-700 text-sm mb-1">3. กระทบยอด (Reconcile)</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">อัปเดตออเดอร์เดิมที่ค้างอยู่ ให้เปลี่ยนสถานะเป็น <span className="text-amber-600 font-bold">"รับเงินแล้ว"</span> (ไม่สร้างรายการซ้ำ)</p>
+                </button>
+            </div>
+
+            <div className="pt-4 border-t border-indigo-100 flex items-center gap-3 text-left">
+              <label className="text-sm font-bold text-slate-600 whitespace-nowrap text-left">ค่าธรรมเนียม PLATFORM เพิ่มเติม (ถ้ามี):</label>
+              <div className="relative text-left w-40">
+                <input 
+                  type="number" 
+                  value={fixedInfraFee} 
+                  onChange={(e) => setFixedInfraFee(e.target.value)} 
+                  className="w-full bg-white border border-indigo-200 rounded-xl px-4 py-2 text-sm font-bold focus:ring-2 focus:ring-indigo-200 outline-none text-right pr-8 text-slate-800"
+                  placeholder="0.00"
+                  disabled={importMode === 'update_settled'}
+                />
+                <span className="absolute right-3 top-2 text-slate-400 text-xs font-bold text-right">฿</span>
               </div>
-            )}
+            </div>
           </div>
-          
-          {/* Preview Summary Section */}
-          {importedData.length > 0 && (
-              <div className="p-5 bg-indigo-50/30 border-b border-indigo-50 flex flex-col gap-3">
-                  <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5"><PieChart size={14}/> สรุปข้อมูลรอการยืนยัน (Preview Summary)</h4>
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-                      <div className="bg-white p-3 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">พร้อมบันทึก</p>
-                          <p className="text-xl font-black text-indigo-600">{stats.processed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                      </div>
-                      <div className="bg-white p-3 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม</p>
-                          <p className="text-xl font-black text-emerald-600">{formatCurrency(stats.totalAmount)}</p>
-                      </div>
-                      <div className="bg-white p-3 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม</p>
-                          <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)}</p>
-                      </div>
-                      
-                      {/* แก้ไขให้กดคลิกเพื่อดูรายการจัดส่งไม่สำเร็จได้ */}
-                      <div onClick={() => setShowDeliveryFailedModal(true)} className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-orange-50 transition-colors group relative">
-                          <div className="absolute top-2 right-2 text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-orange-600 transition-colors">จัดส่งไม่สำเร็จ</p>
-                          <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                          {stats.deliveryFailed > 0 && <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดูรายละเอียด</span>}
-                      </div>
 
-                      <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ลูกค้ายกเลิก</p>
-                          <p className="text-xl font-black text-slate-500">{stats.cancelled} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                      </div>
-                      
-                      {/* แก้ไขให้กดคลิกเพื่อดูรายการที่ถูกข้ามได้ */}
-                      <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-amber-50 transition-colors group relative">
-                          <div className="absolute top-2 right-2 text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-amber-600 transition-colors">ข้าม / ข้อมูลซ้ำ</p>
-                          <p className="text-xl font-black text-amber-500">{stats.skipped} / {stats.duplicates || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
-                          {stats.skippedQty > 0 && <span className="text-[9px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดู {stats.skippedQty} ชิ้น</span>}
-                      </div>
-                  </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
+            <div className="bg-white p-6 rounded-3xl border shadow-sm flex flex-col gap-4 text-left">
+              <div className="space-y-2 text-left">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider text-left">Step 1: Upload Excel File</p>
+                <input type="file" ref={fileInputRef} hidden onChange={handleFileUpload} />
+                <button onClick={() => fileInputRef.current.click()} className="w-full py-10 border-2 border-dashed border-indigo-200 rounded-3xl flex flex-col items-center justify-center text-indigo-600 hover:bg-indigo-50 transition-colors text-center">
+                  <FileUp size={48} className="mb-2"/>
+                  <p className="font-bold">คลิกเพื่ออัปโหลดไฟล์ Excel</p>
+                </button>
               </div>
-          )}
-          
-          {/* Stock Validation Display */}
-          {stockValidation && (
-              <div className={`p-5 border-b flex flex-col gap-3 ${stockValidation.issues.length > 0 ? 'bg-orange-50/50 border-orange-100' : 'bg-emerald-50/50 border-emerald-100'}`}>
-                  <h4 className={`font-bold text-sm flex items-center gap-2 ${stockValidation.issues.length > 0 ? 'text-orange-800' : 'text-emerald-800'}`}>
-                      {stockValidation.issues.length > 0 ? <AlertTriangle size={18}/> : <CheckCircle size={18}/>}
-                      ตรวจสอบสต็อกก่อนบันทึก (Pre-Import Validation)
-                  </h4>
-                  <div className="flex flex-wrap gap-4 mb-1">
-                      <span className="text-xs font-bold text-slate-600">วิเคราะห์สินค้ารวม: <span className="text-indigo-600">{stockValidation.totalUniqueItems} SKUs</span></span>
-                      <span className="text-xs font-bold text-emerald-600">สต็อกพร้อมตัด: {stockValidation.okCount} SKUs</span>
-                      {stockValidation.issues.length > 0 && <span className="text-xs font-black text-rose-500 bg-rose-100 px-2 rounded-full">พบปัญหา: {stockValidation.issues.length} SKUs</span>}
+            </div>
+            <div className="lg:col-span-2 bg-white rounded-3xl border shadow-sm overflow-hidden flex flex-col text-left">
+              <div className="p-4 border-b flex flex-col md:flex-row justify-between items-start md:items-center bg-slate-50 gap-4 text-left">
+                <div className="flex flex-col gap-1">
+                    <span className="font-bold text-slate-800 text-left">Step 2: ยืนยันเพื่อบันทึกและหักสต็อก</span>
+                    {importMode === 'update_settled' && importedData.some(it => (it.grandTotal || it.total) - (it.actualSettledAmt || 0) > 0.01) && (
+                        <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] font-bold text-rose-500">บันทึกส่วนต่างเป็นรายจ่ายหมวด:</span>
+                            <select value={discrepancyCategory} onChange={e=>setDiscrepancyCategory(e.target.value)} className="bg-white border border-rose-200 rounded-md text-[10px] font-bold px-2 py-1 outline-none text-rose-700">
+                                {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                        </div>
+                    )}
+                </div>
+                {importedData.length > 0 && (
+                  <div className="flex flex-col md:flex-row items-center gap-2">
+                      <button onClick={checkAnomalies} disabled={isCheckingAnomaly} className="text-amber-700 bg-amber-50 hover:bg-amber-100 px-4 py-2 rounded-xl text-xs font-bold shadow-sm flex items-center gap-2 transition-all disabled:opacity-50">
+                          {isCheckingAnomaly ? <Loader className="animate-spin" size={14}/> : <ScanText size={14}/>} AI ตรวจจับค่าธรรมเนียมแพง
+                      </button>
+                      <button 
+                        onClick={saveToFirebase} 
+                        disabled={loading} 
+                        className={`text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50 text-center ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100'}`}
+                      >
+                        {loading ? <Loader className="animate-spin" size={14}/> : <CheckCircle size={14}/>}
+                        {importMode === 'update_settled' ? 'ยืนยันการรับเงิน (Settle)' : 'บันทึกและเปิดใช้งาน (Activate)'}
+                      </button>
                   </div>
+                )}
+              </div>
+              
+              {/* Preview Summary Section */}
+              {importedData.length > 0 && (
+                  <div className="p-5 bg-indigo-50/30 border-b border-indigo-50 flex flex-col gap-3">
+                      <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5"><PieChart size={14}/> สรุปข้อมูลรอการยืนยัน (Preview Summary)</h4>
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                          <div className="bg-white p-3 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-center">
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">พร้อมบันทึก</p>
+                              <p className="text-xl font-black text-indigo-600">{stats.processed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                          </div>
+                          <div className="bg-white p-3 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-center">
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม</p>
+                              <p className="text-xl font-black text-emerald-600">{formatCurrency(stats.totalAmount)}</p>
+                          </div>
+                          <div className="bg-white p-3 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-center">
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม</p>
+                              <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)}</p>
+                          </div>
+                          
+                          {/* แก้ไขให้กดคลิกเพื่อดูรายการจัดส่งไม่สำเร็จได้ */}
+                          <div onClick={() => setShowDeliveryFailedModal(true)} className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-orange-50 transition-colors group relative">
+                              <div className="absolute top-2 right-2 text-orange-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-orange-600 transition-colors">จัดส่งไม่สำเร็จ</p>
+                              <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                              {stats.deliveryFailed > 0 && <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดูรายละเอียด</span>}
+                          </div>
 
-                  {stockValidation.allItems && stockValidation.allItems.length > 0 && (
-                      <div className="max-h-56 overflow-y-auto custom-scrollbar bg-white rounded-xl border border-slate-200 shadow-sm text-left">
-                          <table className="w-full text-xs text-left">
-                              <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200">
-                                  <tr>
-                                      <th className="p-3 pl-4">ชื่อสินค้า / SKU (จากไฟล์)</th>
-                                      <th className="p-3 text-center">ยอดที่ต้องตัด</th>
-                                      <th className="p-3 text-center">มีในคลัง</th>
-                                      <th className="p-3 pr-4 text-right">สถานะ</th>
-                                      <th className="p-3 pr-4 text-center">จัดการ</th>
-                                  </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                  {stockValidation.allItems.map((issue, idx) => (
-                                      <tr key={idx} className={`group ${issue.status === 'ok' ? 'hover:bg-slate-50' : 'bg-orange-50/30 hover:bg-orange-50'}`}>
-                                          <td className="p-3 pl-4">
-                                              <p className="font-bold text-slate-700">{issue.name}</p>
-                                              <p className="text-[10px] font-mono text-slate-400">SKU: {issue.sku}</p>
-                                          </td>
-                                          <td className="p-3 text-center font-black text-slate-800">{issue.required}</td>
-                                          <td className={`p-3 text-center font-black ${issue.status === 'ok' ? 'text-emerald-600' : 'text-orange-600'}`}>{issue.available}</td>
-                                          <td className="p-3 pr-4 text-right">
-                                              <span className={`px-2 py-1 rounded text-[10px] font-bold ${issue.status === 'missing' ? 'bg-rose-100 text-rose-700' : issue.status === 'insufficient' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                                  {issue.status === 'missing' ? 'ไม่มีในคลัง' : issue.status === 'insufficient' ? 'สต็อกไม่พอ' : 'สต็อกพอ'}
-                                              </span>
-                                          </td>
-                                          <td className="p-3 text-center">
-                                              {issue.status !== 'ok' ? (
-                                                  <button 
-                                                      onClick={() => {
-                                                          setQuickTransferItem({ ...issue, missing: issue.required - issue.available });
-                                                          setTransferData({ sourceKey: '', qty: issue.required - issue.available });
-                                                      }} 
-                                                      className="bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-bold shadow-sm transition-all flex items-center gap-1 mx-auto"
-                                                  >
-                                                      <ArrowRightLeft size={12}/> ดึงมาเติม
-                                                  </button>
-                                              ) : (
-                                                  <span className="text-emerald-500 flex justify-center"><CheckCircle size={16}/></span>
-                                              )}
-                                          </td>
+                          <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ลูกค้ายกเลิก</p>
+                              <p className="text-xl font-black text-slate-500">{stats.cancelled} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                          </div>
+                          
+                          {/* แก้ไขให้กดคลิกเพื่อดูรายการที่ถูกข้ามได้ */}
+                          <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-amber-50 transition-colors group relative">
+                              <div className="absolute top-2 right-2 text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
+                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-amber-600 transition-colors">ข้าม / ข้อมูลซ้ำ</p>
+                              <p className="text-xl font-black text-amber-500">{stats.skipped} / {stats.duplicates || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
+                              {stats.skippedQty > 0 && <span className="text-[9px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดู {stats.skippedQty} ชิ้น</span>}
+                          </div>
+                      </div>
+                  </div>
+              )}
+              
+              {/* Stock Validation Display */}
+              {stockValidation && (
+                  <div className={`p-5 border-b flex flex-col gap-3 ${stockValidation.issues.length > 0 ? 'bg-orange-50/50 border-orange-100' : 'bg-emerald-50/50 border-emerald-100'}`}>
+                      <h4 className={`font-bold text-sm flex items-center gap-2 ${stockValidation.issues.length > 0 ? 'text-orange-800' : 'text-emerald-800'}`}>
+                          {stockValidation.issues.length > 0 ? <AlertTriangle size={18}/> : <CheckCircle size={18}/>}
+                          ตรวจสอบสต็อกก่อนบันทึก (Pre-Import Validation)
+                      </h4>
+                      <div className="flex flex-wrap gap-4 mb-1">
+                          <span className="text-xs font-bold text-slate-600">วิเคราะห์สินค้ารวม: <span className="text-indigo-600">{stockValidation.totalUniqueItems} SKUs</span></span>
+                          <span className="text-xs font-bold text-emerald-600">สต็อกพร้อมตัด: {stockValidation.okCount} SKUs</span>
+                          {stockValidation.issues.length > 0 && <span className="text-xs font-black text-rose-500 bg-rose-100 px-2 rounded-full">พบปัญหา: {stockValidation.issues.length} SKUs</span>}
+                      </div>
+
+                      {stockValidation.allItems && stockValidation.allItems.length > 0 && (
+                          <div className="max-h-56 overflow-y-auto custom-scrollbar bg-white rounded-xl border border-slate-200 shadow-sm text-left">
+                              <table className="w-full text-xs text-left">
+                                  <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200">
+                                      <tr>
+                                          <th className="p-3 pl-4">ชื่อสินค้า / SKU (จากไฟล์)</th>
+                                          <th className="p-3 text-center">ยอดที่ต้องตัด</th>
+                                          <th className="p-3 text-center">มีในคลัง</th>
+                                          <th className="p-3 pr-4 text-right">สถานะ</th>
+                                          <th className="p-3 pr-4 text-center">จัดการ</th>
                                       </tr>
-                                  ))}
-                              </tbody>
-                          </table>
-                      </div>
-                  )}
-                  {stockValidation.issues.length > 0 && (
-                      <p className="text-[10px] font-bold text-orange-600 mt-1">
-                          * คำแนะนำ: หากกดบันทึก ระบบจะข้ามการหักสต็อกสำหรับสินค้าที่ไม่มีในคลัง แนะนำให้กด "ดึงมาเติม" หรือแก้ไขยอดให้เรียบร้อยก่อนกดยืนยัน
-                      </p>
-                  )}
-              </div>
-          )}
-          
-          {anomalyAlerts.length > 0 && (
-              <div className="bg-rose-50 p-4 border-b border-rose-100">
-                  <h4 className="font-bold text-rose-700 text-xs mb-2 flex items-center gap-1"><AlertTriangle size={14}/> AI Detected Anomalies (พบความผิดปกติ)</h4>
-                  <ul className="list-disc pl-5 space-y-1 text-[10px] text-rose-600 font-medium">
-                      {anomalyAlerts.map((an, i) => (
-                          <li key={i}>Order: <span className="font-mono bg-white px-1 rounded">{an.orderId}</span> - {an.issue}</li>
-                      ))}
-                  </ul>
-              </div>
-          )}
-
-          <div className="flex-1 overflow-auto max-h-[400px] text-left">
-            <table className="w-full text-xs text-left">
-              <thead className="bg-white text-slate-400 font-bold uppercase tracking-wider sticky top-0 border-b text-left">
-                <tr>
-                  <th className="p-4 text-left">{importMode === 'update_settled' ? 'Settlement Date' : 'Date'}</th>
-                  <th className="p-4 text-left">Description</th>
-                  <th className="p-4 text-left">Status / SKU</th>
-                  <th className="p-4 text-right">Fees (฿)</th>
-                  <th className="p-4 text-right">Income (฿)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50 text-left">
-                {importedData.length === 0 ? (
-                  <tr><td colSpan="5" className="p-10 text-center text-slate-300 font-bold text-center">กรุณาเลือกประเภทแพลตฟอร์ม โหมดการนำเข้า และอัปโหลดไฟล์</td></tr>
-                ) : importedData.map((it, idx) => (
-                  <tr key={idx} className="hover:bg-slate-50 group text-left">
-                    <td className="p-4 text-slate-500 whitespace-nowrap text-left">{formatDate(it.newSettlementDate || it.date)}</td>
-                    <td className="p-4 text-left">
-                      <p className="font-bold text-slate-700 text-left">{it.orderId}</p>
-                      <p className="text-[10px] text-slate-400 truncate max-w-[200px] text-left">{it.description}</p>
-                      {it.shopName && (
-                          <span className="inline-block mt-1 bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><Store size={10}/> {it.shopName}</span>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                      {stockValidation.allItems.map((issue, idx) => (
+                                          <tr key={idx} className={`group ${issue.status === 'ok' ? 'hover:bg-slate-50' : 'bg-orange-50/30 hover:bg-orange-50'}`}>
+                                              <td className="p-3 pl-4">
+                                                  <p className="font-bold text-slate-700">{issue.name}</p>
+                                                  <p className="text-[10px] font-mono text-slate-400">SKU: {issue.sku}</p>
+                                              </td>
+                                              <td className="p-3 text-center font-black text-slate-800">{issue.required}</td>
+                                              <td className={`p-3 text-center font-black ${issue.status === 'ok' ? 'text-emerald-600' : 'text-orange-600'}`}>{issue.available}</td>
+                                              <td className="p-3 pr-4 text-right">
+                                                  <span className={`px-2 py-1 rounded text-[10px] font-bold ${issue.status === 'missing' ? 'bg-rose-100 text-rose-700' : issue.status === 'insufficient' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                                      {issue.status === 'missing' ? 'ไม่มีในคลัง' : issue.status === 'insufficient' ? 'สต็อกไม่พอ' : 'สต็อกพอ'}
+                                                  </span>
+                                              </td>
+                                              <td className="p-3 text-center">
+                                                  {issue.status !== 'ok' ? (
+                                                      <button 
+                                                          onClick={() => {
+                                                              setQuickTransferItem({ ...issue, missing: issue.required - issue.available });
+                                                              setTransferData({ sourceKey: '', qty: issue.required - issue.available });
+                                                          }} 
+                                                          className="bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-bold shadow-sm transition-all flex items-center gap-1 mx-auto"
+                                                      >
+                                                          <ArrowRightLeft size={12}/> ดึงมาเติม
+                                                      </button>
+                                                  ) : (
+                                                      <span className="text-emerald-500 flex justify-center"><CheckCircle size={16}/></span>
+                                                  )}
+                                              </td>
+                                          </tr>
+                                      ))}
+                                  </tbody>
+                              </table>
+                          </div>
                       )}
-                    </td>
-                    <td className="p-4 text-left">
-                        {it.isUpdateMode ? (
-                            <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[10px] font-bold">อัปเดตเป็นรับเงินแล้ว</span>
-                        ) : (
-                            <div className="flex flex-col gap-1 text-left">
-                                {(it.items || []).map((item, itemIdx) => {
-                                    const batches = stockBatches.filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
-                                    const available = batches.reduce((sum, b) => sum + Math.max(0, Number(b.quantity) - Number(b.sold || 0)), 0);
-                                    return (
-                                        <div key={itemIdx} className="flex items-center gap-1.5 flex-wrap">
-                                            <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold truncate max-w-[120px]" title={item.desc}>
-                                                {item.sku || '-'} <span className="text-slate-400 font-normal">x{item.qty}</span>
-                                            </span>
-                                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${available >= item.qty ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                                                เหลือ {available}
-                                            </span>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </td>
-                    <td className="p-4 text-right text-rose-500 font-bold">
-                        -{formatCurrency(it.platformFee || 0)}
-                    </td>
-                    <td className="p-4 text-right">
-                        {importMode === 'update_settled' ? (
-                            <div className="flex flex-col items-end">
-                                <p className="font-black text-indigo-600 text-right">{formatCurrency(it.actualSettledAmt || 0)}</p>
-                                {Math.abs((it.actualSettledAmt || 0) - (it.grandTotal || it.total)) > 0.01 ? (
-                                    <p className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
-                                        <AlertTriangle size={10}/>
-                                        ส่วนต่าง: {formatCurrency((it.actualSettledAmt || 0) - (it.grandTotal || it.total))} (บันทึกไว้: {formatCurrency(it.grandTotal || it.total)})
-                                    </p>
-                                ) : (
-                                    <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
-                                        <CheckCircle size={10}/> ยอดตรงกัน
-                                    </p>
-                                )}
-                            </div>
-                        ) : (
-                            <p className="font-black text-indigo-600 text-right">{formatCurrency(it.grandTotal || it.total)}</p>
-                        )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      {stockValidation.issues.length > 0 && (
+                          <p className="text-[10px] font-bold text-orange-600 mt-1">
+                              * คำแนะนำ: หากกดบันทึก ระบบจะข้ามการหักสต็อกสำหรับสินค้าที่ไม่มีในคลัง แนะนำให้กด "ดึงมาเติม" หรือแก้ไขยอดให้เรียบร้อยก่อนกดยืนยัน
+                          </p>
+                      )}
+                  </div>
+              )}
+              
+              {anomalyAlerts.length > 0 && (
+                  <div className="bg-rose-50 p-4 border-b border-rose-100">
+                      <h4 className="font-bold text-rose-700 text-xs mb-2 flex items-center gap-1"><AlertTriangle size={14}/> AI Detected Anomalies (พบความผิดปกติ)</h4>
+                      <ul className="list-disc pl-5 space-y-1 text-[10px] text-rose-600 font-medium">
+                          {anomalyAlerts.map((an, i) => (
+                              <li key={i}>Order: <span className="font-mono bg-white px-1 rounded">{an.orderId}</span> - {an.issue}</li>
+                          ))}
+                      </ul>
+                  </div>
+              )}
+
+              <div className="flex-1 overflow-auto max-h-[400px] text-left">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-white text-slate-400 font-bold uppercase tracking-wider sticky top-0 border-b text-left">
+                    <tr>
+                      <th className="p-4 text-left">{importMode === 'update_settled' ? 'Settlement Date' : 'Date'}</th>
+                      <th className="p-4 text-left">Description</th>
+                      <th className="p-4 text-left">Status / SKU</th>
+                      <th className="p-4 text-right">Fees (฿)</th>
+                      <th className="p-4 text-right">Income (฿)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50 text-left">
+                    {importedData.length === 0 ? (
+                      <tr><td colSpan="5" className="p-10 text-center text-slate-300 font-bold text-center">กรุณาเลือกประเภทแพลตฟอร์ม โหมดการนำเข้า และอัปโหลดไฟล์</td></tr>
+                    ) : importedData.map((it, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50 group text-left">
+                        <td className="p-4 text-slate-500 whitespace-nowrap text-left">{formatDate(it.newSettlementDate || it.date)}</td>
+                        <td className="p-4 text-left">
+                          <p className="font-bold text-slate-700 text-left">{it.orderId}</p>
+                          <p className="text-[10px] text-slate-400 truncate max-w-[200px] text-left">{it.description}</p>
+                          {it.shopName && (
+                              <span className="inline-block mt-1 bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><Store size={10}/> {it.shopName}</span>
+                          )}
+                        </td>
+                        <td className="p-4 text-left">
+                            {it.isUpdateMode ? (
+                                <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[10px] font-bold">อัปเดตเป็นรับเงินแล้ว</span>
+                            ) : (
+                                <div className="flex flex-col gap-1 text-left">
+                                    {(it.items || []).map((item, itemIdx) => {
+                                        const batches = stockBatches.filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
+                                        const available = batches.reduce((sum, b) => sum + Math.max(0, Number(b.quantity) - Number(b.sold || 0)), 0);
+                                        return (
+                                            <div key={itemIdx} className="flex items-center gap-1.5 flex-wrap">
+                                                <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold truncate max-w-[120px]" title={item.desc}>
+                                                    {item.sku || '-'} <span className="text-slate-400 font-normal">x{item.qty}</span>
+                                                </span>
+                                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${available >= item.qty ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                                                    เหลือ {available}
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </td>
+                        <td className="p-4 text-right text-rose-500 font-bold">
+                            -{formatCurrency(it.platformFee || 0)}
+                        </td>
+                        <td className="p-4 text-right">
+                            {importMode === 'update_settled' ? (
+                                <div className="flex flex-col items-end">
+                                    <p className="font-black text-indigo-600 text-right">{formatCurrency(it.actualSettledAmt || 0)}</p>
+                                    {Math.abs((it.actualSettledAmt || 0) - (it.grandTotal || it.total)) > 0.01 ? (
+                                        <p className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
+                                            <AlertTriangle size={10}/>
+                                            ส่วนต่าง: {formatCurrency((it.actualSettledAmt || 0) - (it.grandTotal || it.total))} (บันทึกไว้: {formatCurrency(it.grandTotal || it.total)})
+                                        </p>
+                                    ) : (
+                                        <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
+                                            <CheckCircle size={10}/> ยอดตรงกัน
+                                        </p>
+                                    )}
+                                </div>
+                            ) : (
+                                <p className="font-black text-indigo-600 text-right">{formatCurrency(it.grandTotal || it.total)}</p>
+                            )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        </>
+      )}
+
+      {importerTab === 'logs' && (
+          <div className="bg-white rounded-3xl border shadow-sm overflow-hidden flex flex-col text-left animate-fadeIn">
+              <div className="p-5 border-b bg-slate-50/50 flex justify-between items-center">
+                  <h4 className="font-bold text-slate-800 flex items-center gap-2"><History size={18} className="text-indigo-600"/> ประวัติการนำเข้าและรายการที่ถูกข้าม</h4>
+              </div>
+              <div className="overflow-x-auto flex-1 custom-scrollbar p-4">
+                  <table className="w-full text-sm text-left">
+                      <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-500 sticky top-0">
+                          <tr>
+                              <th className="p-4 text-left rounded-tl-xl border-b border-slate-100">วันที่ทำรายการ</th>
+                              <th className="p-4 text-left border-b border-slate-100">โหมดนำเข้า</th>
+                              <th className="p-4 text-center border-b border-slate-100 text-emerald-600">สำเร็จ</th>
+                              <th className="p-4 text-center border-b border-slate-100 text-amber-500">ถูกข้าม/ข้อมูลซ้ำ</th>
+                              <th className="p-4 text-center border-b border-slate-100 text-orange-500">จัดส่งไม่สำเร็จ/ตีกลับ</th>
+                              <th className="p-4 text-center rounded-tr-xl border-b border-slate-100">ดูรายละเอียด</th>
+                          </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                          {importLogs && importLogs.length > 0 ? importLogs.map(log => (
+                              <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                                  <td className="p-4 font-bold text-slate-700">{formatDate(log.date)}</td>
+                                  <td className="p-4">
+                                      <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${log.mode === 'update_settled' ? 'bg-amber-100 text-amber-700' : log.mode === 'new_settled' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                                          {log.mode === 'update_settled' ? 'กระทบยอดรับเงิน' : log.mode === 'new_settled' ? 'นำเข้าแบบรับเงินแล้ว' : 'นำเข้าแบบรอเงินเข้า'}
+                                      </span>
+                                  </td>
+                                  <td className="p-4 text-center font-black text-emerald-600">{log.stats?.processed || 0}</td>
+                                  <td className="p-4 text-center font-black text-amber-500">{log.stats?.skipped || 0}</td>
+                                  <td className="p-4 text-center font-black text-orange-500">{log.stats?.deliveryFailed || 0}</td>
+                                  <td className="p-4 text-center">
+                                      <button onClick={() => setViewLogDetails(log)} className="px-3 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold transition-colors">
+                                          ดูรายละเอียด
+                                      </button>
+                                  </td>
+                              </tr>
+                          )) : (
+                              <tr><td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่มีประวัติการนำเข้าข้อมูล</td></tr>
+                          )}
+                      </tbody>
+                  </table>
+              </div>
+          </div>
+      )}
+
+      {/* Modal ดูรายละเอียด Log ย้อนหลัง */}
+      {viewLogDetails && (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+                  <div className="flex justify-between items-start mb-6">
+                      <div>
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><History className="text-indigo-600"/> รายละเอียดข้อมูลที่ถูกกรองทิ้ง</h3>
+                          <p className="text-xs text-slate-500 mt-1">ประวัติการนำเข้าเมื่อ: {formatDate(viewLogDetails.date)} (โหมด: {viewLogDetails.mode})</p>
+                      </div>
+                      <button onClick={()=>setViewLogDetails(null)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                  </div>
+                  
+                  <div className="flex-1 overflow-auto custom-scrollbar flex flex-col gap-6">
+                      
+                      {/* Section 1: Delivery Failed */}
+                      <div className="border border-orange-200 rounded-2xl overflow-hidden shadow-sm">
+                          <div className="bg-orange-50 p-4 border-b border-orange-100 flex items-center gap-2">
+                              <AlertTriangle size={18} className="text-orange-500"/>
+                              <h4 className="font-bold text-orange-800 text-sm">ออเดอร์จัดส่งไม่สำเร็จ / ตีกลับ ({(viewLogDetails.failedDetails || []).length} รายการ)</h4>
+                          </div>
+                          <div className="max-h-60 overflow-y-auto">
+                              <table className="w-full text-xs text-left">
+                                  <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10">
+                                      <tr>
+                                          <th className="p-3 pl-4">Order ID</th>
+                                          <th className="p-3">สินค้า (Product)</th>
+                                          <th className="p-3 text-center">จำนวน</th>
+                                          <th className="p-3">สาเหตุ</th>
+                                      </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                      {(viewLogDetails.failedDetails || []).length > 0 ? (
+                                          (viewLogDetails.failedDetails || []).map((item, i) => (
+                                              <tr key={i} className="hover:bg-orange-50/50">
+                                                  <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
+                                                  <td className="p-3 truncate max-w-[200px]">{item.product}</td>
+                                                  <td className="p-3 text-center font-black">{item.qty}</td>
+                                                  <td className="p-3 text-orange-600 text-[10px]"><span className="bg-orange-100/50 px-2 py-1 rounded">{item.reason}</span></td>
+                                              </tr>
+                                          ))
+                                      ) : (
+                                          <tr><td colSpan="4" className="p-6 text-center text-slate-400">ไม่มีข้อมูลการจัดส่งไม่สำเร็จในรอบนี้</td></tr>
+                                      )}
+                                  </tbody>
+                              </table>
+                          </div>
+                      </div>
+
+                      {/* Section 2: Skipped / Duplicates */}
+                      <div className="border border-amber-200 rounded-2xl overflow-hidden shadow-sm">
+                          <div className="bg-amber-50 p-4 border-b border-amber-100 flex items-center gap-2">
+                              <Search size={18} className="text-amber-500"/>
+                              <h4 className="font-bold text-amber-800 text-sm">ออเดอร์ที่ถูกข้าม / ข้อมูลซ้ำ ({(viewLogDetails.skippedDetails || []).length} รายการ)</h4>
+                          </div>
+                          <div className="max-h-60 overflow-y-auto">
+                              <table className="w-full text-xs text-left">
+                                  <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10">
+                                      <tr>
+                                          <th className="p-3 pl-4">Order ID</th>
+                                          <th className="p-3">สินค้า (Product)</th>
+                                          <th className="p-3 text-center">จำนวน</th>
+                                          <th className="p-3">สาเหตุ</th>
+                                      </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                      {(viewLogDetails.skippedDetails || []).length > 0 ? (
+                                          (viewLogDetails.skippedDetails || []).map((item, i) => (
+                                              <tr key={i} className="hover:bg-amber-50/30">
+                                                  <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
+                                                  <td className="p-3 truncate max-w-[200px]">{item.product}</td>
+                                                  <td className="p-3 text-center font-black">{item.qty}</td>
+                                                  <td className="p-3 text-amber-600 text-[10px]"><span className="bg-amber-100/50 px-2 py-1 rounded">{item.reason}</span></td>
+                                              </tr>
+                                          ))
+                                      ) : (
+                                          <tr><td colSpan="4" className="p-6 text-center text-slate-400">ไม่มีข้อมูลที่ถูกข้ามในรอบนี้</td></tr>
+                                      )}
+                                  </tbody>
+                              </table>
+                          </div>
+                      </div>
+
+                  </div>
+                  <div className="pt-6 mt-4 border-t border-slate-100 flex justify-end">
+                      <button onClick={()=>setViewLogDetails(null)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
+                  </div>
+              </div>
+          </div>
+      )}
 
       {/* --- Quick Transfer Modal --- */}
       {quickTransferItem && (
@@ -8343,6 +8512,9 @@ export default function App() {
   const [restoreFile, setRestoreFile] = useState(null);
   const restoreFileRef = useRef(null);
 
+  // --- NEW: Import Logs State ---
+  const [importLogs, setImportLogs] = useState([]);
+
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
   const toggleAppMode = () => { const ids = Object.values(CONSTANTS.IDS); const nextId = ids[(ids.indexOf(currentAppId) + 1) % ids.length]; setCurrentAppId(nextId); localStorage.setItem('merchant_app_id', nextId); addToast(`ฐานข้อมูล: ${nextId}`, "success"); };
@@ -8365,7 +8537,9 @@ export default function App() {
     const unsubInv = onSnapshot(query(path('invoices')), (s) => { setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))); setLoading(false); }, errorFn);
     const unsubStock = onSnapshot(query(path('inventory_batches')), (s) => setStockBatches(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
     const unsubPromo = onSnapshot(query(path('promotions')), (s) => setPromotions(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
-    return () => { unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubPromo(); };
+    const unsubLogs = onSnapshot(query(path('import_logs')), (s) => setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)}))), errorFn);
+    
+    return () => { unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubPromo(); unsubLogs(); };
   }, [user, currentAppId]);
 
   const forceDeleteById = async () => {
@@ -8730,7 +8904,7 @@ export default function App() {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} />;
       case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={currentAppId} stockBatches={stockBatches} showToast={addToast} onIssueInvoice={(t)=>{setPreFillInvoice(t); setActiveTab('invoice');}} promotions={promotions} />;
-      case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} />;
+      case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} importLogs={importLogs} />;
       case 'stock': return <StockManager appId={currentAppId} stockBatches={stockBatches} showToast={addToast} user={user} transactions={transactions} />;
       case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} transactions={transactions} appId={currentAppId} showToast={addToast} preFillData={preFillInvoice} promotions={promotions} />;
       case 'reports': return <TaxReports transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} user={user} />;
