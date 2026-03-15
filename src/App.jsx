@@ -85,8 +85,32 @@ const normalizeDate = (dateInput) => {
     return new Date(dateInput.getFullYear(), dateInput.getMonth(), dateInput.getDate());
   }
   if (typeof dateInput === 'string') {
-    const cleanStr = dateInput.trim();
-    const parts = cleanStr.split(/[\/\-\s:]/);
+    let cleanStr = dateInput.trim();
+    
+    // --- FIX: แปลงเดือนภาษาไทยเป็นตัวเลข เพื่อแก้ปัญหา Shopee/Lazada Export เป็นภาษาไทย ---
+    const thaiMonths = { 
+        'ม.ค.': '01', 'มกราคม': '01', 'jan': '01',
+        'ก.พ.': '02', 'กุมภาพันธ์': '02', 'feb': '02',
+        'มี.ค.': '03', 'มีนาคม': '03', 'mar': '03',
+        'เม.ย.': '04', 'เมษายน': '04', 'apr': '04',
+        'พ.ค.': '05', 'พฤษภาคม': '05', 'may': '05',
+        'มิ.ย.': '06', 'มิถุนายน': '06', 'jun': '06',
+        'ก.ค.': '07', 'กรกฎาคม': '07', 'jul': '07',
+        'ส.ค.': '08', 'สิงหาคม': '08', 'aug': '08',
+        'ก.ย.': '09', 'กันยายน': '09', 'sep': '09',
+        'ต.ค.': '10', 'ตุลาคม': '10', 'oct': '10',
+        'พ.ย.': '11', 'พฤศจิกายน': '11', 'nov': '11',
+        'ธ.ค.': '12', 'ธันวาคม': '12', 'dec': '12' 
+    };
+    
+    for (const [th, num] of Object.entries(thaiMonths)) {
+        if (cleanStr.toLowerCase().includes(th)) {
+            cleanStr = cleanStr.replace(new RegExp(th, 'gi'), `-${num}-`);
+            break;
+        }
+    }
+
+    const parts = cleanStr.split(/[\/\-\s:]+/).filter(p => p.length > 0);
     if (parts.length >= 3) {
       let d, m, y;
       if (parts[0].length === 4) {
@@ -95,7 +119,8 @@ const normalizeDate = (dateInput) => {
         d = parseInt(parts[0]); m = parseInt(parts[1]); y = parseInt(parts[2]);
       }
       if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
-        if (y > 2400) y -= 543;
+        if (y > 2400) y -= 543; // แปลง พ.ศ. เป็น ค.ศ.
+        if (y > 0 && y < 100) y += 2000; // แปลงปีแบบ 2 หลัก (เช่น 24 -> 2024)
         return new Date(y, m - 1, d, 0, 0, 0); 
       }
     }
@@ -611,38 +636,104 @@ function TaxGuide() {
 
 function Dashboard({ transactions, invoices, stockBatches, showToast }) {
   const [selectedChannel, setSelectedChannel] = useState('all');
+  const [selectedShop, setSelectedShop] = useState('all');
+  const [selectedMonth, setSelectedMonth] = useState('all');
+  const [dashTab, setDashTab] = useState('performance'); // NEW: 'performance', 'cashflow'
   const [aiSummary, setAiSummary] = useState(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
 
-  const analytics = useMemo(() => {
-    const filteredTrans = transactions.filter(t => 
-        (selectedChannel === 'all' || (t.channel || 'หน้าร้าน').toUpperCase() === selectedChannel.toUpperCase()) &&
-        !t.isCancelled // เพิ่มการกรองรายการที่ยกเลิกแล้วออก
-    );
+  // ล้างค่า AI Summary เมื่อเปลี่ยน Tab หรือตัวกรอง
+  useEffect(() => {
+      setAiSummary(null);
+  }, [dashTab, selectedChannel, selectedShop, selectedMonth]);
 
-    const inc = filteredTrans.filter(t => t.type === 'income').reduce((s, t) => s + (Number(t.total) || 0), 0);
-    const exp = filteredTrans.filter(t => t.type === 'expense').reduce((s, t) => s + (Number(t.total) || 0), 0);
+  const analytics = useMemo(() => {
+    let perfSales = 0;
+    let perfCogs = 0;
+    let perfFees = 0;
+    let perfExp = 0;
+
+    let cashSettled = 0;
+    let cashPending = 0;
+    let cashExp = 0;
+    let cashShipping = 0;
+    let cashFees = 0;
+
+    transactions.forEach(t => {
+        if (t.isCancelled) return;
+        if (t.isFromReconciliation) return; // ข้ามบิลปรับปรุงอัตโนมัติ เพื่อป้องกันยอดเบิ้ล
+        if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
+        if (selectedShop !== 'all' && (t.shopName || 'ไม่ระบุ') !== selectedShop) return;
+
+        const orderD = normalizeDate(t.date);
+        const settleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.paymentStatus === 'settled' || t.status === 'paid' ? orderD : null);
+
+        let matchOrderMonth = true;
+        let matchSettleMonth = true;
+
+        if (selectedMonth !== 'all') {
+            const oMonth = orderD ? `${orderD.getFullYear()}-${String(orderD.getMonth() + 1).padStart(2, '0')}` : '';
+            matchOrderMonth = oMonth === selectedMonth;
+
+            const sMonth = settleD ? `${settleD.getFullYear()}-${String(settleD.getMonth() + 1).padStart(2, '0')}` : '';
+            matchSettleMonth = sMonth === selectedMonth;
+        }
+
+        if (t.type === 'income') {
+            const expectedAmt = t.grandTotal || t.total;
+            const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : expectedAmt;
+            const fee = Number(t.platformFee) || 0;
+            const ship = Number(t.shippingFee) || 0;
+            
+            // 1. Performance: ผลประกอบการ อิงวันสั่งซื้อ
+            if (matchOrderMonth) {
+                perfSales += expectedAmt;
+                perfFees += fee;
+                
+                const cogs = (t.items || []).reduce((itemSum, item) => {
+                    const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
+                    return itemSum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
+                }, 0);
+                perfCogs += cogs;
+            }
+
+            // 2. Cash Flow: กระแสเงินสด อิงวันเงินเข้า
+            if (matchSettleMonth && (t.paymentStatus === 'settled' || t.status === 'paid')) {
+                cashSettled += settledAmt;
+                cashShipping += ship;
+                cashFees += fee;
+            }
+        } else if (t.type === 'expense') {
+            const amt = Number(t.total) || 0;
+            if (matchOrderMonth) {
+                perfExp += amt;
+            }
+            if (matchSettleMonth && t.status === 'paid') {
+                cashExp += amt;
+            }
+        }
+    });
+
+    // 3. คำนวณยอด "รอโอน" (Pending) โดยไม่สนเดือน เพื่อให้เห็นยอดค้างรับทั้งหมดของสภาพคล่องปัจจุบัน
+    transactions.forEach(t => {
+         if (t.isCancelled || t.isFromReconciliation) return;
+         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
+         if (selectedShop !== 'all' && (t.shopName || 'ไม่ระบุ') !== selectedShop) return;
+         
+         if (t.type === 'income' && t.paymentStatus === 'pending_platform') {
+             cashPending += (t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total));
+         }
+    });
     
-    // คำนวณเจ้าหนี้การค้า (Supplier Debt)
     const supplierDebt = stockBatches
         .filter(b => b.paymentStatus === 'credit')
         .reduce((sum, b) => sum + (Number(b.quantity) * Number(b.costPerUnit)), 0);
 
-    // คำนวณกำไรสุทธิแบบ Real-time (Income - Platform Fees - COGS)
-    const netProfit = filteredTrans.filter(t => t.type === 'income').reduce((sum, t) => {
-        const platformFees = Number(t.platformFee) || 0;
-        const cogs = (t.items || []).reduce((itemSum, item) => {
-            const batch = stockBatches.find(b => 
-                (b.sku && b.sku !== '-' && b.sku === item.sku) || 
-                (b.productName === item.desc)
-            );
-            return itemSum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
-        }, 0);
-        return sum + (Number(t.total) - platformFees - cogs);
-    }, 0);
-
-    return { inc, exp, netProfit, supplierDebt };
-  }, [transactions, invoices, stockBatches, selectedChannel]);
+    return { 
+        perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: perfSales - perfCogs - perfExp },
+        cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt }
+    };
+  }, [transactions, stockBatches, selectedChannel, selectedShop, selectedMonth]);
 
   const monthlyStats = useMemo(() => {
     const mData = {};
@@ -650,32 +741,72 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
         const d = new Date();
         d.setMonth(d.getMonth() - i);
         const key = d.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' });
-        mData[key] = { name: key, income: 0, expense: 0 };
+        mData[key] = { name: key, perfSales: 0, perfExp: 0, perfNet: 0, cashIn: 0, cashOut: 0, cashNet: 0 };
     }
     
     transactions.forEach(t => {
-        if (t.isCancelled) return; // ข้ามรายการที่ยกเลิกแล้ว
+        if (t.isCancelled) return; 
+        if (t.isFromReconciliation) return; 
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
+        if (selectedShop !== 'all' && (t.shopName || 'ไม่ระบุ') !== selectedShop) return;
         
-        const d = normalizeDate(t.date);
-        if (!d) return;
-        const key = d.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' });
-        if (mData[key]) {
+        const orderD = normalizeDate(t.date);
+        const settleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.paymentStatus === 'settled' || t.status === 'paid' ? orderD : null);
+
+        const oKey = orderD ? orderD.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' }) : null;
+        const sKey = settleD ? settleD.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' }) : null;
+
+        if (t.type === 'income') {
+            const expectedAmt = t.grandTotal || t.total;
+            const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : expectedAmt;
+            
+            const cogs = (t.items || []).reduce((sum, item) => {
+                const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
+                return sum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
+            }, 0);
+
+            if (oKey && mData[oKey]) {
+                mData[oKey].perfSales += expectedAmt;
+                mData[oKey].perfNet += (expectedAmt - cogs);
+            }
+            
+            if (sKey && mData[sKey] && (t.paymentStatus === 'settled' || t.status === 'paid')) {
+                mData[sKey].cashIn += settledAmt;
+            }
+        } else if (t.type === 'expense') {
             const amt = Number(t.total) || 0;
-            if (t.type === 'income') mData[key].income += amt;
-            else mData[key].expense += amt;
+            if (oKey && mData[oKey]) {
+                mData[oKey].perfExp += amt;
+                mData[oKey].perfNet -= amt;
+            }
+            if (sKey && mData[sKey] && t.status === 'paid') {
+                mData[sKey].cashOut += amt;
+            }
         }
     });
-    
-    const maxVal = Math.max(...Object.values(mData).map(m => Math.max(m.income, m.expense, 1)));
-    return { data: Object.values(mData), maxVal };
-  }, [transactions, selectedChannel]);
 
-  // --- สินค้ายอดฮิต (Top Sellers) ---
+    Object.values(mData).forEach(m => {
+        m.cashNet = m.cashIn - m.cashOut;
+    });
+    
+    const maxPerf = Math.max(...Object.values(mData).map(m => Math.max(m.perfSales, m.perfExp, 1)));
+    const maxCash = Math.max(...Object.values(mData).map(m => Math.max(m.cashIn, m.cashOut, 1)));
+
+    return { data: Object.values(mData), maxPerf, maxCash };
+  }, [transactions, selectedChannel, selectedShop, stockBatches]);
+
   const topSellers = useMemo(() => {
     const salesMap = {};
-    transactions.filter(t => t.type === 'income' && !t.isCancelled).forEach(t => {
+    transactions.filter(t => t.type === 'income' && !t.isCancelled && !t.isFromReconciliation).forEach(t => {
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
+        if (selectedShop !== 'all' && (t.shopName || 'ไม่ระบุ') !== selectedShop) return;
+        if (selectedMonth !== 'all') {
+            const d = normalizeDate(t.date);
+            if (!d) return;
+            const tMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            if (tMonth !== selectedMonth) return;
+        }
+
         (t.items || []).forEach(item => {
             const key = (item.sku && item.sku !== '-') ? item.sku : item.desc;
             if (!salesMap[key]) salesMap[key] = { name: item.desc, sku: item.sku, qty: 0, total: 0 };
@@ -684,9 +815,8 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
         });
     });
     return Object.values(salesMap).sort((a, b) => b.qty - a.qty).slice(0, 5);
-  }, [transactions, selectedChannel]);
+  }, [transactions, selectedChannel, selectedShop, selectedMonth]);
 
-  // --- สินค้าใกล้หมด (Low Stock Alerts) ---
   const lowStockItems = useMemo(() => {
     const stockMap = {};
     stockBatches.forEach(b => {
@@ -703,15 +833,25 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
   const generateAiSummary = async () => {
       setIsGeneratingAi(true);
       try {
-          const prompt = `
-          คุณคือผู้บริหารฝ่ายการเงิน (CFO) วิเคราะห์ข้อมูลสรุปยอดขายร้านค้าประจำวัน
-          ข้อมูลภาพรวมช่องทาง ${selectedChannel === 'all' ? 'รวมทุกช่องทาง' : selectedChannel}:
-          - รายรับรวม: ${analytics.inc} บาท
-          - กำไรสุทธิ: ${analytics.netProfit} บาท
-          - รายจ่าย: ${analytics.exp} บาท
+          const prompt = dashTab === 'performance' ? `
+          คุณคือผู้บริหารฝ่ายการเงิน (CFO) วิเคราะห์ข้อมูลสรุปยอดขายร้านค้าประจำวัน (อิงตามวันสั่งซื้อ)
+          ข้อมูลภาพรวม (ร้านค้า: ${selectedShop === 'all' ? 'ทุกร้าน' : selectedShop}, ช่องทาง: ${selectedChannel === 'all' ? 'ทุกช่องทาง' : selectedChannel}, เดือน: ${selectedMonth === 'all' ? 'ทุกเดือน' : selectedMonth}):
+          - ยอดขายรวม: ${analytics.perf.sales} บาท
+          - กำไรสุทธิ: ${analytics.perf.netProfit} บาท
+          - รายจ่าย: ${analytics.perf.expense} บาท
           - สินค้าขายดี 3 อันดับแรก: ${topSellers.slice(0,3).map(s => s.name).join(', ') || 'ไม่มีข้อมูล'}
           
-          ช่วยเขียน Executive Summary สั้นๆ 2-3 ประโยค เป็นภาษาไทย เพื่อรายงานเจ้าของร้านแบบกระชับ อ่านง่าย และให้คำแนะนำ 1 ข้อในการดันยอดขายหรือคุมรายจ่าย
+          ช่วยเขียน Executive Summary สั้นๆ 2-3 ประโยค เป็นภาษาไทย เพื่อรายงานเจ้าของร้านแบบกระชับ อ่านง่าย และให้คำแนะนำ 1 ข้อ
+          ตอบกลับเป็นข้อความ JSON format เท่านั้น: { "summary": "ข้อความสรุป..." }
+          ` : `
+          คุณคือผู้บริหารฝ่ายการเงิน (CFO) วิเคราะห์กระแสเงินสดร้านค้าประจำวัน (อิงตามวันโอนเงิน)
+          ข้อมูลภาพรวม (ร้านค้า: ${selectedShop === 'all' ? 'ทุกร้าน' : selectedShop}, ช่องทาง: ${selectedChannel === 'all' ? 'ทุกช่องทาง' : selectedChannel}, เดือน: ${selectedMonth === 'all' ? 'ทุกเดือน' : selectedMonth}):
+          - เงินเข้าแล้ว: ${analytics.cash.settled} บาท
+          - รอเงินโอนจากแพลตฟอร์ม: ${analytics.cash.pending} บาท
+          - รายจ่ายที่จ่ายแล้ว: ${analytics.cash.expense} บาท
+          - กระแสเงินสดสุทธิ: ${analytics.cash.netCash} บาท
+          
+          ช่วยเขียน Executive Summary สั้นๆ 2-3 ประโยค เป็นภาษาไทย สรุปสภาพคล่องทางการเงิน และให้คำแนะนำ 1 ข้อ
           ตอบกลับเป็นข้อความ JSON format เท่านั้น: { "summary": "ข้อความสรุป..." }
           `;
           const res = await callGeminiAPI(prompt, true);
@@ -725,24 +865,63 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
 
   return (
     <div className="space-y-6 animate-fadeIn text-left font-sarabun w-full">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4">
             <div>
                 <h2 className="text-2xl font-bold text-slate-800 text-left">Financial Intelligence</h2>
                 <p className="text-xs text-slate-400">วิเคราะห์ผลกำไรสุทธิและสภาพคล่องทางการเงิน</p>
             </div>
-            <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-2xl shadow-sm border border-slate-100 shrink-0">
-                <Filter size={16} className="text-indigo-600"/>
-                <span className="text-xs font-bold text-slate-500">ช่องทาง:</span>
-                <select 
-                    value={selectedChannel} 
-                    onChange={e => setSelectedChannel(e.target.value)} 
-                    className="bg-transparent border-0 text-sm font-bold text-slate-800 outline-none cursor-pointer focus:ring-0 p-0 pr-4"
-                >
-                    <option value="all">รวมทุกช่องทาง</option>
-                    {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
-                    <option value="IMPORTED">IMPORTED</option>
-                </select>
+            
+            <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto">
+                <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-2xl shadow-sm border border-slate-100 flex-1 xl:flex-none">
+                    <Store size={14} className="text-indigo-600 shrink-0"/>
+                    <select 
+                        value={selectedShop} 
+                        onChange={e => setSelectedShop(e.target.value)} 
+                        className="bg-transparent border-0 text-xs font-bold text-slate-800 outline-none cursor-pointer focus:ring-0 p-0 w-full"
+                    >
+                        <option value="all">ทุกร้านค้า</option>
+                        {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                </div>
+                
+                <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-2xl shadow-sm border border-slate-100 flex-1 xl:flex-none">
+                    <Filter size={14} className="text-indigo-600 shrink-0"/>
+                    <select 
+                        value={selectedChannel} 
+                        onChange={e => setSelectedChannel(e.target.value)} 
+                        className="bg-transparent border-0 text-xs font-bold text-slate-800 outline-none cursor-pointer focus:ring-0 p-0 w-full"
+                    >
+                        <option value="all">ทุกช่องทาง</option>
+                        {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
+                        <option value="IMPORTED">IMPORTED</option>
+                    </select>
+                </div>
+
+                <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-2xl shadow-sm border border-slate-100 flex-1 xl:flex-none">
+                    <Calendar size={14} className="text-indigo-600 shrink-0"/>
+                    <input 
+                        type="month" 
+                        value={selectedMonth === 'all' ? '' : selectedMonth} 
+                        onChange={e => setSelectedMonth(e.target.value || 'all')} 
+                        className="bg-transparent border-0 text-xs font-bold text-slate-800 outline-none cursor-pointer focus:ring-0 p-0 w-full"
+                    />
+                    {selectedMonth !== 'all' && (
+                        <button onClick={() => setSelectedMonth('all')} className="text-slate-400 hover:text-rose-500 shrink-0">
+                            <X size={12}/>
+                        </button>
+                    )}
+                </div>
             </div>
+        </div>
+
+        {/* Tab Selector */}
+        <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit overflow-x-auto shadow-inner border border-slate-200/50">
+            <button onClick={() => setDashTab('performance')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${dashTab === 'performance' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                <TrendingUp size={16}/> ผลประกอบการ (อิงวันสั่งซื้อ)
+            </button>
+            <button onClick={() => setDashTab('cashflow')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${dashTab === 'cashflow' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                <Wallet size={16}/> กระแสเงินสด (อิงวันรับเงิน)
+            </button>
         </div>
 
         {/* Executive AI Summary Banner */}
@@ -756,7 +935,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 {aiSummary ? (
                     <p className="text-sm md:text-base leading-relaxed text-indigo-50 font-medium whitespace-pre-line">{aiSummary}</p>
                 ) : (
-                    <p className="text-sm text-slate-400">ให้ AI สรุปภาพรวมธุรกิจและคำแนะนำประจำวันจาก Data จริงของคุณ</p>
+                    <p className="text-sm text-slate-400">ให้ AI สรุป{dashTab === 'performance' ? 'ผลประกอบการ' : 'สภาพคล่องทางการเงิน'}และให้คำแนะนำประจำวันจาก Data จริงของคุณ</p>
                 )}
             </div>
             <button onClick={generateAiSummary} disabled={isGeneratingAi} className="relative z-10 shrink-0 w-full md:w-auto bg-indigo-500 hover:bg-indigo-400 text-white px-6 py-3.5 rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50">
@@ -765,106 +944,251 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
             </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
-            <StatCard title="รายรับ (ยอดขาย)" value={analytics.inc} color="indigo" icon={<TrendingUp />} subtitle="รายรับรวมก่อนหักค่าธรรมเนียม" />
-            <StatCard title="กำไรสุทธิ (Real Net)" value={analytics.netProfit} color="emerald" icon={<ProfitIcon />} subtitle="หักต้นทุนและค่าธรรมเนียมแล้ว" />
-            <StatCard title="เจ้าหนี้ค้างจ่าย" value={analytics.supplierDebt} color="amber" icon={<Landmark />} subtitle="ยอดค้างชำระ Supplier (Credit)" />
-            <StatCard title="รายจ่ายปฏิบัติการ" value={analytics.exp} color="rose" icon={<TrendingDown />} subtitle="ค่าใช้จ่ายที่ไม่ใช่ต้นทุนสินค้า" />
-        </div>
+        {/* --------------------- PERFORMANCE TAB (อิงวันสั่งซื้อ) --------------------- */}
+        {dashTab === 'performance' && (
+            <div className="space-y-6 animate-fadeIn">
+                <div className="bg-indigo-50/50 border border-indigo-100 p-5 rounded-2xl flex gap-3 items-start shadow-sm">
+                    <Info className="text-indigo-500 shrink-0 mt-0.5" size={18} />
+                    <div>
+                        <p className="text-sm font-black text-indigo-800">วิธีการคำนวณ: เกณฑ์สิทธิ์ (Accrual Basis)</p>
+                        <p className="text-xs text-indigo-600/80 mt-1 leading-relaxed font-medium">
+                            คำนวณรายรับและรายจ่ายโดยยึดตาม <b>"วันที่ลูกค้ากดสั่งซื้อ"</b> (Order Date) หรือวันที่เกิดรายการจริง <br/>
+                            เพื่อวัดผล <b>ยอดขายและกำไรสุทธิที่แท้จริง</b> ของเดือนนั้นๆ แม้แพลตฟอร์มจะยังไม่โอนเงินเข้าบัญชีก็ตาม
+                        </p>
+                    </div>
+                </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex flex-col min-h-[350px] w-full">
-                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChart2 className="text-indigo-600"/> กำไรสุทธิแยกตามช่องทาง (Performance by Channel)</h3>
-                <div className="flex-1 flex flex-col justify-end text-slate-300 w-full mt-4">
-                    <div className="flex h-48 items-end gap-2 w-full">
-                        {monthlyStats.data.map((m, i) => (
-                            <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
-                                <div className="flex w-full items-end justify-center gap-1 h-full relative">
-                                     <div className="w-1/3 bg-indigo-500 rounded-t-md relative group-hover:bg-indigo-400 transition-colors cursor-pointer" style={{ height: `${(m.income / monthlyStats.maxVal) * 100}%`, minHeight: '4px' }}>
-                                         <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity bg-indigo-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.income)}</span>
-                                     </div>
-                                     <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.expense / monthlyStats.maxVal) * 100}%`, minHeight: '4px' }}>
-                                         <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.expense)}</span>
-                                     </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full">
+                    <StatCard title="ยอดขายรวม (Sales)" value={analytics.perf.sales} color="indigo" icon={<TrendingUp />} subtitle="รายรับรวมตามวันที่ลูกค้าสั่งซื้อ" />
+                    <StatCard title="รายจ่าย (Expense)" value={analytics.perf.expense} color="rose" icon={<TrendingDown />} subtitle="ค่าใช้จ่ายตามวันที่เกิดรายการ" />
+                    <StatCard title="กำไรสุทธิ (Net Profit)" value={analytics.perf.netProfit} color="emerald" icon={<ProfitIcon />} subtitle="หักต้นทุนและค่าธรรมเนียมแพลตฟอร์ม" />
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex flex-col w-full">
+                        <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChart2 className="text-indigo-600"/> กราฟผลประกอบการ (Sales vs Expense)</h3>
+                        <div className="flex-1 flex flex-col justify-end text-slate-300 w-full mt-4 min-h-[250px]">
+                            <div className="flex h-48 items-end gap-2 w-full">
+                                {monthlyStats.data.map((m, i) => (
+                                    <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
+                                        <div className="flex w-full items-end justify-center gap-1 h-full relative">
+                                             <div className="w-1/3 bg-indigo-500 rounded-t-md relative group-hover:bg-indigo-400 transition-colors cursor-pointer" style={{ height: `${(m.perfSales / monthlyStats.maxPerf) * 100}%`, minHeight: '4px' }}>
+                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity bg-indigo-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.perfSales)}</span>
+                                             </div>
+                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.perfExp / monthlyStats.maxPerf) * 100}%`, minHeight: '4px' }}>
+                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.perfExp)}</span>
+                                             </div>
+                                        </div>
+                                        <span className="text-[10px] font-bold text-slate-500">{m.name}</span>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="flex justify-center gap-4 mt-6 border-t border-slate-100 pt-4">
+                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-indigo-500"></span> ยอดขายรวม (Sales)</div>
+                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-rose-400"></span> รายจ่าย (Expense)</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex flex-col w-full h-full">
+                        <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Star className="text-amber-500 fill-amber-500"/> สินค้ายอดฮิต (Top Sellers)</h3>
+                        <div className="space-y-4 flex-1 overflow-y-auto custom-scrollbar">
+                            {topSellers.map((item, idx) => (
+                                <div key={idx} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-black text-xs shrink-0">{idx + 1}</div>
+                                        <div>
+                                            <p className="font-bold text-slate-800 text-sm line-clamp-1">{item.name}</p>
+                                            <p className="text-[10px] text-slate-400 font-mono">SKU: {item.sku || '-'}</p>
+                                        </div>
+                                    </div>
+                                    <div className="text-right shrink-0">
+                                        <p className="font-black text-indigo-600">{item.qty.toLocaleString()} <span className="text-[10px] text-slate-500">ชิ้น</span></p>
+                                    </div>
                                 </div>
-                                <span className="text-[10px] font-bold text-slate-500">{m.name}</span>
-                            </div>
-                        ))}
-                    </div>
-                    <div className="flex justify-center gap-4 mt-6 border-t border-slate-100 pt-4">
-                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-indigo-500"></span> รายรับ (Income)</div>
-                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-rose-400"></span> รายจ่าย (Expense)</div>
-                    </div>
-                </div>
-            </div>
-            <div className="bg-slate-900 p-8 rounded-[40px] shadow-xl text-white flex flex-col justify-between">
-                <div>
-                    <h4 className="text-indigo-400 text-[10px] font-black uppercase tracking-[0.2em] mb-2">Liquidity Alert</h4>
-                    <p className="text-sm font-bold mb-6">สรุปสถานะการเงินที่ต้องจัดการคนเดียว</p>
-                    <div className="space-y-4">
-                        <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                            <span className="text-xs opacity-60">หนี้ค้างชำระ:</span>
-                            <span className="text-sm font-black text-amber-400">{formatCurrency(analytics.supplierDebt)}</span>
-                        </div>
-                        <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                            <span className="text-xs opacity-60">สินค้าใกล้หมด (SKUs):</span>
-                            <span className="text-sm font-black text-rose-400">
-                                {lowStockItems.length > 0 ? lowStockItems.length : 0} รายการ
-                            </span>
+                            ))}
+                            {topSellers.length === 0 && <div className="h-full flex items-center justify-center"><p className="text-sm text-slate-400">ยังไม่มีข้อมูลการขาย</p></div>}
                         </div>
                     </div>
                 </div>
-                <div className="pt-6">
-                    <button onClick={() => window.print()} className="w-full bg-indigo-600 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-900/20">
-                        <Printer size={16}/> พิมพ์รายงานการเงินสรุป
-                    </button>
-                </div>
-            </div>
-        </div>
 
-        {/* Top Sellers and Low Stock Alerts Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6 w-full">
-            <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex flex-col w-full">
-                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Star className="text-amber-500 fill-amber-500"/> สินค้ายอดฮิต (Top Sellers)</h3>
-                <div className="space-y-4 flex-1">
-                    {topSellers.map((item, idx) => (
-                        <div key={idx} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                            <div className="flex items-center gap-4">
-                                <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-black text-xs">{idx + 1}</div>
-                                <div>
-                                    <p className="font-bold text-slate-800 text-sm">{item.name}</p>
-                                    <p className="text-[10px] text-slate-400 font-mono">SKU: {item.sku || '-'}</p>
+                <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 w-full">
+                    <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-indigo-600"/> สรุปผลประกอบการรายเดือนย้อนหลัง (Performance Summary)</h3>
+                    <div className="overflow-x-auto custom-scrollbar">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-400">
+                                <tr>
+                                    <th className="p-4 rounded-tl-2xl border-b border-slate-100">เดือน (Month)</th>
+                                    <th className="p-4 text-right border-b border-slate-100 text-indigo-600">ยอดขายรวม (Sales)</th>
+                                    <th className="p-4 text-right border-b border-slate-100 text-rose-500">รายจ่าย (Expense)</th>
+                                    <th className="p-4 text-right rounded-tr-2xl border-b border-slate-100 text-emerald-600">กำไรสุทธิ (Net Profit)</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                                {[...monthlyStats.data].reverse().map((m, i) => (
+                                    <tr key={i} className="hover:bg-indigo-50/30 transition-colors group">
+                                        <td className="p-4 font-bold text-slate-700">{m.name}</td>
+                                        <td className="p-4 text-right font-black text-indigo-600">{formatCurrency(m.perfSales)}</td>
+                                        <td className="p-4 text-right font-bold text-rose-500">{formatCurrency(m.perfExp)}</td>
+                                        <td className="p-4 text-right font-black">
+                                            <span className={m.perfNet >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                                                {m.perfNet > 0 ? '+' : ''}{formatCurrency(m.perfNet)}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* --------------------- CASH FLOW TAB (อิงวันรับเงิน) --------------------- */}
+        {dashTab === 'cashflow' && (
+            <div className="space-y-6 animate-fadeIn">
+                <div className="bg-emerald-50/50 border border-emerald-100 p-5 rounded-2xl flex gap-3 items-start shadow-sm">
+                    <Info className="text-emerald-500 shrink-0 mt-0.5" size={18} />
+                    <div>
+                        <p className="text-sm font-black text-emerald-800">วิธีการคำนวณ: เกณฑ์เงินสด (Cash Basis)</p>
+                        <p className="text-xs text-emerald-600/80 mt-1 leading-relaxed font-medium">
+                            คำนวณเฉพาะเงินที่เข้า-ออกบัญชีจริง โดยยึดตาม <b>"วันที่เงินโอนสำเร็จ"</b> (Settlement Date) <br/>
+                            เพื่อดู <b>สภาพคล่องทางการเงิน (Cash Flow)</b> ใช้เทียบยอดกับ Statement ธนาคาร และประเมินฐานภาษีที่ต้องยื่น
+                        </p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 w-full">
+                    <StatCard title="เงินเข้าแล้ว (Settled)" value={analytics.cash.settled} color="emerald" icon={<Wallet />} subtitle="โอนเข้าบัญชีเรียบร้อยแล้ว" />
+                    <StatCard title="รอเงินโอน (Pending)" value={analytics.cash.pending} color="amber" icon={<Clock />} subtitle="ยอดค้างรับรวมจาก Platform" />
+                    <StatCard title="จ่ายออกแล้ว (Cash Out)" value={analytics.cash.expense} color="rose" icon={<TrendingDown />} subtitle="รายจ่ายที่ชำระเงินแล้ว" />
+                    <StatCard title="กระแสเงินสดสุทธิ (Net Cash)" value={analytics.cash.netCash} color="indigo" icon={<ProfitIcon />} subtitle="เงินเข้า หัก เงินออก" />
+                </div>
+
+                {/* Taxable Income Calculation Section */}
+                <div className="bg-indigo-50/80 border border-indigo-100 rounded-[32px] p-6 md:p-8 flex flex-col xl:flex-row gap-8 items-center justify-between shadow-sm w-full">
+                    <div className="flex flex-col gap-2 w-full xl:w-1/4">
+                        <div className="w-12 h-12 bg-white rounded-2xl text-indigo-600 shadow-sm flex items-center justify-center mb-2"><Calculator size={24}/></div>
+                        <h3 className="text-xl font-black text-indigo-900">ฐานภาษีรายได้<br/>(Taxable Income)</h3>
+                        <p className="text-xs text-indigo-600/70 font-medium">สรุปยอดประเมินรายได้เพื่อยื่นภาษีตามหลักสรรพากร</p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center gap-3 w-full xl:w-3/4">
+                        <div className="bg-white p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ยอดเงินรับสุทธิ</p>
+                            <p className="text-xl font-black text-slate-800">{formatCurrency(analytics.cash.settled)}</p>
+                            <p className="text-[9px] text-slate-400 mt-1">เงินเข้าบัญชีจริง</p>
+                            <div className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center z-10 hidden sm:flex"><Plus size={12} className="text-indigo-600"/></div>
+                        </div>
+                        
+                        <div className="bg-white p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ค่าจัดส่ง (ลูกค้าจ่าย)</p>
+                            <p className="text-xl font-black text-slate-800">{formatCurrency(analytics.cash.shipping)}</p>
+                            <p className="text-[9px] text-slate-400 mt-1">เฉพาะบิลที่รับเงินแล้ว</p>
+                            <div className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center z-10 hidden sm:flex"><Plus size={12} className="text-indigo-600"/></div>
+                        </div>
+                        
+                        <div className="bg-white p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ค่าธรรมเนียม Platform</p>
+                            <p className="text-xl font-black text-rose-500">{formatCurrency(analytics.cash.fees)}</p>
+                            <p className="text-[9px] text-slate-400 mt-1">นำกลับมาบวกเป็นรายได้</p>
+                            <div className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-indigo-600 rounded-full flex items-center justify-center z-10 hidden sm:flex"><ArrowRight size={12} className="text-white"/></div>
+                        </div>
+                        
+                        <div className="bg-indigo-600 p-5 rounded-[24px] shadow-md border border-indigo-500 flex-[1.2] w-full text-white transform sm:scale-105 origin-left">
+                            <p className="text-[10px] font-bold text-indigo-200 uppercase mb-1">ยอดประเมินเสียภาษีรวม</p>
+                            <p className="text-2xl font-black">{formatCurrency(analytics.cash.settled + analytics.cash.shipping + analytics.cash.fees)}</p>
+                            <p className="text-[9px] text-indigo-300 mt-1 flex items-center gap-1"><Info size={10}/> อิงตามยอดที่รับเงินแล้ว</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex flex-col min-h-[350px] w-full">
+                        <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChart2 className="text-emerald-600"/> กราฟกระแสเงินสด (Cash In vs Cash Out)</h3>
+                        <div className="flex-1 flex flex-col justify-end text-slate-300 w-full mt-4 min-h-[250px]">
+                            <div className="flex h-48 items-end gap-2 w-full">
+                                {monthlyStats.data.map((m, i) => (
+                                    <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
+                                        <div className="flex w-full items-end justify-center gap-1 h-full relative">
+                                             <div className="w-1/3 bg-emerald-500 rounded-t-md relative group-hover:bg-emerald-400 transition-colors cursor-pointer" style={{ height: `${(m.cashIn / monthlyStats.maxCash) * 100}%`, minHeight: '4px' }}>
+                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity bg-emerald-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.cashIn)}</span>
+                                             </div>
+                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.cashOut / monthlyStats.maxCash) * 100}%`, minHeight: '4px' }}>
+                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.cashOut)}</span>
+                                             </div>
+                                        </div>
+                                        <span className="text-[10px] font-bold text-slate-500">{m.name}</span>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="flex justify-center gap-4 mt-6 border-t border-slate-100 pt-4">
+                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-emerald-500"></span> เงินเข้าแล้ว (Cash In)</div>
+                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-rose-400"></span> จ่ายแล้ว (Cash Out)</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="bg-slate-900 p-8 rounded-[40px] shadow-xl text-white flex flex-col justify-between w-full h-full">
+                        <div>
+                            <h4 className="text-indigo-400 text-[10px] font-black uppercase tracking-[0.2em] mb-2 flex items-center gap-1"><AlertTriangle size={14}/> Liquidity Alert</h4>
+                            <p className="text-sm font-bold mb-6">สรุปสถานะความเสี่ยงสภาพคล่อง</p>
+                            <div className="space-y-4">
+                                <div className="flex justify-between items-center border-b border-white/10 pb-2">
+                                    <span className="text-xs opacity-60">เงินค้างในระบบ (Pending):</span>
+                                    <span className="text-sm font-black text-indigo-400">{formatCurrency(analytics.cash.pending)}</span>
+                                </div>
+                                <div className="flex justify-between items-center border-b border-white/10 pb-2">
+                                    <span className="text-xs opacity-60">หนี้ค้างชำระเจ้าหนี้ (Credit):</span>
+                                    <span className="text-sm font-black text-amber-400">{formatCurrency(analytics.cash.supplierDebt)}</span>
+                                </div>
+                                <div className="flex justify-between items-center border-b border-white/10 pb-2">
+                                    <span className="text-xs opacity-60">สินค้าใกล้หมด (SKUs):</span>
+                                    <span className="text-sm font-black text-rose-400">
+                                        {lowStockItems.length > 0 ? lowStockItems.length : 0} รายการ
+                                    </span>
                                 </div>
                             </div>
-                            <div className="text-right">
-                                <p className="font-black text-indigo-600">{item.qty.toLocaleString()} <span className="text-[10px] text-slate-500">ชิ้น</span></p>
-                                <p className="text-[10px] font-bold text-slate-400">{formatCurrency(item.total)}</p>
-                            </div>
                         </div>
-                    ))}
-                    {topSellers.length === 0 && <p className="text-sm text-slate-400 text-center py-4">ยังไม่มีข้อมูลการขาย</p>}
+                        <div className="pt-6">
+                            <button onClick={() => window.print()} className="w-full bg-indigo-600 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-900/20">
+                                <Printer size={16}/> พิมพ์รายงานการเงินสรุป
+                            </button>
+                        </div>
+                    </div>
                 </div>
-            </div>
 
-            <div className="bg-white p-8 rounded-[40px] shadow-sm border border-rose-100 flex flex-col w-full">
-                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><AlertTriangle className="text-rose-500"/> สินค้าใกล้หมด (Low Stock Alerts)</h3>
-                <div className="space-y-4 flex-1">
-                    {lowStockItems.map((item, idx) => (
-                        <div key={idx} className="flex justify-between items-center p-4 bg-rose-50/50 rounded-2xl border border-rose-100">
-                            <div>
-                                <p className="font-bold text-slate-800 text-sm">{item.name}</p>
-                                <p className="text-[10px] text-slate-400 font-mono">SKU: {item.sku || '-'}</p>
-                            </div>
-                            <div className="text-right">
-                                <p className={`font-black text-lg ${item.remaining <= 0 ? 'text-rose-600' : 'text-orange-500'}`}>{item.remaining.toLocaleString()} <span className="text-[10px] text-slate-500">ชิ้น</span></p>
-                                <p className="text-[10px] font-bold text-rose-400 uppercase">{item.remaining <= 0 ? 'Out of stock' : 'Low stock'}</p>
-                            </div>
-                        </div>
-                    ))}
-                    {lowStockItems.length === 0 && <p className="text-sm text-slate-400 text-center py-4">ไม่มีสินค้าที่ต้องสั่งซื้อเพิ่ม (สต็อกเพียงพอ)</p>}
+                <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 w-full mt-6">
+                    <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Wallet className="text-emerald-600"/> สรุปกระแสเงินสดรายเดือนย้อนหลัง (Cash Flow Summary)</h3>
+                    <div className="overflow-x-auto custom-scrollbar">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-400">
+                                <tr>
+                                    <th className="p-4 rounded-tl-2xl border-b border-slate-100">เดือนที่รับเงิน (Month)</th>
+                                    <th className="p-4 text-right border-b border-slate-100 text-emerald-600">เงินเข้าแล้ว (Cash In)</th>
+                                    <th className="p-4 text-right border-b border-slate-100 text-rose-500">จ่ายออกแล้ว (Cash Out)</th>
+                                    <th className="p-4 text-right rounded-tr-2xl border-b border-slate-100 text-indigo-600">กระแสเงินสดสุทธิ (Net Cash)</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                                {[...monthlyStats.data].reverse().map((m, i) => (
+                                    <tr key={i} className="hover:bg-indigo-50/30 transition-colors group">
+                                        <td className="p-4 font-bold text-slate-700">{m.name}</td>
+                                        <td className="p-4 text-right font-black text-emerald-600">{formatCurrency(m.cashIn)}</td>
+                                        <td className="p-4 text-right font-bold text-rose-500">{formatCurrency(m.cashOut)}</td>
+                                        <td className="p-4 text-right font-black">
+                                            <span className={m.cashNet >= 0 ? 'text-indigo-600' : 'text-rose-600'}>
+                                                {m.cashNet > 0 ? '+' : ''}{formatCurrency(m.cashNet)}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
-        </div>
+        )}
     </div>
   );
 }
@@ -895,6 +1219,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
   // NEW: State สำหรับการดูรายละเอียด Log ย้อนหลัง
   const [viewLogDetails, setViewLogDetails] = useState(null);
+  const [logToDelete, setLogToDelete] = useState(null); // NEW: State สำหรับ Popup ยืนยันการลบ Log
 
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
@@ -903,18 +1228,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const [anomalyAlerts, setAnomalyAlerts] = useState([]);
   const [isCheckingAnomaly, setIsCheckingAnomaly] = useState(false);
   const fileInputRef = useRef(null);
-
-  // --- NEW: ฟังก์ชันลบประวัติการนำเข้า ---
-  const handleDeleteLog = async (id) => {
-      if (!window.confirm("ยืนยันการลบประวัติการนำเข้านี้?")) return;
-      try {
-          await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'import_logs', id));
-          showToast("ลบประวัติการนำเข้าสำเร็จ", "success");
-      } catch (error) {
-          console.error("Delete log error:", error);
-          showToast("ลบประวัติไม่สำเร็จ", "error");
-      }
-  };
 
   // --- Quick Transfer States ---
   const [quickTransferItem, setQuickTransferItem] = useState(null);
@@ -1294,8 +1607,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                         }
                     } else if (existingTrans.paymentStatus === 'pending_platform' && !existingTrans.isCancelled) {
                         if (!matched.find(m => m.id === existingTrans.id)) {
-                            const dateStr = findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน', 'เวลาที่ชำระเงิน', 'Settlement Date', ...(schema.date || [])]);
-                            const actualSettledAmt = cleanNum(findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว']));
+                            // --- FIX: บังคับหาคอลัมน์วันที่โอนเงินก่อน เพื่อไม่ให้ระบบดึงวันที่สั่งซื้อ (Order Date) มาใช้ผิดเดือน ---
+                            let dateStr = findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน', 'Payout Time', 'Payout Date', 'Settlement Date', 'เวลาที่โอนเงิน', 'เวลาที่สำเร็จ']);
+                            if (!dateStr) {
+                                dateStr = findVal(row, schema.date);
+                            }
+                            
+                            const actualSettledAmt = cleanNum(findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount']));
                             
                             matched.push({
                                 ...existingTrans,
@@ -1409,9 +1727,17 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                       
           const isCompleted = status === '' || !isCancelledOrUnpaid;
                               
-          const dateVal = findVal(row, schema.date);
+          // --- FIX: แยกวันที่สั่งซื้อ (Order Date) และ วันที่โอนเงิน (Settlement Date) ---
+          const orderDateVal = findVal(row, schema.date);
+          let settleDateVal = null;
+          if (importMode === 'new_settled') {
+              settleDateVal = findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน', 'Payout Time', 'Payout Date', 'Settlement Date', 'เวลาที่โอนเงิน', 'เวลาที่สำเร็จ']);
+          }
           
-          if (!orderId || !isCompleted || !dateVal) { 
+          const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount']);
+          const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? Math.abs(cleanNum(actualSettledAmtRaw)) : undefined;
+          
+          if (!orderId || !isCompleted || !orderDateVal) { 
               skipped++; 
               skippedQty += qty; 
 
@@ -1487,7 +1813,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             
             ordersMap[orderId] = { 
               type: 'income', 
-              date: normalizeDate(dateVal), 
+              date: normalizeDate(orderDateVal), // คงวันที่สั่งซื้อไว้ตามเดิม
               orderId, 
               total: lineTotal, 
               platformFee: rowTotalFees,
@@ -1509,8 +1835,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               estimatedShippingFee: estimatedShippingFee,
               returnShippingFee: returnShippingFee,
               grandTotal: lineTotal - rowTotalFees,
+              actualSettledAmt: importMode === 'new_settled' && actualSettledAmtFromRow !== undefined ? actualSettledAmtFromRow : undefined,
               paymentStatus: importMode === 'new_pending' ? 'pending_platform' : 'settled',
-              settlementDate: importMode === 'new_pending' ? null : normalizeDate(dateVal),
+              settlementDate: importMode === 'new_pending' ? null : (normalizeDate(settleDateVal) || normalizeDate(orderDateVal)), // ใช้วันที่โอนเงิน
               shopName: shopName !== 'ไม่ระบุ' ? shopName : undefined,
               isDeliveryFailed: isDeliveryFailed
             };
@@ -1855,6 +2182,20 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       setDeliveryFailedDetailsData([]);
       setDiscrepancyDetailsData([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const confirmDeleteLog = async () => {
+      if (!logToDelete || !user) return;
+      setLoading(true);
+      try {
+          await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'import_logs', logToDelete.id));
+          showToast("ลบประวัติการนำเข้าสำเร็จ", "success");
+      } catch (err) {
+          console.error(err);
+          showToast("ลบประวัติไม่สำเร็จ", "error");
+      }
+      setLogToDelete(null);
+      setLoading(false);
   };
 
   return (
@@ -2406,21 +2747,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                               <th className="p-4 text-center border-b border-slate-100 text-emerald-600">สำเร็จ</th>
                               <th className="p-4 text-center border-b border-slate-100 text-amber-500">ถูกข้าม/ข้อมูลซ้ำ</th>
                               <th className="p-4 text-center border-b border-slate-100 text-orange-500">จัดส่งไม่สำเร็จ/ตีกลับ</th>
-                              <th className="p-4 text-center rounded-tr-xl border-b border-slate-100">จัดการ</th>
+                              <th className="p-4 text-center rounded-tr-xl border-b border-slate-100">ดูรายละเอียด</th>
                           </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50">
-                          {importLogs && importLogs.length > 0 ? [...importLogs].sort((a,b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0)).map((log, index) => (
+                          {importLogs && importLogs.length > 0 ? importLogs.map(log => (
                               <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                                  <td className="p-4 font-bold text-slate-700">
-                                      <div className="flex items-center gap-2">
-                                          <span>{formatDate(log.date)}</span>
-                                          {index === 0 && <span className="bg-rose-100 text-rose-600 px-2 py-0.5 rounded-full text-[9px] uppercase tracking-widest font-black">ล่าสุด</span>}
-                                      </div>
-                                      <span className="text-[10px] font-normal text-slate-400 mt-0.5 inline-block">
-                                          เวลา {log.date ? new Date(log.date).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'}) : '-'} น.
-                                      </span>
-                                  </td>
+                                  <td className="p-4 font-bold text-slate-700">{formatDate(log.date)}</td>
                                   <td className="p-4">
                                       <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${log.mode === 'update_settled' ? 'bg-amber-100 text-amber-700' : log.mode === 'new_settled' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
                                           {log.mode === 'update_settled' ? 'กระทบยอดรับเงิน' : log.mode === 'new_settled' ? 'นำเข้าแบบรับเงินแล้ว' : 'นำเข้าแบบรอเงินเข้า'}
@@ -2430,12 +2763,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                   <td className="p-4 text-center font-black text-amber-500">{log.stats?.skipped || 0}</td>
                                   <td className="p-4 text-center font-black text-orange-500">{log.stats?.deliveryFailed || 0}</td>
                                   <td className="p-4 text-center">
-                                      <div className="flex justify-center items-center gap-2">
+                                      <div className="flex items-center justify-center gap-2">
                                           <button onClick={() => setViewLogDetails(log)} className="px-3 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold transition-colors">
                                               ดูรายละเอียด
                                           </button>
-                                          <button onClick={() => handleDeleteLog(log.id)} className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors" title="ลบประวัติ">
-                                              <Trash2 size={16} />
+                                          <button onClick={() => setLogToDelete(log)} className="p-1.5 bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-colors" title="ลบประวัติ">
+                                              <Trash2 size={16}/>
                                           </button>
                                       </div>
                                   </td>
@@ -2534,6 +2867,29 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   </div>
                   <div className="pt-6 mt-4 border-t border-slate-100 flex justify-end">
                       <button onClick={()=>setViewLogDetails(null)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* NEW: Modal ยืนยันการลบประวัติการนำเข้า */}
+      {logToDelete && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+                  <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
+                      <Trash2 size={32}/>
+                  </div>
+                  <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันการลบประวัติ?</h3>
+                  <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
+                      คุณต้องการลบประวัติการนำเข้าของวันที่ <b>{formatDate(logToDelete.date)}</b> ใช่หรือไม่?<br/>
+                      <span className="text-rose-600 font-bold underline">ข้อมูลนี้จะถูกลบออกอย่างถาวร</span>
+                  </p>
+                  <div className="flex gap-3 text-center">
+                      <button onClick={() => setLogToDelete(null)} disabled={loading} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold text-slate-600 text-center transition-colors">ยกเลิก</button>
+                      <button onClick={confirmDeleteLog} disabled={loading} className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg text-center disabled:opacity-50 flex items-center justify-center gap-2 transition-colors">
+                          {loading ? <Loader size={16} className="animate-spin"/> : null}
+                          ยืนยันลบ
+                      </button>
                   </div>
               </div>
           </div>
@@ -4151,71 +4507,6 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     return { totalIncome, actualExpense, standardExpense, usedExpense, totalDeductions, netIncome, calculatedTax, grossTax: actualGrossTax, finalTax, isGrossTaxApplied, totalWHT, payableTax, steps };
   }, [transactions, startDate, endDate, selectedBranch, expenseMode, pitDeductions]);
 
-  // --- NEW: สรุปยอดขายรายร้านค้า แยกตามเดือน ---
-  const shopSummaryData = useMemo(() => {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    start.setHours(0,0,0,0);
-    end.setHours(23,59,59,999);
-
-    const summary = {};
-
-    transactions.forEach(t => {
-        if (t.type !== 'income' || t.isCancelled) return;
-        const d = normalizeDate(t.date);
-        if (!d || d < start || d > end) return;
-        
-        // กรองตามสาขาที่เลือกด้วย เพื่อให้สอดคล้องกับ filter ตัวอื่น
-        if (selectedBranch !== 'all' && (t.branch || '00000') !== selectedBranch && (t.partnerBranch || '00000') !== selectedBranch) return;
-
-        const monthKey = d.toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
-        const sortKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        const shopKey = t.shopName || 'ไม่ระบุ';
-
-        const mapKey = `${sortKey}_${shopKey}`;
-
-        if (!summary[mapKey]) {
-            summary[mapKey] = {
-                sortKey,
-                monthLabel: monthKey,
-                shop: shopKey,
-                orders: 0,
-                productSales: 0,
-                shippingFeeByBuyer: 0,
-                platformFee: 0,
-                discount: 0,
-                netIncome: 0,
-                settledIncome: 0, // NEW
-                unpaidIncome: 0   // NEW
-            };
-        }
-
-        const s = summary[mapKey];
-        s.orders += 1;
-        s.productSales += (Number(t.total) || 0);
-        s.shippingFeeByBuyer += (Number(t.shippingFee) || 0);
-        s.platformFee += (Number(t.platformFee) || 0);
-        s.discount += (Number(t.couponDiscount) || 0) + (Number(t.cashCoupon) || 0);
-        
-        // ถ้ารายการนี้ปรับปรุงรับเงินแล้ว (actualSettledAmt) ให้ใช้ยอดนั้นเป็นสุทธิ ถ้ายังให้ใช้ grandTotal
-        const net = t.actualSettledAmt !== undefined ? Number(t.actualSettledAmt) : (Number(t.grandTotal) || (Number(t.total) - Number(t.platformFee)));
-        s.netIncome += net;
-
-        if (t.paymentStatus === 'settled') {
-            s.settledIncome += net;
-        } else {
-            s.unpaidIncome += net;
-        }
-    });
-
-    return Object.values(summary).sort((a,b) => {
-        // เรียงจากเดือนใหม่ล่าสุดไปเก่า
-        if (b.sortKey !== a.sortKey) return b.sortKey.localeCompare(a.sortKey);
-        // เรียงชื่อร้านค้าตามตัวอักษร
-        return a.shop.localeCompare(b.shop);
-    });
-  }, [transactions, startDate, endDate, selectedBranch]);
-
   const getTaxAdvice = async () => {
       setIsGettingTaxAdvice(true);
       try {
@@ -4294,24 +4585,6 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         m.issueQty > 0 ? m.issueQty : '-', m.issueTotal > 0 ? toFixedNum(m.issueTotal) : '-',
         m.balanceQty, toFixedNum(m.balanceTotal)
       ])];
-    } else if (reportTab === 'shop_summary') {
-      fileName = `Shop_Summary_${startDate}.xlsx`;
-      const tableHeader = ["ลำดับ", "เดือน", "ร้านค้า", "จำนวนออเดอร์", "ยอดขายสินค้า", "ค่าส่ง (ลูกค้าจ่าย)", "ส่วนลด/อื่นๆ", "ค่าธรรมเนียมรวม", "ยอดเงินสุทธิ", "รับเงินแล้ว", "ค้างชำระ"];
-      const body = shopSummaryData.map((row, i) => [
-        i + 1, row.monthLabel, row.shop, row.orders, toFixedNum(row.productSales), toFixedNum(row.shippingFeeByBuyer), toFixedNum(row.discount), toFixedNum(row.platformFee), toFixedNum(row.netIncome), toFixedNum(row.settledIncome), toFixedNum(row.unpaidIncome)
-      ]);
-      const footer = [
-        "รวมทั้งสิ้น", "", "", 
-        shopSummaryData.reduce((s, r) => s + r.orders, 0), 
-        toFixedNum(shopSummaryData.reduce((s, r) => s + r.productSales, 0)), 
-        toFixedNum(shopSummaryData.reduce((s, r) => s + r.shippingFeeByBuyer, 0)), 
-        toFixedNum(shopSummaryData.reduce((s, r) => s + r.discount, 0)), 
-        toFixedNum(shopSummaryData.reduce((s, r) => s + r.platformFee, 0)), 
-        toFixedNum(shopSummaryData.reduce((s, r) => s + r.netIncome, 0)),
-        toFixedNum(shopSummaryData.reduce((s, r) => s + r.settledIncome, 0)),
-        toFixedNum(shopSummaryData.reduce((s, r) => s + r.unpaidIncome, 0))
-      ];
-      dataRows = [...headerRows, tableHeader, ...body, footer];
     }
 
     try {
@@ -4432,7 +4705,6 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         <TabBtn id="sales" label="ภาษีขาย (Sales Tax)" icon={<FileText size={18}/>} />
         <TabBtn id="purchase" label="ภาษีซื้อ (Purchase Tax)" icon={<ShoppingCart size={18}/>} />
         <TabBtn id="inventory" label="คุมสินค้า (Stock)" icon={<Box size={18}/>} />
-        <TabBtn id="shop_summary" label="สรุปรายร้านค้า" icon={<Store size={18}/>} />
         <TabBtn id="pp30" label="สรุป ภ.พ.30" icon={<Calculator size={18}/>} />
         <TabBtn id="pit90" label="ภ.ง.ด. 90/94 (บุคคลธรรมดา)" icon={<User size={18}/>} />
       </div>
@@ -4570,59 +4842,6 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
               </tbody>
               {filteredMovement.length === 0 && (
                 <tbody><tr><td colSpan="9" className="p-10 text-center text-slate-400 font-bold">ไม่พบความเคลื่อนไหวในช่วงเวลานี้</td></tr></tbody>
-              )}
-            </table>
-          )}
-
-          {reportTab === 'shop_summary' && (
-            <table className="w-full text-sm text-left">
-              <thead className="bg-white text-slate-400 text-[10px] font-bold uppercase sticky top-0 border-b z-10 text-left">
-                <tr>
-                  <th className="p-5 text-left">เดือน (Month)</th>
-                  <th className="p-5 text-left">ร้านค้า (Shop)</th>
-                  <th className="p-5 text-center">จำนวนออเดอร์</th>
-                  <th className="p-5 text-right">ยอดขายสินค้า</th>
-                  <th className="p-5 text-right">ค่าส่ง (ลูกค้าจ่าย)</th>
-                  <th className="p-5 text-right">ส่วนลด/อื่นๆ</th>
-                  <th className="p-5 text-right text-rose-500">ค่าธรรมเนียมรวม</th>
-                  <th className="p-5 text-right text-indigo-600">ยอดเงินสุทธิ</th>
-                  <th className="p-5 text-right text-emerald-600">รับแล้ว (Settled)</th>
-                  <th className="p-5 text-right text-amber-500">ค้างรับ (Unpaid)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50 text-left">
-                {shopSummaryData.map((row, i) => (
-                  <tr key={i} className="hover:bg-slate-50/80 transition-colors text-left">
-                    <td className="p-5 font-bold text-slate-700 text-left">{row.monthLabel}</td>
-                    <td className="p-5 font-bold text-indigo-600 text-left">{row.shop}</td>
-                    <td className="p-5 text-center font-bold text-slate-800">{row.orders.toLocaleString()}</td>
-                    <td className="p-5 text-right">{formatCurrency(row.productSales)}</td>
-                    <td className="p-5 text-right text-emerald-600">+{formatCurrency(row.shippingFeeByBuyer)}</td>
-                    <td className="p-5 text-right text-amber-500">-{formatCurrency(row.discount)}</td>
-                    <td className="p-5 text-right text-rose-500 font-bold">-{formatCurrency(row.platformFee)}</td>
-                    <td className="p-5 text-right font-black text-indigo-600">{formatCurrency(row.netIncome)}</td>
-                    <td className="p-5 text-right font-bold text-emerald-600">{formatCurrency(row.settledIncome)}</td>
-                    <td className="p-5 text-right font-bold text-amber-500">{formatCurrency(row.unpaidIncome)}</td>
-                  </tr>
-                ))}
-                {shopSummaryData.length === 0 && (
-                    <tr><td colSpan="10" className="p-10 text-center text-slate-400 font-bold">ไม่พบข้อมูลในช่วงเวลาที่เลือก</td></tr>
-                )}
-              </tbody>
-              {shopSummaryData.length > 0 && (
-                <tfoot className="bg-slate-900 text-white font-bold sticky bottom-0 text-left">
-                    <tr>
-                        <td colSpan="2" className="p-5 text-right uppercase tracking-widest text-xs opacity-60">รวมทั้งสิ้น</td>
-                        <td className="p-5 text-center">{shopSummaryData.reduce((s, r) => s + r.orders, 0).toLocaleString()}</td>
-                        <td className="p-5 text-right">{formatCurrency(shopSummaryData.reduce((s, r) => s + r.productSales, 0))}</td>
-                        <td className="p-5 text-right text-emerald-400">+{formatCurrency(shopSummaryData.reduce((s, r) => s + r.shippingFeeByBuyer, 0))}</td>
-                        <td className="p-5 text-right text-amber-400">-{formatCurrency(shopSummaryData.reduce((s, r) => s + r.discount, 0))}</td>
-                        <td className="p-5 text-right text-rose-400">-{formatCurrency(shopSummaryData.reduce((s, r) => s + r.platformFee, 0))}</td>
-                        <td className="p-5 text-right text-indigo-400">{formatCurrency(shopSummaryData.reduce((s, r) => s + r.netIncome, 0))}</td>
-                        <td className="p-5 text-right text-emerald-400">{formatCurrency(shopSummaryData.reduce((s, r) => s + r.settledIncome, 0))}</td>
-                        <td className="p-5 text-right text-amber-400">{formatCurrency(shopSummaryData.reduce((s, r) => s + r.unpaidIncome, 0))}</td>
-                    </tr>
-                </tfoot>
               )}
             </table>
           )}
@@ -6431,7 +6650,26 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             </div>
             <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-8 text-left">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
-                <div className="space-y-6 text-left"><h4 className="font-bold text-slate-800 border-b pb-2 flex items-center gap-2 text-left"><Info size={18} className="text-indigo-600"/> ข้อมูลพื้นฐาน</h4><div className="bg-slate-50/50 p-6 rounded-3xl border border-slate-100 text-sm space-y-4 text-left"><div className="text-left"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">วันที่ทำรายการ</p><p className="font-bold text-slate-800 text-left">{formatDate(viewItem.date)}</p></div><div className="text-left"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">หมวดหมู่</p><p className="font-bold text-slate-800 text-left">{viewItem.category || '-'}</p></div><div className="pt-2 border-t text-left"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">{viewItem.type === 'income' ? 'ลูกค้า' : 'ผู้ขาย'}</p><p className="font-bold text-slate-800 text-base text-left">{viewItem.partnerName || '-'}</p><div className="flex flex-wrap gap-2 mt-1 text-left"><p className="text-[10px] font-mono text-indigo-500 font-bold text-left">TAX: {viewItem.partnerTaxId || '-'}</p><p className="text-[10px] font-bold text-indigo-400 text-left">สาขา: {viewItem.partnerBranch === '00000' || !viewItem.partnerBranch ? 'สำนักงานใหญ่' : viewItem.partnerBranch} {viewItem.partnerBranchName && `(${viewItem.partnerBranchName})`}</p></div>
+                <div className="space-y-6 text-left"><h4 className="font-bold text-slate-800 border-b pb-2 flex items-center gap-2 text-left"><Info size={18} className="text-indigo-600"/> ข้อมูลพื้นฐาน</h4><div className="bg-slate-50/50 p-6 rounded-3xl border border-slate-100 text-sm space-y-4 text-left">
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="bg-indigo-50/80 p-4 rounded-2xl border border-indigo-100">
+                          <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-1 text-left">วันที่ทำรายการ (Order Date)</p>
+                          <p className="font-black text-slate-800 text-base text-left">{formatDate(viewItem.date)}</p>
+                          <p className="text-[9px] text-indigo-500 font-medium mt-1.5 text-left">*อิงตามเกณฑ์สิทธิ์: ใช้คำนวณผลประกอบการและยอดขายรวม</p>
+                      </div>
+                      <div className="bg-emerald-50/80 p-4 rounded-2xl border border-emerald-100">
+                          <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1 text-left">วันที่รับเงินจริง (Settlement Date)</p>
+                          <p className="font-black text-slate-800 text-base flex items-center gap-2 text-left">
+                              {viewItem.settlementDate ? formatDate(viewItem.settlementDate) : ((viewItem.paymentStatus === 'settled' || viewItem.status === 'paid') ? formatDate(viewItem.date) : '-')}
+                              {viewItem.type === 'income' && viewItem.paymentStatus === 'pending_platform' && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">รอเงินเข้า</span>}
+                              {viewItem.type === 'expense' && viewItem.status === 'unpaid' && <span className="bg-rose-100 text-rose-700 px-2 py-0.5 rounded text-[10px] font-bold">ค้างชำระ</span>}
+                          </p>
+                          <p className="text-[9px] text-emerald-600 font-medium mt-1.5 text-left">*อิงตามเกณฑ์เงินสด: ใช้คำนวณกระแสเงินสดและฐานภาษี</p>
+                      </div>
+                  </div>
+                  
+                  <div className="text-left"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">หมวดหมู่</p><p className="font-bold text-slate-800 text-left">{viewItem.category || '-'}</p></div><div className="pt-2 border-t text-left"><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-left">{viewItem.type === 'income' ? 'ลูกค้า' : 'ผู้ขาย'}</p><p className="font-bold text-slate-800 text-base text-left">{viewItem.partnerName || '-'}</p><div className="flex flex-wrap gap-2 mt-1 text-left"><p className="text-[10px] font-mono text-indigo-500 font-bold text-left">TAX: {viewItem.partnerTaxId || '-'}</p><p className="text-[10px] font-bold text-indigo-400 text-left">สาขา: {viewItem.partnerBranch === '00000' || !viewItem.partnerBranch ? 'สำนักงานใหญ่' : viewItem.partnerBranch} {viewItem.partnerBranchName && `(${viewItem.partnerBranchName})`}</p></div>
                 
                 <div className="mt-2 p-3 bg-white/50 rounded-xl border border-slate-100 text-left">
                   <div className="flex items-center gap-1 mb-1">
