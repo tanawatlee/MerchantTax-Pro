@@ -6613,8 +6613,20 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         {currentHistData.length > 0 ? currentHistData.map(t => (
                         <tr key={t.id} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : 'hover:bg-slate-50/80'}`}>
                             <td className="p-5 text-left">
-                                <p className={`font-black text-left ${t.isCancelled ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{formatDate(t.date)}</p>
-                                <p className="text-[10px] font-mono font-bold text-indigo-600 mt-0.5">{t.sysDocId || 'NO-REF'}</p>
+                                <p className={`font-black text-left ${t.isCancelled ? 'text-slate-400 line-through' : 'text-slate-700'}`} title="วันที่ทำรายการ/สั่งซื้อ">{formatDate(t.date)}</p>
+                                
+                                {/* NEW: แสดงวันที่รับเงิน (Settled) แยกให้ชัดเจน */}
+                                {!t.isCancelled && (t.paymentStatus === 'settled' || t.status === 'paid') ? (
+                                    <p className="text-[10px] font-bold text-emerald-600 mt-1 flex items-center gap-1 bg-emerald-50 w-fit px-1.5 py-0.5 rounded border border-emerald-100" title="วันที่เงินเข้าบัญชีจริง">
+                                        <Wallet size={10}/> {t.settlementDate ? formatDate(t.settlementDate) : formatDate(t.date)}
+                                    </p>
+                                ) : !t.isCancelled ? (
+                                    <p className="text-[10px] font-bold text-amber-500 mt-1 flex items-center gap-1 bg-amber-50 w-fit px-1.5 py-0.5 rounded border border-amber-100" title="รอเงินโอนเข้าบัญชี">
+                                        <Clock size={10}/> รอเงินเข้า
+                                    </p>
+                                ) : null}
+
+                                <p className="text-[10px] font-mono font-bold text-indigo-600 mt-1.5">{t.sysDocId || 'NO-REF'}</p>
                                 <div className="flex gap-1 mt-1 flex-wrap">
                                     <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500 uppercase text-center">{t.channel || 'หน้าร้าน'}</span>
                                     {t.shopName && t.shopName !== 'ไม่ระบุ' && <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 text-indigo-600 uppercase text-center">{t.shopName}</span>}
@@ -7732,13 +7744,24 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
               ["รายงานประวัติเอกสาร (Filtered)"],
               ["วันที่ดึงข้อมูล", formatDate(new Date())],
               [],
-              ["วันที่", "เลขที่เอกสาร", "Order ID", "ชื่อลูกค้า", "ประเภทเอกสาร", "สถานะเอกสาร", "สถานะการชำระ", "ยอดรวม (บาท)"]
+              // --- FIX: เพิ่มคอลัมน์ วันที่รับเงิน (Settled Date) ให้ไฟล์ Export ---
+              ["วันที่สั่งซื้อ/ออกบิล", "วันที่รับเงิน (Settled)", "เลขที่เอกสาร", "Order ID", "ชื่อลูกค้า", "ประเภทเอกสาร", "สถานะเอกสาร", "สถานะการชำระ", "ยอดรวม (บาท)"]
           ];
 
           displayDocs.forEach(d => {
               const isPaid = d.status === 'paid' || d.paymentStatus === 'settled';
+              
+              // หากจ่ายแล้ว ให้แสดงวันที่รับเงินจริง
+              let settleDateStr = '-';
+              if (isPaid) {
+                  if (d.settlementDate) settleDateStr = formatDate(d.settlementDate);
+                  else if (d.orderDate) settleDateStr = formatDate(d.orderDate);
+                  else settleDateStr = formatDate(d.date);
+              }
+
               dataRows.push([
                   formatDate(d.date),
+                  settleDateStr,
                   d.invNo || '-',
                   d.orderId || '-',
                   d.customerName || 'ลูกค้าทั่วไป',
@@ -8323,10 +8346,21 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                     />
                                 </td>
                                 <td className="p-4 text-left">
-                                    <p className="font-bold text-slate-800 text-xs">{formatDate(docItem.date)}</p>
+                                    <p className="font-bold text-slate-800 text-xs" title="วันที่ออกเอกสาร / ทำรายการ">📅 {formatDate(docItem.date)}</p>
                                     {(docItem.orderDate || docItem.source === 'transaction') && (
-                                        <p className="text-[10px] text-slate-400 mt-0.5">Order: {formatDate(docItem.orderDate || docItem.date)}</p>
+                                        <p className="text-[10px] text-slate-400 mt-0.5" title="วันที่สั่งซื้อ">Order: {formatDate(docItem.orderDate || docItem.date)}</p>
                                     )}
+                                    
+                                    {/* NEW: แสดงวันที่รับเงิน (Settled) แบบชัดเจน */}
+                                    {docItem.status !== 'cancelled' && isPaid ? (
+                                        <p className="text-[10px] font-bold text-emerald-600 mt-1 flex items-center gap-1 bg-emerald-50 w-fit px-1.5 py-0.5 rounded border border-emerald-100" title="วันที่เงินเข้าบัญชีจริง">
+                                            <Wallet size={10}/> In: {docItem.settlementDate ? formatDate(docItem.settlementDate) : (docItem.orderDate ? formatDate(docItem.orderDate) : formatDate(docItem.date))}
+                                        </p>
+                                    ) : docItem.status !== 'cancelled' ? (
+                                        <p className="text-[10px] font-bold text-amber-500 mt-1 flex items-center gap-1 bg-amber-50 w-fit px-1.5 py-0.5 rounded border border-amber-100" title="รอเงินโอนเข้าบัญชี">
+                                            <Clock size={10}/> รอเงินเข้า
+                                        </p>
+                                    ) : null}
                                 </td>
                                 <td className="p-4 text-slate-700 font-bold text-left">
                                     <p className={`text-left ${docItem.status === 'cancelled' ? 'line-through' : ''}`}>{docItem.invNo}</p>
