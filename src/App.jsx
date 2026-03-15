@@ -1848,10 +1848,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               estimatedShippingFee: estimatedShippingFee,
               returnShippingFee: returnShippingFee,
               grandTotal: lineTotal - rowTotalFees,
-              actualSettledAmt: importMode === 'new_settled' && actualSettledAmtFromRow !== undefined ? actualSettledAmtFromRow : undefined,
+              // --- FIX: ใช้ Spread Operator ป้องกันการสร้าง field ที่เป็น undefined ---
+              ...(importMode === 'new_settled' && actualSettledAmtFromRow !== undefined ? { actualSettledAmt: actualSettledAmtFromRow } : {}),
               paymentStatus: importMode === 'new_pending' ? 'pending_platform' : 'settled',
               settlementDate: importMode === 'new_pending' ? null : (normalizeDate(settleDateVal) || normalizeDate(orderDateVal)), // ใช้วันที่โอนเงิน
-              shopName: shopName !== 'ไม่ระบุ' ? shopName : undefined,
+              ...(shopName !== 'ไม่ระบุ' ? { shopName: shopName } : {}),
               isDeliveryFailed: isDeliveryFailed
             };
             totalAmt += lineTotal; 
@@ -2100,7 +2101,16 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         const sysDocId = `INC-${String(currentIncMax).padStart(5, '0')}`;
 
         const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
-        batch.set(docRef, { ...trans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
+        
+        // --- FIX: ล้าง properties ที่เป็น undefined ทิ้งให้หมดก่อนบันทึกลง Firestore ---
+        const cleanTrans = { ...trans };
+        Object.keys(cleanTrans).forEach(key => {
+            if (cleanTrans[key] === undefined) {
+                delete cleanTrans[key];
+            }
+        });
+        
+        batch.set(docRef, { ...cleanTrans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
 
         for (const item of trans.items) {
             let needed = Number(item.qty);
