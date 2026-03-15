@@ -1379,14 +1379,15 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         shipping: ['ที่อยู่ในการจัดส่ง', 'Shipping Address'],
         buyer: ['ชื่อผู้ใช้(ผู้ซื้อ)', 'ชื่อผู้ใช้ (ผู้ซื้อ)', 'ชื่อผู้รับ', 'Receiver Name', 'ชื่อผู้ซื้อ'],
         product: ['ชื่อสินค้า', 'Product Name'],
-        sku: ['Product SKU', 'SKU', 'Seller SKU', 'รหัสตัวเลือกสินค้า', 'Option SKU', 'รหัสสินค้า', 'Variation SKU', 'เลข SKU'],
+        // --- FIX: ลำดับความสำคัญ เอา "เลข SKU" ขึ้นก่อน และเอาคำที่แม่นยำขึ้นก่อน ---
+        sku: ['เลข SKU', 'SKU ตัวเลือกสินค้า', 'Variation SKU', 'หมายเลขอ้างอิง SKU', 'SKU', 'Seller SKU', 'Product SKU', 'รหัสตัวเลือกสินค้า', 'Option SKU', 'รหัสสินค้า'],
         courier: ['ตัวเลือกการจัดส่ง', 'Shipping Option', 'ชื่อผู้ให้บริการขนส่ง', 'Shipping provider'],
         trackingNo: ['หมายเลขติดตามพัสดุ', 'Tracking Number'],
         shippingFeeByBuyer: ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ', 'Shipping Fee Paid by Buyer'],
         shippingFeeSubsidy: ['ค่าจัดส่งที่Shopeeออกให้โดยประมาณ', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง', 'ค่าจัดส่งสินค้าที่ออกโดย Shopee'],
         estimatedShippingFee: ['ค่าจัดส่งโดยประมาณ', 'Estimated Shipping Fee', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee', 'ค่าจัดส่งที่Shopeeชำระโดยชื่อของคุณ', 'ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ'],
         returnShippingFee: ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee', 'ค่าจัดส่งสินค้าคืนผู้ขาย'],
-        refundAmount: ['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน'], // <-- เพิ่มคอลัมน์นี้
+        refundAmount: ['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน'],
         shopName: ['ชื่อร้านค้า', 'Shop Name', 'ร้านค้า']
     },
     lazada: {
@@ -1402,14 +1403,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         shipping: ['Shipping Address', 'ที่อยู่จัดส่ง', 'Billing Address'],
         buyer: ['Customer Name', 'ชื่อลูกค้า', 'Buyer Name'],
         product: ['Product Name', 'ชื่อสินค้า', 'Item Name'],
-        sku: ['Product SKU', 'SKU', 'Seller SKU', 'รหัสตัวเลือกสินค้า', 'Option SKU', 'รหัสสินค้า', 'Seller SKU ID'],
+        sku: ['เลข SKU', 'Seller SKU', 'Seller SKU ID', 'Product SKU', 'SKU', 'รหัสตัวเลือกสินค้า', 'Option SKU', 'รหัสสินค้า'],
         courier: ['Delivery Provider', 'ผู้ให้บริการจัดส่ง', 'Shipping Provider'],
         trackingNo: ['Tracking Code', 'หมายเลขติดตามพัสดุ', 'Tracking Number'],
         shippingFeeByBuyer: ['Shipping Fee (Paid By Customer)', 'ค่าจัดส่งที่ลูกค้าชำระ', 'ค่าจัดส่ง (ชำระโดยลูกค้า)', 'Customer Shipping Fee'],
         shippingFeeSubsidy: ['Shipping Fee Voucher (by Lazada)', 'คูปองส่วนลดค่าจัดส่ง (จากลาซาด้า)', 'Promotional Value'],
         estimatedShippingFee: ['ค่าจัดส่งโดยประมาณ', 'Estimated Shipping Fee', 'Shipping Fee (Paid By Seller)', 'ค่าจัดส่ง (ชำระโดยผู้ขาย)', 'ค่าจัดส่งที่ผู้ขายชำระ'],
         returnShippingFee: ['Return Shipping Fee', 'ค่าจัดส่งสินค้าคืน'],
-        refundAmount: ['Refund Amount', 'ยอดเงินคืน', 'จำนวนเงินคืน'], // <-- เพิ่มคอลัมน์นี้
+        refundAmount: ['Refund Amount', 'ยอดเงินคืน', 'จำนวนเงินคืน'],
         shopName: ['ชื่อร้านค้า', 'Shop Name', 'ร้านค้า']
     },
     tiktok: {
@@ -1425,14 +1426,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         shipping: ['Shipping Address', 'ที่อยู่จัดส่ง', 'Detail Address'],
         buyer: ['Buyer Name', 'ชื่อผู้ซื้อ', 'Customer Name'],
         product: ['Product Name', 'ชื่อสินค้า'],
-        sku: ['Product SKU', 'SKU', 'Seller SKU', 'รหัสสินค้าในร้าน', 'Option SKU', 'รหัสสินค้า', 'Seller SKU ID'],
+        sku: ['เลข SKU', 'Seller SKU', 'Seller SKU ID', 'Product SKU', 'SKU', 'รหัสสินค้าในร้าน', 'Option SKU', 'รหัสสินค้า'],
         courier: ['Shipping Provider', 'ผู้จัดส่ง', 'Delivery Option'],
         trackingNo: ['Tracking ID', 'หมายเลขติดตามพัสดุ', 'Tracking Number'],
         shippingFeeByBuyer: ['Customer Shipping Fee', 'ค่าจัดส่งที่ลูกค้าชำระ', 'Shipping Fee Paid by Customer'],
         shippingFeeSubsidy: ['Platform Shipping Subsidy', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม', 'Shipping Discount'],
         estimatedShippingFee: ['Estimated Shipping Fee', 'ค่าจัดส่งโดยประมาณ', 'Shipping fee borne by seller', 'ค่าจัดส่งที่เรียกเก็บจากผู้ขาย'],
         returnShippingFee: ['Return Shipping Fee', 'ค่าจัดส่งสินค้าคืน'],
-        refundAmount: ['Refund Amount', 'Customer Refund', 'ยอดเงินคืนลูกค้า'], // <-- เพิ่มคอลัมน์นี้
+        refundAmount: ['Refund Amount', 'Customer Refund', 'ยอดเงินคืนลูกค้า'],
         shopName: ['ชื่อร้านค้า', 'Shop Name', 'ร้านค้า']
     }
   };
@@ -1444,47 +1445,53 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       return isNaN(parsed) ? 0 : parsed;
   };
   
+  // --- FIX: ล้างอักขระพิเศษทุกชนิด เหลือแค่ตัวอักษรและตัวเลข ---
+  const cleanForSearch = (str) => String(str).replace(/[^a-zA-Z0-9ก-๙]/g, '').toLowerCase();
+
   const findVal = (row, kws) => { 
     if (!kws) return undefined;
     const keys = Object.keys(row);
-    const cleanKws = kws.map(kw => kw.toString().replace(/\s/g, '').toLowerCase());
+    const cleanKeys = keys.map(k => ({ original: k, clean: cleanForSearch(k) }));
     
-    // 1. Exact Match (Cleaned) - แม่นยำ 100%
-    let foundKey = keys.find(x => {
-        const cleanKey = x.toString().replace(/\s/g, '').toLowerCase();
-        return cleanKws.some(ckw => cleanKey === ckw);
-    });
-
-    // 2. Starts With Match - แม่นยำรองลงมา
-    if (!foundKey) {
-        foundKey = keys.find(x => {
-            const cleanKey = x.toString().replace(/\s/g, '').toLowerCase();
-            return cleanKws.some(ckw => cleanKey.startsWith(ckw));
-        });
+    // 1. Exact Match - หาเจาะจง และ "ต้องไม่เป็นช่องว่าง"
+    for (let i = 0; i < kws.length; i++) {
+        const ckw = cleanForSearch(kws[i]);
+        const matches = cleanKeys.filter(x => x.clean === ckw);
+        for (const match of matches) {
+            const val = row[match.original];
+            if (val !== undefined && val !== null && String(val).trim() !== '') {
+                return val; // คืนค่าเฉพาะเมื่อมีข้อมูลจริงๆ
+            }
+        }
     }
 
-    // 3. Partial Match (Includes) + Safety Checks ป้องกันการดึงคอลัมน์ผิด
-    if (!foundKey) {
-        foundKey = keys.find(x => {
-            const cleanKey = x.toString().replace(/\s/g, '').toLowerCase();
-            
+    // 2. Includes Match - หาคำที่ประกอบอยู่ และ "ต้องไม่เป็นช่องว่าง"
+    for (let i = 0; i < kws.length; i++) {
+        const ckw = cleanForSearch(kws[i]);
+        const matches = cleanKeys.filter(x => {
+            const cleanKey = x.clean;
             // Safety Check 1: ถ้ากำลังหา "จำนวนชิ้น" ต้องไม่ไปดึง "จำนวนเงิน"
-            const isQtySearch = cleanKws.includes('จำนวน') || cleanKws.includes('qty');
+            const isQtySearch = ckw.includes('จำนวน') || ckw.includes('qty');
             if (isQtySearch && (cleanKey.includes('เงิน') || cleanKey.includes('โอน') || cleanKey.includes('รวม') || cleanKey.includes('ราคา'))) {
                 return false;
             }
-            
             // Safety Check 2: ถ้ากำลังหา "ราคาต่อหน่วย" ต้องไม่ดึง "ราคาสุทธิ" (เดี๋ยวคูณซ้ำ) หรือ "ค่าธรรมเนียม"
-            const isPriceSearch = cleanKws.includes('ราคา') || cleanKws.includes('price') || cleanKws.includes('ราคาเสนอ');
+            const isPriceSearch = ckw.includes('ราคา') || ckw.includes('price') || ckw.includes('เสนอ');
             if (isPriceSearch && (cleanKey.includes('สุทธิ') || cleanKey.includes('รวม') || cleanKey.includes('ธรรมเนียม') || cleanKey.includes('ส่วนลด'))) {
                 return false;
             }
-
-            return cleanKws.some(ckw => cleanKey.includes(ckw) || ckw.includes(cleanKey));
+            return cleanKey.includes(ckw) || ckw.includes(cleanKey);
         });
+        
+        for (const match of matches) {
+            const val = row[match.original];
+            if (val !== undefined && val !== null && String(val).trim() !== '') {
+                return val; // คืนค่าเฉพาะเมื่อมีข้อมูลจริงๆ
+            }
+        }
     }
 
-    return foundKey ? row[foundKey] : undefined; 
+    return undefined; 
   };
 
   const handleFileUpload = async (e) => {
@@ -1737,6 +1744,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount']);
           const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? Math.abs(cleanNum(actualSettledAmtRaw)) : undefined;
           
+          // ดึง SKU มาเตรียมไว้เพื่อแสดงใน Log
+          const skuInput = findVal(row, schema.sku);
+          const skuVal = String(skuInput || '-').replace(/^['"=]+|['"=]+$/g, '').trim();
+
           if (!orderId || !isCompleted || !orderDateVal) { 
               skipped++; 
               skippedQty += qty; 
@@ -1747,6 +1758,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   reasonStr = 'สถานะไม่สำเร็จ / ลูกค้ายกเลิก / ยังไม่จ่ายเงิน';
                   currentSkippedDetails.push({
                       orderId: rawOrderId || '-',
+                      sku: skuVal,
                       product: String(findVal(row, schema.product) || '-'),
                       reason: reasonStr,
                       qty: qty
@@ -1755,12 +1767,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       cCount++;
                       trackedCancelledOrders.add(orderId);
                   }
-              } else if (!dateVal) {
+              } else if (!orderDateVal) {
                   reasonStr = 'ไม่มีวันที่ทำรายการ';
-                  currentSkippedDetails.push({ orderId: rawOrderId || '-', product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
+                  currentSkippedDetails.push({ orderId: rawOrderId || '-', sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
               } else if (!orderId) {
                   reasonStr = 'ไม่มีหมายเลขคำสั่งซื้อ';
-                  currentSkippedDetails.push({ orderId: '-', product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
+                  currentSkippedDetails.push({ orderId: '-', sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
               }
 
               return; // SKIP IT!
@@ -1773,6 +1785,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               
               currentSkippedDetails.push({
                   orderId: orderId,
+                  sku: skuVal,
                   product: String(findVal(row, schema.product) || '-'),
                   reason: 'มีข้อมูลในระบบแล้ว (ข้ามเพื่อป้องกันข้อมูลซ้ำ)',
                   qty: qty
@@ -1787,7 +1800,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const transFee = Math.abs(cleanNum(findVal(row, schema.transFee)));
           const comm = Math.abs(cleanNum(findVal(row, schema.commFee)));
           const serv = Math.abs(cleanNum(findVal(row, schema.servFee)));
-          const skuVal = String(findVal(row, schema.sku) || '-').trim();
+          
           const infra = parseFloat(fixedInfraFee || 0) || 0;
           
           const shippingAddress = String(findVal(row, schema.shipping) || '');
@@ -2457,7 +2470,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                       <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0">
                                           <tr>
                                               <th className="p-3 pl-4">Order ID</th>
-                                              <th className="p-3">สินค้า (Product)</th>
+                                              <th className="p-3">สินค้า (Product / SKU)</th>
                                               <th className="p-3 text-center">สถานะ/เหตุผล</th>
                                           </tr>
                                       </thead>
@@ -2465,7 +2478,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                           {deliveryFailedDetailsData.map((item, i) => (
                                               <tr key={`failed-${i}`} className="hover:bg-orange-50/30">
                                                   <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
-                                                  <td className="p-3 truncate max-w-[200px]" title={item.product}>{item.product}</td>
+                                                  <td className="p-3 truncate max-w-[200px]" title={item.product}>
+                                                      <span className="font-mono text-indigo-500 font-bold mr-1">[{item.sku || '-'}]</span>
+                                                      {item.product}
+                                                  </td>
                                                   <td className="p-3 text-center">
                                                       <span className="bg-orange-100 text-orange-700 px-2 py-1 rounded-md text-[10px] font-bold">
                                                           {item.reason}
@@ -2476,7 +2492,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                           {skippedDetailsData.map((item, i) => (
                                               <tr key={`skipped-${i}`} className="hover:bg-amber-50/30">
                                                   <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
-                                                  <td className="p-3 truncate max-w-[200px]" title={item.product}>{item.product}</td>
+                                                  <td className="p-3 truncate max-w-[200px]" title={item.product}>
+                                                      <span className="font-mono text-indigo-500 font-bold mr-1">[{item.sku || '-'}]</span>
+                                                      {item.product}
+                                                  </td>
                                                   <td className="p-3 text-center">
                                                       <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded-md text-[10px] font-bold">
                                                           {item.reason}
@@ -2623,7 +2642,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   <thead className="bg-white text-slate-400 font-bold uppercase tracking-wider sticky top-0 border-b text-left">
                     <tr>
                       <th className="p-4 text-left">{importMode === 'update_settled' ? 'Settlement Date' : 'Date'}</th>
-                      <th className="p-4 text-left">Description</th>
+                      <th className="p-4 text-left">Order ID / Description</th>
                       <th className="p-4 text-left">Status / SKU</th>
                       <th className="p-4 text-right">Fees (฿)</th>
                       <th className="p-4 text-right">Income (฿)</th>
@@ -2637,7 +2656,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                         <td className="p-4 text-slate-500 whitespace-nowrap text-left">{formatDate(it.newSettlementDate || it.date)}</td>
                         <td className="p-4 text-left">
                           <p className="font-bold text-slate-700 text-left">{it.orderId}</p>
-                          <p className="text-[10px] text-slate-400 truncate max-w-[200px] text-left">{it.description}</p>
+                          <div className="text-[10px] text-slate-500 mt-1 flex flex-col gap-0.5">
+                              {(it.items || []).map((item, itemIdx) => (
+                                 <p key={itemIdx} className="truncate max-w-[250px]" title={item.desc}>
+                                    <span className="font-mono text-indigo-600 font-bold bg-indigo-50 px-1 rounded mr-1">[{item.sku || 'NO SKU'}]</span>
+                                    {item.desc} <span className="text-slate-400 font-bold ml-1">x{item.qty}</span>
+                                 </p>
+                              ))}
+                          </div>
                           {it.isDeliveryFailed && (
                               <span className="inline-block mt-1 bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><AlertTriangle size={10}/> นำเข้าพร้อมหมายเหตุ: จัดส่งไม่สำเร็จ</span>
                           )}
@@ -2994,7 +3020,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             <tr>
                                 <th className="p-4 w-10 text-center">No.</th>
                                 <th className="p-4">Order ID</th>
-                                <th className="p-4">สินค้า (Product)</th>
+                                <th className="p-4">สินค้า (Product / SKU)</th>
                                 <th className="p-4 text-center">จำนวน (ชิ้น)</th>
                                 <th className="p-4">สาเหตุที่ระบบข้าม (Reason)</th>
                             </tr>
@@ -3004,7 +3030,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                 <tr key={i} className="hover:bg-amber-50/30 transition-colors">
                                     <td className="p-4 text-center font-bold text-slate-400">{i + 1}</td>
                                     <td className="p-4 font-mono font-bold text-slate-700">{item.orderId}</td>
-                                    <td className="p-4 truncate max-w-[250px]" title={item.product}>{item.product}</td>
+                                    <td className="p-4 truncate max-w-[250px]" title={item.product}>
+                                        <span className="font-mono text-indigo-500 font-bold mr-1">[{item.sku || '-'}]</span>
+                                        {item.product}
+                                    </td>
                                     <td className="p-4 text-center font-black text-slate-800">{item.qty}</td>
                                     <td className="p-4 text-amber-600 font-bold text-[10px]">
                                         <span className="bg-amber-100/50 px-2 py-1 rounded-lg border border-amber-200/50">{item.reason}</span>
@@ -3366,33 +3395,48 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                 const batch = writeBatch(dbInstance);
                 let count = 0;
 
+                const cleanForSearch = (str) => String(str).replace(/[^a-zA-Z0-9ก-๙]/g, '').toLowerCase();
+
                 const findInRow = (row, keywords) => {
                   const keys = Object.keys(row);
-                  const cleanKws = keywords.map(kw => kw.toString().replace(/\s/g, '').toLowerCase());
+                  const cleanKeys = keys.map(k => ({ original: k, clean: cleanForSearch(k) }));
                   
-                  let foundKey = keys.find(k => {
-                    const cleanKey = k.toString().replace(/\s/g, '').toLowerCase();
-                    return cleanKws.some(ckw => cleanKey === ckw);
-                  });
-
-                  if (!foundKey) {
-                      foundKey = keys.find(k => {
-                        const cleanKey = k.toString().replace(/\s/g, '').toLowerCase();
-                        return cleanKws.some(ckw => cleanKey.includes(ckw) || ckw.includes(cleanKey));
-                      });
+                  // 1. Exact match - หาให้เจอและต้องมีข้อมูล!
+                  for (let i = 0; i < keywords.length; i++) {
+                      const ckw = cleanForSearch(keywords[i]);
+                      const matches = cleanKeys.filter(k => k.clean === ckw);
+                      for (const match of matches) {
+                          const val = row[match.original];
+                          if (val !== undefined && val !== null && String(val).trim() !== '') return val;
+                      }
                   }
-                  return foundKey ? row[foundKey] : undefined;
+                  
+                  // 2. Includes match - หาให้เจอและต้องมีข้อมูล!
+                  for (let i = 0; i < keywords.length; i++) {
+                      const ckw = cleanForSearch(keywords[i]);
+                      const matches = cleanKeys.filter(k => {
+                          return k.clean.includes(ckw) || ckw.includes(k.clean);
+                      });
+                      for (const match of matches) {
+                          const val = row[match.original];
+                          if (val !== undefined && val !== null && String(val).trim() !== '') return val;
+                      }
+                  }
+                  return undefined;
                 };
 
                 jsonData.forEach((row) => {
                     const name = findInRow(row, ['ชื่อสินค้า', 'productname', 'name']);
-                    const skuInput = findInRow(row, ['Product SKU', 'เลข SKU', 'รหัสตัวเลือกสินค้า', 'sku', 'Seller SKU']);
+                    // --- FIX: ลำดับความสำคัญ เอา "เลข SKU" ขึ้นก่อน ---
+                    const skuInput = findInRow(row, ['เลข SKU', 'SKU ตัวเลือกสินค้า', 'Variation SKU', 'หมายเลขอ้างอิง SKU', 'SKU', 'Seller SKU', 'Product SKU', 'รหัสตัวเลือกสินค้า', 'รหัสสินค้าในร้าน', 'รหัสสินค้า']);
                     const priceVal = findInRow(row, ['ราคาขาย', 'ราคา']);
                     const qtyVal = findInRow(row, ['จำนวน', 'คงเหลือ', 'quantity', 'qty']);
                     
                     const qty = (qtyVal !== undefined && qtyVal !== "") ? Number(qtyVal) : 0; 
                     const sellPrice = (priceVal !== undefined && priceVal !== "") ? Number(priceVal) : 0;
-                    const finalSku = (skuInput && skuInput.toString().trim() !== "") ? String(skuInput).trim() : "0";
+                    
+                    // --- FIX: ตัดเครื่องหมายพิเศษออกจาก SKU ---
+                    const finalSku = (skuInput && skuInput.toString().trim() !== "") ? String(skuInput).replace(/^['"=]+|['"=]+$/g, '').trim() : "0";
 
                     const dateVal = findInRow(row, ['วันที่', 'date']);
                     
