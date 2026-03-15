@@ -5144,6 +5144,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [subTab, setSubTab] = useState('new');
   const [viewItem, setViewItem] = useState(null);
   const [cancelConfirmId, setCancelConfirmId] = useState(null); // แก้ไขชื่อ State สำหรับยกเลิกรายการ
+  const [hardDeleteConfirmId, setHardDeleteConfirmId] = useState(null); // NEW: State สำหรับลบถาวร
   const [showPartnerModal, setShowPartnerModal] = useState(false);
   const [showStockSelectModal, setShowStockSelectModal] = useState(false);
   const [stockSearchTerm, setStockSearchTerm] = useState('');
@@ -5463,6 +5464,51 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       showToast("ยกเลิกรายการและคืนยอดสต็อกเรียบร้อย", "success"); 
       setCancelConfirmId(null); 
     } catch (e) { showToast("ไม่สามารถยกเลิกรายการได้", "error"); } 
+  };
+
+  const handleHardDeleteTransaction = async () => {
+      if (!hardDeleteConfirmId || !user) return;
+      try {
+          const batchWriter = writeBatch(dbInstance);
+          const coll = hardDeleteConfirmId.type === 'income' ? 'transactions_income' : 'transactions_expense';
+          const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, hardDeleteConfirmId.id);
+
+          // ถ้ายังไม่ได้ถูกยกเลิก (void) ต้องคืนสต็อกก่อน
+          if (!hardDeleteConfirmId.isCancelled) {
+              if (hardDeleteConfirmId.type === 'expense') {
+                  const associatedLots = stockBatches.filter(b => b.parentExpenseId === hardDeleteConfirmId.id);
+                  associatedLots.forEach(lot => {
+                      batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
+                  });
+              } else if (hardDeleteConfirmId.type === 'income') {
+                  const saleDoc = transactions.find(t => t.id === hardDeleteConfirmId.id);
+                  if (saleDoc && saleDoc.items) {
+                      for (const item of saleDoc.items) {
+                          let toReturn = Number(item.qty);
+                          const affectedLots = stockBatches
+                            .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
+                            .sort(sortNewestFirst);
+
+                          for (const lot of affectedLots) {
+                              if (toReturn <= 0) break;
+                              const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                              batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) });
+                              toReturn -= canTakeBack;
+                          }
+                      }
+                  }
+              }
+          }
+
+          // ลบรายการนี้ออกไปถาวร
+          batchWriter.delete(docRef);
+
+          await batchWriter.commit();
+          showToast("ลบรายการนี้แบบถาวรเรียบร้อยแล้ว", "success");
+          setHardDeleteConfirmId(null);
+      } catch (e) {
+          showToast("ไม่สามารถลบรายการถาวรได้", "error");
+      }
   };
 
   const selectPartner = (p) => { 
@@ -6646,6 +6692,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     {!t.isCancelled && (
                                         <button onClick={()=>setCancelConfirmId({id: t.id, type: t.type})} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-rose-600 hover:shadow-md transition-all shadow-sm text-center" title="ยกเลิกรายการ (Void)"><XCircle size={16}/></button>
                                     )}
+                                    <button onClick={()=>setHardDeleteConfirmId(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-rose-600 hover:shadow-md transition-all shadow-sm text-center" title="ลบถาวร (Hard Delete)"><Trash2 size={16}/></button>
                                 </div>
                             </td>
                         </tr>
@@ -6824,7 +6871,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       )}
       
       {/* Cancel Item Confirm Modal */}
-      {cancelConfirmId && (<div className="fixed inset-0 bg-black/60 z-[900] flex items-center justify-center p-4 text-left"><div className="bg-white rounded-[32px] p-8 max-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center"><XCircle size={32}/></div><h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันการยกเลิกรายการ (Void)?</h3><p className="text-xs text-slate-400 mb-8 text-center leading-relaxed">ระบบจะทำเครื่องหมายรายการนี้เป็น "ยกเลิกแล้ว"<br/>และทำการดึงสต็อกสินค้ากลับคืนเข้าคลังให้อัตโนมัติ<br/><span className="font-bold text-rose-600">*เลขเอกสารจะยังคงอยู่เพื่อการตรวจสอบบัญชี</span></p><div className="flex gap-3 text-center"><button onClick={()=>setCancelConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ปิด</button><button onClick={()=>handleCancelTransaction(cancelConfirmId.id, cancelConfirmId.type)} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center">ยืนยันยกเลิก</button></div></div></div>)}
+      {cancelConfirmId && (<div className="fixed inset-0 bg-black/60 z-[900] flex items-center justify-center p-4 text-left"><div className="bg-white rounded-[32px] p-8 max-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center"><XCircle size={32}/></div><h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันการยกเลิกรายการ (Void)?</h3><p className="text-xs text-slate-400 mb-8 text-center leading-relaxed">ระบบจะทำเครื่องหมายรายการนี้เป็น "ยกเลิกแล้ว"<br/>และทำการดึงสต็อกสินค้ากลับคืนเข้าคลังให้อัตโนมัติ<br/><span className="font-bold text-rose-600">*เลขเอกสารจะยังคงอยู่เพื่อการตรวจสอบบัญชี</span></p><div className="flex gap-3 text-center"><button onClick={()=>setCancelConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ปิด</button><button onClick={handleCancelTransaction} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center">ยืนยันยกเลิก</button></div></div></div>)}
+
+      {/* Hard Delete Confirm Modal */}
+      {hardDeleteConfirmId && (<div className="fixed inset-0 bg-black/60 z-[900] flex items-center justify-center p-4 text-left"><div className="bg-white rounded-[32px] p-8 max-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center"><Trash2 size={32}/></div><h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันลบข้อมูลถาวร?</h3><p className="text-xs text-slate-400 mb-8 text-center leading-relaxed">ระบบจะลบข้อมูล <b>{hardDeleteConfirmId.sysDocId || 'รายการนี้'}</b> ออกจากฐานข้อมูลอย่างถาวร<br/>และจะทำการคืนยอดสต็อกสินค้าให้โดยอัตโนมัติ (ถ้ามียอดตัดไป)<br/><span className="font-bold text-rose-600">*การกระทำนี้ไม่สามารถเรียกคืนได้</span></p><div className="flex gap-3 text-center"><button onClick={()=>setHardDeleteConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button><button onClick={handleHardDeleteTransaction} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center">ยืนยันลบถาวร</button></div></div></div>)}
 
       {/* Settlement (รับเงินเข้า) Confirm Modal */}
       {settleConfirmId && (
@@ -6920,6 +6970,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [customerSearchTerm, setCustomerSearchTerm] = useState('');
   const [customerTab, setCustomerTab] = useState('buyer');
   const [cancelConfirmId, setCancelConfirmId] = useState(null);
+  const [hardDeleteInvoiceId, setHardDeleteInvoiceId] = useState(null); // NEW: State สำหรับลบเอกสารถาวร
   const [historyFilter, setHistoryFilter] = useState('all');
 
   // --- Document Dashboard & AI State ---
@@ -7720,6 +7771,28 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       }
   };
 
+  const handleHardDeleteInvoice = async () => {
+      if (!hardDeleteInvoiceId || !user) return;
+      try {
+          const batchWriter = writeBatch(dbInstance);
+          const invRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', hardDeleteInvoiceId.id);
+          batchWriter.delete(invRef);
+          
+          if (hardDeleteInvoiceId.orderId) {
+              const linkedTrans = transactions.filter(t => t.orderId === hardDeleteInvoiceId.orderId && t.type === 'income');
+              linkedTrans.forEach(t => { 
+                  const tRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', t.id); 
+                  batchWriter.update(tRef, { invoiceNo: null, isInvoiced: false }); 
+              });
+          }
+          await batchWriter.commit();
+          showToast("ลบเอกสารแบบถาวรเรียบร้อยแล้ว", "success");
+          setHardDeleteInvoiceId(null);
+      } catch(e) { 
+          showToast("ลบเอกสารไม่สำเร็จ", "error"); 
+      }
+  };
+
   const handleDownloadPDF = async () => {
     if (!window.html2pdf || !window.JSZip) {
       showToast("กำลังโหลดโปรแกรมช่วยดาวน์โหลด...", "success");
@@ -8281,6 +8354,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                                         <button onClick={() => setCancelConfirmId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="ยกเลิกเอกสาร"><X size={12}/></button>
                                                     </>
                                                 )}
+                                                <button onClick={() => setHardDeleteInvoiceId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="ลบถาวร (Hard Delete)"><Trash2 size={12}/></button>
                                             </>
                                         )}
                                     </div>
@@ -8294,7 +8368,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
             </div>
             
             {cancelConfirmId && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
                   <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
                     <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
                       <XCircle size={32}/>
@@ -8308,6 +8382,27 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                     <div className="flex gap-3 text-center">
               <button onClick={() => setCancelConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ปิด</button>
               <button onClick={handleCancelInvoice} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center">ยืนยันยกเลิก</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hard Delete Invoice Confirm Modal */}
+      {hardDeleteInvoiceId && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+                  <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+                    <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
+                      <Trash2 size={32}/>
+                    </div>
+                    <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันลบเอกสารถาวร?</h3>
+                    <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
+                      เอกสารเลขที่ <b>{hardDeleteInvoiceId.invNo}</b> จะถูกลบออกจากระบบถาวร<br/>
+                      และออเดอร์ <b>{hardDeleteInvoiceId.orderId || '-'}</b> จะถูกปลดล็อกให้สร้างเอกสารใหม่ได้<br/>
+                      <span className="text-rose-600 font-bold underline">การกระทำนี้ไม่สามารถย้อนกลับได้</span>
+                    </p>
+                    <div className="flex gap-3 text-center">
+              <button onClick={() => setHardDeleteInvoiceId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+              <button onClick={handleHardDeleteInvoice} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center">ยืนยันลบถาวร</button>
             </div>
           </div>
         </div>
