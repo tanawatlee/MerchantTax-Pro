@@ -658,12 +658,13 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     let cashExp = 0;
     let cashShipping = 0;
     let cashFees = 0;
+    let cashCogs = 0; // NEW: ตัวแปรเก็บต้นทุนของบิลที่รับเงินแล้ว
 
     transactions.forEach(t => {
         if (t.isCancelled) return;
         if (t.isFromReconciliation) return; // ข้ามบิลปรับปรุงอัตโนมัติ เพื่อป้องกันยอดเบิ้ล
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
-        if (selectedShop !== 'all' && (t.shopName || 'ไม่ระบุ') !== selectedShop) return;
+        if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
 
         const orderD = normalizeDate(t.date);
         const settleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.paymentStatus === 'settled' || t.status === 'paid' ? orderD : null);
@@ -685,15 +686,16 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
             const fee = Number(t.platformFee) || 0;
             const ship = Number(t.shippingFee) || 0;
             
+            // คำนวณต้นทุนสินค้าของบิลนี้ (COGS)
+            const cogs = (t.items || []).reduce((itemSum, item) => {
+                const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
+                return itemSum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
+            }, 0);
+
             // 1. Performance: ผลประกอบการ อิงวันสั่งซื้อ
             if (matchOrderMonth) {
                 perfSales += expectedAmt;
                 perfFees += fee;
-                
-                const cogs = (t.items || []).reduce((itemSum, item) => {
-                    const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
-                    return itemSum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
-                }, 0);
                 perfCogs += cogs;
             }
 
@@ -702,6 +704,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 cashSettled += settledAmt;
                 cashShipping += ship;
                 cashFees += fee;
+                cashCogs += cogs; // NEW: เก็บยอดต้นทุนของบิลที่ได้เงินแล้ว
             }
         } else if (t.type === 'expense') {
             const amt = Number(t.total) || 0;
@@ -718,7 +721,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     transactions.forEach(t => {
          if (t.isCancelled || t.isFromReconciliation) return;
          if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
-         if (selectedShop !== 'all' && (t.shopName || 'ไม่ระบุ') !== selectedShop) return;
+         if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
          
          if (t.type === 'income' && t.paymentStatus === 'pending_platform') {
              cashPending += (t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total));
@@ -731,7 +734,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
 
     return { 
         perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: perfSales - perfCogs - perfExp },
-        cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt }
+        cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt, cogs: cashCogs }
     };
   }, [transactions, stockBatches, selectedChannel, selectedShop, selectedMonth]);
 
@@ -748,7 +751,8 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
         if (t.isCancelled) return; 
         if (t.isFromReconciliation) return; 
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
-        if (selectedShop !== 'all' && (t.shopName || 'ไม่ระบุ') !== selectedShop) return;
+        // --- FIX: แก้ไขให้ตรวจสอบชื่อร้านแบบไม่สนใจตัวพิมพ์เล็ก/ใหญ่ ---
+        if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
         
         const orderD = normalizeDate(t.date);
         const settleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.paymentStatus === 'settled' || t.status === 'paid' ? orderD : null);
@@ -799,7 +803,8 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     const salesMap = {};
     transactions.filter(t => t.type === 'income' && !t.isCancelled && !t.isFromReconciliation).forEach(t => {
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
-        if (selectedShop !== 'all' && (t.shopName || 'ไม่ระบุ') !== selectedShop) return;
+        // --- FIX: แก้ไขให้ตรวจสอบชื่อร้านแบบไม่สนใจตัวพิมพ์เล็ก/ใหญ่ ---
+        if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
         if (selectedMonth !== 'all') {
             const d = normalizeDate(t.date);
             if (!d) return;
@@ -1063,6 +1068,21 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     <StatCard title="รอเงินโอน (Pending)" value={analytics.cash.pending} color="amber" icon={<Clock />} subtitle="ยอดค้างรับรวมจาก Platform" />
                     <StatCard title="จ่ายออกแล้ว (Cash Out)" value={analytics.cash.expense} color="rose" icon={<TrendingDown />} subtitle="รายจ่ายที่ชำระเงินแล้ว" />
                     <StatCard title="กระแสเงินสดสุทธิ (Net Cash)" value={analytics.cash.netCash} color="indigo" icon={<ProfitIcon />} subtitle="เงินเข้า หัก เงินออก" />
+                </div>
+
+                {/* NEW: แถบแสดงข้อมูลอ้างอิง (ต้นทุนสินค้าที่แฝงอยู่ในเงินที่รับเข้า) */}
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 w-full shadow-sm">
+                    <div className="flex items-start md:items-center gap-3">
+                        <div className="p-2 bg-slate-200 rounded-xl text-slate-500 shrink-0"><Box size={20}/></div>
+                        <div>
+                            <p className="text-sm font-black text-slate-700">ต้นทุนสินค้าของยอดเงินที่เข้าแล้ว (Settled COGS)</p>
+                            <p className="text-xs text-slate-500 mt-0.5 font-medium">ตัวเลขสำหรับใช้อ้างอิง (ไม่นำไปหักลบกับยอด Net Cash เพื่อไม่ให้นับรายจ่ายซ้ำซ้อนกับบิลตอนซื้อของเข้า)</p>
+                        </div>
+                    </div>
+                    <div className="text-left md:text-right w-full md:w-auto">
+                        <p className="text-xl font-black text-slate-700">{formatCurrency(analytics.cash.cogs)}</p>
+                        <p className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase tracking-widest">Reference Only</p>
+                    </div>
                 </div>
 
                 {/* Taxable Income Calculation Section */}
