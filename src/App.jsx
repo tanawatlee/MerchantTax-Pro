@@ -2844,7 +2844,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
                   <div className="flex justify-between items-start mb-6">
                       <div>
-                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><History className="text-indigo-600"/> รายละเอียดข้อมูลที่ถูกกรองทิ้ง</h3>
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><History className="text-indigo-600"/> รายละเอียดข้อมูลการนำเข้า</h3>
                           <p className="text-xs text-slate-500 mt-1">ประวัติการนำเข้าเมื่อ: {formatDate(viewLogDetails.date)} (โหมด: {viewLogDetails.mode})</p>
                       </div>
                       <button onClick={()=>setViewLogDetails(null)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
@@ -2852,6 +2852,96 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   
                   <div className="flex-1 overflow-auto custom-scrollbar flex flex-col gap-6">
                       
+                      {/* --- NEW: Summary Section for Import Log --- */}
+                      <div className="bg-indigo-50/30 p-5 rounded-2xl border border-indigo-100 flex flex-col gap-4">
+                          <h4 className="font-bold text-indigo-800 text-sm flex items-center gap-1.5"><PieChart size={16}/> สรุปข้อมูลการนำเข้า (Import Summary)</h4>
+                          
+                          {viewLogDetails.mode === 'update_settled' ? (
+                              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm font-sarabun">
+                                  {/* 1. รายได้ทั้งหมด */}
+                                  <div className="bg-orange-500 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center">
+                                      <span>1. รายได้ทั้งหมด (Total Income)</span>
+                                      <span className="text-base">{formatCurrency((viewLogDetails.stats?.detailedSummary?.productPrice || 0) - (viewLogDetails.stats?.detailedSummary?.sellerDiscount || 0) - (viewLogDetails.stats?.detailedSummary?.refundAmount || 0))}</span>
+                                  </div>
+                                  <div className="px-4 py-3 space-y-2 text-xs">
+                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">สินค้าราคาปกติ</span><span className="font-mono font-medium">{formatCurrency(viewLogDetails.stats?.detailedSummary?.productPrice)}</span></div>
+                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ส่วนลดสินค้าจากผู้ขาย</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(viewLogDetails.stats?.detailedSummary?.sellerDiscount)}</span></div>
+                                      <div className="flex justify-between"><span className="text-slate-600">จำนวนเงินที่ทำการคืนให้ผู้ซื้อ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(viewLogDetails.stats?.detailedSummary?.refundAmount)}</span></div>
+                                  </div>
+
+                                  {/* 2. ค่าใช้จ่ายทั้งหมด */}
+                                  <div className="bg-slate-400 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center border-t border-white/20">
+                                      <span>2. ค่าใช้จ่ายทั้งหมด (Total Expenses)</span>
+                                      <span className="text-base">{formatCurrency(
+                                          (viewLogDetails.stats?.detailedSummary?.shipBuyer || 0) + (viewLogDetails.stats?.detailedSummary?.shipShopee || 0) - (viewLogDetails.stats?.detailedSummary?.shipActual || 0) - (viewLogDetails.stats?.detailedSummary?.shipReturn || 0) -
+                                          (viewLogDetails.stats?.detailedSummary?.feeComm || 0) - (viewLogDetails.stats?.detailedSummary?.feeServ || 0) - (viewLogDetails.stats?.detailedSummary?.feeInfra || 0) - (viewLogDetails.stats?.detailedSummary?.feeTrans || 0)
+                                      )}</span>
+                                  </div>
+                                  <div className="px-4 py-3 text-xs bg-slate-50">
+                                      <p className="font-bold text-slate-700 mb-2">ค่าจัดส่ง (Shipping)</p>
+                                      <div className="space-y-2 pl-4 border-l-2 border-slate-200">
+                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ชำระโดยผู้ซื้อ</span><span className="font-mono font-medium">{formatCurrency(viewLogDetails.stats?.detailedSummary?.shipBuyer)}</span></div>
+                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งสินค้าที่ออกโดย Shopee</span><span className="font-mono font-medium">{formatCurrency(viewLogDetails.stats?.detailedSummary?.shipShopee)}</span></div>
+                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(viewLogDetails.stats?.detailedSummary?.shipActual)}</span></div>
+                                          <div className="flex justify-between"><span className="text-slate-600">ค่าจัดส่งสินค้าคืน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(viewLogDetails.stats?.detailedSummary?.shipReturn)}</span></div>
+                                      </div>
+                                      
+                                      <p className="font-bold text-slate-700 mb-2 mt-4">ค่าธรรมเนียม (Fees)</p>
+                                      <div className="space-y-2 pl-4 border-l-2 border-slate-200">
+                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าคอมมิชชั่นรวม</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(viewLogDetails.stats?.detailedSummary?.feeComm)}</span></div>
+                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าบริการ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(viewLogDetails.stats?.detailedSummary?.feeServ)}</span></div>
+                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าธรรมเนียมโครงสร้างพื้นฐานฯ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(viewLogDetails.stats?.detailedSummary?.feeInfra)}</span></div>
+                                          <div className="flex justify-between"><span className="text-slate-600">ค่าธุรกรรมการชำระเงิน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(viewLogDetails.stats?.detailedSummary?.feeTrans)}</span></div>
+                                      </div>
+                                  </div>
+
+                                  {/* 3. จำนวนเงินทั้งหมดที่โอนแล้ว */}
+                                  <div className="bg-slate-800 text-white font-bold p-4 text-sm flex justify-between items-center">
+                                      <span>3. จำนวนเงินทั้งหมดที่โอนแล้ว (Net Transferred)</span>
+                                      <span className="text-xl font-black">{formatCurrency(viewLogDetails.stats?.detailedSummary?.totalSettled)}</span>
+                                  </div>
+                                  
+                                  <div className="grid grid-cols-2 gap-px bg-slate-200">
+                                      <div className="bg-white p-3">
+                                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ส่วนต่าง (เงินขาด)</p>
+                                          <p className="text-base font-black text-rose-500">{formatCurrency(viewLogDetails.stats?.totalDiffShort)}</p>
+                                      </div>
+                                      <div className="bg-white p-3">
+                                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ส่วนต่าง (ได้เพิ่ม)</p>
+                                          <p className="text-base font-black text-emerald-500">{formatCurrency(viewLogDetails.stats?.totalDiffSurplus)}</p>
+                                      </div>
+                                  </div>
+                              </div>
+                          ) : (
+                              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                                  <div className="bg-white p-3 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-center">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">นำเข้าสำเร็จ</p>
+                                      <p className="text-xl font-black text-indigo-600">{viewLogDetails.stats?.processed || 0} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                                  </div>
+                                  <div className="bg-white p-3 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-center">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม</p>
+                                      <p className="text-xl font-black text-emerald-600">{formatCurrency(viewLogDetails.stats?.totalAmount || 0)}</p>
+                                  </div>
+                                  <div className="bg-white p-3 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-center">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม</p>
+                                      <p className="text-xl font-black text-rose-500">{formatCurrency(viewLogDetails.stats?.totalFees || 0)}</p>
+                                  </div>
+                                  <div className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 text-orange-600">จัดส่งไม่สำเร็จ</p>
+                                      <p className="text-xl font-black text-orange-500">{viewLogDetails.stats?.deliveryFailed || 0} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                                  </div>
+                                  <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ลูกค้ายกเลิก</p>
+                                      <p className="text-xl font-black text-slate-500">{viewLogDetails.stats?.cancelled || 0} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                                  </div>
+                                  <div className="bg-white p-3 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-center">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ข้าม/ข้อมูลซ้ำ</p>
+                                      <p className="text-xl font-black text-amber-500">{(viewLogDetails.stats?.skipped || 0)} / {(viewLogDetails.stats?.duplicates || 0)} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
+                                  </div>
+                              </div>
+                          )}
+                      </div>
+
                       {/* Section 1: Delivery Failed */}
                       <div className="border border-orange-200 rounded-2xl overflow-hidden shadow-sm">
                           <div className="bg-orange-50 p-4 border-b border-orange-100 flex items-center gap-2">
