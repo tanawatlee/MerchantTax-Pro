@@ -658,10 +658,10 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     let cashExp = 0;
     let cashShipping = 0;
     let cashFees = 0;
-    let cashCogs = 0; // NEW: ตัวแปรเก็บต้นทุนของบิลที่รับเงินแล้ว
+    let cashCogs = 0; 
+    let cashGrossSales = 0; // NEW: ตัวแปรเก็บยอดขายสินค้าก่อนหักค่าธรรมเนียม
 
     transactions.forEach(t => {
-        if (t.isCancelled) return;
         if (t.isFromReconciliation) return; // ข้ามบิลปรับปรุงอัตโนมัติ เพื่อป้องกันยอดเบิ้ล
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
         if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
@@ -681,38 +681,64 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
         }
 
         if (t.type === 'income') {
-            const expectedAmt = t.grandTotal || t.total;
-            const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : expectedAmt;
             const fee = Number(t.platformFee) || 0;
             const ship = Number(t.shippingFee) || 0;
             
-            // คำนวณต้นทุนสินค้าของบิลนี้ (COGS)
-            const cogs = (t.items || []).reduce((itemSum, item) => {
-                const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
-                return itemSum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
-            }, 0);
+            if (!t.isCancelled) {
+                const expectedAmt = t.grandTotal || t.total;
+                const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : expectedAmt;
+                
+                // คำนวณต้นทุนสินค้าของบิลนี้ (COGS)
+                const cogs = (t.items || []).reduce((itemSum, item) => {
+                    const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
+                    return itemSum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
+                }, 0);
 
-            // 1. Performance: ผลประกอบการ อิงวันสั่งซื้อ
-            if (matchOrderMonth) {
-                perfSales += expectedAmt;
-                perfFees += fee;
-                perfCogs += cogs;
-            }
+                // 1. Performance: ผลประกอบการ อิงวันสั่งซื้อ
+                if (matchOrderMonth) {
+                    perfSales += expectedAmt;
+                    perfFees += fee;
+                    perfCogs += cogs;
+                }
 
-            // 2. Cash Flow: กระแสเงินสด อิงวันเงินเข้า
-            if (matchSettleMonth && (t.paymentStatus === 'settled' || t.status === 'paid')) {
-                cashSettled += settledAmt;
-                cashShipping += ship;
-                cashFees += fee;
-                cashCogs += cogs; // NEW: เก็บยอดต้นทุนของบิลที่ได้เงินแล้ว
+                // 2. Cash Flow: กระแสเงินสด อิงวันเงินเข้า
+                if (matchSettleMonth && (t.paymentStatus === 'settled' || t.status === 'paid')) {
+                    cashSettled += settledAmt;
+                    cashShipping += ship;
+                    cashFees += fee;
+                    cashCogs += cogs; 
+                    // หักยอดคืนเงินออกจาก Gross Sales เพื่อให้คำนวณฐานภาษีได้ถูกต้อง
+                    cashGrossSales += Math.max(0, (Number(t.total) || 0) - (Number(t.refundAmount) || 0)); 
+                }
+            } else {
+                // --- FIX: ดึงค่าธรรมเนียม Platform จากออเดอร์ที่ถูกยกเลิก/คืนสินค้า มารวมด้วย ---
+                if (matchOrderMonth && fee > 0) {
+                    perfFees += fee;
+                    perfExp += fee; // นำไปหักเป็นรายจ่ายในฝั่งกำไรสุทธิ เพราะเสียเงินไปฟรีๆ
+                }
+                
+                // คำนวณเดือนที่รับรู้การคืนเงิน/ยกเลิก
+                const cancelSettleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.cancelledAt ? normalizeDate(t.cancelledAt) : orderD);
+                let matchCancelSettleMonth = true;
+                if (selectedMonth !== 'all') {
+                    const cMonth = cancelSettleD ? `${cancelSettleD.getFullYear()}-${String(cancelSettleD.getMonth() + 1).padStart(2, '0')}` : '';
+                    matchCancelSettleMonth = cMonth === selectedMonth;
+                }
+                
+                if (matchCancelSettleMonth && fee > 0) {
+                    cashFees += fee; // แสดงในกล่อง "ค่าธรรมเนียม Platform"
+                    cashExp += fee; // นำไปหักออกเป็นกระแสเงินสดจ่ายออก
+                }
             }
         } else if (t.type === 'expense') {
-            const amt = Number(t.total) || 0;
-            if (matchOrderMonth) {
-                perfExp += amt;
-            }
-            if (matchSettleMonth && t.status === 'paid') {
-                cashExp += amt;
+            if (!t.isCancelled) {
+                const amt = Number(t.total) || 0;
+                if (matchOrderMonth) {
+                    perfExp += amt;
+                }
+                if (matchSettleMonth && t.status === 'paid') {
+                    cashExp += amt;
+                }
             }
         }
     });
@@ -734,7 +760,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
 
     return { 
         perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: perfSales - perfCogs - perfExp },
-        cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt, cogs: cashCogs }
+        cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt, cogs: cashCogs, grossSales: cashGrossSales }
     };
   }, [transactions, stockBatches, selectedChannel, selectedShop, selectedMonth]);
 
@@ -748,7 +774,6 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     }
     
     transactions.forEach(t => {
-        if (t.isCancelled) return; 
         if (t.isFromReconciliation) return; 
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
         // --- FIX: แก้ไขให้ตรวจสอบชื่อร้านแบบไม่สนใจตัวพิมพ์เล็ก/ใหญ่ ---
@@ -761,30 +786,50 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
         const sKey = settleD ? settleD.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' }) : null;
 
         if (t.type === 'income') {
-            const expectedAmt = t.grandTotal || t.total;
-            const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : expectedAmt;
+            const fee = Number(t.platformFee) || 0;
             
-            const cogs = (t.items || []).reduce((sum, item) => {
-                const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
-                return sum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
-            }, 0);
+            if (!t.isCancelled) {
+                const expectedAmt = t.grandTotal || t.total;
+                const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : expectedAmt;
+                
+                const cogs = (t.items || []).reduce((sum, item) => {
+                    const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
+                    return sum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
+                }, 0);
 
-            if (oKey && mData[oKey]) {
-                mData[oKey].perfSales += expectedAmt;
-                mData[oKey].perfNet += (expectedAmt - cogs);
-            }
-            
-            if (sKey && mData[sKey] && (t.paymentStatus === 'settled' || t.status === 'paid')) {
-                mData[sKey].cashIn += settledAmt;
+                if (oKey && mData[oKey]) {
+                    mData[oKey].perfSales += expectedAmt;
+                    mData[oKey].perfNet += (expectedAmt - cogs);
+                }
+                
+                if (sKey && mData[sKey] && (t.paymentStatus === 'settled' || t.status === 'paid')) {
+                    mData[sKey].cashIn += settledAmt;
+                }
+            } else {
+                // --- FIX: รวมค่าธรรมเนียมจากออเดอร์ยกเลิก เข้าไปในกราฟผลประกอบการรายเดือน ---
+                if (fee > 0) {
+                    if (oKey && mData[oKey]) {
+                        mData[oKey].perfExp += fee;
+                        mData[oKey].perfNet -= fee;
+                    }
+                    
+                    const cancelSettleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.cancelledAt ? normalizeDate(t.cancelledAt) : orderD);
+                    const cKey = cancelSettleD ? cancelSettleD.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' }) : null;
+                    if (cKey && mData[cKey]) {
+                        mData[cKey].cashOut += fee;
+                    }
+                }
             }
         } else if (t.type === 'expense') {
-            const amt = Number(t.total) || 0;
-            if (oKey && mData[oKey]) {
-                mData[oKey].perfExp += amt;
-                mData[oKey].perfNet -= amt;
-            }
-            if (sKey && mData[sKey] && t.status === 'paid') {
-                mData[sKey].cashOut += amt;
+            if (!t.isCancelled) {
+                const amt = Number(t.total) || 0;
+                if (oKey && mData[oKey]) {
+                    mData[oKey].perfExp += amt;
+                    mData[oKey].perfNet -= amt;
+                }
+                if (sKey && mData[sKey] && t.status === 'paid') {
+                    mData[sKey].cashOut += amt;
+                }
             }
         }
     });
@@ -1086,39 +1131,38 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 </div>
 
                 {/* Taxable Income Calculation Section */}
-                <div className="bg-indigo-50/80 border border-indigo-100 rounded-[32px] p-6 md:p-8 flex flex-col xl:flex-row gap-8 items-center justify-between shadow-sm w-full">
-                    <div className="flex flex-col gap-2 w-full xl:w-1/4">
+                <div className="bg-indigo-50/80 border border-indigo-100 rounded-[32px] p-6 md:p-8 flex flex-col xl:flex-row gap-6 items-center justify-between shadow-sm w-full">
+                    <div className="flex flex-col gap-2 w-full xl:w-1/5 shrink-0">
                         <div className="w-12 h-12 bg-white rounded-2xl text-indigo-600 shadow-sm flex items-center justify-center mb-2"><Calculator size={24}/></div>
                         <h3 className="text-xl font-black text-indigo-900">ฐานภาษีรายได้<br/>(Taxable Income)</h3>
-                        <p className="text-xs text-indigo-600/70 font-medium">สรุปยอดประเมินรายได้เพื่อยื่นภาษีตามหลักสรรพากร</p>
+                        <p className="text-[10px] text-indigo-600/70 font-medium leading-relaxed">สรุปยอดประเมินรายได้เพื่อยื่นภาษีตามหลักสรรพากร (อิงตามบิลที่รับเงินแล้ว)</p>
                     </div>
 
-                    <div className="flex flex-col sm:flex-row items-center gap-3 w-full xl:w-3/4">
-                        <div className="bg-white p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ยอดเงินรับสุทธิ</p>
-                            <p className="text-xl font-black text-slate-800">{formatCurrency(analytics.cash.settled)}</p>
-                            <p className="text-[9px] text-slate-400 mt-1">เงินเข้าบัญชีจริง</p>
+                    <div className="flex flex-col sm:flex-row items-center gap-3 w-full xl:w-4/5 flex-wrap lg:flex-nowrap">
+                        <div className="bg-white p-4 lg:p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ยอดขาย (ก่อนหักธรรมเนียม)</p>
+                            <p className="text-lg lg:text-xl font-black text-slate-800">{formatCurrency(analytics.cash.grossSales)}</p>
+                            <p className="text-[9px] text-slate-400 mt-1">ยอดขายสินค้าสุทธิ</p>
                             <div className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center z-10 hidden sm:flex"><Plus size={12} className="text-indigo-600"/></div>
                         </div>
                         
-                        <div className="bg-white p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
+                        <div className="bg-white p-4 lg:p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
                             <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ค่าจัดส่ง (ลูกค้าจ่าย)</p>
-                            <p className="text-xl font-black text-slate-800">{formatCurrency(analytics.cash.shipping)}</p>
-                            <p className="text-[9px] text-slate-400 mt-1">เฉพาะบิลที่รับเงินแล้ว</p>
-                            <div className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center z-10 hidden sm:flex"><Plus size={12} className="text-indigo-600"/></div>
-                        </div>
-                        
-                        <div className="bg-white p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ค่าธรรมเนียม Platform</p>
-                            <p className="text-xl font-black text-rose-500">{formatCurrency(analytics.cash.fees)}</p>
-                            <p className="text-[9px] text-slate-400 mt-1">นำกลับมาบวกเป็นรายได้</p>
+                            <p className="text-lg lg:text-xl font-black text-slate-800">{formatCurrency(analytics.cash.shipping)}</p>
+                            <p className="text-[9px] text-slate-400 mt-1">รวมในฐานภาษีรายได้</p>
                             <div className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-indigo-600 rounded-full flex items-center justify-center z-10 hidden sm:flex"><ArrowRight size={12} className="text-white"/></div>
                         </div>
                         
-                        <div className="bg-indigo-600 p-5 rounded-[24px] shadow-md border border-indigo-500 flex-[1.2] w-full text-white transform sm:scale-105 origin-left">
+                        <div className="bg-indigo-600 p-4 lg:p-5 rounded-[24px] shadow-md border border-indigo-500 flex-[1.2] w-full text-white transform sm:scale-105 origin-center z-10">
                             <p className="text-[10px] font-bold text-indigo-200 uppercase mb-1">ยอดประเมินเสียภาษีรวม</p>
-                            <p className="text-2xl font-black">{formatCurrency(analytics.cash.settled + analytics.cash.shipping + analytics.cash.fees)}</p>
-                            <p className="text-[9px] text-indigo-300 mt-1 flex items-center gap-1"><Info size={10}/> อิงตามยอดที่รับเงินแล้ว</p>
+                            <p className="text-xl lg:text-2xl font-black">{formatCurrency(analytics.cash.grossSales + analytics.cash.shipping)}</p>
+                            <p className="text-[9px] text-indigo-300 mt-1 flex items-center gap-1"><Info size={10}/> นำยอดนี้ไปคำนวณภาษี</p>
+                        </div>
+
+                        <div className="bg-rose-50 p-4 lg:p-5 rounded-[24px] shadow-sm border border-rose-100 flex-1 w-full relative ml-0 lg:ml-2">
+                            <p className="text-[10px] font-bold text-rose-400 uppercase mb-1">ค่าธรรมเนียม Platform</p>
+                            <p className="text-lg lg:text-xl font-black text-rose-600">{formatCurrency(analytics.cash.fees)}</p>
+                            <p className="text-[9px] text-rose-500 mt-1 flex items-center gap-1"><AlertTriangle size={10}/> แยกนำไปลงเป็นรายจ่ายทีหลัง</p>
                         </div>
                     </div>
                 </div>
@@ -1240,6 +1284,25 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   // NEW: State สำหรับการดูรายละเอียด Log ย้อนหลัง
   const [viewLogDetails, setViewLogDetails] = useState(null);
   const [logToDelete, setLogToDelete] = useState(null); // NEW: State สำหรับ Popup ยืนยันการลบ Log
+
+  // --- NEW: คำนวณยอดกระแสเงินสดปัจจุบัน (ภาพรวม) สำหรับใช้ Review ก่อนกระทบยอด ---
+  const currentCashFlow = useMemo(() => {
+      let settled = 0;
+      let pending = 0;
+
+      transactions.forEach(t => {
+          if (t.isCancelled || t.isFromReconciliation) return;
+
+          if (t.type === 'income') {
+              if (t.paymentStatus === 'settled' || t.status === 'paid') {
+                  settled += t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total);
+              } else if (t.paymentStatus === 'pending_platform') {
+                  pending += t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total);
+              }
+          }
+      });
+      return { settled, pending };
+  }, [transactions]);
 
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
@@ -1389,9 +1452,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         orderId: ['หมายเลขคำสั่งซื้อ', 'Order ID'],
         status: ['สถานะการสั่งซื้อ', 'Order Status'],
         cancelReason: ['เหตุผลในการยกเลิกคำสั่งซื้อ', 'Cancel Reason'],
-        date: ['วันที่โอนชำระเงินสำเร็จ', 'เวลาการชำระสินค้า', 'Payment Time', 'เวลาที่ทำการสั่งซื้อ', 'เวลาชำระเงิน', 'วันที่ทำการสั่งซื้อ'],
+        // --- FIX: แยกคอลัมน์ วันที่สั่งซื้อ vs วันที่รับเงิน ให้ชัดเจน ---
+        orderDate: ['เวลาที่ทำการสั่งซื้อ', 'วันที่ทำการสั่งซื้อ', 'Order Creation Date'],
+        settleDate: ['วันที่โอนชำระเงินสำเร็จ', 'เวลาการชำระสินค้า', 'Payment Time', 'เวลาชำระเงิน'],
         price: ['ราคาเสนอ', 'ราคาต่อชิ้น', 'Deal Price', 'ราคาขาย', 'สินค้าราคาปกติ'], 
         qty: ['จำนวน', 'Quantity'],
+        // --- FIX: เพิ่มการดึงส่วนลดผู้ขาย เพื่อให้ยอดตั้งต้นตรงกับ Shopee ---
+        sellerDiscount: ['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount', 'ส่วนลดจากร้านค้า'],
         transFee: ['Transaction Fee', 'ค่าธรรมเนียมการทำธุรกรรม', 'ค่าธรรมเนียมธุรกรรม', 'ค่าธุรกรรมการชำระเงิน'],
         commFee: ['ค่าคอมมิชชั่น', 'Commission Fee', 'ค่าคอมมิชชั่น AMS'],
         servFee: ['ค่าบริการ', 'Service Fee'],
@@ -1399,7 +1466,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         shipping: ['ที่อยู่ในการจัดส่ง', 'Shipping Address'],
         buyer: ['ชื่อผู้ใช้(ผู้ซื้อ)', 'ชื่อผู้ใช้ (ผู้ซื้อ)', 'ชื่อผู้รับ', 'Receiver Name', 'ชื่อผู้ซื้อ'],
         product: ['ชื่อสินค้า', 'Product Name'],
-        // --- FIX: ลำดับความสำคัญ เอา "เลข SKU" ขึ้นก่อน และเอาคำที่แม่นยำขึ้นก่อน ---
         sku: ['เลข SKU', 'SKU ตัวเลือกสินค้า', 'Variation SKU', 'หมายเลขอ้างอิง SKU', 'SKU', 'Seller SKU', 'Product SKU', 'รหัสตัวเลือกสินค้า', 'Option SKU', 'รหัสสินค้า'],
         courier: ['ตัวเลือกการจัดส่ง', 'Shipping Option', 'ชื่อผู้ให้บริการขนส่ง', 'Shipping provider'],
         trackingNo: ['หมายเลขติดตามพัสดุ', 'Tracking Number'],
@@ -1414,9 +1480,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         orderId: ['Order No.', 'Order Number', 'เลขที่สั่งซื้อ', 'หมายเลขคำสั่งซื้อ'],
         status: ['Status', 'สถานะ', 'สถานะคำสั่งซื้อ'],
         cancelReason: ['เหตุผลในการยกเลิก', 'Cancellation Reason'],
-        date: ['Order Creation Date', 'วันที่สร้างคำสั่งซื้อ', 'วันที่ชำระเงิน', 'Create Time'],
+        orderDate: ['Order Creation Date', 'วันที่สร้างคำสั่งซื้อ', 'Create Time'],
+        settleDate: ['วันที่ชำระเงิน', 'Settlement Date', 'Payout Date'],
         price: ['Unit Price', 'ราคาต่อชิ้น', 'paid_price', 'ราคาขาย'],
         qty: ['Quantity', 'จำนวน', 'Qty'],
+        sellerDiscount: ['Seller Discount', 'ส่วนลดจากผู้ขาย', 'Seller Promotion'],
         transFee: ['Payment Fee', 'ค่าธุรกรรม', 'Transaction Fee'],
         commFee: ['Commission', 'ค่าคอมมิชชั่น', 'Commission Fee'],
         servFee: ['Service Fee', 'ค่าธรรมเนียม', 'ค่าธรรมเนียมการชำระเงิน'],
@@ -1437,9 +1505,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         orderId: ['Order ID', 'หมายเลขคำสั่งซื้อ', 'Order number'],
         status: ['Order Status', 'สถานะ', 'สถานะคำสั่งซื้อ'],
         cancelReason: ['เหตุผลการยกเลิก', 'Cancel Reason'],
-        date: ['Payment Time', 'Order Creation Time', 'วันที่ชำระเงิน', 'เวลาชำระเงิน', 'Created Time', 'เวลาที่สร้างคำสั่งซื้อ', 'เวลาที่สร้าง'],
+        orderDate: ['Order Creation Time', 'Created Time', 'เวลาที่สร้างคำสั่งซื้อ', 'เวลาที่สร้าง'],
+        settleDate: ['Payment Time', 'วันที่ชำระเงิน', 'เวลาชำระเงิน', 'Settlement Time'],
         price: ['Product Price', 'ราคาขาย', 'Unit Price', 'ราคาปกติ'],
         qty: ['Quantity', 'จำนวน', 'Qty'],
+        sellerDiscount: ['Seller Discount', 'ส่วนลดจากผู้ขาย'],
         transFee: ['Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee'],
         commFee: ['Platform Commission', 'ค่าคอมมิชชั่น', 'Commission'],
         servFee: ['Service Fee', 'ค่าธรรมเนียมบริการ', 'Affiliate Commission'],
@@ -1465,7 +1535,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       return isNaN(parsed) ? 0 : parsed;
   };
   
-  // --- FIX: ล้างอักขระพิเศษทุกชนิด เหลือแค่ตัวอักษรและตัวเลข ---
   const cleanForSearch = (str) => String(str).replace(/[^a-zA-Z0-9ก-๙]/g, '').toLowerCase();
 
   const findVal = (row, kws) => { 
@@ -1473,30 +1542,31 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
     const keys = Object.keys(row);
     const cleanKeys = keys.map(k => ({ original: k, clean: cleanForSearch(k) }));
     
-    // 1. Exact Match - หาเจาะจง และ "ต้องไม่เป็นช่องว่าง"
+    // 1. Exact Match
     for (let i = 0; i < kws.length; i++) {
         const ckw = cleanForSearch(kws[i]);
         const matches = cleanKeys.filter(x => x.clean === ckw);
         for (const match of matches) {
             const val = row[match.original];
             if (val !== undefined && val !== null && String(val).trim() !== '') {
-                return val; // คืนค่าเฉพาะเมื่อมีข้อมูลจริงๆ
+                return val;
             }
         }
     }
 
-    // 2. Includes Match - หาคำที่ประกอบอยู่ และ "ต้องไม่เป็นช่องว่าง"
+    // 2. Includes Match
     for (let i = 0; i < kws.length; i++) {
         const ckw = cleanForSearch(kws[i]);
         const matches = cleanKeys.filter(x => {
             const cleanKey = x.clean;
-            // Safety Check 1: ถ้ากำลังหา "จำนวนชิ้น" ต้องไม่ไปดึง "จำนวนเงิน"
-            const isQtySearch = ckw.includes('จำนวน') || ckw.includes('qty');
+            
+            // --- FIX: แก้ไขบั๊กที่ไปบล็อกคอลัมน์ "จำนวนเงินที่โอนแล้ว" ---
+            const isQtySearch = ckw === 'จำนวน' || ckw === 'qty' || ckw === 'quantity';
             if (isQtySearch && (cleanKey.includes('เงิน') || cleanKey.includes('โอน') || cleanKey.includes('รวม') || cleanKey.includes('ราคา'))) {
                 return false;
             }
-            // Safety Check 2: ถ้ากำลังหา "ราคาต่อหน่วย" ต้องไม่ดึง "ราคาสุทธิ" (เดี๋ยวคูณซ้ำ) หรือ "ค่าธรรมเนียม"
-            const isPriceSearch = ckw.includes('ราคา') || ckw.includes('price') || ckw.includes('เสนอ');
+            
+            const isPriceSearch = ckw === 'ราคา' || ckw === 'price' || ckw === 'ราคาขาย';
             if (isPriceSearch && (cleanKey.includes('สุทธิ') || cleanKey.includes('รวม') || cleanKey.includes('ธรรมเนียม') || cleanKey.includes('ส่วนลด'))) {
                 return false;
             }
@@ -1506,7 +1576,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         for (const match of matches) {
             const val = row[match.original];
             if (val !== undefined && val !== null && String(val).trim() !== '') {
-                return val; // คืนค่าเฉพาะเมื่อมีข้อมูลจริงๆ
+                return val; 
             }
         }
     }
@@ -1564,20 +1634,83 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         }
         
         const schema = PLATFORM_SCHEMAS[platform] || PLATFORM_SCHEMAS.shopee;
-        let currentSkippedDetails = []; // Array เก็บข้อมูลที่ถูกข้าม
-        let currentDeliveryFailedDetails = []; // NEW: Array เก็บออเดอร์ที่ส่งไม่สำเร็จ
+        let currentSkippedDetails = []; 
+        let currentDeliveryFailedDetails = []; 
+
+        const getRowValAbs = (row, kws) => {
+            const val = findVal(row, kws);
+            return val !== undefined && val !== null && String(val).trim() !== '' ? Math.abs(cleanNum(val)) : 0;
+        };
+
+        // --- 🔥 NEW FIX: EXCEL EXACT EXTRACTOR 🔥 ---
+        // คำนวณสรุปข้อมูลจากไฟล์ Excel ตรงๆ เพื่อให้ยอด Preview ตรงกับหน้าสรุปของ Shopee 100%
+        let detailedStats = {
+            productPrice: 0, sellerDiscount: 0, refundAmount: 0, 
+            shipBuyer: 0, shipShopee: 0, shipActual: 0, shipReturn: 0, 
+            feeComm: 0, feeServ: 0, feeInfra: 0, feeTrans: 0, totalSettled: 0
+        };
+        let seenOrdersForStats = new Set();
+        const cleanStrForStats = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
+
+        raw.forEach(row => {
+            const orderId = cleanStrForStats(findVal(row, schema.orderId));
+            if (!orderId) return;
+
+            const status = String(findVal(row, schema.status) || '').toLowerCase();
+            let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
+                                      status.includes('unpaid') || status.includes('รอชำระเงิน') ||
+                                      (status.includes('ไม่สำเร็จ') && !status.includes('จัดส่งไม่สำเร็จ'));
+            
+            const refundAmtRow = getRowValAbs(row, schema.refundAmount);
+            if (status.includes('คืน') || status.includes('refund') || status.includes('return') || refundAmtRow > 0) {
+                isCancelledOrUnpaid = false;
+            }
+
+            const transFee = getRowValAbs(row, schema.transFee);
+            const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']);
+            const serv = getRowValAbs(row, schema.servFee);
+            const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
+            const shippingProgFee = getRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'ค่าธรรมเนียม ของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
+            const rowTotalFees = transFee + comm + serv + infraRow + shippingProgFee;
+
+            // ข้ามรายการที่ยกเลิกและไม่มีการหักค่าธรรมเนียม (เหมือนที่ Shopee ทำ)
+            if (isCancelledOrUnpaid && Math.abs(rowTotalFees) < 0.01) return;
+
+            // 1. หมวดรายชิ้น (Item Level) - Shopee กระจายยอดพวกนี้ในทุกบรรทัดย่อย ให้บวกสะสมได้เลย
+            detailedStats.productPrice += getRowValAbs(row, ['สินค้าราคาปกติ', 'Original Price', 'Product Price', 'ราคาเสนอ']);
+            detailedStats.sellerDiscount += getRowValAbs(row, ['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount']);
+            detailedStats.feeComm += comm;
+            detailedStats.feeServ += serv;
+            detailedStats.feeInfra += (infraRow + shippingProgFee);
+            detailedStats.feeTrans += transFee;
+
+            // 2. หมวดรายออเดอร์ (Order Level) - ต้องบวกแค่ครั้งเดียวต่อ 1 Order ID เพื่อป้องกันยอดเบิ้ล
+            if (!seenOrdersForStats.has(orderId)) {
+                detailedStats.refundAmount += getRowValAbs(row, ['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน']);
+                detailedStats.shipBuyer += getRowValAbs(row, ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ', 'Shipping Fee Paid by Buyer']);
+                detailedStats.shipShopee += getRowValAbs(row, ['ค่าจัดส่งสินค้าที่ออกโดย Shopee', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง']);
+                detailedStats.shipActual += getRowValAbs(row, ['ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee']);
+                detailedStats.shipReturn += getRowValAbs(row, ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee']);
+
+                const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount']);
+                if (actualSettledAmtRaw !== undefined) {
+                    // อนุญาตให้ยอด Payout ติดลบได้ (Shopee อาจหักค่าแอด)
+                    detailedStats.totalSettled += cleanNum(actualSettledAmtRaw); 
+                }
+
+                seenOrdersForStats.add(orderId);
+            }
+        });
+
+        // ดึงยอดที่สมบูรณ์ 100% ไปใช้แสดงผล
+        const exactExcelTotalFees = detailedStats.feeComm + detailedStats.feeServ + detailedStats.feeInfra + detailedStats.feeTrans;
+        const exactExcelTotalSettled = detailedStats.totalSettled;
         
         if (importMode === 'update_settled') {
-            const matched = [];
+            const matchedMap = {}; 
             let skippedCount = 0;
             let alreadySettledCount = 0;
             let notFoundCount = 0;
-            
-            let detailedStats = {
-                productPrice: 0, sellerDiscount: 0, refundAmount: 0, 
-                shipBuyer: 0, shipShopee: 0, shipActual: 0, shipReturn: 0, 
-                feeComm: 0, feeServ: 0, feeInfra: 0, feeTrans: 0, totalSettled: 0
-            };
 
             const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
 
@@ -1592,76 +1725,115 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 
                 const existingTrans = transactions.find(t => cleanStrForMatch(t.orderId) === orderId && t.type === 'income');
                 
-                // --- ตรวจสอบสถานะการคืนสินค้า (Return/Refund) ---
                 const statusStr = String(findVal(row, schema.status) || '').toLowerCase();
-                const refundAmtRaw = findVal(row, schema.refundAmount);
-                const refundAmt = Math.abs(cleanNum(refundAmtRaw));
-                const isReturned = statusStr.includes('คืน') || statusStr.includes('refund') || statusStr.includes('return') || refundAmt > 0;
+                const refundAmtRow = getRowValAbs(row, schema.refundAmount);
+                const isReturnedRow = statusStr.includes('คืน') || statusStr.includes('refund') || statusStr.includes('return') || refundAmtRow > 0;
 
-                const accumulateDetails = () => {
-                    const getRowValAbs = (keywords) => Math.abs(cleanNum(findVal(row, keywords)));
-                    const getRowVal = (keywords) => cleanNum(findVal(row, keywords));
-                    
-                    detailedStats.productPrice += getRowValAbs(['สินค้าราคาปกติ', 'Original Price', 'Product Price']);
-                    detailedStats.sellerDiscount += getRowValAbs(['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount']);
-                    detailedStats.refundAmount += getRowValAbs(['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน', 'ยอดเงินคืน']);
-                    
-                    detailedStats.shipBuyer += getRowValAbs(['ค่าจัดส่งที่ชำระโดยผู้ซื้อ']);
-                    detailedStats.shipShopee += getRowValAbs(['ค่าจัดส่งสินค้าที่ออกโดย Shopee']);
-                    detailedStats.shipActual += getRowValAbs(['ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ', 'ค่าจัดส่งตามที่เกิดขึ้นจริง']);
-                    detailedStats.shipReturn += getRowValAbs(['ค่าจัดส่งสินค้าคืน']);
-                    
-                    detailedStats.feeComm += getRowValAbs(['ค่าคอมมิชชั่น', 'Commission Fee']) + getRowValAbs(['ค่าคอมมิชชั่น AMS']);
-                    detailedStats.feeServ += getRowValAbs(['ค่าบริการ', 'Service Fee']);
-                    detailedStats.feeInfra += getRowValAbs(['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
-                    detailedStats.feeTrans += getRowValAbs(['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
-                    
-                    detailedStats.totalSettled += getRowVal(['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว', 'จำนวนเงินที่โอน']);
-                };
+                const transFee = getRowValAbs(row, schema.transFee);
+                const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']);
+                const serv = getRowValAbs(row, schema.servFee);
+                const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
+                const shippingProgFee = getRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'ค่าธรรมเนียม ของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
+                const infra = infraRow > 0 ? infraRow : (parseFloat(fixedInfraFee || 0) || 0);
+                const rowTotalPlatformFee = transFee + comm + serv + infra + shippingProgFee;
+
+                const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount']);
+                const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? cleanNum(actualSettledAmtRaw) : undefined;
+                
+                // --- FIX: อ่านวันที่จากคอลัมน์ Excel ตรงๆ ตามที่คุณแนะนำ (ตัดโค้ดที่พยายามเดาสุ่มออกทั้งหมด) ---
+                let dateStr = findVal(row, schema.settleDate) || findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน']) || findVal(row, schema.orderDate);
+                let finalSettleDate = normalizeDate(dateStr);
 
                 if (existingTrans) {
-                    if (isReturned && !existingTrans.isCancelled) {
-                        // กรณีพบว่าออเดอร์นี้มีการคืนเงิน/คืนสินค้าในไฟล์กระทบยอด
-                        if (!matched.find(m => m.id === existingTrans.id)) {
-                            matched.push({
+                    if (isReturnedRow && !existingTrans.isCancelled) {
+                        if (!matchedMap[existingTrans.id]) {
+                            matchedMap[existingTrans.id] = {
                                 ...existingTrans,
                                 isUpdateMode: true,
-                                needsReturn: true, // แจ้งให้ saveToFirebase รู้ว่าต้องยกเลิกบิลและคืนสต็อก
-                                returnAction: 'restock', // <-- กำหนดค่าเริ่มต้นเป็น คืนเข้าคลัง
-                                reason: `คืนสินค้า/คืนเงิน (ยอด: ${formatCurrency(refundAmt || existingTrans.total)})`
-                            });
-                            accumulateDetails();
+                                needsReturn: true, 
+                                returnAction: 'restock', 
+                                reason: `คืนสินค้า/คืนเงิน (ยอดคืน: ${formatCurrency(refundAmtRow)})`,
+                                newPlatformFee: rowTotalPlatformFee,
+                                newTransactionFee: transFee,
+                                newCommissionFee: comm,
+                                newServiceFee: serv,
+                                newInfrastructureFee: infra + shippingProgFee,
+                                actualSettledAmt: actualSettledAmtFromRow !== undefined ? actualSettledAmtFromRow : 0,
+                                newSettlementDate: finalSettleDate || existingTrans.settlementDate || existingTrans.date || new Date()
+                            };
+                        } else {
+                            matchedMap[existingTrans.id].newPlatformFee = (matchedMap[existingTrans.id].newPlatformFee || 0) + rowTotalPlatformFee;
+                            matchedMap[existingTrans.id].newTransactionFee = (matchedMap[existingTrans.id].newTransactionFee || 0) + transFee;
+                            matchedMap[existingTrans.id].newCommissionFee = (matchedMap[existingTrans.id].newCommissionFee || 0) + comm;
+                            matchedMap[existingTrans.id].newServiceFee = (matchedMap[existingTrans.id].newServiceFee || 0) + serv;
+                            matchedMap[existingTrans.id].newInfrastructureFee = (matchedMap[existingTrans.id].newInfrastructureFee || 0) + (infra + shippingProgFee);
                         }
-                    } else if (existingTrans.paymentStatus === 'pending_platform' && !existingTrans.isCancelled) {
-                        if (!matched.find(m => m.id === existingTrans.id)) {
-                            // --- FIX: บังคับหาคอลัมน์วันที่โอนเงินก่อน เพื่อไม่ให้ระบบดึงวันที่สั่งซื้อ (Order Date) มาใช้ผิดเดือน ---
-                            let dateStr = findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน', 'Payout Time', 'Payout Date', 'Settlement Date', 'เวลาที่โอนเงิน', 'เวลาที่สำเร็จ']);
-                            if (!dateStr) {
-                                dateStr = findVal(row, schema.date);
-                            }
-                            
-                            const actualSettledAmt = cleanNum(findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount']));
-                            
-                            matched.push({
+                    } 
+                    else if (existingTrans.paymentStatus === 'pending_platform' && !existingTrans.isCancelled) {
+                        if (!matchedMap[existingTrans.id]) {
+                            matchedMap[existingTrans.id] = {
                                 ...existingTrans,
-                                newSettlementDate: normalizeDate(dateStr) || existingTrans.date || new Date(),
+                                newSettlementDate: finalSettleDate || existingTrans.date || new Date(),
                                 isUpdateMode: true,
-                                actualSettledAmt: actualSettledAmt > 0 ? actualSettledAmt : (existingTrans.grandTotal || existingTrans.total)
-                            });
-                            accumulateDetails();
+                                actualSettledAmt: actualSettledAmtFromRow !== undefined ? actualSettledAmtFromRow : 0,
+                                newPlatformFee: rowTotalPlatformFee,
+                                newTransactionFee: transFee,
+                                newCommissionFee: comm,
+                                newServiceFee: serv,
+                                newInfrastructureFee: infra + shippingProgFee
+                            };
+                            if (actualSettledAmtFromRow === undefined) {
+                                matchedMap[existingTrans.id].actualSettledAmt = undefined; 
+                            }
+                        } else {
+                            matchedMap[existingTrans.id].newPlatformFee += rowTotalPlatformFee;
+                            matchedMap[existingTrans.id].newTransactionFee += transFee;
+                            matchedMap[existingTrans.id].newCommissionFee += comm;
+                            matchedMap[existingTrans.id].newServiceFee += serv;
+                            matchedMap[existingTrans.id].newInfrastructureFee += (infra + shippingProgFee);
+
+                            if (actualSettledAmtFromRow !== undefined && matchedMap[existingTrans.id].actualSettledAmt !== undefined) {
+                                matchedMap[existingTrans.id].actualSettledAmt = Math.max(matchedMap[existingTrans.id].actualSettledAmt || 0, actualSettledAmtFromRow);
+                            }
                         }
                     } else if (existingTrans.isCancelled) {
-                        skippedCount++;
-                        currentSkippedDetails.push({ orderId: orderId, product: '-', qty: 0, reason: 'ออเดอร์ถูกยกเลิกในระบบไปแล้ว' });
+                        if (!matchedMap[existingTrans.id]) {
+                            matchedMap[existingTrans.id] = {
+                                ...existingTrans,
+                                isUpdateMode: true,
+                                isAlreadyCancelled: true,
+                                reason: 'อัปเดตค่าธรรมเนียม (ออเดอร์ยกเลิก)',
+                                newPlatformFee: rowTotalPlatformFee,
+                                newTransactionFee: transFee,
+                                newCommissionFee: comm,
+                                newServiceFee: serv,
+                                newInfrastructureFee: infra + shippingProgFee,
+                                actualSettledAmt: actualSettledAmtFromRow !== undefined ? actualSettledAmtFromRow : 0,
+                                newSettlementDate: finalSettleDate || existingTrans.settlementDate || existingTrans.date || new Date()
+                            };
+                        } else {
+                            matchedMap[existingTrans.id].newPlatformFee = (matchedMap[existingTrans.id].newPlatformFee || 0) + rowTotalPlatformFee;
+                            matchedMap[existingTrans.id].newTransactionFee = (matchedMap[existingTrans.id].newTransactionFee || 0) + transFee;
+                            matchedMap[existingTrans.id].newCommissionFee = (matchedMap[existingTrans.id].newCommissionFee || 0) + comm;
+                            matchedMap[existingTrans.id].newServiceFee = (matchedMap[existingTrans.id].newServiceFee || 0) + serv;
+                            matchedMap[existingTrans.id].newInfrastructureFee = (matchedMap[existingTrans.id].newInfrastructureFee || 0) + (infra + shippingProgFee);
+                            if (actualSettledAmtFromRow !== undefined && matchedMap[existingTrans.id].actualSettledAmt !== undefined) {
+                                matchedMap[existingTrans.id].actualSettledAmt = Math.max(matchedMap[existingTrans.id].actualSettledAmt || 0, actualSettledAmtFromRow);
+                            }
+                        }
                     } else {
-                        alreadySettledCount++;
-                        currentSkippedDetails.push({ orderId: orderId, product: '-', qty: 0, reason: 'อัปเดตรับเงินไปแล้ว (ข้อมูลซ้ำ)' });
+                        if (!matchedMap[existingTrans.id]) {
+                            alreadySettledCount++;
+                            currentSkippedDetails.push({ orderId: orderId, product: '-', qty: 0, reason: 'อัปเดตรับเงินไปแล้ว (ข้อมูลซ้ำ)' });
+                        }
                     }
                 } else {
                     notFoundCount++;
                     currentSkippedDetails.push({ orderId: orderId, product: '-', qty: 0, reason: 'ไม่พบออเดอร์ตั้งต้นในระบบ' });
                 }
             });
+            
+            const matched = Object.values(matchedMap);
             
             let totalExpected = 0;
             let totalActual = 0;
@@ -1670,33 +1842,36 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             let currentDiffDetails = [];
 
             matched.forEach(m => {
-                if (!m.needsReturn) {
-                    const expected = m.grandTotal || m.total || 0;
-                    const actual = m.actualSettledAmt !== undefined ? m.actualSettledAmt : expected;
-                    totalExpected += expected;
+                if (!m.needsReturn && !m.isAlreadyCancelled) {
+                    // ออเดอร์ปกติที่รับเงิน (เช็คส่วนต่างแบบเดิม)
+                    const exactExpected = m.grandTotal !== undefined ? m.grandTotal : (m.total || 0);
+                        
+                    const actual = m.actualSettledAmt !== undefined ? m.actualSettledAmt : exactExpected;
+                    totalExpected += exactExpected;
                     totalActual += actual;
-                    const diff = expected - actual;
+                    const diff = exactExpected - actual;
                     
                     if (diff > 0.01) {
-                        // ขาดทุน (เงินหาย)
                         totalDiffShort += diff;
-                        currentDiffDetails.push({
-                            orderId: m.orderId || m.sysDocId,
-                            expected,
-                            actual,
-                            diff: diff,
-                            type: 'short'
-                        });
+                        currentDiffDetails.push({ orderId: m.orderId || m.sysDocId, originalId: m.id, expected: exactExpected, actual, diff: diff, type: 'short' });
                     } else if (diff < -0.01) {
-                        // กำไร (เงินเกินมา)
                         totalDiffSurplus += Math.abs(diff);
-                        currentDiffDetails.push({
-                            orderId: m.orderId || m.sysDocId,
-                            expected,
-                            actual,
-                            diff: Math.abs(diff),
-                            type: 'surplus'
+                        currentDiffDetails.push({ orderId: m.orderId || m.sysDocId, originalId: m.id, expected: exactExpected, actual, diff: Math.abs(diff), type: 'surplus' });
+                    }
+                } else {
+                    // --- 🔥 NEW: สำหรับออเดอร์ยกเลิก/ตีคืน ที่เสียค่าธรรมเนียม ให้ดึงมาสร้างบิลแยก! ---
+                    const feeToCharge = m.newPlatformFee !== undefined ? m.newPlatformFee : 0;
+                    if (feeToCharge > 0) {
+                        currentDiffDetails.push({ 
+                            orderId: m.orderId || m.sysDocId, 
+                            originalId: m.id, 
+                            expected: 0, 
+                            actual: -feeToCharge, 
+                            diff: feeToCharge, 
+                            type: 'cancel_fee', // Type ใหม่สำหรับล็อกหมวดหมู่
+                            category: 'ค่าธรรมเนียม Platform' 
                         });
+                        totalDiffShort += feeToCharge; // นำไปบวกยอดรวม Diff
                     }
                 }
             });
@@ -1704,20 +1879,19 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             setImportedData(matched);
             setStats({ 
                 totalRows: raw.length, processed: matched.length, skipped: skippedCount, 
-                totalAmount: totalExpected, totalActualSettled: totalActual, totalDiffShort: totalDiffShort, totalDiffSurplus: totalDiffSurplus, 
-                totalFees: matched.reduce((s,t)=>s+(Number(t.platformFee)||0),0), 
+                totalAmount: totalExpected, 
+                totalActualSettled: exactExcelTotalSettled, // ใช้ยอดจาก Excel ตรงๆ
+                totalDiffShort: totalDiffShort, totalDiffSurplus: totalDiffSurplus, 
+                totalFees: exactExcelTotalFees, // ใช้ยอดจาก Excel ตรงๆ
                 duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0,
-                detailedSummary: detailedStats
+                detailedSummary: detailedStats // ใส่ข้อมูลตารางสรุปแบบเป๊ะ 100%
             });
             setSkippedDetailsData(currentSkippedDetails);
             setDeliveryFailedDetailsData([]);
             setDiscrepancyDetailsData(currentDiffDetails);
 
-            if (matched.length > 0) {
-                showToast(`พบออเดอร์รอรับเงินที่ตรงกัน ${matched.length} รายการ`, 'success');
-            } else {
-                showToast(`ไม่พบออเดอร์รอรับเงิน (ไม่มีในระบบ ${notFoundCount}, รับเงินแล้ว ${alreadySettledCount})`, 'error');
-            }
+            if (matched.length > 0) { showToast(`พบออเดอร์รอรับเงินที่ตรงกัน ${matched.length} รายการ`, 'success'); } 
+            else { showToast(`ไม่พบออเดอร์รอรับเงิน (ไม่มีในระบบ ${notFoundCount}, รับเงินแล้ว ${alreadySettledCount})`, 'error'); }
             return;
         }
 
@@ -1725,11 +1899,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         let skipped = 0; let totalAmt = 0; let totalFees = 0; let duplicates = 0;
         let cCount = 0; let dfCount = 0;
         let trackedCancelledOrders = new Set();
-        let trackedDeliveryFailedOrders = new Set(); // NEW: Tracking set
+        let trackedDeliveryFailedOrders = new Set(); 
         let skippedQty = 0; 
         
         const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
-        // สร้าง Set ของ Order ID ที่มีอยู่ในระบบแล้ว (เช็คซ้ำเฉพาะรายการที่ยังไม่ได้ถูกยกเลิก)
         const existingOrderIds = new Set(transactions.filter(t => t.type === 'income' && t.orderId && !t.isCancelled).map(t => cleanStrForMatch(t.orderId)));
 
         raw.forEach(row => {
@@ -1738,7 +1911,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const status = String(findVal(row, schema.status) || '').toLowerCase();
           const cancelReason = String(findVal(row, schema.cancelReason) || '').toLowerCase();
           
-          // ดึงจำนวนชิ้นขึ้นมาไว้ก่อนเพื่อไว้บวกยอดที่ถูกข้าม
           const rawQty = findVal(row, schema.qty);
           const qty = (rawQty !== undefined && rawQty !== '') ? Math.max(1, Math.abs(cleanNum(rawQty))) : 1;
 
@@ -1747,46 +1919,56 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                    status.includes('จัดส่งไม่สำเร็จ') ||
                                    status.includes('ตีกลับ');
           
+          // --- FIX: ดึงค่าธรรมเนียมโปรแกรมส่งฟรีกลับเข้ามา โดยที่ยังตัด AMS ทิ้งเหมือนเดิม ---
+          const transFee = getRowValAbs(row, schema.transFee);
+          const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']); // Removed AMS
+          const serv = getRowValAbs(row, schema.servFee);
+          const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
+          const shippingProgFee = getRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'ค่าธรรมเนียม ของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
+          
+          const infra = infraRow > 0 ? infraRow : (parseFloat(fixedInfraFee || 0) || 0);
+          const rowTotalFees = transFee + comm + serv + infra + shippingProgFee;
+
+          // NEW: กฎเหล็ก! ดึงยอดคืนเงินขึ้นมาตรวจสอบก่อน เพื่อป้องกันการเข้าใจผิดว่าเป็นออเดอร์ยกเลิก
+          const refundAmtRow = getRowValAbs(row, schema.refundAmount); 
+          const isReturnedRow = status.includes('คืน') || status.includes('refund') || status.includes('return') || refundAmtRow > 0;
+
           let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
                                       status.includes('unpaid') || status.includes('รอชำระเงิน') ||
-                                      (status.includes('ไม่สำเร็จ') && !status.includes('จัดส่งไม่สำเร็จ')) || 
-                                      status.includes('คืนสินค้า');
+                                      (status.includes('ไม่สำเร็จ') && !status.includes('จัดส่งไม่สำเร็จ'));
+          
+          // กฎเหล็ก: หากเป็นออเดอร์ที่มีการคืนสินค้า/คืนเงิน (Return/Refund) ห้ามระบบตีความว่าเป็นการยกเลิกเด็ดขาด
+          if (isReturnedRow) {
+              isCancelledOrUnpaid = false;
+          }
                                       
           const isCompleted = status === '' || !isCancelledOrUnpaid;
+          
+          // กฎเหล็ก: ถ้าสถานะคือยกเลิกแท้ๆ (ไม่มีคืนเงิน) แต่ Shopee ชาร์จค่าธรรมเนียมมา ห้ามข้ามเด็ดขาด
+          const forceImportDueToFee = isCancelledOrUnpaid && Math.abs(rowTotalFees) > 0.01;
                               
-          // --- FIX: แยกวันที่สั่งซื้อ (Order Date) และ วันที่โอนเงิน (Settlement Date) ---
-          const orderDateVal = findVal(row, schema.date);
+          const orderDateVal = findVal(row, schema.orderDate) || findVal(row, schema.settleDate);
           let settleDateVal = null;
           if (importMode === 'new_settled') {
-              settleDateVal = findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน', 'Payout Time', 'Payout Date', 'Settlement Date', 'เวลาที่โอนเงิน', 'เวลาที่สำเร็จ']);
+              settleDateVal = findVal(row, schema.settleDate) || findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน']);
           }
           
-          const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว(฿)', 'จำนวนเงินทั้งหมดที่โอนแล้ว (฿)', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount']);
-          const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? Math.abs(cleanNum(actualSettledAmtRaw)) : undefined;
+          const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount']);
+          const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? cleanNum(actualSettledAmtRaw) : undefined;
           
-          // ดึง SKU มาเตรียมไว้เพื่อแสดงใน Log
           const skuInput = findVal(row, schema.sku);
           const skuVal = String(skuInput || '-').replace(/^['"=]+|['"=]+$/g, '').trim();
 
-          if (!orderId || !isCompleted || !orderDateVal) { 
+          // ถ้าข้อมูลไม่ครบ หรือ (ไม่สำเร็จ และ ไม่ได้ถูกบังคับให้นำเข้า) ให้ข้าม
+          if (!orderId || (!isCompleted && !forceImportDueToFee) || !orderDateVal) { 
               skipped++; 
               skippedQty += qty; 
 
               let reasonStr = 'ข้อมูลไม่ครบถ้วน';
-              
-              if (!isCompleted) {
+              if (!isCompleted && !forceImportDueToFee) {
                   reasonStr = 'สถานะไม่สำเร็จ / ลูกค้ายกเลิก / ยังไม่จ่ายเงิน';
-                  currentSkippedDetails.push({
-                      orderId: rawOrderId || '-',
-                      sku: skuVal,
-                      product: String(findVal(row, schema.product) || '-'),
-                      reason: reasonStr,
-                      qty: qty
-                  });
-                  if (orderId && !trackedCancelledOrders.has(orderId)) {
-                      cCount++;
-                      trackedCancelledOrders.add(orderId);
-                  }
+                  currentSkippedDetails.push({ orderId: rawOrderId || '-', sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
+                  if (orderId && !trackedCancelledOrders.has(orderId)) { cCount++; trackedCancelledOrders.add(orderId); }
               } else if (!orderDateVal) {
                   reasonStr = 'ไม่มีวันที่ทำรายการ';
                   currentSkippedDetails.push({ orderId: rawOrderId || '-', sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
@@ -1794,64 +1976,48 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   reasonStr = 'ไม่มีหมายเลขคำสั่งซื้อ';
                   currentSkippedDetails.push({ orderId: '-', sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
               }
-
-              return; // SKIP IT!
+              return;
           }
           
-          // [ระบบป้องกันการบันทึกซ้ำ] ตรวจสอบว่า Order ID นี้มีในระบบแล้วหรือไม่
           if (existingOrderIds.has(orderId)) { 
               duplicates++; 
               skippedQty += qty; 
-              
-              currentSkippedDetails.push({
-                  orderId: orderId,
-                  sku: skuVal,
-                  product: String(findVal(row, schema.product) || '-'),
-                  reason: 'มีข้อมูลในระบบแล้ว (ข้ามเพื่อป้องกันข้อมูลซ้ำ)',
-                  qty: qty
-              });
-              
+              currentSkippedDetails.push({ orderId: orderId, sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: 'มีข้อมูลในระบบแล้ว (ข้ามเพื่อป้องกันข้อมูลซ้ำ)', qty: qty });
               return; 
           }
-          
-          const price = Math.abs(cleanNum(findVal(row, schema.price)));
-          
-          // ดึงค่าธรรมเนียมและแปลงเป็นบวก ป้องกัน NaN
-          const transFee = Math.abs(cleanNum(findVal(row, schema.transFee)));
-          const comm = Math.abs(cleanNum(findVal(row, schema.commFee)));
-          const serv = Math.abs(cleanNum(findVal(row, schema.servFee)));
-          
-          const infra = parseFloat(fixedInfraFee || 0) || 0;
+
+          const price = getRowValAbs(row, schema.price);
+          const sellerDiscount = getRowValAbs(row, schema.sellerDiscount);
+          // ย้าย refundAmtRow ไปคำนวณด้านบนแทนแล้ว
           
           const shippingAddress = String(findVal(row, schema.shipping) || '');
           const buyerName = String(findVal(row, schema.buyer) || 'ลูกค้า ' + platform);
           const courier = String(findVal(row, schema.courier) || '-').trim();
           const trackingNo = String(findVal(row, schema.trackingNo) || '-').trim();
           
-          const shippingFeeByBuyer = Math.abs(cleanNum(findVal(row, schema.shippingFeeByBuyer)));
-          const shippingFeeSubsidy = Math.abs(cleanNum(findVal(row, schema.shippingFeeSubsidy)));
-          const estimatedShippingFee = Math.abs(cleanNum(findVal(row, schema.estimatedShippingFee)));
-          const returnShippingFee = Math.abs(cleanNum(findVal(row, schema.returnShippingFee)));
+          const shippingFeeByBuyer = getRowValAbs(row, schema.shippingFeeByBuyer);
+          const shippingFeeSubsidy = getRowValAbs(row, schema.shippingFeeSubsidy);
+          const estimatedShippingFee = getRowValAbs(row, schema.estimatedShippingFee);
+          const returnShippingFee = getRowValAbs(row, schema.returnShippingFee);
           const shopName = String(findVal(row, schema.shopName) || 'ไม่ระบุ').trim();
 
-          // รวมยอดสินค้าในแถวนี้
           const lineTotal = price * qty;
 
           if (!ordersMap[orderId]) {
-            const rowTotalFees = transFee + comm + serv + infra;
-            
             const baseProdName = String(findVal(row, schema.product) || 'สินค้าจาก ' + platform);
             const descStr = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdName.substring(0, 80)}` : baseProdName.substring(0, 100);
             const itemDescStr = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdName.trim()}` : baseProdName.trim();
             
             ordersMap[orderId] = { 
               type: 'income', 
-              date: normalizeDate(orderDateVal), // คงวันที่สั่งซื้อไว้ตามเดิม
+              date: normalizeDate(orderDateVal), 
               orderId, 
               total: lineTotal, 
+              couponDiscount: sellerDiscount,
+              refundAmount: refundAmtRow, 
               platformFee: rowTotalFees,
               transactionFee: transFee, 
-              infrastructureFee: infra, 
+              infrastructureFee: infra + shippingProgFee,
               commissionFee: comm, 
               serviceFee: serv,
               description: descStr, 
@@ -1867,13 +2033,16 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               shippingFeeSubsidy: shippingFeeSubsidy,
               estimatedShippingFee: estimatedShippingFee,
               returnShippingFee: returnShippingFee,
-              grandTotal: lineTotal - rowTotalFees,
-              // --- FIX: ใช้ Spread Operator ป้องกันการสร้าง field ที่เป็น undefined ---
               ...(importMode === 'new_settled' && actualSettledAmtFromRow !== undefined ? { actualSettledAmt: actualSettledAmtFromRow } : {}),
               paymentStatus: importMode === 'new_pending' ? 'pending_platform' : 'settled',
-              settlementDate: importMode === 'new_pending' ? null : (normalizeDate(settleDateVal) || normalizeDate(orderDateVal)), // ใช้วันที่โอนเงิน
+              // --- FIX: ใช้ข้อมูลจากคอลัมน์โดยตรง ไม่ต้องผ่าน defaultSettleDate ---
+              settlementDate: importMode === 'new_pending' ? null : (normalizeDate(settleDateVal) || normalizeDate(orderDateVal)),
               ...(shopName !== 'ไม่ระบุ' ? { shopName: shopName } : {}),
-              isDeliveryFailed: isDeliveryFailed
+              isDeliveryFailed: isDeliveryFailed,
+              isReturned: isReturnedRow,
+              
+              isCancelled: forceImportDueToFee,
+              cancelledAt: forceImportDueToFee ? (normalizeDate(settleDateVal) || normalizeDate(orderDateVal)) : null
             };
             totalAmt += lineTotal; 
             totalFees += rowTotalFees;
@@ -1884,47 +2053,78 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             }
           } else {
             ordersMap[orderId].total += lineTotal;
+            // Item Level (สะสม)
+            ordersMap[orderId].couponDiscount += sellerDiscount;
+            ordersMap[orderId].refundAmount += refundAmtRow; 
+            ordersMap[orderId].transactionFee += transFee;
+            ordersMap[orderId].commissionFee += comm;
+            ordersMap[orderId].serviceFee += serv;
+            ordersMap[orderId].infrastructureFee += (infra + shippingProgFee); 
             
-            const oldPlatformFee = ordersMap[orderId].platformFee;
+            const rowTotalFeesAcc = transFee + comm + serv + infra + shippingProgFee;
+            ordersMap[orderId].platformFee += rowTotalFeesAcc;
             
-            ordersMap[orderId].transactionFee = Math.max(ordersMap[orderId].transactionFee, transFee);
-            ordersMap[orderId].commissionFee = Math.max(ordersMap[orderId].commissionFee, comm);
-            ordersMap[orderId].serviceFee = Math.max(ordersMap[orderId].serviceFee, serv);
-            ordersMap[orderId].platformFee = ordersMap[orderId].transactionFee + ordersMap[orderId].commissionFee + ordersMap[orderId].serviceFee + ordersMap[orderId].infrastructureFee;
-            
-            ordersMap[orderId].grandTotal = ordersMap[orderId].total - ordersMap[orderId].platformFee;
+            // Order Level (ใช้ค่า Max ป้องกันการบวกเบิ้ล)
             ordersMap[orderId].shippingFee = Math.max(ordersMap[orderId].shippingFee || 0, shippingFeeByBuyer);
             ordersMap[orderId].shippingFeeSubsidy = Math.max(ordersMap[orderId].shippingFeeSubsidy || 0, shippingFeeSubsidy);
             ordersMap[orderId].estimatedShippingFee = Math.max(ordersMap[orderId].estimatedShippingFee || 0, estimatedShippingFee);
             ordersMap[orderId].returnShippingFee = Math.max(ordersMap[orderId].returnShippingFee || 0, returnShippingFee);
+            ordersMap[orderId].isReturned = ordersMap[orderId].isReturned || isReturnedRow;
+            
+            if (actualSettledAmtFromRow !== undefined) {
+                ordersMap[orderId].actualSettledAmt = Math.max(ordersMap[orderId].actualSettledAmt || 0, actualSettledAmtFromRow);
+            }
             
             const baseProdNamePush = String(findVal(row, schema.product) || 'สินค้า').trim();
             const itemDescStrPush = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdNamePush}` : baseProdNamePush;
             
-            ordersMap[orderId].items.push({ 
-              desc: itemDescStrPush, qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal
-            });
+            ordersMap[orderId].items.push({ desc: itemDescStrPush, qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal });
             totalAmt += lineTotal;
-            totalFees += (ordersMap[orderId].platformFee - oldPlatformFee);
+            totalFees += rowTotalFeesAcc;
           }
         });
         
         const final = Object.values(ordersMap).sort(sortNewestFirst);
-        setImportedData(final);
-        setSkippedDetailsData(currentSkippedDetails); // อัปเดต State รายการที่ถูกข้าม
-        setDeliveryFailedDetailsData(currentDeliveryFailedDetails); // อัปเดต State รายการตีกลับ
         
-        // เซ็ตตัวแปรให้ UI นำไปแสดง (รวมถึง skippedQty)
+        let finalActualSettled = 0;
+        let currentDiffDetails = []; // --- FIX: เตรียมตัวแปรเพื่อแสดง Simulator ในโหมดนำเข้าใหม่ ---
+        
+        final.forEach(t => {
+            const netShip = (t.shippingFee || 0) + (t.shippingFeeSubsidy || 0) - (t.estimatedShippingFee || 0) - (t.returnShippingFee || 0);
+            t.grandTotal = t.total - t.platformFee - t.couponDiscount - (t.refundAmount || 0) + netShip;
+            
+            finalActualSettled += t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total);
+
+            // --- FIX: ดึงค่าธรรมเนียมของออเดอร์ยกเลิก/ตีคืน มาแสดงใน Simulator เพื่อสร้างบิลแยก ---
+            if ((t.isCancelled || t.isReturned) && t.platformFee > 0) {
+                currentDiffDetails.push({ 
+                    orderId: t.orderId, 
+                    expected: 0, 
+                    actual: -t.platformFee, 
+                    diff: t.platformFee, 
+                    type: 'cancel_fee',
+                    category: 'ค่าธรรมเนียม Platform' 
+                });
+            }
+        });
+
+        setImportedData(final);
+        setSkippedDetailsData(currentSkippedDetails); 
+        setDeliveryFailedDetailsData(currentDeliveryFailedDetails); 
+        setDiscrepancyDetailsData(currentDiffDetails); // --- FIX: อัปเดตข้อมูล Simulator ---
+        
         setStats({ 
             totalRows: raw.length, 
             processed: final.length, 
             skipped, 
             duplicates, 
             totalAmount: totalAmt, 
-            totalFees, 
+            totalActualSettled: exactExcelTotalSettled, // ใช้ยอดจาก Excel ตรงๆ
+            totalFees: exactExcelTotalFees, // ใช้ยอดจาก Excel ตรงๆ
             deliveryFailed: dfCount, 
             cancelled: cCount,
-            skippedQty // เก็บจำนวนชิ้นที่ข้ามลง State
+            skippedQty,
+            detailedSummary: detailedStats // ใส่ข้อมูลตารางสรุปแบบเป๊ะ 100%
         });
         
         if (duplicates > 0) {
@@ -1996,13 +2196,52 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           for (const item of importedData) {
               const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
               
-              if (item.needsReturn) {
+              if (item.isAlreadyCancelled) {
+                  // --- FIX: บิลที่ยกเลิกไปแล้ว ให้เซฟทับเฉพาะ "ค่าธรรมเนียมย่อย" อย่างเดียว เพื่อให้ Dashboard ตรงเป๊ะ ---
+                  batch.update(ref, {
+                      platformFee: item.newPlatformFee !== undefined ? item.newPlatformFee : (item.platformFee || 0),
+                      transactionFee: item.newTransactionFee !== undefined ? item.newTransactionFee : (item.transactionFee || 0),
+                      commissionFee: item.newCommissionFee !== undefined ? item.newCommissionFee : (item.commissionFee || 0),
+                      serviceFee: item.newServiceFee !== undefined ? item.newServiceFee : (item.serviceFee || 0),
+                      infrastructureFee: item.newInfrastructureFee !== undefined ? item.newInfrastructureFee : (item.infrastructureFee || 0),
+                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : (item.actualSettledAmt || 0),
+                      settlementDate: item.newSettlementDate || item.settlementDate || null, // <-- FIX: บันทึกวันที่รับเงินลงฐานข้อมูล
+                      updatedAt: serverTimestamp()
+                  });
+                  count++;
+              }
+              else if (item.needsReturn) {
                   // --- 1. กรณีกระทบยอดแล้วพบว่า "คืนสินค้า" ให้ยกเลิกบิลและดึงสต็อกกลับ ---
                   batch.update(ref, {
                       isCancelled: true,
                       cancelledAt: serverTimestamp(),
                       paymentStatus: 'refunded',
-                      cancelReason: item.reason + (item.returnAction === 'discard' ? ' [สินค้าชำรุด/ตัดทิ้ง ไม่คืนคลัง]' : ' [คืนสต็อกแล้ว]')
+                      cancelReason: item.reason + (item.returnAction === 'discard' ? ' [สินค้าชำรุด/ตัดทิ้ง ไม่คืนคลัง]' : ' [คืนสต็อกแล้ว]'),
+                      // --- FIX: บันทึกค่าธรรมเนียมย่อยต่างๆ สำหรับบิลตีคืนด้วย! ---
+                      platformFee: item.newPlatformFee !== undefined ? item.newPlatformFee : (item.platformFee || 0),
+                      transactionFee: item.newTransactionFee !== undefined ? item.newTransactionFee : (item.transactionFee || 0),
+                      commissionFee: item.newCommissionFee !== undefined ? item.newCommissionFee : (item.commissionFee || 0),
+                      serviceFee: item.newServiceFee !== undefined ? item.newServiceFee : (item.serviceFee || 0),
+                      infrastructureFee: item.newInfrastructureFee !== undefined ? item.newInfrastructureFee : (item.infrastructureFee || 0),
+                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : (item.actualSettledAmt || 0),
+                      settlementDate: item.newSettlementDate || item.settlementDate || null // <-- FIX: บันทึกวันที่รับเงินลงฐานข้อมูล
+                  });
+                  count++;
+              }
+              else if (item.needsReturn) {
+                  // --- 1. กรณีกระทบยอดแล้วพบว่า "คืนสินค้า" ให้ยกเลิกบิลและดึงสต็อกกลับ ---
+                  batch.update(ref, {
+                      isCancelled: true,
+                      cancelledAt: serverTimestamp(),
+                      paymentStatus: 'refunded',
+                      cancelReason: item.reason + (item.returnAction === 'discard' ? ' [สินค้าชำรุด/ตัดทิ้ง ไม่คืนคลัง]' : ' [คืนสต็อกแล้ว]'),
+                      // --- FIX: บันทึกค่าธรรมเนียมย่อยต่างๆ สำหรับบิลตีคืนด้วย! ---
+                      platformFee: item.newPlatformFee !== undefined ? item.newPlatformFee : (item.platformFee || 0),
+                      transactionFee: item.newTransactionFee !== undefined ? item.newTransactionFee : (item.transactionFee || 0),
+                      commissionFee: item.newCommissionFee !== undefined ? item.newCommissionFee : (item.commissionFee || 0),
+                      serviceFee: item.newServiceFee !== undefined ? item.newServiceFee : (item.serviceFee || 0),
+                      infrastructureFee: item.newInfrastructureFee !== undefined ? item.newInfrastructureFee : (item.infrastructureFee || 0),
+                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : (item.actualSettledAmt || 0)
                   });
                   
                   // ดึงสต็อกกลับเข้าคลัง เฉพาะกรณีที่เลือก "คืนเข้าคลัง"
@@ -2030,17 +2269,31 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       updatedAt: serverTimestamp()
                   };
                   
+                  // --- FIX: อัปเดตเฉพาะ "ค่าธรรมเนียม" ลงฐานข้อมูล เพื่อให้ Dashboard แสดงยอด 19,637! ---
+                  // (ห้ามแตะต้องค่าจัดส่งเด็ดขาด เพื่อรักษายอดเดิมไว้ ไม่ให้บั๊ก +99 กลับมา)
+                  if (item.newPlatformFee !== undefined) {
+                      updateData.platformFee = item.newPlatformFee;
+                      updateData.transactionFee = item.newTransactionFee;
+                      updateData.commissionFee = item.newCommissionFee;
+                      updateData.serviceFee = item.newServiceFee;
+                      updateData.infrastructureFee = item.newInfrastructureFee;
+                      
+                      const originalNetShip = (item.shippingFee || 0) + (item.shippingFeeSubsidy || 0) - (item.estimatedShippingFee || 0) - (item.returnShippingFee || 0);
+                      const originalDiscount = (item.couponDiscount || 0) + (item.refundAmount || 0);
+                      updateData.grandTotal = (item.total || 0) - updateData.platformFee - originalDiscount + originalNetShip;
+                  }
+                  
                   let diff = 0;
                   if (item.actualSettledAmt !== undefined) {
                       updateData.actualSettledAmt = item.actualSettledAmt;
-                      const expectedAmt = item.grandTotal || item.total || 0;
+                      const expectedAmt = updateData.grandTotal !== undefined ? updateData.grandTotal : (item.grandTotal || item.total || 0);
                       diff = expectedAmt - item.actualSettledAmt;
                   }
 
                   batch.update(ref, updateData);
                   count++;
 
-                  // Auto-create expense for discrepancy (เงินหาย/ขาด)
+                  // สร้างบิลส่วนต่างอัตโนมัติเฉพาะเคสที่ยอด Payout ของแพลตฟอร์มต่างจากที่เราตั้งหนี้ไว้
                   if (diff > 0.01) {
                       expCount++;
                       const sysDocId = `EXP-${String(expCount).padStart(5, '0')}`;
@@ -2058,10 +2311,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
                           partnerBranch: '00000',
                           isFromReconciliation: true,
-                          linkedOrderId: item.id
+                          linkedOrderId: item.id,
+                          linkedOrderNo: item.orderId || item.sysDocId || '-' // <-- FIX: เซฟหมายเลขออเดอร์ลงไปด้วยเพื่อใช้คลิกค้นหา
                       });
                   } 
-                  // Auto-create income for surplus (เงินเกิน/ได้เพิ่ม)
                   else if (diff < -0.01) {
                       incCount++;
                       const sysDocId = `INC-${String(incCount).padStart(5, '0')}`;
@@ -2079,7 +2332,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
                           partnerBranch: '00000',
                           isFromReconciliation: true,
-                          linkedOrderId: item.id
+                          linkedOrderId: item.id,
+                          linkedOrderNo: item.orderId || item.sysDocId || '-' // <-- FIX: เซฟหมายเลขออเดอร์ลงไปด้วยเพื่อใช้คลิกค้นหา
                       });
                   }
               }
@@ -2114,6 +2368,15 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           return m;
       }, 0);
 
+      // --- FIX: เตรียมตัวนับสำหรับสร้างบิลรายจ่ายแยก ---
+      let currentExpMax = transactions.filter(t => t.type === 'expense').reduce((m, t) => {
+          if (t.sysDocId && t.sysDocId.startsWith('EXP-')) {
+              const num = parseInt(t.sysDocId.replace('EXP-', ''), 10);
+              return !isNaN(num) && num > m ? num : m;
+          }
+          return m;
+      }, 0);
+
       const sortedForSave = [...importedData].sort(sortOldestFirst);
 
       for (const trans of sortedForSave) {
@@ -2122,8 +2385,23 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
         const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
         
-        // --- FIX: ล้าง properties ที่เป็น undefined ทิ้งให้หมดก่อนบันทึกลง Firestore ---
+        // --- FIX: ตัดค่าธรรมเนียมไปสร้างบิลแยก (สำหรับโหมดนำเข้าใหม่) ---
         const cleanTrans = { ...trans };
+        const feeForCancelled = cleanTrans.platformFee || 0;
+        const shouldCreateFeeBill = (cleanTrans.isCancelled || cleanTrans.isReturned) && feeForCancelled > 0;
+        
+        if (shouldCreateFeeBill) {
+            cleanTrans.platformFee = 0;
+            cleanTrans.transactionFee = 0;
+            cleanTrans.commissionFee = 0;
+            cleanTrans.serviceFee = 0;
+            cleanTrans.infrastructureFee = 0;
+            if (cleanTrans.grandTotal !== undefined) cleanTrans.grandTotal += feeForCancelled;
+            if (cleanTrans.actualSettledAmt !== undefined && cleanTrans.actualSettledAmt < 0) {
+                cleanTrans.actualSettledAmt += feeForCancelled;
+            }
+        }
+        
         Object.keys(cleanTrans).forEach(key => {
             if (cleanTrans[key] === undefined) {
                 delete cleanTrans[key];
@@ -2131,6 +2409,29 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         });
         
         batch.set(docRef, { ...cleanTrans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
+
+        // --- FIX: สร้างบิลรายจ่ายแยกอิสระ ---
+        if (shouldCreateFeeBill) {
+            currentExpMax++;
+            const expSysDocId = `EXP-${String(currentExpMax).padStart(5, '0')}`;
+            const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+            batch.set(expRef, {
+                sysDocId: expSysDocId,
+                type: 'expense',
+                category: 'ค่าธรรมเนียม Platform',
+                description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`,
+                total: feeForCancelled,
+                date: cleanTrans.settlementDate || cleanTrans.date || new Date(),
+                userId: user.uid,
+                createdAt: serverTimestamp(),
+                status: 'paid',
+                partnerName: cleanTrans.channel ? `Platform (${cleanTrans.channel})` : 'Platform',
+                partnerBranch: '00000',
+                isFromReconciliation: true,
+                linkedOrderId: docRef.id,
+                linkedOrderNo: cleanTrans.orderId || '-'
+            });
+        }
 
         for (const item of trans.items) {
             let needed = Number(item.qty);
@@ -2286,6 +2587,27 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 </button>
             </div>
 
+            {/* --- NEW: Quick Cash Flow Review Bar (แสดงเฉพาะโหมดกระทบยอด) --- */}
+            {importMode === 'update_settled' && (
+                <div className="mt-2 flex flex-col sm:flex-row items-start sm:items-center justify-between bg-white border border-slate-200 px-5 py-3 rounded-2xl text-xs shadow-sm animate-fadeIn">
+                    <div className="flex items-center gap-2 font-bold text-slate-700 mb-2 sm:mb-0">
+                        <Wallet size={16} className="text-indigo-500"/>
+                        <span>ยอดกระแสเงินสดในระบบ (ภาพรวม):</span>
+                    </div>
+                    <div className="flex flex-wrap gap-x-6 gap-y-2">
+                        <div title="ยอดรอเงินโอนทั้งหมด (จะลดลงเมื่อกระทบยอด)">
+                            <span className="text-slate-500 mr-1.5">รอโอน (Pending):</span>
+                            <span className="font-black text-amber-500 text-sm">{formatCurrency(currentCashFlow.pending)}</span>
+                        </div>
+                        <div className="w-px h-4 bg-slate-200 hidden sm:block mt-0.5"></div>
+                        <div title="ยอดเงินเข้าทั้งหมดในระบบ (จะเพิ่มขึ้นเมื่อกระทบยอด)">
+                            <span className="text-slate-500 mr-1.5">เงินเข้า (Settled):</span>
+                            <span className="font-black text-emerald-600 text-sm">{formatCurrency(currentCashFlow.settled)}</span>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="pt-4 border-t border-indigo-100 flex items-center gap-3 text-left">
               <label className="text-sm font-bold text-slate-600 whitespace-nowrap text-left">ค่าธรรมเนียม PLATFORM เพิ่มเติม (ถ้ามี):</label>
               <div className="relative text-left w-40">
@@ -2357,26 +2679,53 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               
               {/* Preview Summary Section */}
               {importedData.length > 0 && (
-                  <div className="p-5 bg-indigo-50/30 border-b border-indigo-50 flex flex-col gap-3">
-                      <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5"><PieChart size={14}/> สรุปข้อมูลรอการยืนยัน (Preview Summary)</h4>
+                  <div className="p-5 bg-indigo-50/30 border-b border-indigo-50 flex flex-col gap-4">
                       
-                      {importMode === 'update_settled' ? (
+                      {/* --- NEW: Pre-Save Checker Banner --- */}
+                      <div className="bg-blue-600 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-lg text-white animate-in slide-in-from-bottom-4">
+                          <div>
+                              <h4 className="font-black text-lg flex items-center gap-2 text-white">
+                                  <Eye size={20} className="text-blue-200"/> โปรดตรวจสอบยอดเหล่านี้กับไฟล์ Excel!
+                              </h4>
+                              <p className="text-xs text-blue-200 mt-1 font-medium">
+                                  ข้อมูลยังไม่ถูกบันทึก หากตัวเลขด้านขวานี้ <b>ตรงกับไฟล์ Shopee</b> ให้กดปุ่ม "บันทึก" ด้านบนได้เลย<br/>
+                                  <span className="text-white font-bold bg-blue-700/50 px-1.5 py-0.5 rounded">*แต่ถ้าไม่ตรง ห้ามกดบันทึกเด็ดขาด! (ให้รีเฟรชหน้าเว็บทิ้งได้เลย ระบบจะไม่บันทึกข้อมูลผิดๆ ลงไปครับ)</span>
+                              </p>
+                          </div>
+                          <div className="flex gap-4 md:gap-6 bg-white/10 p-3 rounded-xl border border-white/20 w-full md:w-auto">
+                              <div className="text-left md:text-right">
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-emerald-300">โอนเข้าจริง (Settled)</p>
+                                  <p className="text-xl md:text-2xl font-black text-white">{formatCurrency(stats.totalActualSettled)}</p>
+                              </div>
+                              <div className="w-px bg-white/20"></div>
+                              <div className="text-left md:text-right">
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-rose-300">ค่าธรรมเนียมรวม</p>
+                                  <p className="text-xl md:text-2xl font-black text-white">{formatCurrency(stats.totalFees)}</p>
+                              </div>
+                          </div>
+                      </div>
+
+                      <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5 mt-2"><PieChart size={14}/> สรุปภาพรวมจากไฟล์ Excel (อ้างอิงตรงตามไฟล์ต้นฉบับ 100%)</h4>
+                      
+                      {importMode === 'update_settled' || importMode !== 'update_settled' ? (
                           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm font-sarabun">
                               {/* Header / Info */}
                               <div className="flex justify-between items-center p-4 bg-slate-50 border-b">
                                   <div>
-                                      <h5 className="font-bold text-slate-800 text-sm">ออเดอร์พร้อมอัปเดต ({stats.processed} รายการ)</h5>
-                                      <p className="text-xs text-slate-500 mt-1">จำแนกโครงสร้างรายได้และรายจ่ายตามรายงานการโอนเงิน</p>
+                                      <h5 className="font-bold text-slate-800 text-sm">การจัดโครงสร้างรายได้/รายจ่าย (Excel Summary)</h5>
+                                      <p className="text-xs text-slate-500 mt-1">ยอดรวมของทุกบรรทัดในไฟล์นี้ (เทียบกับชีท 'สรุป' ของ Shopee ได้เลย)</p>
                                   </div>
-                                  {/* Diff Alert Button */}
-                                  {(stats.totalDiffShort > 0 || stats.totalDiffSurplus > 0) ? (
-                                      <button onClick={() => setShowDiscrepancyModal(true)} className="flex items-center gap-1 text-rose-600 font-bold bg-rose-50 px-3 py-2 rounded-lg hover:bg-rose-100 transition-colors border border-rose-200 text-xs shadow-sm">
-                                          <AlertTriangle size={14}/> ตรวจพบส่วนต่าง (คลิกดู)
-                                      </button>
-                                  ) : (
-                                      <span className="flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 px-3 py-2 rounded-lg border border-emerald-200 text-xs shadow-sm">
-                                          <CheckCircle size={14}/> ยอดเงินตรงกัน
-                                      </span>
+                                  {/* Diff Alert Button - Show only in Update Mode */}
+                                  {importMode === 'update_settled' && (
+                                      (stats.totalDiffShort > 0 || stats.totalDiffSurplus > 0) ? (
+                                          <button onClick={() => setShowDiscrepancyModal(true)} className="flex items-center gap-1 text-rose-600 font-bold bg-rose-50 px-3 py-2 rounded-lg hover:bg-rose-100 transition-colors border border-rose-200 text-xs shadow-sm">
+                                              <AlertTriangle size={14}/> ตรวจพบส่วนต่าง (คลิกดู)
+                                          </button>
+                                      ) : (
+                                          <span className="flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 px-3 py-2 rounded-lg border border-emerald-200 text-xs shadow-sm">
+                                              <CheckCircle size={14}/> ยอดเงินตรงกัน
+                                          </span>
+                                      )
                                   )}
                               </div>
 
@@ -2444,38 +2793,36 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                               )}
                           </div>
                       ) : (
+                          // --- FIX: ปรับรูปแบบกล่องให้มี "ยอดโอนเข้าจริง (Settled)" ตามที่ผู้ใช้ต้องการเห็น 86,395 ---
                           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                               <div className="bg-white p-3 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-center">
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">พร้อมบันทึก</p>
+                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">นำเข้าสำเร็จ</p>
                                   <p className="text-xl font-black text-indigo-600">{stats.processed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
                               </div>
                               <div className="bg-white p-3 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-center">
                                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม</p>
                                   <p className="text-xl font-black text-emerald-600">{formatCurrency(stats.totalAmount)}</p>
                               </div>
+                              
+                              <div className="bg-blue-50 p-3 rounded-2xl border border-blue-200 shadow-sm flex flex-col justify-center">
+                                  <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-1">โอนเข้าจริง (Settled)</p>
+                                  <p className="text-xl font-black text-blue-700">{formatCurrency(stats.totalActualSettled)}</p>
+                              </div>
+
                               <div className="bg-white p-3 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-center">
                                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม</p>
                                   <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)}</p>
                               </div>
                               
-                              {/* เปลี่ยนเป็นแสดงตัวเลขจัดส่งไม่สำเร็จ (นำเข้าแล้ว) */}
                               <div className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center relative">
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 text-orange-600">นำเข้าจัดส่งไม่สำเร็จ</p>
+                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 text-orange-600">จัดส่งไม่สำเร็จ</p>
                                   <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                                  {stats.deliveryFailed > 0 && <span className="text-[9px] font-bold text-orange-700 bg-orange-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">ดูหมายเหตุในตาราง</span>}
                               </div>
 
-                              <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ลูกค้ายกเลิก</p>
-                                  <p className="text-xl font-black text-slate-500">{stats.cancelled} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                              </div>
-                              
-                              {/* แก้ไขให้กดคลิกเพื่อดูรายการที่ถูกข้ามได้ */}
                               <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-amber-50 transition-colors group relative">
                                   <div className="absolute top-2 right-2 text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-amber-600 transition-colors">ข้าม / ข้อมูลซ้ำ</p>
+                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-amber-600 transition-colors">ข้าม / ซ้ำ</p>
                                   <p className="text-xl font-black text-amber-500">{stats.skipped} / {stats.duplicates || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
-                                  {stats.skippedQty > 0 && <span className="text-[9px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded w-fit mt-0.5 shadow-sm leading-none block">กดเพื่อดู {stats.skippedQty} ชิ้น</span>}
                               </div>
                           </div>
                       )}
@@ -2667,22 +3014,64 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   </div>
               )}
 
+              {/* --- NEW: Cash Flow Simulation Panel --- */}
+              {discrepancyDetailsData.length > 0 && (
+                  <div className="bg-slate-800 text-white p-5 border-y border-slate-700 flex flex-col gap-3">
+                      <div className="flex items-center gap-2">
+                          <Activity size={18} className="text-indigo-400" />
+                          <h4 className="font-bold text-sm text-white">จำลองการลงบัญชีกระแสเงินสด (Cash Flow Simulation)</h4>
+                      </div>
+                      <p className="text-[10px] text-slate-400 font-medium">เมื่อกดยืนยัน ระบบจะสร้างบิลอัตโนมัติเหล่านี้ขึ้นมา เพื่อปรับสมดุลบัญชีให้ตรงกับเงินโอนเข้าจริง 100%</p>
+                      
+                      <div className="max-h-48 overflow-y-auto custom-scrollbar bg-slate-900 rounded-xl border border-slate-700 p-2 space-y-2">
+                          {discrepancyDetailsData.map((diff, idx) => (
+                              <div key={idx} className="flex justify-between items-center bg-slate-800 p-3 rounded-lg border border-slate-700">
+                                  <div className="flex items-center gap-3">
+                                      {/* --- FIX: เพิ่มการตรวจสอบแท็ก cancel_fee ให้แสดงเป็นสีแดงรายจ่ายให้ถูกต้อง --- */}
+                                      <div className={`p-1.5 rounded-md ${diff.type === 'short' || diff.type === 'cancel_fee' ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                                          {diff.type === 'short' || diff.type === 'cancel_fee' ? <TrendingDown size={14}/> : <TrendingUp size={14}/>}
+                                      </div>
+                                      <div>
+                                          <p className="text-[10px] font-bold text-slate-300 uppercase">
+                                              สร้างบิล {diff.type === 'short' || diff.type === 'cancel_fee' ? 'รายจ่าย (Expense)' : 'รายรับ (Income)'} อัตโนมัติ
+                                          </p>
+                                          <p className="text-xs font-mono font-bold text-indigo-300 mt-0.5 flex items-center gap-1">
+                                              <ArrowRight size={10}/> อ้างอิง Order ID: {diff.orderId}
+                                          </p>
+                                      </div>
+                                  </div>
+                                  <div className="text-right">
+                                      {/* --- FIX: ใส่เครื่องหมายลบ (-) ให้ถูกต้อง --- */}
+                                      <p className={`font-black text-sm ${diff.type === 'short' || diff.type === 'cancel_fee' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                          {diff.type === 'short' || diff.type === 'cancel_fee' ? '-' : '+'}{formatCurrency(diff.diff)}
+                                      </p>
+                                      <p className="text-[9px] text-slate-500 font-bold mt-0.5">
+                                          หมวด: {diff.type === 'short' ? discrepancyCategory : diff.type === 'cancel_fee' ? 'ค่าธรรมเนียม Platform' : surplusCategory}
+                                      </p>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+              )}
+
               <div className="flex-1 overflow-auto max-h-[400px] text-left">
                 <table className="w-full text-xs text-left">
-                  <thead className="bg-white text-slate-400 font-bold uppercase tracking-wider sticky top-0 border-b text-left">
+                  <thead className="bg-white text-slate-400 font-bold uppercase tracking-wider sticky top-0 border-b text-left z-10">
                     <tr>
-                      <th className="p-4 text-left">{importMode === 'update_settled' ? 'Settlement Date' : 'Date'}</th>
+                      <th className="p-4 text-left">{importMode === 'update_settled' ? 'Settlement Date' : 'Order Date'}</th>
                       <th className="p-4 text-left">Order ID / Description</th>
                       <th className="p-4 text-left">Status / SKU</th>
                       <th className="p-4 text-right">Fees (฿)</th>
-                      <th className="p-4 text-right">Income (฿)</th>
+                      {/* เปลี่ยนชื่อคอลัมน์ให้สื่อความหมายมากขึ้น */}
+                      <th className="p-4 text-right">{importMode === 'update_settled' ? 'Settled (฿)' : 'Income / Settled (฿)'}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50 text-left">
                     {importedData.length === 0 ? (
                       <tr><td colSpan="5" className="p-10 text-center text-slate-300 font-bold text-center">กรุณาเลือกประเภทแพลตฟอร์ม โหมดการนำเข้า และอัปโหลดไฟล์</td></tr>
                     ) : importedData.map((it, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50 group text-left">
+                      <tr key={idx} className={`group text-left ${it.isCancelled ? 'bg-slate-100 opacity-60 hover:bg-slate-200' : it.isReturned ? 'bg-pink-50/40 hover:bg-pink-50' : 'hover:bg-slate-50'}`}>
                         <td className="p-4 text-slate-500 whitespace-nowrap text-left">{formatDate(it.newSettlementDate || it.date)}</td>
                         <td className="p-4 text-left">
                           <p className="font-bold text-slate-700 text-left">{it.orderId}</p>
@@ -2694,8 +3083,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                  </p>
                               ))}
                           </div>
-                          {it.isDeliveryFailed && (
+                          {it.isCancelled && !it.isReturned && (
+                              <span className="inline-block mt-1 bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><XCircle size={10}/> ออเดอร์ยกเลิก (เสียค่าธรรมเนียม {formatCurrency(it.platformFee)})</span>
+                          )}
+                          {it.isDeliveryFailed && !it.isCancelled && (
                               <span className="inline-block mt-1 bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><AlertTriangle size={10}/> นำเข้าพร้อมหมายเหตุ: จัดส่งไม่สำเร็จ</span>
+                          )}
+                          {it.isReturned && (
+                              <span className="inline-block mt-1 bg-pink-100 text-pink-700 border border-pink-200 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><ArrowRightLeft size={10}/> {it.isCancelled ? 'ลูกค้ายกเลิก/คืนสินค้า' : 'มีการคืนเงิน'} (เสียค่าธรรมเนียม {formatCurrency(it.platformFee)}) {it.refundAmount > 0 ? `คืนเงิน ${formatCurrency(it.refundAmount)}` : ''}</span>
                           )}
                           {it.shopName && (
                               <span className="inline-block mt-1 bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><Store size={10}/> {it.shopName}</span>
@@ -2703,7 +3098,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                         </td>
                         <td className="p-4 text-left">
                             {it.isUpdateMode ? (
-                                it.needsReturn ? (
+                                it.isAlreadyCancelled ? (
+                                    <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded text-[10px] font-bold">อัปเดตค่าธรรมเนียม (ยกเลิก)</span>
+                                ) : it.needsReturn ? (
                                     <div className="flex flex-col gap-1 items-start">
                                         <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 w-fit"><ArrowRightLeft size={10}/> อัปเดตคืนสินค้า</span>
                                         <select 
@@ -2742,29 +3139,29 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             )}
                         </td>
                         <td className="p-4 text-right text-rose-500 font-bold">
-                            -{formatCurrency(it.platformFee || 0)}
+                            -{formatCurrency(it.newPlatformFee !== undefined ? it.newPlatformFee : (it.platformFee || 0))}
                         </td>
                         <td className="p-4 text-right">
                             {importMode === 'update_settled' ? (
                                 <div className="flex flex-col items-end">
-                                    {it.needsReturn ? (
+                                    {it.needsReturn || it.isAlreadyCancelled ? (
                                         <>
                                             <p className="font-black text-rose-600 text-right line-through">{formatCurrency(it.grandTotal || it.total)}</p>
                                             <p className="text-[10px] font-bold text-rose-500 mt-1">{it.reason}</p>
                                         </>
                                     ) : (
                                         <>
-                                            <p className="font-black text-indigo-600 text-right">{formatCurrency(it.actualSettledAmt || 0)}</p>
-                                            {Math.abs((it.actualSettledAmt || 0) - (it.grandTotal || it.total)) > 0.01 ? (
-                                                ((it.grandTotal || it.total) > (it.actualSettledAmt || 0)) ? (
+                                            <p className="font-black text-indigo-600 text-right">{formatCurrency(it.actualSettledAmt !== undefined ? it.actualSettledAmt : (it.grandTotal || it.total))}</p>
+                                            {it.actualSettledAmt !== undefined && Math.abs((it.grandTotal || it.total) - it.actualSettledAmt) > 0.01 ? (
+                                                ((it.grandTotal || it.total) > it.actualSettledAmt) ? (
                                                     <p className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
                                                         <AlertTriangle size={10}/>
-                                                        ส่วนต่าง (ขาด): {formatCurrency((it.grandTotal || it.total) - (it.actualSettledAmt || 0))} (บันทึกไว้: {formatCurrency(it.grandTotal || it.total)})
+                                                        ส่วนต่าง (ขาด): {formatCurrency((it.grandTotal || it.total) - it.actualSettledAmt)}
                                                     </p>
                                                 ) : (
                                                     <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
                                                         <ArrowUp size={10}/>
-                                                        ส่วนต่าง (เกิน): {formatCurrency((it.actualSettledAmt || 0) - (it.grandTotal || it.total))} (บันทึกไว้: {formatCurrency(it.grandTotal || it.total)})
+                                                        ส่วนต่าง (เกิน): {formatCurrency(it.actualSettledAmt - (it.grandTotal || it.total))}
                                                     </p>
                                                 )
                                             ) : (
@@ -2776,7 +3173,17 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                     )}
                                 </div>
                             ) : (
-                                <p className="font-black text-indigo-600 text-right">{formatCurrency(it.grandTotal || it.total)}</p>
+                                // --- FIX: เพิ่มบรรทัดแสดงยอดที่โอนเข้าจริงๆ ในตาราง Preview ด้วย (เพื่อแก้ปัญหาที่ผู้ใช้เห็นแต่ยอด 109k) ---
+                                <div className="flex flex-col items-end">
+                                    <p className="font-black text-indigo-600 text-right">
+                                        {formatCurrency(it.actualSettledAmt !== undefined ? it.actualSettledAmt : (it.grandTotal || it.total))}
+                                    </p>
+                                    {it.actualSettledAmt !== undefined && Math.abs((it.grandTotal || it.total) - it.actualSettledAmt) > 0.01 && (
+                                        <p className="text-[9px] font-bold text-slate-400 mt-1 line-through" title="ยอดตั้งต้นที่ยังไม่หักค่าธรรมเนียมแฝง">
+                                            เต็ม: {formatCurrency(it.grandTotal || it.total)}
+                                        </p>
+                                    )}
+                                </div>
                             )}
                         </td>
                       </tr>
@@ -4392,6 +4799,9 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
 
   const filteredInvoices = useMemo(() => {
     return invoices.filter(inv => {
+      // --- FIX: กรองเฉพาะเอกสารภาษีขาย (INV, ABB, CN) เท่านั้น ไม่เอาใบเสนอราคา/ใบเสร็จมารวม ---
+      if (inv.docType === 'quotation' || inv.docType === 'receipt') return false;
+
       const d = normalizeDate(inv.date);
       const start = new Date(startDate);
       const end = new Date(endDate);
@@ -4577,8 +4987,10 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   };
 
   const vatAnalysis = useMemo(() => {
-    const outputVat = filteredInvoices.reduce((s, inv) => s + ((Number(inv.vat) || 0) * (inv.docType === 'credit_note' ? -1 : 1)), 0);
-    const outputBase = filteredInvoices.reduce((s, inv) => s + ((Number(inv.preVat) || 0) * (inv.docType === 'credit_note' ? -1 : 1)), 0);
+    // --- FIX: ถ้าเอกสารถูกยกเลิก (cancelled) ให้คิดยอดภาษีเป็น 0 เพื่อไม่ให้ ภ.พ.30 เพี้ยน ---
+    const outputVat = filteredInvoices.reduce((s, inv) => s + (inv.status === 'cancelled' ? 0 : ((Number(inv.vat) || 0) * (inv.docType === 'credit_note' ? -1 : 1))), 0);
+    const outputBase = filteredInvoices.reduce((s, inv) => s + (inv.status === 'cancelled' ? 0 : ((Number(inv.preVat) || 0) * (inv.docType === 'credit_note' ? -1 : 1))), 0);
+    
     const inputVat = filteredExpenses.reduce((s, t) => s + (t.isNonCreditableVat ? 0 : getExpenseTaxDetails(t).vat), 0);
     const inputBase = filteredExpenses.reduce((s, t) => s + (t.isNonCreditableVat ? 0 : getExpenseTaxDetails(t).base), 0);
     return { outputVat, outputBase, inputVat, inputBase, net: outputVat - inputVat };
@@ -4586,6 +4998,9 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
 
   const salesFooter = useMemo(() => {
     return filteredInvoices.reduce((acc, inv) => { 
+      // --- FIX: ถ้าเอกสารถูกยกเลิก ไม่นำยอดมาบวกรวมในท้ายตารางรายงานภาษีขาย ---
+      if (inv.status === 'cancelled') return acc;
+      
       const mult = inv.docType === 'credit_note' ? -1 : 1; 
       return { 
         base: acc.base + ((Number(inv.preVat) || 0) * mult), 
@@ -4896,16 +5311,21 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
               </thead>
               <tbody className="divide-y divide-slate-50 text-left">
                 {filteredInvoices.map((row, i) => {
+                    const isCancelled = row.status === 'cancelled';
                     const mult = row.docType === 'credit_note' ? -1 : 1;
                     return (
-                     <tr key={i} className="hover:bg-slate-50/80 transition-colors text-left">
+                     <tr key={i} className={`hover:bg-slate-50/80 transition-colors text-left ${isCancelled ? 'opacity-50' : ''}`}>
                       <td className="p-5 text-xs text-slate-500 whitespace-nowrap text-left">{formatDate(row.date)}</td>
-                      <td className="p-5 font-bold text-slate-800 text-left">{row.invNo} {row.docType === 'credit_note' && <span className="text-rose-500 text-[10px] ml-1">(ลดหนี้)</span>}</td>
+                      <td className="p-5 font-bold text-slate-800 text-left">
+                          {row.invNo} 
+                          {row.docType === 'credit_note' && <span className="text-rose-500 text-[10px] ml-1">(ลดหนี้)</span>}
+                          {isCancelled && <span className="text-rose-500 text-[10px] ml-1">(ยกเลิก)</span>}
+                      </td>
                       <td className="p-5 text-left">{row.customerName}</td>
                       <td className="p-5 font-mono text-xs text-left">{row.taxId || '-'}</td>
                       <td className="p-5 text-[10px] font-bold text-slate-500 text-left">{(row.branch === '00000' || !row.branch) ? 'สำนักงานใหญ่' : `สาขาที่ ${row.branch}`}</td>
-                      <td className="p-5 text-right font-medium text-right">{formatCurrency((row.preVat || 0) * mult)}</td>
-                      <td className="p-5 text-right text-indigo-600 font-bold text-right">{formatCurrency((row.vat || 0) * mult)}</td>
+                      <td className="p-5 text-right font-medium text-right">{isCancelled ? '0.00' : formatCurrency((row.preVat || 0) * mult)}</td>
+                      <td className="p-5 text-right text-indigo-600 font-bold text-right">{isCancelled ? '0.00' : formatCurrency((row.vat || 0) * mult)}</td>
                     </tr>
                     );
                 })}
@@ -6721,7 +7141,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     </thead>
                     <tbody className="divide-y divide-slate-50 text-left">
                         {currentHistData.length > 0 ? currentHistData.map(t => (
-                        <tr key={t.id} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : 'hover:bg-slate-50/80'}`}>
+                        <tr key={t.id} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : (t.isReturned || t.refundAmount > 0) ? 'bg-pink-50/40 hover:bg-pink-50' : 'hover:bg-slate-50/80'}`}>
                             <td className="p-5 text-left">
                                 <p className={`font-black text-left ${t.isCancelled ? 'text-slate-400 line-through' : 'text-slate-700'}`} title="วันที่ทำรายการ/สั่งซื้อ">{formatDate(t.date)}</p>
                                 
@@ -6744,13 +7164,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                 {t.isCancelled && <span className="ml-2 mt-1 inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
                             </td>
                             <td className="p-5 text-left">
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                     <p className={`font-bold text-slate-800 line-clamp-1 text-left ${t.isCancelled ? 'line-through text-slate-400' : ''}`}>{t.description || '-'}</p>
-                                    {t.isCancelled && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
+                                    {t.isCancelled && !t.isReturned && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
                                     {!t.isCancelled && t.paymentStatus === 'pending_platform' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-orange-100 text-orange-700 border border-orange-200">รอเงินเข้า</span>}
                                     {!t.isCancelled && t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
                                     {/* NEW: แสดง Tag มีการปรับยอด ในตารางประวัติ */}
                                     {!t.isCancelled && t.isAdjusted && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-blue-100 text-blue-700 border border-blue-200">มีการปรับยอด</span>}
+                                    {(t.isReturned || t.refundAmount > 0) && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-pink-100 text-pink-700 border border-pink-200 flex items-center gap-0.5"><ArrowRightLeft size={8}/> {t.isCancelled ? 'ยกเลิก/คืนสินค้า' : 'คืนสินค้า/เงิน'}</span>}
                                 </div>
                                 <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
                                     <p className="text-[10px] font-mono text-slate-400 text-left">
@@ -6785,23 +7206,24 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     {/* NEW: Highlight the exact difference directly under the total */}
                                     {t.type === 'income' && t.actualSettledAmt !== undefined && Math.abs((t.grandTotal || t.total) - t.actualSettledAmt) > 0.01 && (
                                         (t.grandTotal || t.total) > t.actualSettledAmt ? (
-                                            <div className="text-[9px] text-rose-500 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
+                                            <div className="text-[9px] text-rose-500 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm cursor-pointer hover:bg-rose-50 transition-colors" title="คลิกเพื่อดูบิลปรับปรุง" onClick={() => setSearchTerm(t.orderId || t.sysDocId)}>
                                                 <AlertTriangle size={10}/> หายไป {formatCurrency((t.grandTotal || t.total) - t.actualSettledAmt)}
                                             </div>
                                         ) : (
-                                            <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
+                                            <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm cursor-pointer hover:bg-emerald-50 transition-colors" title="คลิกเพื่อดูบิลปรับปรุง" onClick={() => setSearchTerm(t.orderId || t.sysDocId)}>
                                                 <ArrowUp size={10}/> ได้เพิ่ม {formatCurrency(t.actualSettledAmt - (t.grandTotal || t.total))}
                                             </div>
                                         )
                                     )}
+                                    {/* --- FIX: เพิ่มการคลิกที่บิลปรับปรุง เพื่อค้นหากลับไปยังออเดอร์ต้นฉบับ --- */}
                                     {t.type === 'expense' && t.isFromReconciliation && (
-                                        <div className="text-[9px] text-rose-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
-                                            <RefreshCw size={10}/> บิลอุดรอยรั่ว (ขาด)
+                                        <div className="text-[9px] text-rose-600 font-bold mt-1 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-rose-100 cursor-pointer hover:bg-rose-50 transition-all" title="คลิกเพื่อเทียบกับออเดอร์ต้นฉบับ" onClick={() => {setSearchTerm(t.linkedOrderNo); setHistType('all');}}>
+                                            <ArrowRightLeft size={10}/> ขาดทุน (อ้างอิง: {t.linkedOrderNo})
                                         </div>
                                     )}
                                     {t.type === 'income' && t.isFromReconciliation && (
-                                        <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm">
-                                            <RefreshCw size={10}/> บิลรายรับเพิ่ม (เกิน)
+                                        <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-emerald-100 cursor-pointer hover:bg-emerald-50 transition-all" title="คลิกเพื่อเทียบกับออเดอร์ต้นฉบับ" onClick={() => {setSearchTerm(t.linkedOrderNo); setHistType('all');}}>
+                                            <ArrowRightLeft size={10}/> ได้เพิ่ม (อ้างอิง: {t.linkedOrderNo})
                                         </div>
                                     )}
                                 </div>
@@ -6857,11 +7279,17 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             <div className="p-6 border-b flex justify-between items-center bg-slate-50 text-left">
               <div className="text-left">
                 <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2 text-left"><Hash className="text-indigo-600"/> รายละเอียดรายการ</h3>
-                <div className="flex items-center gap-3 mt-2 text-left">
+                <div className="flex items-center gap-3 mt-2 text-left flex-wrap">
                   <span className="text-sm font-black text-indigo-700 bg-indigo-100 border border-indigo-200 px-3 py-1 rounded-lg tracking-wider">SYS ID: {viewItem.sysDocId || 'NO-REF'}</span>
                   <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.isCashBill ? 'บิลเงินสด' : (viewItem.orderId || viewItem.taxInvoiceNo || '-')}</p>
                   <span className={`px-2 py-1 rounded-md text-[10px] font-bold text-center ${viewItem.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{viewItem.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span>
                   <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold text-center">{viewItem.channel || 'หน้าร้าน'}</span>
+                  
+                  {(viewItem.isReturned || viewItem.refundAmount > 0) && (
+                      <span className="bg-pink-100 text-pink-700 border border-pink-200 px-2 py-1 rounded-md text-[10px] font-bold text-center flex items-center gap-1">
+                          <ArrowRightLeft size={12}/> {viewItem.isCancelled ? 'ลูกค้ายกเลิก/คืนสินค้า (เสียค่าธรรมเนียม)' : 'คืนสินค้า/คืนเงิน'}
+                      </span>
+                  )}
                   
                   {/* NEW: Clickable Toggle Badge for Adjusted Status in View Modal */}
                   <button onClick={() => toggleAdjustedStatus(viewItem)} className={`px-2 py-1 rounded-md text-[10px] font-bold text-center shadow-sm transition-colors flex items-center gap-1 ${viewItem.isAdjusted ? 'bg-blue-100 text-blue-700 hover:bg-slate-100 hover:text-slate-500' : 'bg-slate-100 text-slate-400 hover:bg-blue-50 hover:text-blue-600'}`} title="คลิกเพื่อเปิด/ปิดแท็ก">
@@ -6920,6 +7348,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       <div className="flex justify-between text-rose-500 text-left text-left"><span className="text-[10px] font-bold uppercase text-left">ส่วนลดคูปอง</span><span className="font-bold text-right text-right">-{formatCurrency(viewItem.couponDiscount || 0)}</span></div>
                       <div className="flex justify-between text-orange-500 text-left text-left"><span className="text-[10px] font-bold uppercase text-left">คูปองเงินสด</span><span className="font-bold text-right text-right">-{formatCurrency(viewItem.cashCoupon || 0)}</span></div>
                       <div className="flex justify-between text-rose-600 text-left text-left"><span className="text-[10px] font-bold uppercase text-left">หัก ณ ที่จ่าย (WHT)</span><span className="font-bold text-right text-right">-{formatCurrency(viewItem.whtAmount || 0)}</span></div>
+                      {viewItem.refundAmount > 0 && (
+                          <div className="flex justify-between text-rose-700 text-left text-left"><span className="text-[10px] font-bold uppercase text-left">หัก ยอดคืนเงินผู้ซื้อ</span><span className="font-bold text-right text-right">-{formatCurrency(viewItem.refundAmount)}</span></div>
+                      )}
                       
                       {viewItem.type === 'income' && (
                           <>
