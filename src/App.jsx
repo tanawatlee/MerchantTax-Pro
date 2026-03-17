@@ -659,10 +659,12 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     let cashShipping = 0;
     let cashFees = 0;
     let cashCogs = 0; 
-    let cashGrossSales = 0; // NEW: ตัวแปรเก็บยอดขายสินค้าก่อนหักค่าธรรมเนียม
+    let cashGrossSales = 0; 
 
     transactions.forEach(t => {
-        if (t.isFromReconciliation) return; // ข้ามบิลปรับปรุงอัตโนมัติ เพื่อป้องกันยอดเบิ้ล
+        // --- FIX: ข้ามบิลปรับปรุงอัตโนมัติ ยกเว้น บิลค่าธรรมเนียมที่ถูกฉีกแยกออกมา ---
+        if (t.isFromReconciliation && t.category !== 'ค่าธรรมเนียม Platform') return; 
+        
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
         if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
 
@@ -688,36 +690,30 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 const expectedAmt = t.grandTotal || t.total;
                 const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : expectedAmt;
                 
-                // คำนวณต้นทุนสินค้าของบิลนี้ (COGS)
                 const cogs = (t.items || []).reduce((itemSum, item) => {
                     const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
                     return itemSum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
                 }, 0);
 
-                // 1. Performance: ผลประกอบการ อิงวันสั่งซื้อ
                 if (matchOrderMonth) {
                     perfSales += expectedAmt;
                     perfFees += fee;
                     perfCogs += cogs;
                 }
 
-                // 2. Cash Flow: กระแสเงินสด อิงวันเงินเข้า
                 if (matchSettleMonth && (t.paymentStatus === 'settled' || t.status === 'paid')) {
                     cashSettled += settledAmt;
                     cashShipping += ship;
                     cashFees += fee;
                     cashCogs += cogs; 
-                    // หักยอดคืนเงินออกจาก Gross Sales เพื่อให้คำนวณฐานภาษีได้ถูกต้อง
                     cashGrossSales += Math.max(0, (Number(t.total) || 0) - (Number(t.refundAmount) || 0)); 
                 }
             } else {
-                // --- FIX: ดึงค่าธรรมเนียม Platform จากออเดอร์ที่ถูกยกเลิก/คืนสินค้า มารวมด้วย ---
                 if (matchOrderMonth && fee > 0) {
                     perfFees += fee;
-                    perfExp += fee; // นำไปหักเป็นรายจ่ายในฝั่งกำไรสุทธิ เพราะเสียเงินไปฟรีๆ
+                    perfExp += fee; 
                 }
                 
-                // คำนวณเดือนที่รับรู้การคืนเงิน/ยกเลิก
                 const cancelSettleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.cancelledAt ? normalizeDate(t.cancelledAt) : orderD);
                 let matchCancelSettleMonth = true;
                 if (selectedMonth !== 'all') {
@@ -726,8 +722,8 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 }
                 
                 if (matchCancelSettleMonth && fee > 0) {
-                    cashFees += fee; // แสดงในกล่อง "ค่าธรรมเนียม Platform"
-                    cashExp += fee; // นำไปหักออกเป็นกระแสเงินสดจ่ายออก
+                    cashFees += fee; 
+                    cashExp += fee; 
                 }
             }
         } else if (t.type === 'expense') {
@@ -735,15 +731,18 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 const amt = Number(t.total) || 0;
                 if (matchOrderMonth) {
                     perfExp += amt;
+                    // --- FIX: บวกบิลแยกอัตโนมัติเข้ากล่องค่าธรรมเนียม ---
+                    if (t.category === 'ค่าธรรมเนียม Platform') perfFees += amt;
                 }
                 if (matchSettleMonth && t.status === 'paid') {
                     cashExp += amt;
+                    // --- FIX: บวกบิลแยกอัตโนมัติเข้ากล่องค่าธรรมเนียม ---
+                    if (t.category === 'ค่าธรรมเนียม Platform') cashFees += amt;
                 }
             }
         }
     });
 
-    // 3. คำนวณยอด "รอโอน" (Pending) โดยไม่สนเดือน เพื่อให้เห็นยอดค้างรับทั้งหมดของสภาพคล่องปัจจุบัน
     transactions.forEach(t => {
          if (t.isCancelled || t.isFromReconciliation) return;
          if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
@@ -774,7 +773,9 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     }
     
     transactions.forEach(t => {
-        if (t.isFromReconciliation) return; 
+        // --- FIX: ข้ามบิลปรับปรุงอัตโนมัติ ยกเว้น บิลค่าธรรมเนียม ---
+        if (t.isFromReconciliation && t.category !== 'ค่าธรรมเนียม Platform') return; 
+        
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
         // --- FIX: แก้ไขให้ตรวจสอบชื่อร้านแบบไม่สนใจตัวพิมพ์เล็ก/ใหญ่ ---
         if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
@@ -2196,52 +2197,38 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           for (const item of importedData) {
               const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
               
+              // --- FIX: เตรียมตัวแปรค่าธรรมเนียมสำหรับการยกเลิก ---
+              const feeForCancelled = item.newPlatformFee !== undefined ? item.newPlatformFee : 0;
+              const shouldCreateFeeBill = (item.isAlreadyCancelled || item.needsReturn) && feeForCancelled > 0;
+
               if (item.isAlreadyCancelled) {
-                  // --- FIX: บิลที่ยกเลิกไปแล้ว ให้เซฟทับเฉพาะ "ค่าธรรมเนียมย่อย" อย่างเดียว เพื่อให้ Dashboard ตรงเป๊ะ ---
+                  // --- บิลที่ยกเลิกไปแล้ว: อัปเดตวันที่รับเงิน และเคลียร์ค่าธรรมเนียมแฝงออก (เพื่อนำไปสร้างบิลแยก) ---
                   batch.update(ref, {
-                      platformFee: item.newPlatformFee !== undefined ? item.newPlatformFee : (item.platformFee || 0),
-                      transactionFee: item.newTransactionFee !== undefined ? item.newTransactionFee : (item.transactionFee || 0),
-                      commissionFee: item.newCommissionFee !== undefined ? item.newCommissionFee : (item.commissionFee || 0),
-                      serviceFee: item.newServiceFee !== undefined ? item.newServiceFee : (item.serviceFee || 0),
-                      infrastructureFee: item.newInfrastructureFee !== undefined ? item.newInfrastructureFee : (item.infrastructureFee || 0),
-                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : (item.actualSettledAmt || 0),
-                      settlementDate: item.newSettlementDate || item.settlementDate || null, // <-- FIX: บันทึกวันที่รับเงินลงฐานข้อมูล
+                      platformFee: 0,
+                      transactionFee: 0,
+                      commissionFee: 0,
+                      serviceFee: 0,
+                      infrastructureFee: 0,
+                      actualSettledAmt: 0,
+                      settlementDate: item.newSettlementDate || item.settlementDate || null,
                       updatedAt: serverTimestamp()
                   });
                   count++;
               }
               else if (item.needsReturn) {
-                  // --- 1. กรณีกระทบยอดแล้วพบว่า "คืนสินค้า" ให้ยกเลิกบิลและดึงสต็อกกลับ ---
+                  // --- กรณีกระทบยอดแล้วพบว่า "คืนสินค้า": ให้ยกเลิกบิล เคลียร์ค่าธรรมเนียม และดึงสต็อกกลับ ---
                   batch.update(ref, {
                       isCancelled: true,
                       cancelledAt: serverTimestamp(),
                       paymentStatus: 'refunded',
                       cancelReason: item.reason + (item.returnAction === 'discard' ? ' [สินค้าชำรุด/ตัดทิ้ง ไม่คืนคลัง]' : ' [คืนสต็อกแล้ว]'),
-                      // --- FIX: บันทึกค่าธรรมเนียมย่อยต่างๆ สำหรับบิลตีคืนด้วย! ---
-                      platformFee: item.newPlatformFee !== undefined ? item.newPlatformFee : (item.platformFee || 0),
-                      transactionFee: item.newTransactionFee !== undefined ? item.newTransactionFee : (item.transactionFee || 0),
-                      commissionFee: item.newCommissionFee !== undefined ? item.newCommissionFee : (item.commissionFee || 0),
-                      serviceFee: item.newServiceFee !== undefined ? item.newServiceFee : (item.serviceFee || 0),
-                      infrastructureFee: item.newInfrastructureFee !== undefined ? item.newInfrastructureFee : (item.infrastructureFee || 0),
-                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : (item.actualSettledAmt || 0),
-                      settlementDate: item.newSettlementDate || item.settlementDate || null // <-- FIX: บันทึกวันที่รับเงินลงฐานข้อมูล
-                  });
-                  count++;
-              }
-              else if (item.needsReturn) {
-                  // --- 1. กรณีกระทบยอดแล้วพบว่า "คืนสินค้า" ให้ยกเลิกบิลและดึงสต็อกกลับ ---
-                  batch.update(ref, {
-                      isCancelled: true,
-                      cancelledAt: serverTimestamp(),
-                      paymentStatus: 'refunded',
-                      cancelReason: item.reason + (item.returnAction === 'discard' ? ' [สินค้าชำรุด/ตัดทิ้ง ไม่คืนคลัง]' : ' [คืนสต็อกแล้ว]'),
-                      // --- FIX: บันทึกค่าธรรมเนียมย่อยต่างๆ สำหรับบิลตีคืนด้วย! ---
-                      platformFee: item.newPlatformFee !== undefined ? item.newPlatformFee : (item.platformFee || 0),
-                      transactionFee: item.newTransactionFee !== undefined ? item.newTransactionFee : (item.transactionFee || 0),
-                      commissionFee: item.newCommissionFee !== undefined ? item.newCommissionFee : (item.commissionFee || 0),
-                      serviceFee: item.newServiceFee !== undefined ? item.newServiceFee : (item.serviceFee || 0),
-                      infrastructureFee: item.newInfrastructureFee !== undefined ? item.newInfrastructureFee : (item.infrastructureFee || 0),
-                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : (item.actualSettledAmt || 0)
+                      platformFee: 0,
+                      transactionFee: 0,
+                      commissionFee: 0,
+                      serviceFee: 0,
+                      infrastructureFee: 0,
+                      actualSettledAmt: 0,
+                      settlementDate: item.newSettlementDate || item.settlementDate || null
                   });
                   
                   // ดึงสต็อกกลับเข้าคลัง เฉพาะกรณีที่เลือก "คืนเข้าคลัง"
@@ -2262,15 +2249,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   }
                   count++;
               } else {
-                  // --- 2. กรณีกระทบยอดรับเงินปกติ (Settled) ---
+                  // --- กรณีกระทบยอดรับเงินปกติ (Settled) ---
                   const updateData = {
                       paymentStatus: 'settled',
                       settlementDate: item.newSettlementDate,
                       updatedAt: serverTimestamp()
                   };
                   
-                  // --- FIX: อัปเดตเฉพาะ "ค่าธรรมเนียม" ลงฐานข้อมูล เพื่อให้ Dashboard แสดงยอด 19,637! ---
-                  // (ห้ามแตะต้องค่าจัดส่งเด็ดขาด เพื่อรักษายอดเดิมไว้ ไม่ให้บั๊ก +99 กลับมา)
                   if (item.newPlatformFee !== undefined) {
                       updateData.platformFee = item.newPlatformFee;
                       updateData.transactionFee = item.newTransactionFee;
@@ -2312,7 +2297,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           partnerBranch: '00000',
                           isFromReconciliation: true,
                           linkedOrderId: item.id,
-                          linkedOrderNo: item.orderId || item.sysDocId || '-' // <-- FIX: เซฟหมายเลขออเดอร์ลงไปด้วยเพื่อใช้คลิกค้นหา
+                          linkedOrderNo: item.orderId || item.sysDocId || '-'
                       });
                   } 
                   else if (diff < -0.01) {
@@ -2333,9 +2318,32 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           partnerBranch: '00000',
                           isFromReconciliation: true,
                           linkedOrderId: item.id,
-                          linkedOrderNo: item.orderId || item.sysDocId || '-' // <-- FIX: เซฟหมายเลขออเดอร์ลงไปด้วยเพื่อใช้คลิกค้นหา
+                          linkedOrderNo: item.orderId || item.sysDocId || '-'
                       });
                   }
+              }
+
+              // --- 🔥 NEW: สร้างบิลรายจ่ายแยกอิสระ 100% สำหรับค่าธรรมเนียมออเดอร์ยกเลิก/ตีคืน ---
+              if (shouldCreateFeeBill) {
+                  expCount++;
+                  const sysDocId = `EXP-${String(expCount).padStart(5, '0')}`;
+                  const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                  batch.set(expRef, {
+                      sysDocId,
+                      type: 'expense',
+                      category: 'ค่าธรรมเนียม Platform', // ล็อกหมวดหมู่อัตโนมัติตามรีเควส
+                      description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
+                      total: feeForCancelled,
+                      date: item.newSettlementDate || new Date(),
+                      userId: user.uid,
+                      createdAt: serverTimestamp(),
+                      status: 'paid',
+                      partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
+                      partnerBranch: '00000',
+                      isFromReconciliation: true,
+                      linkedOrderId: item.id,
+                      linkedOrderNo: item.orderId || item.sysDocId || '-'
+                  });
               }
           }
           
@@ -6339,9 +6347,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     invoices.forEach(inv => { if (inv.orderId) { if (!docStatusMap[inv.orderId]) docStatusMap[inv.orderId] = []; docStatusMap[inv.orderId].push({ type: inv.docType, no: inv.invNo }); } });
     
     return transactions.filter(t => {
-        // 1. Text Search
+        // 1. Text Search (รองรับการหา linkedOrderNo)
         const matchSearch = (t.partnerName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            (t.orderId || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            (t.orderId || t.linkedOrderNo || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                             (t.taxInvoiceNo || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                             (t.description || '').toLowerCase().includes(searchTerm.toLowerCase());
         if (!matchSearch) return false;
@@ -6411,7 +6419,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     let transactionCount = 0;
 
     const categories = {};
-    const dailyData = {}; // NEW: สำหรับเก็บข้อมูลรายจ่ายรายวัน
+    const dailyData = {}; 
 
     const start = new Date(summaryStartDate || '2000-01-01');
     start.setHours(0,0,0,0);
@@ -6419,7 +6427,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     end.setHours(23,59,59,999);
 
     const filteredTrans = transactions.filter(t => {
-        if (t.isCancelled) return false; // ข้ามรายการที่ยกเลิก
+        if (t.isCancelled) return false; 
+        // --- FIX: ข้ามบิลปรับปรุงอัตโนมัติ ยกเว้น บิลค่าธรรมเนียม ---
+        if (t.isFromReconciliation && t.category !== 'ค่าธรรมเนียม Platform') return false;
+        
         const d = normalizeDate(t.date);
         if (!d || d < start || d > end) return false;
         
@@ -7169,14 +7180,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     {t.isCancelled && !t.isReturned && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
                                     {!t.isCancelled && t.paymentStatus === 'pending_platform' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-orange-100 text-orange-700 border border-orange-200">รอเงินเข้า</span>}
                                     {!t.isCancelled && t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
-                                    {/* NEW: แสดง Tag มีการปรับยอด ในตารางประวัติ */}
                                     {!t.isCancelled && t.isAdjusted && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-blue-100 text-blue-700 border border-blue-200">มีการปรับยอด</span>}
                                     {(t.isReturned || t.refundAmount > 0) && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-pink-100 text-pink-700 border border-pink-200 flex items-center gap-0.5"><ArrowRightLeft size={8}/> {t.isCancelled ? 'ยกเลิก/คืนสินค้า' : 'คืนสินค้า/เงิน'}</span>}
                                 </div>
                                 <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
                                     <p className="text-[10px] font-mono text-slate-400 text-left">
-                                        {t.type === 'income' ? `Order ID: ${t.orderId || '-'}` : (t.isCashBill ? 'Ref: บิลเงินสด' : (t.taxInvoiceNo ? `Tax Inv: ${t.taxInvoiceNo}` : `Ref: ${t.orderId || '-'}`))}
-                                        {t.type === 'expense' && t.orderId && t.orderId !== t.taxInvoiceNo && <span className="ml-2 bg-indigo-50 text-indigo-600 px-1.5 rounded">Linked: {t.orderId}</span>}
+                                        {t.type === 'income' ? `Order ID: ${t.orderId || t.linkedOrderNo || '-'}` : (t.isCashBill ? 'Ref: บิลเงินสด' : (t.taxInvoiceNo ? `Tax Inv: ${t.taxInvoiceNo}` : `Ref: ${t.orderId || t.linkedOrderNo || '-'}`))}
+                                        {t.type === 'expense' && (t.orderId || t.linkedOrderNo) && (t.orderId || t.linkedOrderNo) !== t.taxInvoiceNo && <span className="ml-2 bg-indigo-50 text-indigo-600 px-1.5 rounded">Linked: {t.orderId || t.linkedOrderNo}</span>}
                                     </p>
                                     {t.issuedDocs && t.issuedDocs.length > 0 && t.issuedDocs.map((doc, idx) => {
                                         let badgeColor = 'bg-slate-100 text-slate-600';
@@ -7281,7 +7291,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                 <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2 text-left"><Hash className="text-indigo-600"/> รายละเอียดรายการ</h3>
                 <div className="flex items-center gap-3 mt-2 text-left flex-wrap">
                   <span className="text-sm font-black text-indigo-700 bg-indigo-100 border border-indigo-200 px-3 py-1 rounded-lg tracking-wider">SYS ID: {viewItem.sysDocId || 'NO-REF'}</span>
-                  <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.isCashBill ? 'บิลเงินสด' : (viewItem.orderId || viewItem.taxInvoiceNo || '-')}</p>
+                  <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.isCashBill ? 'บิลเงินสด' : (viewItem.orderId || viewItem.linkedOrderNo || viewItem.taxInvoiceNo || '-')}</p>
                   <span className={`px-2 py-1 rounded-md text-[10px] font-bold text-center ${viewItem.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{viewItem.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span>
                   <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold text-center">{viewItem.channel || 'หน้าร้าน'}</span>
                   
