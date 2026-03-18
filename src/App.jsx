@@ -2288,6 +2288,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           type: 'expense',
                           category: discrepancyCategory,
                           description: `ส่วนต่างยอดรับเงิน (ยอดขาด): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
+                          items: [{ desc: `ส่วนต่างยอดรับเงิน (ยอดขาด): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`, qty: 1, buyPrice: diff, sellPrice: 0, sku: '' }],
                           total: diff,
                           date: item.newSettlementDate || new Date(),
                           userId: user.uid,
@@ -2297,7 +2298,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           partnerBranch: '00000',
                           isFromReconciliation: true,
                           linkedOrderId: item.id,
-                          linkedOrderNo: item.orderId || item.sysDocId || '-'
+                          linkedOrderNo: item.orderId || item.sysDocId || '-',
+                          orderId: item.orderId || item.sysDocId || '-',
+                          channel: item.channel || '',
+                          shopName: item.shopName || 'ไม่ระบุ'
                       });
                   } 
                   else if (diff < -0.01) {
@@ -2309,6 +2313,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           type: 'income',
                           category: surplusCategory,
                           description: `ส่วนต่างยอดรับเงิน (ยอดได้เพิ่ม): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
+                          items: [{ desc: `ส่วนต่างยอดรับเงิน (ยอดได้เพิ่ม): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`, qty: 1, buyPrice: 0, sellPrice: Math.abs(diff), sku: '' }],
                           total: Math.abs(diff),
                           date: item.newSettlementDate || new Date(),
                           userId: user.uid,
@@ -2318,7 +2323,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           partnerBranch: '00000',
                           isFromReconciliation: true,
                           linkedOrderId: item.id,
-                          linkedOrderNo: item.orderId || item.sysDocId || '-'
+                          linkedOrderNo: item.orderId || item.sysDocId || '-',
+                          orderId: item.orderId || item.sysDocId || '-',
+                          channel: item.channel || '',
+                          shopName: item.shopName || 'ไม่ระบุ'
                       });
                   }
               }
@@ -2333,6 +2341,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       type: 'expense',
                       category: 'ค่าธรรมเนียม Platform', // ล็อกหมวดหมู่อัตโนมัติตามรีเควส
                       description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
+                      items: [{ desc: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`, qty: 1, buyPrice: feeForCancelled, sellPrice: 0, sku: '' }],
                       total: feeForCancelled,
                       date: item.newSettlementDate || new Date(),
                       userId: user.uid,
@@ -2342,7 +2351,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       partnerBranch: '00000',
                       isFromReconciliation: true,
                       linkedOrderId: item.id,
-                      linkedOrderNo: item.orderId || item.sysDocId || '-'
+                      linkedOrderNo: item.orderId || item.sysDocId || '-',
+                      orderId: item.orderId || item.sysDocId || '-',
+                      channel: item.channel || '',
+                      shopName: item.shopName || 'ไม่ระบุ'
                   });
               }
           }
@@ -2428,6 +2440,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 type: 'expense',
                 category: 'ค่าธรรมเนียม Platform',
                 description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`,
+                items: [{ desc: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`, qty: 1, buyPrice: feeForCancelled, sellPrice: 0, sku: '' }],
                 total: feeForCancelled,
                 date: cleanTrans.settlementDate || cleanTrans.date || new Date(),
                 userId: user.uid,
@@ -2437,7 +2450,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 partnerBranch: '00000',
                 isFromReconciliation: true,
                 linkedOrderId: docRef.id,
-                linkedOrderNo: cleanTrans.orderId || '-'
+                linkedOrderNo: cleanTrans.orderId || '-',
+                orderId: cleanTrans.orderId || '-',
+                channel: cleanTrans.channel || '',
+                shopName: cleanTrans.shopName || 'ไม่ระบุ'
             });
         }
 
@@ -5810,6 +5826,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   type: 'expense',
                   category: settleDiffCategory,
                   description: `ส่วนต่างยอดรับเงิน (ยอดขาด): ออเดอร์ ${settleConfirmId.orderId || settleConfirmId.sysDocId}`,
+                  items: [{ desc: `ส่วนต่างยอดรับเงิน (ยอดขาด): ออเดอร์ ${settleConfirmId.orderId || settleConfirmId.sysDocId}`, qty: 1, buyPrice: diff, sellPrice: 0, sku: '' }],
                   total: diff,
                   date: normalizeDate(settleDate),
                   userId: user.uid,
@@ -5818,7 +5835,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   partnerName: settleConfirmId.channel ? `Platform (${settleConfirmId.channel})` : 'Platform',
                   partnerBranch: '00000',
                   isFromReconciliation: true,
-                  linkedOrderId: settleConfirmId.id
+                  linkedOrderId: settleConfirmId.id,
+                  linkedOrderNo: settleConfirmId.orderId || settleConfirmId.sysDocId,
+                  orderId: settleConfirmId.orderId || settleConfirmId.sysDocId,
+                  channel: settleConfirmId.channel || '',
+                  shopName: settleConfirmId.shopName || 'ไม่ระบุ'
               });
           } else if (diff < -0.01) {
               const incSysDocId = generateDateBasedDocId(transactions.filter(tx => tx.type === 'income'), 'INC-', settleDate, 'sysDocId');
@@ -5829,6 +5850,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   type: 'income',
                   category: settleSurplusCategory,
                   description: `ส่วนต่างยอดรับเงิน (ยอดได้เพิ่ม): ออเดอร์ ${settleConfirmId.orderId || settleConfirmId.sysDocId}`,
+                  items: [{ desc: `ส่วนต่างยอดรับเงิน (ยอดได้เพิ่ม): ออเดอร์ ${settleConfirmId.orderId || settleConfirmId.sysDocId}`, qty: 1, buyPrice: 0, sellPrice: Math.abs(diff), sku: '' }],
                   total: Math.abs(diff),
                   date: normalizeDate(settleDate),
                   userId: user.uid,
@@ -5837,7 +5859,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   partnerName: settleConfirmId.channel ? `Platform (${settleConfirmId.channel})` : 'Platform',
                   partnerBranch: '00000',
                   isFromReconciliation: true,
-                  linkedOrderId: settleConfirmId.id
+                  linkedOrderId: settleConfirmId.id,
+                  linkedOrderNo: settleConfirmId.orderId || settleConfirmId.sysDocId,
+                  orderId: settleConfirmId.orderId || settleConfirmId.sysDocId,
+                  channel: settleConfirmId.channel || '',
+                  shopName: settleConfirmId.shopName || 'ไม่ระบุ'
               });
           }
 
@@ -6449,9 +6475,15 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         transactionCount++;
         if (t.type === 'expense') {
             const amt = Number(t.grandTotal) || Number(t.total) || 0;
-            explicitExpenseTotal += amt;
-            const cat = t.category || 'อื่นๆ';
-            categories[cat] = (categories[cat] || 0) + amt;
+            
+            // --- FIX: โอนยอดรายจ่าย 'ค่าธรรมเนียม Platform' ไปรวมกล่อง Platform Fee แทนกล่อง Direct Expense ---
+            if (t.category === 'ค่าธรรมเนียม Platform') {
+                platformFeeTotal += amt;
+            } else {
+                explicitExpenseTotal += amt;
+                const cat = t.category || 'อื่นๆ';
+                categories[cat] = (categories[cat] || 0) + amt;
+            }
 
             // NEW: จัดกลุ่มรายจ่ายตามวันที่
             const dDate = normalizeDate(t.date);
