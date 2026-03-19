@@ -1645,6 +1645,24 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             return val !== undefined && val !== null && String(val).trim() !== '' ? Math.abs(cleanNum(val)) : 0;
         };
 
+        // --- NEW: ตัวกวาดค่าธรรมเนียมบริการที่ TikTok ชอบแยกคอลัมน์ยิบย่อย ---
+        const getTikTokExtraFees = (row) => {
+            if (platform !== 'tiktok') return 0;
+            const extraKeys = [
+                'Affiliate Commission', 'Affiliate partner commission', 'SFP service fee', 
+                'Bonus cashback service fee', 'LIVE Specials service fee', 'Voucher Xtra service fee', 
+                'EAMS Program service fee', 'Brands Crazy Deals/Flash Sale service fee', 
+                'Commerce growth fee', 'Campaign resource fee', 'Pre-order service fee', 'Affiliate Shop Ads commission',
+                'ค่าคอมมิชชันของพันธมิตร', 'ค่าธรรมเนียมบริการ SFP', 'ค่าธรรมเนียมบริการ Bonus cashback',
+                'ค่าธรรมเนียมบริการ LIVE Specials', 'ค่าธรรมเนียมบริการ Voucher Xtra', 'ค่าธรรมเนียมบริการโปรแกรม EAMS',
+                'ค่าธรรมเนียมบริการ Brands Crazy Deals/Flash Sale', 'ค่าธรรมเนียม Commerce growth',
+                'ค่าธรรมเนียม Campaign resource', 'ค่าธรรมเนียมบริการ Pre-order', 'ค่าคอมมิชชันของ Affiliate Shop Ads'
+            ];
+            let sum = 0;
+            extraKeys.forEach(k => { sum += getRowValAbs(row, [k]); });
+            return sum;
+        };
+
         // --- 🔥 NEW FIX: EXCEL EXACT EXTRACTOR 🔥 ---
         // คำนวณสรุปข้อมูลจากไฟล์ Excel ตรงๆ เพื่อให้ยอด Preview ตรงกับหน้าสรุปของ Shopee 100%
         let detailedStats = {
