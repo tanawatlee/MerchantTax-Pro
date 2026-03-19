@@ -1740,7 +1740,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 const infra = infraRow > 0 ? infraRow : 0;
                 const rowTotalPlatformFee = transFee + comm + serv + infra;
 
-                const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount']);
+                // --- FIX: เพิ่มคำว่า ยอดเงินที่ชำระทั้งหมด ---
+                const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'Total settlement amount', 'ยอดเงินที่ชำระทั้งหมด']);
                 const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? cleanNum(actualSettledAmtRaw) : undefined;
                 
                 // --- FIX: อ่านวันที่จากคอลัมน์ Excel ตรงๆ ตามที่คุณแนะนำ (ตัดโค้ดที่พยายามเดาสุ่มออกทั้งหมด) ---
@@ -1893,8 +1894,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             setDeliveryFailedDetailsData([]);
             setDiscrepancyDetailsData(currentDiffDetails);
 
-            if (matched.length > 0) { showToast(`พบออเดอร์รอรับเงินที่ตรงกัน ${matched.length} รายการ`, 'success'); } 
-            else { showToast(`ไม่พบออเดอร์รอรับเงิน (ไม่มีในระบบ ${notFoundCount}, รับเงินแล้ว ${alreadySettledCount})`, 'error'); }
+            // --- FIX: ปรับข้อความให้ชัดเจนว่ามีรายการโดนข้ามไปกี่แถว ---
+            if (matched.length > 0) { 
+                showToast(`พบออเดอร์รอรับเงินที่ตรงกัน ${matched.length} รายการ (ข้าม ${skippedCount} แถว)`, 'success'); 
+            } else { 
+                showToast(`ไม่พบออเดอร์รอรับเงิน (ไม่มีในระบบ ${notFoundCount}, รับเงินแล้ว ${alreadySettledCount}, ข้าม/หาเลขไม่เจอ ${skippedCount})`, 'error'); 
+            }
             return;
         }
 
@@ -1923,9 +1928,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                    status.includes('ตีกลับ');
           
           const transFee = getRowValAbs(row, schema.transFee);
-          const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']); // Removed AMS
-          const serv = getRowValAbs(row, schema.servFee);
-          const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
+          const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee', 'TikTok Shop commission fee']); 
+          
+          // --- FIX: รวมค่าบริการยิบย่อยของ TikTok ---
+          const serv = getRowValAbs(row, schema.servFee) + getTikTokExtraFees(row);
+          const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน', 'Infrastructure fee']);
           
           // --- FIX: บังคับใช้เลขที่คุณพิมพ์ในกล่อง "เพิ่มเติม" เสมอ ---
           const parsedFixed = parseFloat(fixedInfraFee);
@@ -1962,11 +1969,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               settleDateVal = findVal(row, schema.settleDate) || findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน']);
           }
           
-          const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount']);
+          // --- FIX: เพิ่มคำว่า ยอดเงินที่ชำระทั้งหมด ---
+          const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'Total settlement amount', 'ยอดเงินที่ชำระทั้งหมด']);
           const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? cleanNum(actualSettledAmtRaw) : undefined;
           
           const skuInput = findVal(row, schema.sku);
-          const skuVal = String(skuInput || '-').replace(/^['"=]+|['"=]+$/g, '').trim();
+          let skuVal = String(skuInput || '-').replace(/^['"=]+|['"=]+$/g, '').trim();
+          if (skuVal.endsWith('.0')) skuVal = skuVal.slice(0, -2); // แก้ปัญหา Excel ปัดเลขเป็นทศนิยม
 
           // ถ้าข้อมูลไม่ครบ หรือ (ไม่สำเร็จ และ ไม่ได้ถูกบังคับให้นำเข้า) ให้ข้าม
           if (!orderId || (!isCompleted && !forceImportDueToFee) || !orderDateVal) { 
@@ -3106,8 +3115,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       <th className="p-4 text-left">Order ID / Description</th>
                       <th className="p-4 text-left">Status / SKU</th>
                       <th className="p-4 text-right">Fees (฿)</th>
-                      {/* เปลี่ยนชื่อคอลัมน์ให้สื่อความหมายมากขึ้น */}
-                      <th className="p-4 text-right">{importMode === 'update_settled' ? 'Settled (฿)' : 'Income / Settled (฿)'}</th>
+                      {/* --- FIX: เปลี่ยนชื่อคอลัมน์ให้ถูกต้องตามหลักการบัญชีแยกตามโหมด --- */}
+                      <th className="p-4 text-right">
+                          {importMode === 'new_pending' ? 'Net Expected (฿)' : 'Net Settled (฿)'}
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50 text-left">
