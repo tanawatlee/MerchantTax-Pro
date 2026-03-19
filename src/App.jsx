@@ -1571,7 +1571,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             if (isPriceSearch && (cleanKey.includes('สุทธิ') || cleanKey.includes('รวม') || cleanKey.includes('ธรรมเนียม') || cleanKey.includes('ส่วนลด'))) {
                 return false;
             }
-            return cleanKey.includes(ckw) || ckw.includes(cleanKey);
+            
+            // --- 🔥 THE ULTIMATE FIX: ตัดการจับคู่ข้ามคอลัมน์เด็ดขาด ป้องกันคำว่า "จำนวนชิ้น" ไปสลับกับ "จำนวนเงินคืน" ---
+            return cleanKey.includes(ckw);
         });
         
         for (const match of matches) {
@@ -1727,16 +1729,16 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 const existingTrans = transactions.find(t => cleanStrForMatch(t.orderId) === orderId && t.type === 'income');
                 
                 const statusStr = String(findVal(row, schema.status) || '').toLowerCase();
-                const refundAmtRow = getRowValAbs(row, schema.refundAmount);
-                const isReturnedRow = statusStr.includes('คืน') || statusStr.includes('refund') || statusStr.includes('return') || refundAmtRow > 0;
+                const isReturnedRow = statusStr.includes('คืน') || statusStr.includes('refund') || statusStr.includes('return');
 
                 const transFee = getRowValAbs(row, schema.transFee);
                 const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']);
                 const serv = getRowValAbs(row, schema.servFee);
                 const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
-                const shippingProgFee = getRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'ค่าธรรมเนียม ของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
-                const infra = infraRow > 0 ? infraRow : (parseFloat(fixedInfraFee || 0) || 0);
-                const rowTotalPlatformFee = transFee + comm + serv + infra + shippingProgFee;
+                
+                // --- FIX: โหมด 3 กลับไปใช้ค่าจากไฟล์ Excel 100% ตามเดิม (เพราะช่องพิมพ์ถูกล็อกไว้) ---
+                const infra = infraRow > 0 ? infraRow : 0;
+                const rowTotalPlatformFee = transFee + comm + serv + infra;
 
                 const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount']);
                 const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? cleanNum(actualSettledAmtRaw) : undefined;
@@ -1758,7 +1760,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                 newTransactionFee: transFee,
                                 newCommissionFee: comm,
                                 newServiceFee: serv,
-                                newInfrastructureFee: infra + shippingProgFee,
+                                newInfrastructureFee: infra,
                                 actualSettledAmt: actualSettledAmtFromRow !== undefined ? actualSettledAmtFromRow : 0,
                                 newSettlementDate: finalSettleDate || existingTrans.settlementDate || existingTrans.date || new Date()
                             };
@@ -1767,7 +1769,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             matchedMap[existingTrans.id].newTransactionFee = (matchedMap[existingTrans.id].newTransactionFee || 0) + transFee;
                             matchedMap[existingTrans.id].newCommissionFee = (matchedMap[existingTrans.id].newCommissionFee || 0) + comm;
                             matchedMap[existingTrans.id].newServiceFee = (matchedMap[existingTrans.id].newServiceFee || 0) + serv;
-                            matchedMap[existingTrans.id].newInfrastructureFee = (matchedMap[existingTrans.id].newInfrastructureFee || 0) + (infra + shippingProgFee);
+                            matchedMap[existingTrans.id].newInfrastructureFee = (matchedMap[existingTrans.id].newInfrastructureFee || 0) + infra;
                         }
                     } 
                     else if (existingTrans.paymentStatus === 'pending_platform' && !existingTrans.isCancelled) {
@@ -1781,7 +1783,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                 newTransactionFee: transFee,
                                 newCommissionFee: comm,
                                 newServiceFee: serv,
-                                newInfrastructureFee: infra + shippingProgFee
+                                newInfrastructureFee: infra
                             };
                             if (actualSettledAmtFromRow === undefined) {
                                 matchedMap[existingTrans.id].actualSettledAmt = undefined; 
@@ -1791,7 +1793,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             matchedMap[existingTrans.id].newTransactionFee += transFee;
                             matchedMap[existingTrans.id].newCommissionFee += comm;
                             matchedMap[existingTrans.id].newServiceFee += serv;
-                            matchedMap[existingTrans.id].newInfrastructureFee += (infra + shippingProgFee);
+                            matchedMap[existingTrans.id].newInfrastructureFee += infra;
 
                             if (actualSettledAmtFromRow !== undefined && matchedMap[existingTrans.id].actualSettledAmt !== undefined) {
                                 matchedMap[existingTrans.id].actualSettledAmt = Math.max(matchedMap[existingTrans.id].actualSettledAmt || 0, actualSettledAmtFromRow);
@@ -1808,7 +1810,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                 newTransactionFee: transFee,
                                 newCommissionFee: comm,
                                 newServiceFee: serv,
-                                newInfrastructureFee: infra + shippingProgFee,
+                                newInfrastructureFee: infra,
                                 actualSettledAmt: actualSettledAmtFromRow !== undefined ? actualSettledAmtFromRow : 0,
                                 newSettlementDate: finalSettleDate || existingTrans.settlementDate || existingTrans.date || new Date()
                             };
@@ -1817,7 +1819,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             matchedMap[existingTrans.id].newTransactionFee = (matchedMap[existingTrans.id].newTransactionFee || 0) + transFee;
                             matchedMap[existingTrans.id].newCommissionFee = (matchedMap[existingTrans.id].newCommissionFee || 0) + comm;
                             matchedMap[existingTrans.id].newServiceFee = (matchedMap[existingTrans.id].newServiceFee || 0) + serv;
-                            matchedMap[existingTrans.id].newInfrastructureFee = (matchedMap[existingTrans.id].newInfrastructureFee || 0) + (infra + shippingProgFee);
+                            matchedMap[existingTrans.id].newInfrastructureFee = (matchedMap[existingTrans.id].newInfrastructureFee || 0) + infra;
                             if (actualSettledAmtFromRow !== undefined && matchedMap[existingTrans.id].actualSettledAmt !== undefined) {
                                 matchedMap[existingTrans.id].actualSettledAmt = Math.max(matchedMap[existingTrans.id].actualSettledAmt || 0, actualSettledAmtFromRow);
                             }
@@ -1920,19 +1922,25 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                    status.includes('จัดส่งไม่สำเร็จ') ||
                                    status.includes('ตีกลับ');
           
-          // --- FIX: ดึงค่าธรรมเนียมโปรแกรมส่งฟรีกลับเข้ามา โดยที่ยังตัด AMS ทิ้งเหมือนเดิม ---
           const transFee = getRowValAbs(row, schema.transFee);
           const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']); // Removed AMS
           const serv = getRowValAbs(row, schema.servFee);
           const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
-          const shippingProgFee = getRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'ค่าธรรมเนียม ของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
           
-          const infra = infraRow > 0 ? infraRow : (parseFloat(fixedInfraFee || 0) || 0);
-          const rowTotalFees = transFee + comm + serv + infra + shippingProgFee;
+          // --- FIX: บังคับใช้เลขที่คุณพิมพ์ในกล่อง "เพิ่มเติม" เสมอ ---
+          const parsedFixed = parseFloat(fixedInfraFee);
+          const infra = !isNaN(parsedFixed) ? parsedFixed : (infraRow > 0 ? infraRow : 0);
+          const rowTotalFees = transFee + comm + serv + infra;
 
           // NEW: กฎเหล็ก! ดึงยอดคืนเงินขึ้นมาตรวจสอบก่อน เพื่อป้องกันการเข้าใจผิดว่าเป็นออเดอร์ยกเลิก
           const refundAmtRow = getRowValAbs(row, schema.refundAmount); 
-          const isReturnedRow = status.includes('คืน') || status.includes('refund') || status.includes('return') || refundAmtRow > 0;
+          // --- FIX: ตัด || refundAmtRow > 0 ทิ้ง ป้องกันการคืนเงิน 1-3 บาท เด้งเป็นตีคืนทั้งออเดอร์ ---
+          let isReturnedRow = status.includes('คืน') || status.includes('refund') || status.includes('return');
+          
+          // --- 🔥 FIX: ป้องกันประโยค "ผู้ซื้อสามารถยื่นคำขอคืนเงิน/คืนสินค้าได้จนถึง" ---
+          if (status.includes('สามารถยื่น') || status.includes('ได้รับสินค้าแล้ว')) {
+              isReturnedRow = false; 
+          }
 
           let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
                                       status.includes('unpaid') || status.includes('รอชำระเงิน') ||
@@ -1945,8 +1953,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                       
           const isCompleted = status === '' || !isCancelledOrUnpaid;
           
-          // กฎเหล็ก: ถ้าสถานะคือยกเลิกแท้ๆ (ไม่มีคืนเงิน) แต่ Shopee ชาร์จค่าธรรมเนียมมา ห้ามข้ามเด็ดขาด
-          const forceImportDueToFee = isCancelledOrUnpaid && Math.abs(rowTotalFees) > 0.01;
+          // --- 🔥 FIX: โหมด 1 และ 2 ไม่อนุญาตให้ดึงออเดอร์ที่ยกเลิกแล้วเข้ามา (ให้ข้ามไปเลย 100%) ---
+          const forceImportDueToFee = false;
                               
           const orderDateVal = findVal(row, schema.orderDate) || findVal(row, schema.settleDate);
           let settleDateVal = null;
@@ -2009,7 +2017,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             const descStr = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdName.substring(0, 80)}` : baseProdName.substring(0, 100);
             const itemDescStr = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdName.trim()}` : baseProdName.trim();
             
-            ordersMap[orderId] = { 
+              ordersMap[orderId] = { 
               type: 'income', 
               date: normalizeDate(orderDateVal), 
               orderId, 
@@ -2018,7 +2026,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               refundAmount: refundAmtRow, 
               platformFee: rowTotalFees,
               transactionFee: transFee, 
-              infrastructureFee: infra + shippingProgFee,
+              infrastructureFee: infra,
               commissionFee: comm, 
               serviceFee: serv,
               description: descStr, 
@@ -2054,16 +2062,19 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             }
           } else {
             ordersMap[orderId].total += lineTotal;
-            // Item Level (สะสม)
-            ordersMap[orderId].couponDiscount += sellerDiscount;
-            ordersMap[orderId].refundAmount += refundAmtRow; 
-            ordersMap[orderId].transactionFee += transFee;
-            ordersMap[orderId].commissionFee += comm;
-            ordersMap[orderId].serviceFee += serv;
-            ordersMap[orderId].infrastructureFee += (infra + shippingProgFee); 
             
-            const rowTotalFeesAcc = transFee + comm + serv + infra + shippingProgFee;
-            ordersMap[orderId].platformFee += rowTotalFeesAcc;
+            // --- 🔥 FIX: โหมด 1 และ 2 ยึดค่าส่วนลดและเงินคืนแบบไม่บวกสะสม (ใช้ค่าสูงสุดเพื่อแก้ปัญหา Shopee ทำยอดซ้ำทุกบรรทัด) ---
+            ordersMap[orderId].couponDiscount = Math.max(ordersMap[orderId].couponDiscount || 0, sellerDiscount);
+            ordersMap[orderId].refundAmount = Math.max(ordersMap[orderId].refundAmount || 0, refundAmtRow); 
+            
+            // --- 🔥 FIX: 1 ออเดอร์ = 1 ค่าธรรมเนียม (ห้ามนำมาบวกสะสมรวมกันเด็ดขาด) ---
+            ordersMap[orderId].transactionFee = Math.max(ordersMap[orderId].transactionFee || 0, transFee);
+            ordersMap[orderId].commissionFee = Math.max(ordersMap[orderId].commissionFee || 0, comm);
+            ordersMap[orderId].serviceFee = Math.max(ordersMap[orderId].serviceFee || 0, serv);
+            ordersMap[orderId].infrastructureFee = Math.max(ordersMap[orderId].infrastructureFee || 0, infra); 
+            
+            // คำนวณ platformFee ใหม่จากค่าที่ไม่ถูกสะสมซ้ำ
+            ordersMap[orderId].platformFee = ordersMap[orderId].transactionFee + ordersMap[orderId].commissionFee + ordersMap[orderId].serviceFee + ordersMap[orderId].infrastructureFee;
             
             // Order Level (ใช้ค่า Max ป้องกันการบวกเบิ้ล)
             ordersMap[orderId].shippingFee = Math.max(ordersMap[orderId].shippingFee || 0, shippingFeeByBuyer);
@@ -2081,23 +2092,25 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             
             ordersMap[orderId].items.push({ desc: itemDescStrPush, qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal });
             totalAmt += lineTotal;
-            totalFees += rowTotalFeesAcc;
+            // ลบ totalFees += rowTotalFeesAcc ทิ้งไปเลย เพราะทำให้ยอดรวมบวม
           }
         });
         
         const final = Object.values(ordersMap).sort(sortNewestFirst);
         
         let finalActualSettled = 0;
-        let currentDiffDetails = []; // --- FIX: เตรียมตัวแปรเพื่อแสดง Simulator ในโหมดนำเข้าใหม่ ---
-        
-        final.forEach(t => {
+        let finalTotalPlatformFee = 0; 
+        let currentDiffDetails = []; 
+
+        final.forEach((t) => {
             const netShip = (t.shippingFee || 0) + (t.shippingFeeSubsidy || 0) - (t.estimatedShippingFee || 0) - (t.returnShippingFee || 0);
             t.grandTotal = t.total - t.platformFee - t.couponDiscount - (t.refundAmount || 0) + netShip;
             
             finalActualSettled += t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total);
+            finalTotalPlatformFee += (t.platformFee || 0);
 
             // --- FIX: ดึงค่าธรรมเนียมของออเดอร์ยกเลิก/ตีคืน มาแสดงใน Simulator เพื่อสร้างบิลแยก ---
-            if ((t.isCancelled || t.isReturned) && t.platformFee > 0) {
+            if (t.isCancelled && t.platformFee > 0) {
                 currentDiffDetails.push({ 
                     orderId: t.orderId, 
                     expected: 0, 
@@ -2112,7 +2125,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         setImportedData(final);
         setSkippedDetailsData(currentSkippedDetails); 
         setDeliveryFailedDetailsData(currentDeliveryFailedDetails); 
-        setDiscrepancyDetailsData(currentDiffDetails); // --- FIX: อัปเดตข้อมูล Simulator ---
+        setDiscrepancyDetailsData(currentDiffDetails); 
         
         setStats({ 
             totalRows: raw.length, 
@@ -2120,12 +2133,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             skipped, 
             duplicates, 
             totalAmount: totalAmt, 
-            totalActualSettled: exactExcelTotalSettled, // ใช้ยอดจาก Excel ตรงๆ
-            totalFees: exactExcelTotalFees, // ใช้ยอดจาก Excel ตรงๆ
+            totalActualSettled: exactExcelTotalSettled,
+            totalFees: finalTotalPlatformFee, // --- FIX: อัปเดตกล่องสีแดงให้โชว์ยอดค่าธรรมเนียมที่ไม่ซ้ำซ้อน ---
             deliveryFailed: dfCount, 
             cancelled: cCount,
             skippedQty,
-            detailedSummary: detailedStats // ใส่ข้อมูลตารางสรุปแบบเป๊ะ 100%
+            detailedSummary: detailedStats 
         });
         
         if (duplicates > 0) {
@@ -2705,33 +2718,39 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               {importedData.length > 0 && (
                   <div className="p-5 bg-indigo-50/30 border-b border-indigo-50 flex flex-col gap-4">
                       
-                      {/* --- NEW: Pre-Save Checker Banner --- */}
-                      <div className="bg-blue-600 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-lg text-white animate-in slide-in-from-bottom-4">
-                          <div>
-                              <h4 className="font-black text-lg flex items-center gap-2 text-white">
-                                  <Eye size={20} className="text-blue-200"/> โปรดตรวจสอบยอดเหล่านี้กับไฟล์ Excel!
-                              </h4>
-                              <p className="text-xs text-blue-200 mt-1 font-medium">
-                                  ข้อมูลยังไม่ถูกบันทึก หากตัวเลขด้านขวานี้ <b>ตรงกับไฟล์ Shopee</b> ให้กดปุ่ม "บันทึก" ด้านบนได้เลย<br/>
-                                  <span className="text-white font-bold bg-blue-700/50 px-1.5 py-0.5 rounded">*แต่ถ้าไม่ตรง ห้ามกดบันทึกเด็ดขาด! (ให้รีเฟรชหน้าเว็บทิ้งได้เลย ระบบจะไม่บันทึกข้อมูลผิดๆ ลงไปครับ)</span>
-                              </p>
-                          </div>
-                          <div className="flex gap-4 md:gap-6 bg-white/10 p-3 rounded-xl border border-white/20 w-full md:w-auto">
-                              <div className="text-left md:text-right">
-                                  <p className="text-[10px] font-black uppercase tracking-widest text-emerald-300">โอนเข้าจริง (Settled)</p>
-                                  <p className="text-xl md:text-2xl font-black text-white">{formatCurrency(stats.totalActualSettled)}</p>
+                      {/* --- NEW: Pre-Save Checker Banner (แสดงเฉพาะโหมด 3) --- */}
+                      {importMode === 'update_settled' && (
+                          <div className="bg-blue-600 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-lg text-white animate-in slide-in-from-bottom-4">
+                              <div>
+                                  <h4 className="font-black text-lg flex items-center gap-2 text-white">
+                                      <Eye size={20} className="text-blue-200"/> โปรดตรวจสอบยอดเหล่านี้กับไฟล์ Excel!
+                                  </h4>
+                                  <p className="text-xs text-blue-200 mt-1 font-medium">
+                                      ข้อมูลยังไม่ถูกบันทึก หากตัวเลขด้านขวานี้ <b>ตรงกับไฟล์ Shopee</b> ให้กดปุ่ม "บันทึก" ด้านบนได้เลย<br/>
+                                      <span className="text-white font-bold bg-blue-700/50 px-1.5 py-0.5 rounded">*แต่ถ้าไม่ตรง ห้ามกดบันทึกเด็ดขาด! (ให้รีเฟรชหน้าเว็บทิ้งได้เลย ระบบจะไม่บันทึกข้อมูลผิดๆ ลงไปครับ)</span>
+                                  </p>
                               </div>
-                              <div className="w-px bg-white/20"></div>
-                              <div className="text-left md:text-right">
-                                  <p className="text-[10px] font-black uppercase tracking-widest text-rose-300">ค่าธรรมเนียมรวม</p>
-                                  <p className="text-xl md:text-2xl font-black text-white">{formatCurrency(stats.totalFees)}</p>
+                              <div className="flex gap-4 md:gap-6 bg-white/10 p-3 rounded-xl border border-white/20 w-full md:w-auto">
+                                  <div className="text-left md:text-right">
+                                      <p className="text-[10px] font-black uppercase tracking-widest text-emerald-300">โอนเข้าจริง (Settled)</p>
+                                      <p className="text-xl md:text-2xl font-black text-white">{formatCurrency(stats.totalActualSettled)}</p>
+                                  </div>
+                                  <div className="w-px bg-white/20"></div>
+                                  <div className="text-left md:text-right">
+                                      <p className="text-[10px] font-black uppercase tracking-widest text-rose-300">ค่าธรรมเนียมรวม</p>
+                                      <p className="text-xl md:text-2xl font-black text-white">{formatCurrency(stats.totalFees)}</p>
+                                  </div>
                               </div>
                           </div>
-                      </div>
+                      )}
 
-                      <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5 mt-2"><PieChart size={14}/> สรุปภาพรวมจากไฟล์ Excel (อ้างอิงตรงตามไฟล์ต้นฉบับ 100%)</h4>
+                      <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5 mt-2">
+                          <PieChart size={14}/> 
+                          {importMode === 'update_settled' ? 'สรุปภาพรวมจากไฟล์ Excel (อ้างอิงตรงตามไฟล์ต้นฉบับ 100%)' : 'สรุปข้อมูลที่จะนำเข้าระบบ (Filtered Data)'}
+                      </h4>
                       
-                      {importMode === 'update_settled' || importMode !== 'update_settled' ? (
+                      {/* --- FIX: กำหนดให้แสดงตารางยาวๆ เฉพาะโหมด update_settled เท่านั้น --- */}
+                      {importMode === 'update_settled' ? (
                           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm font-sarabun">
                               {/* Header / Info */}
                               <div className="flex justify-between items-center p-4 bg-slate-50 border-b">
@@ -3113,8 +3132,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           {it.isDeliveryFailed && !it.isCancelled && (
                               <span className="inline-block mt-1 bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><AlertTriangle size={10}/> นำเข้าพร้อมหมายเหตุ: จัดส่งไม่สำเร็จ</span>
                           )}
-                          {it.isReturned && (
-                              <span className="inline-block mt-1 bg-pink-100 text-pink-700 border border-pink-200 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><ArrowRightLeft size={10}/> {it.isCancelled ? 'ลูกค้ายกเลิก/คืนสินค้า' : 'มีการคืนเงิน'} (เสียค่าธรรมเนียม {formatCurrency(it.platformFee)}) {it.refundAmount > 0 ? `คืนเงิน ${formatCurrency(it.refundAmount)}` : ''}</span>
+                          {/* --- 🔥 FIX: ปรับรูปแบบป้ายแจ้งเตือนให้เรียบง่าย ไม่สร้างความสับสนว่าโดนกระบวนการตีคืน --- */}
+                          {(it.isReturned || it.refundAmount > 0) && (
+                              <span className="inline-block mt-1 bg-pink-100 text-pink-700 border border-pink-200 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit">
+                                  {it.isReturned ? <ArrowRightLeft size={10}/> : <AlertTriangle size={10}/>} 
+                                  {it.isReturned ? 'มีสถานะคืนสินค้า/คืนเงินในไฟล์' : 'มีการหักคืนเงินบางส่วน'} 
+                                  {it.refundAmount > 0 ? ` (หักยอด ${formatCurrency(it.refundAmount)} ฿)` : ''}
+                              </span>
                           )}
                           {it.shopName && (
                               <span className="inline-block mt-1 bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit"><Store size={10}/> {it.shopName}</span>
