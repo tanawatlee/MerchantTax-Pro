@@ -1645,22 +1645,75 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             return val !== undefined && val !== null && String(val).trim() !== '' ? Math.abs(cleanNum(val)) : 0;
         };
 
-        // --- NEW: ตัวกวาดค่าธรรมเนียมบริการที่ TikTok ชอบแยกคอลัมน์ยิบย่อย ---
-        const getTikTokExtraFees = (row) => {
-            if (platform !== 'tiktok') return 0;
-            const extraKeys = [
-                'Affiliate Commission', 'Affiliate partner commission', 'SFP service fee', 
-                'Bonus cashback service fee', 'LIVE Specials service fee', 'Voucher Xtra service fee', 
-                'EAMS Program service fee', 'Brands Crazy Deals/Flash Sale service fee', 
-                'Commerce growth fee', 'Campaign resource fee', 'Pre-order service fee', 'Affiliate Shop Ads commission',
-                'ค่าคอมมิชชันของพันธมิตร', 'ค่าธรรมเนียมบริการ SFP', 'ค่าธรรมเนียมบริการ Bonus cashback',
-                'ค่าธรรมเนียมบริการ LIVE Specials', 'ค่าธรรมเนียมบริการ Voucher Xtra', 'ค่าธรรมเนียมบริการโปรแกรม EAMS',
-                'ค่าธรรมเนียมบริการ Brands Crazy Deals/Flash Sale', 'ค่าธรรมเนียม Commerce growth',
-                'ค่าธรรมเนียม Campaign resource', 'ค่าธรรมเนียมบริการ Pre-order', 'ค่าคอมมิชชันของ Affiliate Shop Ads'
-            ];
-            let sum = 0;
-            extraKeys.forEach(k => { sum += getRowValAbs(row, [k]); });
-            return sum;
+        // --- 🔥 NEW FIX: EXACT MATCH EXTRACTOR FOR TIKTOK 🔥 ---
+        // ป้องกันการดึงคอลัมน์ชื่อคล้ายกัน เช่น "Refund of Transaction fee"
+        const getExactRowValAbs = (row, exactKeys) => {
+            const keys = Object.keys(row);
+            for (let k of exactKeys) {
+                // เปรียบเทียบแบบเป๊ะๆ 100% (ไม่ใช้ Includes) แต่ข้ามเรื่องตัวพิมพ์เล็ก-ใหญ่ และช่องว่างหัวท้าย
+                const match = keys.find(rk => rk.trim().toLowerCase() === k.trim().toLowerCase());
+                if (match) {
+                    const val = row[match];
+                    if (val !== undefined && val !== null && String(val).trim() !== '') {
+                        return Math.abs(cleanNum(val));
+                    }
+                }
+            }
+            return 0;
+        };
+
+        // --- 🔥 NEW FIX: CENTRALIZED FEES & SHIPPING EXTRACTOR 🔥 ---
+        const extractFeesAndShipping = (row, mode) => {
+            let transFee = 0, comm = 0, serv = 0, infraRow = 0, affiliateRow = 0;
+            let shipBuyerRow = 0, shipSubsidyRow = 0, shipEstRow = 0, shipReturnRow = 0;
+
+            if (platform === 'tiktok') {
+                // 1. ดึง Total Fees แบบเหมาจบในช่องเดียว ตามไอเดียของลูกค้า (เป๊ะและชัวร์ที่สุด)
+                let totalFeeVal = getExactRowValAbs(row, ['Total Fees', 'ค่าธรรมเนียมรวม', 'รวมค่าธรรมเนียม']);
+                
+                // Fallback: ถ้าบังเอิญหาคอลัมน์ Total Fees ไม่เจอ ค่อยกลับไปรวม 4 คอลัมน์เดิม
+                if (totalFeeVal === 0) {
+                    let t1 = getExactRowValAbs(row, ['Transaction fee', 'Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee']);
+                    let t2 = getExactRowValAbs(row, ['TikTok Shop commission fee', 'ค่าคอมมิชชันของ TikTok Shop', 'Platform Commission']);
+                    let t3 = getExactRowValAbs(row, ['Affiliate Commission', 'ค่าคอมมิชชันของพันธมิตร']);
+                    let t4 = getExactRowValAbs(row, ['Commerce growth fee', 'ค่าธรรมเนียม Commerce growth']);
+                    totalFeeVal = t1 + t2 + t3 + t4;
+                }
+
+                // รวบยอดค่าธรรมเนียมทั้งหมดไว้ก้อนเดียว เพื่อไม่ให้ซ้ำซ้อน
+                transFee = totalFeeVal;
+                comm = 0;
+                affiliateRow = 0;
+                infraRow = 0;
+                serv = 0; // ล็อก Service Fee เป็น 0 เพื่อไม่ให้ดึงคอลัมน์อื่นมากวน
+
+                // 2. ดึงเฉพาะค่าจัดส่ง 3 คอลัมน์ที่คุณลูกค้าระบุเป๊ะๆ แบบ Exact Match
+                let sellerShip = getExactRowValAbs(row, ['Seller shipping fee', 'ค่าจัดส่งของผู้ขาย']);
+                let actualShip = getExactRowValAbs(row, ['Actual shipping fee', 'ค่าจัดส่งตามจริง']);
+                
+                // ระบบจะใช้ Actual ก่อน ถ้าไม่มีถึงจะถอยไปใช้ Seller
+                shipEstRow = actualShip > 0 ? actualShip : sellerShip;
+                
+                shipSubsidyRow = getExactRowValAbs(row, ['Platform shipping fee discount', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม']);
+                
+                // ล็อกค่าส่งอื่นๆ เป็น 0 ป้องกันยอดบวม
+                shipBuyerRow = 0; 
+                shipReturnRow = 0; 
+            } else {
+                // สำหรับ Shopee/Lazada ดึงตามปกติ
+                transFee = getRowValAbs(row, schema.transFee);
+                comm = getRowValAbs(row, schema.commFee);
+                serv = getRowValAbs(row, schema.servFee);
+                affiliateRow = getRowValAbs(row, schema.affiliateFee);
+                infraRow = getRowValAbs(row, schema.infraFee);
+                
+                shipBuyerRow = getRowValAbs(row, schema.shippingFeeByBuyer);
+                shipSubsidyRow = getRowValAbs(row, schema.shippingFeeSubsidy);
+                shipEstRow = getRowValAbs(row, schema.estimatedShippingFee);
+                shipReturnRow = getRowValAbs(row, schema.returnShippingFee);
+            }
+
+            return { transFee, comm, serv, affiliateRow, infraRow, shipBuyerRow, shipSubsidyRow, shipEstRow, shipReturnRow };
         };
 
         // --- 🔥 NEW FIX: EXCEL EXACT EXTRACTOR 🔥 ---
@@ -1748,15 +1801,24 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 
                 const statusStr = String(findVal(row, schema.status) || '').toLowerCase();
                 const isReturnedRow = statusStr.includes('คืน') || statusStr.includes('refund') || statusStr.includes('return');
+                const refundAmtRow = getRowValAbs(row, schema.refundAmount);
 
-                const transFee = getRowValAbs(row, schema.transFee);
-                const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']);
-                const serv = getRowValAbs(row, schema.servFee);
-                const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
+                // --- 🔥 THE REAL FIX: โหมด 3 ต้องดึงผ่านตัวสกัดข้อมูลกลางและรวม Affiliate เสมอ ---
+                const fees = extractFeesAndShipping(row, importMode);
+                const transFee = fees.transFee;
+                const comm = fees.comm;
+                const serv = fees.serv;
+                const affiliateRow = fees.affiliateRow;
+                const infraRow = fees.infraRow;
                 
-                // --- FIX: โหมด 3 กลับไปใช้ค่าจากไฟล์ Excel 100% ตามเดิม (เพราะช่องพิมพ์ถูกล็อกไว้) ---
                 const infra = infraRow > 0 ? infraRow : 0;
-                const rowTotalPlatformFee = transFee + comm + serv + infra;
+                // รวม Affiliate เข้ากับยอดแพลตฟอร์มให้เรียบร้อย
+                const rowTotalPlatformFee = transFee + comm + serv + affiliateRow + infra;
+
+                const shipBuyerRow = fees.shipBuyerRow;
+                const shipSubsidyRow = fees.shipSubsidyRow;
+                const shipEstRow = fees.shipEstRow;
+                const shipReturnRow = fees.shipReturnRow;
 
                 // --- FIX: เพิ่มคำว่า ยอดเงินที่ชำระทั้งหมด ---
                 const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'Total settlement amount', 'ยอดเงินที่ชำระทั้งหมด']);
@@ -1945,17 +2007,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                    status.includes('จัดส่งไม่สำเร็จ') ||
                                    status.includes('ตีกลับ');
           
-          const transFee = getRowValAbs(row, schema.transFee);
-          const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee', 'TikTok Shop commission fee']); 
-          
-          // --- FIX: รวมค่าบริการยิบย่อยของ TikTok ---
-          const serv = getRowValAbs(row, schema.servFee) + getTikTokExtraFees(row);
-          const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน', 'Infrastructure fee']);
+          // --- 🔥 THE REAL FIX: โหมด 1 และ 2 บังคับใช้กฎเหล็ก 4 ช่อง ---
+          const fees = extractFeesAndShipping(row, importMode);
+          const transFee = fees.transFee;
+          const comm = fees.comm; 
+          const serv = fees.serv;
+          const affiliateRow = fees.affiliateRow;
+          const infraRow = fees.infraRow;
           
           // --- FIX: บังคับใช้เลขที่คุณพิมพ์ในกล่อง "เพิ่มเติม" เสมอ ---
           const parsedFixed = parseFloat(fixedInfraFee);
-          const infra = !isNaN(parsedFixed) ? parsedFixed : (infraRow > 0 ? infraRow : 0);
-          const rowTotalFees = transFee + comm + serv + infra;
+          const infra = !isNaN(parsedFixed) ? parsedFixed : (infraRow !== 0 ? infraRow : 0);
+          const rowTotalFees = transFee + comm + serv + affiliateRow + infra;
 
           // NEW: กฎเหล็ก! ดึงยอดคืนเงินขึ้นมาตรวจสอบก่อน เพื่อป้องกันการเข้าใจผิดว่าเป็นออเดอร์ยกเลิก
           const refundAmtRow = getRowValAbs(row, schema.refundAmount); 
@@ -1991,6 +2054,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'Total settlement amount', 'ยอดเงินที่ชำระทั้งหมด']);
           const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? cleanNum(actualSettledAmtRaw) : undefined;
           
+          const shippingFeeByBuyer = fees.shipBuyerRow;
+          const shippingFeeSubsidy = fees.shipSubsidyRow;
+          const estimatedShippingFee = fees.shipEstRow;
+          const returnShippingFee = fees.shipReturnRow;
+
           const skuInput = findVal(row, schema.sku);
           let skuVal = String(skuInput || '-').replace(/^['"=]+|['"=]+$/g, '').trim();
           if (skuVal.endsWith('.0')) skuVal = skuVal.slice(0, -2); // แก้ปัญหา Excel ปัดเลขเป็นทศนิยม
@@ -2031,10 +2099,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const courier = String(findVal(row, schema.courier) || '-').trim();
           const trackingNo = String(findVal(row, schema.trackingNo) || '-').trim();
           
-          const shippingFeeByBuyer = getRowValAbs(row, schema.shippingFeeByBuyer);
-          const shippingFeeSubsidy = getRowValAbs(row, schema.shippingFeeSubsidy);
-          const estimatedShippingFee = getRowValAbs(row, schema.estimatedShippingFee);
-          const returnShippingFee = getRowValAbs(row, schema.returnShippingFee);
+          // ลบการประกาศซ้ำออก เพราะดึงมาจากตัวสกัดข้อมูลกลาง (extractFeesAndShipping) ไว้แล้วด้านบน
           const shopName = String(findVal(row, schema.shopName) || 'ไม่ระบุ').trim();
 
           const lineTotal = price * qty;
@@ -2248,6 +2313,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       transactionFee: 0,
                       commissionFee: 0,
                       serviceFee: 0,
+                      affiliateFee: 0,
                       infrastructureFee: 0,
                       actualSettledAmt: 0,
                       settlementDate: item.newSettlementDate || item.settlementDate || null,
@@ -2266,6 +2332,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       transactionFee: 0,
                       commissionFee: 0,
                       serviceFee: 0,
+                      affiliateFee: 0,
                       infrastructureFee: 0,
                       actualSettledAmt: 0,
                       settlementDate: item.newSettlementDate || item.settlementDate || null
@@ -2301,11 +2368,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       updateData.transactionFee = item.newTransactionFee;
                       updateData.commissionFee = item.newCommissionFee;
                       updateData.serviceFee = item.newServiceFee;
+                      updateData.affiliateFee = item.newAffiliateFee !== undefined ? item.newAffiliateFee : (item.affiliateFee || 0); // <-- จุดที่ลืมเซฟ
                       updateData.infrastructureFee = item.newInfrastructureFee;
                       
-                      const originalNetShip = (item.shippingFee || 0) + (item.shippingFeeSubsidy || 0) - (item.estimatedShippingFee || 0) - (item.returnShippingFee || 0);
+                      // --- 🔥 FIX: อัปเดตค่าขนส่งใหม่ทั้งหมดจากไฟล์กระทบยอด ---
+                      updateData.shippingFee = item.newShippingFee !== undefined ? item.newShippingFee : (item.shippingFee || 0);
+                      updateData.shippingFeeSubsidy = item.newShippingFeeSubsidy !== undefined ? item.newShippingFeeSubsidy : (item.shippingFeeSubsidy || 0);
+                      updateData.estimatedShippingFee = item.newEstimatedShippingFee !== undefined ? item.newEstimatedShippingFee : (item.estimatedShippingFee || 0);
+                      updateData.returnShippingFee = item.newReturnShippingFee !== undefined ? item.newReturnShippingFee : (item.returnShippingFee || 0);
+                      
+                      const newNetShip = updateData.shippingFee + updateData.shippingFeeSubsidy - updateData.estimatedShippingFee - updateData.returnShippingFee;
                       const originalDiscount = (item.couponDiscount || 0) + (item.refundAmount || 0);
-                      updateData.grandTotal = (item.total || 0) - updateData.platformFee - originalDiscount + originalNetShip;
+                      updateData.grandTotal = (item.total || 0) - updateData.platformFee - originalDiscount + newNetShip;
                   }
                   
                   let diff = 0;
@@ -2456,6 +2530,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             cleanTrans.commissionFee = 0;
             cleanTrans.serviceFee = 0;
             cleanTrans.infrastructureFee = 0;
+            cleanTrans.affiliateFee = 0;
             if (cleanTrans.grandTotal !== undefined) cleanTrans.grandTotal += feeForCancelled;
             if (cleanTrans.actualSettledAmt !== undefined && cleanTrans.actualSettledAmt < 0) {
                 cleanTrans.actualSettledAmt += feeForCancelled;
@@ -2611,11 +2686,15 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       <div className="flex justify-between items-center text-left">
         <h3 className="text-2xl font-bold flex items-center gap-2 text-left"><Sparkles className="text-indigo-600"/> Import & Activate Data</h3>
         <div className="flex gap-2">
-            {['shopee', 'lazada', 'tiktok'].map(p => (
-              <button key={p} onClick={() => {setPlatform(p); setImportedData([]);}} className={`px-4 py-2 rounded-xl text-xs font-bold border-2 transition-all ${platform === p ? 'border-indigo-600 bg-indigo-600 text-white shadow-md' : 'bg-white text-slate-800'}`}>
+            {['shopee', 'lazada', 'tiktok'].map(p => {
+              const activeStyle = p === 'shopee' ? 'border-orange-500 bg-orange-500 text-white shadow-md shadow-orange-200' :
+                                  p === 'lazada' ? 'border-blue-700 bg-blue-700 text-white shadow-md shadow-blue-200' :
+                                  'border-slate-900 bg-slate-900 text-white shadow-md shadow-slate-300';
+              return (
+              <button key={p} onClick={() => {setPlatform(p); setImportedData([]);}} className={`px-4 py-2 rounded-xl text-xs font-bold border-2 transition-all ${platform === p ? activeStyle : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>
                 {p.toUpperCase()}
               </button>
-            ))}
+            )})}
         </div>
       </div>
       
@@ -5780,7 +5859,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
    
   const [formData, setFormData] = useState({ 
     type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', shopName: CONSTANTS.SHOPS[0],
-    transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '',
+    transactionFee: '', commissionFee: '', serviceFee: '', affiliateFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '',
     whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '',
     category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '',
     partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '',
@@ -6218,11 +6297,12 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     const infraFee = parseFloat(formData.infrastructureFee) || 0;
     const commFee = parseFloat(formData.commissionFee) || 0;
     const servFee = parseFloat(formData.serviceFee) || 0;
+    const affiliateFee = parseFloat(formData.affiliateFee) || 0;
     const couponDisc = parseFloat(formData.couponDiscount) || 0;
     const cashCpn = parseFloat(formData.cashCoupon) || 0;
     const wht = parseFloat(formData.whtAmount) || 0;
     const shippingFee = parseFloat(formData.shippingFee) || 0;
-    const totalFees = formData.type === 'income' ? (transFee + infraFee + commFee + servFee) : 0;
+    const totalFees = formData.type === 'income' ? (transFee + infraFee + commFee + servFee + affiliateFee) : 0;
     const totalDiscounts = couponDisc + cashCpn;
     
     let grandTotal = 0;
@@ -6756,13 +6836,21 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <input disabled={formData.isCashBill} placeholder={formData.isCashBill ? "ไม่ต้องระบุ (บิลเงินสด)" : "ระบุเลขที่..."} value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} className={`w-full p-2.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-left transition-colors ${formData.isCashBill ? 'bg-slate-100 text-slate-400' : 'bg-slate-50 text-slate-700 focus:ring-2 focus:ring-indigo-100'}`}/>
                       </div>
                   ) : (
-                      <div className="space-y-1 text-left">
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">สถานะรับเงิน</label>
-                          <select value={formData.paymentStatus || 'settled'} onChange={e=>setFormData({...formData, paymentStatus: e.target.value})} className={`w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-left ${formData.paymentStatus === 'pending_platform' ? 'text-orange-600' : 'text-emerald-600'}`}>
-                              <option value="settled">รับเงินแล้ว (เข้าบัญชี)</option>
-                              <option value="pending_platform">รอเงินโอน (Platform)</option>
-                          </select>
-                      </div>
+                      <>
+                          <div className="space-y-1 text-left">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">สถานะรับเงิน</label>
+                              <select value={formData.paymentStatus || 'settled'} onChange={e=>setFormData({...formData, paymentStatus: e.target.value, settlementDate: e.target.value === 'settled' ? (formData.settlementDate || formData.date) : ''})} className={`w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-left ${formData.paymentStatus === 'pending_platform' ? 'text-orange-600' : 'text-emerald-600'}`}>
+                                  <option value="settled">รับเงินแล้ว (เข้าบัญชี)</option>
+                                  <option value="pending_platform">รอเงินโอน (Platform)</option>
+                              </select>
+                          </div>
+                          {formData.paymentStatus === 'settled' && (
+                              <div className="space-y-1 text-left animate-fadeIn">
+                                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest text-left">วันที่รับเงินเข้า</label>
+                                  <input type="date" value={formData.settlementDate || formData.date} onChange={e=>setFormData({...formData, settlementDate: e.target.value})} className="w-full bg-emerald-50 p-2.5 rounded-xl border border-emerald-100 text-sm font-bold text-emerald-700 focus:ring-2 focus:ring-emerald-200 outline-none text-left"/>
+                              </div>
+                          )}
+                      </>
                   )}
                   <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">หมวดหมู่</label><select value={formData.category} onChange={e=>setFormData({...formData, category: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left">{(formData.type === 'income' ? CONSTANTS.CATEGORIES.INCOME : CONSTANTS.CATEGORIES.EXPENSE).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                 </div>
@@ -6931,11 +7019,12 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   {formData.type === 'income' && (
                     <div className="pt-4 border-t border-white/10 space-y-3 text-left">
                       <p className="text-[10px] font-black uppercase text-indigo-400 tracking-widest text-left">Platform Fees and Costs</p>
-                      <div className="grid grid-cols-2 gap-3 text-left">
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-left">
                         <div className="space-y-1 text-left"><label className="text-[9px] font-bold opacity-40 uppercase text-left">Trans. Fee</label><input type="number" value={formData.transactionFee} onChange={e=>setFormData({...formData, transactionFee: e.target.value})} className="w-full bg-white/5 border border-white/10 p-2 rounded-lg text-xs font-bold focus:bg-white/10 outline-none text-left" placeholder="0.00" /></div>
                         <div className="space-y-1 text-left"><label className="text-[9px] font-bold opacity-40 uppercase text-left">Infra Fee</label><input type="number" value={formData.infrastructureFee} onChange={e=>setFormData({...formData, infrastructureFee: e.target.value})} className="w-full bg-white/5 border border-white/10 p-2 rounded-lg text-xs font-bold focus:bg-white/10 outline-none text-left" placeholder="0.00" /></div>
                         <div className="space-y-1 text-left"><label className="text-[9px] font-bold opacity-40 uppercase text-left">Comm. Fee</label><input type="number" value={formData.commissionFee} onChange={e=>setFormData({...formData, commissionFee: e.target.value})} className="w-full bg-white/5 border border-white/10 p-2 rounded-lg text-xs font-bold focus:bg-white/10 outline-none text-left" placeholder="0.00" /></div>
                         <div className="space-y-1 text-left"><label className="text-[9px] font-bold opacity-40 uppercase text-left">Service Fee</label><input type="number" value={formData.serviceFee} onChange={e=>setFormData({...formData, serviceFee: e.target.value})} className="w-full bg-white/5 border border-white/10 p-2 rounded-lg text-xs font-bold focus:bg-white/10 outline-none text-left" placeholder="0.00" /></div>
+                        <div className="space-y-1 text-left"><label className="text-[9px] font-bold opacity-40 uppercase text-left">Affiliate Fee</label><input type="number" value={formData.affiliateFee} onChange={e=>setFormData({...formData, affiliateFee: e.target.value})} className="w-full bg-white/5 border border-white/10 p-2 rounded-lg text-xs font-bold focus:bg-white/10 outline-none text-left" placeholder="0.00" /></div>
                       </div>
                     </div>
                   )}
@@ -7437,7 +7526,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   <div className="bg-slate-50/50 p-6 rounded-3xl border border-slate-100 text-sm space-y-3 text-left">
                     <div className="flex justify-between text-left text-left"><span className="text-slate-500 text-left">ค่าธรรมเนียมธุรกรรม</span><span className="font-bold text-right">{formatCurrency(viewItem.transactionFee || 0)}</span></div>
                     <div className="flex justify-between text-left text-left"><span className="text-slate-500 text-left">ค่าโครงสร้างพื้นฐาน</span><span className="font-bold text-right">{formatCurrency(viewItem.infrastructureFee || 0)}</span></div>
-                    <div className="flex justify-between text-left text-left"><span className="text-slate-500 text-left">ค่าคอมมิชชั่น/บริการ</span><span className="font-bold text-right">{formatCurrency((Number(viewItem.commissionFee) || 0) + (Number(viewItem.serviceFee) || 0))}</span></div>
+                    <div className="flex justify-between text-left text-left"><span className="text-slate-500 text-left">ค่าคอมมิชชั่น</span><span className="font-bold text-right">{formatCurrency(viewItem.commissionFee || 0)}</span></div>
+                    {viewItem.serviceFee > 0 && <div className="flex justify-between text-left text-left"><span className="text-slate-500 text-left">ค่าบริการ</span><span className="font-bold text-right">{formatCurrency(viewItem.serviceFee || 0)}</span></div>}
+                    {viewItem.affiliateFee > 0 && <div className="flex justify-between text-left text-left"><span className="text-slate-500 text-left">ค่าคอมมิชชัน Affiliate</span><span className="font-bold text-right">{formatCurrency(viewItem.affiliateFee || 0)}</span></div>}
                     <div className="flex justify-between border-t pt-2 font-bold text-indigo-600 text-left text-left"><span>รวมค่าธรรมเนียม Platform</span><span>{formatCurrency(viewItem.platformFee || 0)}</span></div>
                     <div className="pt-2 border-t space-y-2 text-left text-left">
                       <div className="flex justify-between text-rose-500 text-left text-left"><span className="text-[10px] font-bold uppercase text-left">ส่วนลดคูปอง</span><span className="font-bold text-right text-right">-{formatCurrency(viewItem.couponDiscount || 0)}</span></div>
