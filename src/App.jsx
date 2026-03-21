@@ -5857,6 +5857,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   // --- NEW: State for showing generated ID ---
   const [generatedDocId, setGeneratedDocId] = useState(null);
    
+  // --- NEW: Edit Settle Date State ---
+  const [editSettleDateItem, setEditSettleDateItem] = useState(null);
+  const [newSettleDate, setNewSettleDate] = useState('');
+
   const [formData, setFormData] = useState({ 
     type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', shopName: CONSTANTS.SHOPS[0],
     transactionFee: '', commissionFee: '', serviceFee: '', affiliateFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '',
@@ -6217,6 +6221,51 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
   };
 
+  // --- NEW: Edit Settle Date Function ---
+  const handleUpdateSettleDate = async () => {
+    if (!editSettleDateItem || !user || !newSettleDate) return;
+    try {
+        const batchWriter = writeBatch(dbInstance);
+        const coll = editSettleDateItem.type === 'income' ? 'transactions_income' : 'transactions_expense';
+        const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, editSettleDateItem.id);
+        
+        batchWriter.update(docRef, { 
+            settlementDate: normalizeDate(newSettleDate),
+            updatedAt: serverTimestamp() 
+        });
+
+        // ถ้ามีบิลส่วนต่าง (Diff Bill) หรือค่าธรรมเนียม ที่อ้างอิงถึงรายการนี้ ต้องแก้วันที่ให้ตรงกันด้วย
+        if (editSettleDateItem.type === 'income') {
+             const linkedExpenses = transactions.filter(t => t.type === 'expense' && t.linkedOrderId === editSettleDateItem.id && t.isFromReconciliation);
+             linkedExpenses.forEach(exp => {
+                 batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', exp.id), {
+                     date: normalizeDate(newSettleDate)
+                 });
+             });
+             const linkedIncomes = transactions.filter(t => t.type === 'income' && t.linkedOrderId === editSettleDateItem.id && t.isFromReconciliation);
+             linkedIncomes.forEach(inc => {
+                 batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', inc.id), {
+                     date: normalizeDate(newSettleDate),
+                     settlementDate: normalizeDate(newSettleDate)
+                 });
+             });
+        }
+
+        await batchWriter.commit();
+        showToast("แก้ไขวันที่รับเงินเข้าสำเร็จ", "success");
+        
+        // อัปเดตข้อมูลบนหน้าจอที่เปิดอยู่ให้เป็นปัจจุบัน
+        if (viewItem && viewItem.id === editSettleDateItem.id) {
+            setViewItem(prev => ({...prev, settlementDate: normalizeDate(newSettleDate)}));
+        }
+        
+        setEditSettleDateItem(null);
+    } catch(e) {
+        console.error(e);
+        showToast("แก้ไขวันที่รับเงินไม่สำเร็จ", "error");
+    }
+  };
+
   const selectPartner = (p) => { 
     setFormData({ ...formData, partnerName: p.name || '', partnerTaxId: p.taxId || '', partnerAddress: p.address || '', partnerBranch: p.branch || '00000', partnerBranchName: p.branchName || '' }); 
     setShowPartnerModal(false); 
@@ -6393,7 +6442,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         returnShippingFee: parseFloat(formData.returnShippingFee) || 0,
         total: subTotal, platformFee: totalFees, grandTotal, date: normalizeDate(formData.date), description: formData.items.map(i => i.desc).join(', '), userId: user.uid, createdAt: serverTimestamp(),
         paymentStatus: formData.type === 'income' ? (formData.paymentStatus || 'settled') : (formData.status === 'unpaid' ? 'unpaid' : 'paid'),
-        settlementDate: (formData.type === 'income' && (!formData.paymentStatus || formData.paymentStatus === 'settled')) ? normalizeDate(formData.date) : null
+        // แก้ไข: ให้ใช้ formData.settlementDate ถ้ามี หากไม่มีให้ใช้วันที่ทำรายการ (formData.date)
+        settlementDate: (formData.type === 'income' && (!formData.paymentStatus || formData.paymentStatus === 'settled')) ? normalizeDate(formData.settlementDate || formData.date) : null
       };
       
       if (formData.partnerName) {
@@ -7494,7 +7544,17 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <p className="text-[9px] text-indigo-500 font-medium mt-1.5 text-left">*อิงตามเกณฑ์สิทธิ์: ใช้คำนวณผลประกอบการและยอดขายรวม</p>
                       </div>
                       <div className="bg-emerald-50/80 p-4 rounded-2xl border border-emerald-100">
-                          <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1 text-left">วันที่รับเงินจริง (Settlement Date)</p>
+                          <div className="flex justify-between items-start mb-1">
+                              <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest text-left">วันที่รับเงินจริง (Settlement Date)</p>
+                              {(viewItem.paymentStatus === 'settled' || viewItem.status === 'paid') && (
+                                  <button onClick={() => {
+                                      setEditSettleDateItem(viewItem);
+                                      setNewSettleDate(formatDateISO(viewItem.settlementDate || viewItem.date));
+                                  }} className="text-emerald-600 hover:text-emerald-700 bg-emerald-100/50 hover:bg-emerald-200/50 p-1 rounded transition-colors" title="แก้ไขวันที่รับเงิน">
+                                      <Edit size={12}/>
+                                  </button>
+                              )}
+                          </div>
                           <p className="font-black text-slate-800 text-base flex items-center gap-2 text-left">
                               {viewItem.settlementDate ? formatDate(viewItem.settlementDate) : ((viewItem.paymentStatus === 'settled' || viewItem.status === 'paid') ? formatDate(viewItem.date) : '-')}
                               {viewItem.type === 'income' && viewItem.paymentStatus === 'pending_platform' && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">รอเงินเข้า</span>}
@@ -7696,6 +7756,36 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   </button>
               </div>
           </div>
+      )}
+
+      {/* --- NEW: Edit Settle Date Modal --- */}
+      {editSettleDateItem && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-sm w-full shadow-2xl animate-in zoom-in-95 flex flex-col text-center">
+                <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 text-emerald-500">
+                    <Calendar size={32}/>
+                </div>
+                <h3 className="text-xl font-bold mb-2 text-slate-800">แก้ไขวันที่รับเงินเข้า</h3>
+                <p className="text-xs text-slate-400 mb-6 leading-relaxed">
+                    ออเดอร์: {editSettleDateItem.orderId || editSettleDateItem.sysDocId}
+                </p>
+                <div className="text-left mb-6">
+                    <label className="text-xs font-bold text-slate-500 uppercase">วันที่เงินเข้าจริงใหม่</label>
+                    <input 
+                        type="date" 
+                        value={newSettleDate} 
+                        onChange={e=>setNewSettleDate(e.target.value)} 
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-emerald-200 text-emerald-700" 
+                    />
+                </div>
+                <div className="flex gap-3">
+                    <button onClick={() => setEditSettleDateItem(null)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold text-slate-600 transition-colors">ยกเลิก</button>
+                    <button onClick={handleUpdateSettleDate} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-lg transition-colors flex items-center justify-center gap-2">
+                        <Save size={16}/> บันทึก
+                    </button>
+                </div>
+            </div>
+        </div>
       )}
     </div>
   );
