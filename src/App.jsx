@@ -30,15 +30,15 @@ const PROD_APP_ID = 'Data2026';
 const TEST_APP_ID = 'Test2026';
 
 const CONSTANTS = {
-  IDS: { PROD: PROD_APP_ID, DEV: TEST_APP_ID },
-  SHOPS: ['eats and use', 'bubee bubee', 'ไม่ระบุ'],
-  CATEGORIES: {
-    INCOME: ['รายได้จากการขายสินค้า', 'รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)', 'รายได้จากการให้บริการ', 'รายได้ค่านายหน้า/ตัวแทน', 'รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'],
-    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าแพ็คกิ้ง/บรรจุภัณฑ์', 'อุปกรณ์/เครื่องใช้สำนักงาน', 'ค่าน้ำมัน (ซื้อของเข้าร้าน)', 'ค่าขนส่งพัสดุ (ส่งลูกค้า)', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า'],
-    STOCK: ['อาหาร and เครื่องดื่ม', 'ของใช้ส่วนตัว', 'ผลิตภัณฑ์ในครัวเรือน', 'ผลิตภัณฑ์ดูแลผ้า', 'แม่ and เด็ก', 'สุขภาพ and ความงาม', 'สัตว์เลี้ยง', 'ขนม and ของว่าง', 'เครื่องปรุง/วัตถุดิบ', 'บรรจุภัณฑ์/อุปกรณ์แพ็ค', 'อื่นๆ']
-  },
-  CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'Instagram', 'Website', 'หน้าร้าน'],
-  VAT_RATES: { INCLUDED: 'included', EXCLUDED: 'excluded', NONE: 'none' }
+  IDS: { PROD: PROD_APP_ID, DEV: TEST_APP_ID },
+  SHOPS: ['eats and use', 'bubee bubee', 'ไม่ระบุ'],
+  CATEGORIES: {
+    INCOME: ['รายได้จากการขายสินค้า', 'รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)', 'รายได้จากการให้บริการ', 'รายได้ค่านายหน้า/ตัวแทน', 'รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'],
+    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าแพ็คกิ้ง/บรรจุภัณฑ์', 'อุปกรณ์/เครื่องใช้สำนักงาน', 'ค่าน้ำมัน (ซื้อของเข้าร้าน)', 'ค่าขนส่งพัสดุ (ส่งลูกค้า)', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า'],
+    STOCK: ['อาหาร and เครื่องดื่ม', 'ของใช้ส่วนตัว', 'ผลิตภัณฑ์ในครัวเรือน', 'ผลิตภัณฑ์ดูแลผ้า', 'แม่ and เด็ก', 'สุขภาพ and ความงาม', 'สัตว์เลี้ยง', 'ขนม and ของว่าง', 'เครื่องปรุง/วัตถุดิบ', 'บรรจุภัณฑ์/อุปกรณ์แพ็ค', 'อื่นๆ']
+  },
+  CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line্্রLine Shopping', 'Facebook', 'หน้าร้าน'],
+  VAT_RATES: { INCLUDED: 'included', EXCLUDED: 'excluded', NONE: 'none' }
 };
 
 const GLOBAL_STYLES = `
@@ -1942,6 +1942,21 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                         totalDiffSurplus += Math.abs(diff);
                         currentDiffDetails.push({ orderId: m.orderId || m.sysDocId, originalId: m.id, expected: exactExpected, actual, diff: Math.abs(diff), type: 'surplus' });
                     }
+                } else {
+                    // --- 🔥 NEW: สำหรับออเดอร์ยกเลิก/ตีคืน ที่เสียค่าธรรมเนียม ให้ดึงมาสร้างบิลแยก! ---
+                    const feeToCharge = m.newPlatformFee !== undefined ? m.newPlatformFee : 0;
+                    if (feeToCharge > 0) {
+                        currentDiffDetails.push({ 
+                            orderId: m.orderId || m.sysDocId, 
+                            originalId: m.id, 
+                            expected: 0, 
+                            actual: -feeToCharge, 
+                            diff: feeToCharge, 
+                            type: 'cancel_fee', // Type ใหม่สำหรับล็อกหมวดหมู่
+                            category: 'ค่าธรรมเนียม Platform' 
+                        });
+                        totalDiffShort += feeToCharge; // นำไปบวกยอดรวม Diff
+                    }
                 }
             });
 
@@ -2185,6 +2200,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             
             finalActualSettled += t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total);
             finalTotalPlatformFee += (t.platformFee || 0);
+
+            // --- FIX: ดึงค่าธรรมเนียมของออเดอร์ยกเลิก/ตีคืน มาแสดงใน Simulator เพื่อสร้างบิลแยก ---
+            if (t.isCancelled && t.platformFee > 0) {
+                currentDiffDetails.push({ 
+                    orderId: t.orderId, 
+                    expected: 0, 
+                    actual: -t.platformFee, 
+                    diff: t.platformFee, 
+                    type: 'cancel_fee',
+                    category: 'ค่าธรรมเนียม Platform' 
+                });
+            }
         });
 
         setImportedData(final);
@@ -2274,17 +2301,21 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
           for (const item of importedData) {
               const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
+              
+              // --- FIX: เตรียมตัวแปรค่าธรรมเนียมสำหรับการยกเลิก ---
+              const feeForCancelled = item.newPlatformFee !== undefined ? item.newPlatformFee : 0;
+              const shouldCreateFeeBill = (item.isAlreadyCancelled || item.needsReturn) && feeForCancelled > 0;
 
               if (item.isAlreadyCancelled) {
-                  // --- บิลที่ยกเลิกไปแล้ว: อัปเดตวันที่รับเงิน ---
+                  // --- บิลที่ยกเลิกไปแล้ว: อัปเดตวันที่รับเงิน และเคลียร์ค่าธรรมเนียมแฝงออก (เพื่อนำไปสร้างบิลแยก) ---
                   batch.update(ref, {
-                      platformFee: item.newPlatformFee !== undefined ? item.newPlatformFee : (item.platformFee || 0),
-                      transactionFee: item.newTransactionFee !== undefined ? item.newTransactionFee : (item.transactionFee || 0),
-                      commissionFee: item.newCommissionFee !== undefined ? item.newCommissionFee : (item.commissionFee || 0),
-                      serviceFee: item.newServiceFee !== undefined ? item.newServiceFee : (item.serviceFee || 0),
-                      affiliateFee: item.newAffiliateFee !== undefined ? item.newAffiliateFee : (item.affiliateFee || 0),
-                      infrastructureFee: item.newInfrastructureFee !== undefined ? item.newInfrastructureFee : (item.infrastructureFee || 0),
-                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : 0,
+                      platformFee: 0,
+                      transactionFee: 0,
+                      commissionFee: 0,
+                      serviceFee: 0,
+                      affiliateFee: 0,
+                      infrastructureFee: 0,
+                      actualSettledAmt: 0,
                       settlementDate: item.newSettlementDate || item.settlementDate || null,
                       updatedAt: serverTimestamp()
                   });
@@ -2297,13 +2328,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       cancelledAt: serverTimestamp(),
                       paymentStatus: 'refunded',
                       cancelReason: item.reason + (item.returnAction === 'discard' ? ' [สินค้าชำรุด/ตัดทิ้ง ไม่คืนคลัง]' : ' [คืนสต็อกแล้ว]'),
-                      platformFee: item.newPlatformFee !== undefined ? item.newPlatformFee : (item.platformFee || 0),
-                      transactionFee: item.newTransactionFee !== undefined ? item.newTransactionFee : (item.transactionFee || 0),
-                      commissionFee: item.newCommissionFee !== undefined ? item.newCommissionFee : (item.commissionFee || 0),
-                      serviceFee: item.newServiceFee !== undefined ? item.newServiceFee : (item.serviceFee || 0),
-                      affiliateFee: item.newAffiliateFee !== undefined ? item.newAffiliateFee : (item.affiliateFee || 0),
-                      infrastructureFee: item.newInfrastructureFee !== undefined ? item.newInfrastructureFee : (item.infrastructureFee || 0),
-                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : 0,
+                      platformFee: 0,
+                      transactionFee: 0,
+                      commissionFee: 0,
+                      serviceFee: 0,
+                      affiliateFee: 0,
+                      infrastructureFee: 0,
+                      actualSettledAmt: 0,
                       settlementDate: item.newSettlementDate || item.settlementDate || null
                   });
                   
@@ -2413,6 +2444,33 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       });
                   }
               }
+
+              // --- 🔥 NEW: สร้างบิลรายจ่ายแยกอิสระ 100% สำหรับค่าธรรมเนียมออเดอร์ยกเลิก/ตีคืน ---
+              if (shouldCreateFeeBill) {
+                  expCount++;
+                  const sysDocId = `EXP-${String(expCount).padStart(5, '0')}`;
+                  const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                  batch.set(expRef, {
+                      sysDocId,
+                      type: 'expense',
+                      category: 'ค่าธรรมเนียม Platform', // ล็อกหมวดหมู่อัตโนมัติตามรีเควส
+                      description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
+                      items: [{ desc: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`, qty: 1, buyPrice: feeForCancelled, sellPrice: 0, sku: '' }],
+                      total: feeForCancelled,
+                      date: item.newSettlementDate || new Date(),
+                      userId: user.uid,
+                      createdAt: serverTimestamp(),
+                      status: 'paid',
+                      partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
+                      partnerBranch: '00000',
+                      isFromReconciliation: true,
+                      linkedOrderId: item.id,
+                      linkedOrderNo: item.orderId || item.sysDocId || '-',
+                      orderId: item.orderId || item.sysDocId || '-',
+                      channel: item.channel || '',
+                      shopName: item.shopName || 'ไม่ระบุ'
+                  });
+              }
           }
           
           // บันทึก Log ก่อน Commit ในสาขานี้
@@ -2461,7 +2519,23 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
         const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
         
+        // --- FIX: ตัดค่าธรรมเนียมไปสร้างบิลแยก (สำหรับโหมดนำเข้าใหม่) ---
         const cleanTrans = { ...trans };
+        const feeForCancelled = cleanTrans.platformFee || 0;
+        const shouldCreateFeeBill = (cleanTrans.isCancelled || cleanTrans.isReturned) && feeForCancelled > 0;
+        
+        if (shouldCreateFeeBill) {
+            cleanTrans.platformFee = 0;
+            cleanTrans.transactionFee = 0;
+            cleanTrans.commissionFee = 0;
+            cleanTrans.serviceFee = 0;
+            cleanTrans.infrastructureFee = 0;
+            cleanTrans.affiliateFee = 0;
+            if (cleanTrans.grandTotal !== undefined) cleanTrans.grandTotal += feeForCancelled;
+            if (cleanTrans.actualSettledAmt !== undefined && cleanTrans.actualSettledAmt < 0) {
+                cleanTrans.actualSettledAmt += feeForCancelled;
+            }
+        }
         
         Object.keys(cleanTrans).forEach(key => {
             if (cleanTrans[key] === undefined) {
@@ -2470,6 +2544,33 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         });
         
         batch.set(docRef, { ...cleanTrans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
+
+        // --- FIX: สร้างบิลรายจ่ายแยกอิสระ ---
+        if (shouldCreateFeeBill) {
+            currentExpMax++;
+            const expSysDocId = `EXP-${String(currentExpMax).padStart(5, '0')}`;
+            const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+            batch.set(expRef, {
+                sysDocId: expSysDocId,
+                type: 'expense',
+                category: 'ค่าธรรมเนียม Platform',
+                description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`,
+                items: [{ desc: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`, qty: 1, buyPrice: feeForCancelled, sellPrice: 0, sku: '' }],
+                total: feeForCancelled,
+                date: cleanTrans.settlementDate || cleanTrans.date || new Date(),
+                userId: user.uid,
+                createdAt: serverTimestamp(),
+                status: 'paid',
+                partnerName: cleanTrans.channel ? `Platform (${cleanTrans.channel})` : 'Platform',
+                partnerBranch: '00000',
+                isFromReconciliation: true,
+                linkedOrderId: docRef.id,
+                linkedOrderNo: cleanTrans.orderId || '-',
+                orderId: cleanTrans.orderId || '-',
+                channel: cleanTrans.channel || '',
+                shopName: cleanTrans.shopName || 'ไม่ระบุ'
+            });
+        }
 
         for (const item of trans.items) {
             let needed = Number(item.qty);
@@ -3075,12 +3176,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           {discrepancyDetailsData.map((diff, idx) => (
                               <div key={idx} className="flex justify-between items-center bg-slate-800 p-3 rounded-lg border border-slate-700">
                                   <div className="flex items-center gap-3">
-                                      <div className={`p-1.5 rounded-md ${diff.type === 'short' ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                                          {diff.type === 'short' ? <TrendingDown size={14}/> : <TrendingUp size={14}/>}
+                                      {/* --- FIX: เพิ่มการตรวจสอบแท็ก cancel_fee ให้แสดงเป็นสีแดงรายจ่ายให้ถูกต้อง --- */}
+                                      <div className={`p-1.5 rounded-md ${diff.type === 'short' || diff.type === 'cancel_fee' ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                                          {diff.type === 'short' || diff.type === 'cancel_fee' ? <TrendingDown size={14}/> : <TrendingUp size={14}/>}
                                       </div>
                                       <div>
                                           <p className="text-[10px] font-bold text-slate-300 uppercase">
-                                              สร้างบิล {diff.type === 'short' ? 'รายจ่าย (Expense)' : 'รายรับ (Income)'} อัตโนมัติ
+                                              สร้างบิล {diff.type === 'short' || diff.type === 'cancel_fee' ? 'รายจ่าย (Expense)' : 'รายรับ (Income)'} อัตโนมัติ
                                           </p>
                                           <p className="text-xs font-mono font-bold text-indigo-300 mt-0.5 flex items-center gap-1">
                                               <ArrowRight size={10}/> อ้างอิง Order ID: {diff.orderId}
@@ -3088,11 +3190,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                       </div>
                                   </div>
                                   <div className="text-right">
-                                      <p className={`font-black text-sm ${diff.type === 'short' ? 'text-rose-400' : 'text-emerald-400'}`}>
-                                          {diff.type === 'short' ? '-' : '+'}{formatCurrency(diff.diff)}
+                                      {/* --- FIX: ใส่เครื่องหมายลบ (-) ให้ถูกต้อง --- */}
+                                      <p className={`font-black text-sm ${diff.type === 'short' || diff.type === 'cancel_fee' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                          {diff.type === 'short' || diff.type === 'cancel_fee' ? '-' : '+'}{formatCurrency(diff.diff)}
                                       </p>
                                       <p className="text-[9px] text-slate-500 font-bold mt-0.5">
-                                          หมวด: {diff.type === 'short' ? discrepancyCategory : surplusCategory}
+                                          หมวด: {diff.type === 'short' ? discrepancyCategory : diff.type === 'cancel_fee' ? 'ค่าธรรมเนียม Platform' : surplusCategory}
                                       </p>
                                   </div>
                               </div>
@@ -4870,21 +4973,19 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     return transactions.filter(t => {
       if (t.isCancelled) return false; // ข้ามรายการที่ยกเลิก
       
+      // --- FIX: แสดงเฉพาะบิลรายจ่ายที่มีอยู่จริง และหากเป็นบิลระบบสร้างอัตโนมัติ ต้องมีเลขใบกำกับภาษีแล้วเท่านั้น ---
+      if (t.type !== 'expense') return false;
+      if (t.isFromReconciliation && (!t.taxInvoiceNo || String(t.taxInvoiceNo).trim() === '')) return false;
+
       const d = normalizeDate(t.date);
       const start = new Date(startDate);
       const end = new Date(endDate);
       start.setHours(0,0,0,0);
       end.setHours(23,59,59,999);
-      
       const dateMatch = d >= start && d <= end;
       const branchMatch = selectedBranch === 'all' || selectedBranch === '00000';
       
-      // --- 🔥 FIX: ตัดรายการปรับปรุงอัตโนมัติ (ส่วนต่างรับเงิน) ออกจากรายงานภาษีซื้อเด็ดขาด ---
-      // เนื่องจากรายการเหล่านี้ถูกสร้างโดยระบบเพื่อปรับสมดุล Cash Flow เท่านั้น ไม่มีใบกำกับภาษีตัวจริง
-      // ผู้ใช้จะต้องเป็นคนนำบิลค่าธรรมเนียม/ค่าขนส่งรายเดือนจาก Platform มาบันทึกเองต่างหาก
-      const isAutoGenerated = t.isFromReconciliation === true;
-      
-      return t.type === 'expense' && dateMatch && branchMatch && !isAutoGenerated;
+      return dateMatch && branchMatch;
     }).sort(sortNewestFirst);
   }, [transactions, startDate, endDate, selectedBranch]);
 
@@ -4996,16 +5097,16 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     let vat = 0, base = 0, total = 0;
     
     if (row.vatType === 'excluded') {
-        vat = row.isNonCreditableVat ? 0 : baseAmt * 0.07;
+        vat = row.isNonCreditableVat ? 0 : (row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : baseAmt * 0.07);
         base = baseAmt;
-        total = baseAmt + (baseAmt * 0.07);
+        total = baseAmt + vat;
     } else if (row.vatType === 'none') {
         vat = 0;
         base = baseAmt;
         total = baseAmt;
     } else { // included or legacy default
-        vat = row.isNonCreditableVat ? 0 : baseAmt * 7 / 107;
-        base = row.isNonCreditableVat ? baseAmt : baseAmt * 100 / 107;
+        vat = row.isNonCreditableVat ? 0 : (row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : baseAmt * 7 / 107);
+        base = row.isNonCreditableVat ? baseAmt : baseAmt - vat;
         total = baseAmt;
     }
     
@@ -5055,10 +5156,6 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
 
     transactions.forEach(t => {
         if (t.isCancelled) return; // ข้ามรายการที่ยกเลิก
-        
-        // --- 🔥 FIX: ไม่นำบิลส่วนต่างอัตโนมัติ มาคิดเป็นค่าใช้จ่ายซ้ำซ้อนใน ภ.ง.ด. 90/94 ---
-        if (t.isFromReconciliation && t.type === 'expense') return;
-
         const d = normalizeDate(t.date);
         if (!d || d < start || d > end) return;
         
@@ -5731,21 +5828,70 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   // --- NEW: State for showing generated ID ---
   const [generatedDocId, setGeneratedDocId] = useState(null);
    
-  // --- NEW: Edit Settle Date State ---
-  const [editSettleDateItem, setEditSettleDateItem] = useState(null);
-  const [newSettleDate, setNewSettleDate] = useState('');
-
-  const [formData, setFormData] = useState({ 
+  const defaultFormState = { 
+    id: null, // NEW: เพิ่ม id เพื่อระบุว่าเป็นโหมด Edit
     type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', shopName: CONSTANTS.SHOPS[0],
     transactionFee: '', commissionFee: '', serviceFee: '', affiliateFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '',
-    whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '',
+    whtAmount: '', isNonCreditableVat: false, vatType: 'none', manualVatAmount: '', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', shippingFeePaidBySeller: '',
     category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '',
     partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '',
     items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }],
-    paymentStatus: 'settled',
-    isCashBill: false,
-    isAdjusted: false // NEW: เพิ่ม state สำหรับเก็บสถานะการปรับยอด
-  });
+    paymentStatus: 'settled', settlementDate: formatDateISO(new Date()),
+    isCashBill: false, isAdjusted: false, isFromReconciliation: false
+  };
+
+  const [formData, setFormData] = useState(defaultFormState);
+
+  // --- NEW: ฟังก์ชันสำหรับกดปุ่ม Edit จากหน้าประวัติ ---
+  const handleEditTransaction = (t) => {
+      setFormData({
+          id: t.id,
+          sysDocId: t.sysDocId || '',
+          type: t.type,
+          date: formatDateISO(t.date),
+          description: t.description || '',
+          total: t.total || 0,
+          channel: t.channel || 'หน้าร้าน',
+          shopName: t.shopName || CONSTANTS.SHOPS[0],
+          transactionFee: t.transactionFee || '',
+          commissionFee: t.commissionFee || '',
+          serviceFee: t.serviceFee || '',
+          affiliateFee: t.affiliateFee || '',
+          infrastructureFee: t.infrastructureFee || '',
+          couponDiscount: t.couponDiscount || '',
+          cashCoupon: t.cashCoupon || '',
+          whtAmount: t.whtAmount || '',
+          isNonCreditableVat: t.isNonCreditableVat || false,
+          vatType: t.vatType || 'none',
+          manualVatAmount: t.manualVatAmount !== undefined ? t.manualVatAmount : '',
+          shippingFee: t.shippingFee || '',
+          estimatedShippingFee: t.estimatedShippingFee || '',
+          shippingFeeSubsidy: t.shippingFeeSubsidy || '',
+          shippingFeePaidBySeller: t.shippingFeePaidBySeller || '',
+          returnShippingFee: t.returnShippingFee || '',
+          category: t.category || (t.type === 'income' ? 'รายได้จากการขายสินค้า' : 'ค่าใช้จ่ายทั่วไป'),
+          orderId: t.orderId || t.linkedOrderNo || '',
+          taxInvoiceNo: t.taxInvoiceNo || '',
+          partnerName: t.partnerName || '',
+          partnerTaxId: t.partnerTaxId || '',
+          partnerAddress: t.partnerAddress || '',
+          partnerBranch: t.partnerBranch || '00000',
+          partnerBranchName: t.partnerBranchName || '',
+          items: t.items && t.items.length > 0 ? t.items.map(i => ({...i, buyPrice: t.type==='expense'?(i.buyPrice||i.price||0):0, sellPrice: t.type==='income'?(i.sellPrice||i.price||0):0})) : [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }],
+          paymentStatus: t.paymentStatus || 'settled',
+          settlementDate: t.settlementDate ? formatDateISO(t.settlementDate) : formatDateISO(t.date),
+          isCashBill: t.isCashBill || false,
+          isAdjusted: t.isAdjusted || false,
+          isFromReconciliation: t.isFromReconciliation || false
+      });
+      setSubTab('new');
+      window.scrollTo(0,0);
+  };
+
+  const cancelEdit = () => {
+      setFormData(defaultFormState);
+      setSubTab('history');
+  };
 
   // --- Summary Filters State ---
   const [summaryStartDate, setSummaryStartDate] = useState(formatDateISO(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
@@ -6095,51 +6241,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
   };
 
-  // --- NEW: Edit Settle Date Function ---
-  const handleUpdateSettleDate = async () => {
-    if (!editSettleDateItem || !user || !newSettleDate) return;
-    try {
-        const batchWriter = writeBatch(dbInstance);
-        const coll = editSettleDateItem.type === 'income' ? 'transactions_income' : 'transactions_expense';
-        const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, editSettleDateItem.id);
-        
-        batchWriter.update(docRef, { 
-            settlementDate: normalizeDate(newSettleDate),
-            updatedAt: serverTimestamp() 
-        });
-
-        // ถ้ามีบิลส่วนต่าง (Diff Bill) หรือค่าธรรมเนียม ที่อ้างอิงถึงรายการนี้ ต้องแก้วันที่ให้ตรงกันด้วย
-        if (editSettleDateItem.type === 'income') {
-             const linkedExpenses = transactions.filter(t => t.type === 'expense' && t.linkedOrderId === editSettleDateItem.id && t.isFromReconciliation);
-             linkedExpenses.forEach(exp => {
-                 batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', exp.id), {
-                     date: normalizeDate(newSettleDate)
-                 });
-             });
-             const linkedIncomes = transactions.filter(t => t.type === 'income' && t.linkedOrderId === editSettleDateItem.id && t.isFromReconciliation);
-             linkedIncomes.forEach(inc => {
-                 batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', inc.id), {
-                     date: normalizeDate(newSettleDate),
-                     settlementDate: normalizeDate(newSettleDate)
-                 });
-             });
-        }
-
-        await batchWriter.commit();
-        showToast("แก้ไขวันที่รับเงินเข้าสำเร็จ", "success");
-        
-        // อัปเดตข้อมูลบนหน้าจอที่เปิดอยู่ให้เป็นปัจจุบัน
-        if (viewItem && viewItem.id === editSettleDateItem.id) {
-            setViewItem(prev => ({...prev, settlementDate: normalizeDate(newSettleDate)}));
-        }
-        
-        setEditSettleDateItem(null);
-    } catch(e) {
-        console.error(e);
-        showToast("แก้ไขวันที่รับเงินไม่สำเร็จ", "error");
-    }
-  };
-
   const selectPartner = (p) => { 
     setFormData({ ...formData, partnerName: p.name || '', partnerTaxId: p.taxId || '', partnerAddress: p.address || '', partnerBranch: p.branch || '00000', partnerBranchName: p.branchName || '' }); 
     setShowPartnerModal(false); 
@@ -6214,25 +6315,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
   };
 
-  // --- NEW: Update Channel Function ---
-  const handleUpdateChannel = async (item, newChannel) => {
-      if (!user) return;
-      try {
-          const coll = item.type === 'income' ? 'transactions_income' : 'transactions_expense';
-          const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, item.id);
-          await updateDoc(docRef, { channel: newChannel, updatedAt: serverTimestamp() });
-          
-          showToast(`เปลี่ยนช่องทางเป็น ${newChannel} สำเร็จ`, "success");
-          
-          if (viewItem && viewItem.id === item.id) {
-              setViewItem(prev => ({ ...prev, channel: newChannel }));
-          }
-      } catch (e) {
-          console.error(e);
-          showToast("เปลี่ยนช่องทางไม่สำเร็จ", "error");
-      }
-  };
-
   const financialSummary = useMemo(() => {
     const subTotal = formData.items.reduce((sum, item) => sum + ((formData.type === 'income' ? Number(item.sellPrice) : Number(item.buyPrice)) * (Number(item.qty) || 0)), 0);
     const transFee = parseFloat(formData.transactionFee) || 0;
@@ -6267,14 +6349,15 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         }
     } else {
         let vatBase = subTotal - couponDisc;
+        let manualVat = (formData.manualVatAmount !== undefined && formData.manualVatAmount !== '') ? Number(formData.manualVatAmount) : null;
         if (formData.vatType === 'excluded') {
-            let vatAmt = vatBase * 0.07;
+            let vatAmt = manualVat !== null ? manualVat : vatBase * 0.07;
             vatAmount = vatAmt;
             trueVatBase = vatBase;
             grandTotal = vatBase + vatAmt - cashCpn - wht;
         } else if (formData.vatType === 'included') {
-            vatAmount = vatBase * 7 / 107;
-            trueVatBase = vatBase * 100 / 107;
+            vatAmount = manualVat !== null ? manualVat : vatBase * 7 / 107;
+            trueVatBase = vatBase - vatAmount;
             grandTotal = subTotal - totalDiscounts - wht;
         } else {
             trueVatBase = vatBase;
@@ -6329,14 +6412,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       const dataToSave = { 
         sysDocId, // เพิ่มการบันทึกเลขรันเอกสารลงฐานข้อมูลอัตโนมัติ
         ...formData, 
+        manualVatAmount: formData.manualVatAmount !== '' ? Number(formData.manualVatAmount) : '',
         shippingFee: parseFloat(formData.shippingFee) || 0,
         estimatedShippingFee: parseFloat(formData.estimatedShippingFee) || 0,
         shippingFeeSubsidy: parseFloat(formData.shippingFeeSubsidy) || 0,
         returnShippingFee: parseFloat(formData.returnShippingFee) || 0,
         total: subTotal, platformFee: totalFees, grandTotal, date: normalizeDate(formData.date), description: formData.items.map(i => i.desc).join(', '), userId: user.uid, createdAt: serverTimestamp(),
         paymentStatus: formData.type === 'income' ? (formData.paymentStatus || 'settled') : (formData.status === 'unpaid' ? 'unpaid' : 'paid'),
-        // แก้ไข: ให้ใช้ formData.settlementDate ถ้ามี หากไม่มีให้ใช้วันที่ทำรายการ (formData.date)
-        settlementDate: (formData.type === 'income' && (!formData.paymentStatus || formData.paymentStatus === 'settled')) ? normalizeDate(formData.settlementDate || formData.date) : null
+        settlementDate: (formData.type === 'income' && (!formData.paymentStatus || formData.paymentStatus === 'settled')) ? normalizeDate(formData.date) : null
       };
       
       if (formData.partnerName) {
@@ -6440,7 +6523,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           isExpense: formData.type === 'expense'
       });
 
-      setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', shopName: CONSTANTS.SHOPS[0], transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled', isCashBill: false, isAdjusted: false });
+      setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', shopName: CONSTANTS.SHOPS[0], transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', manualVatAmount: '', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled', isCashBill: false, isAdjusted: false });
     } catch (e) { showToast("Error: " + e.message, "error"); }
   };
 
@@ -6602,8 +6685,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
   // --- Calculate VAT Base safely for viewItem Modal ---
   const viewItemBaseAmount = viewItem ? (viewItem.total || 0) + (viewItem.type === 'income' ? (Number(viewItem.shippingFee) || 0) : 0) - (Number(viewItem.couponDiscount) || 0) : 0;
-  const viewItemTrueVatBase = viewItem ? (viewItem.vatType === 'excluded' ? viewItemBaseAmount : (viewItemBaseAmount * 100 / 107)) : 0;
-  const viewItemVatAmt = viewItem ? (viewItem.vatType === 'excluded' ? viewItemBaseAmount * 0.07 : (viewItemBaseAmount * 7 / 107)) : 0;
+  const viewItemManualVat = viewItem && viewItem.manualVatAmount !== undefined && viewItem.manualVatAmount !== '' ? Number(viewItem.manualVatAmount) : null;
+  const viewItemVatAmt = viewItem ? (viewItem.vatType === 'excluded' ? (viewItemManualVat !== null ? viewItemManualVat : viewItemBaseAmount * 0.07) : (viewItemManualVat !== null ? viewItemManualVat : viewItemBaseAmount * 7 / 107)) : 0;
+  const viewItemTrueVatBase = viewItem ? (viewItem.vatType === 'excluded' ? viewItemBaseAmount : (viewItemBaseAmount - viewItemVatAmt)) : 0;
 
   return (
     <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full h-full pb-10">
@@ -6923,7 +7007,22 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           </div>
                           <div className="flex justify-between items-center text-sm text-indigo-300 mt-2 text-left">
                               <span className="opacity-80 text-left">{formData.vatType === 'included' ? 'ภาษีมูลค่าเพิ่ม 7% (รวมในยอด)' : '+ ภาษีมูลค่าเพิ่ม 7% (แยกเพิ่ม)'}</span>
-                              <span className="font-bold text-right">{formatCurrency(financialSummary.vatAmount)}</span>
+                              {formData.type === 'expense' ? (
+                                  <div className="relative flex items-center gap-2">
+                                      <input 
+                                          type="number" 
+                                          step="0.01"
+                                          value={formData.manualVatAmount} 
+                                          onChange={e => setFormData({...formData, manualVatAmount: e.target.value})}
+                                          placeholder={formatCurrency(formData.vatType === 'included' ? (financialSummary.subTotal - (Number(formData.couponDiscount)||0)) * 7/107 : (financialSummary.subTotal - (Number(formData.couponDiscount)||0)) * 0.07).replace(/,/g, '')}
+                                          className="w-24 bg-white/10 border border-white/20 p-1.5 rounded-lg text-right text-xs font-bold text-white outline-none focus:border-indigo-400 placeholder-white/30"
+                                          title="ระบุยอด VAT ตามหน้าบิล (ถ้าไม่ตรงกับระบบ)"
+                                      />
+                                      <span className="font-bold text-right w-16">{formatCurrency(financialSummary.vatAmount)}</span>
+                                  </div>
+                              ) : (
+                                  <span className="font-bold text-right">{formatCurrency(financialSummary.vatAmount)}</span>
+                              )}
                           </div>
                       </>
                   )}
@@ -7298,6 +7397,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     {!t.isCancelled && t.paymentStatus === 'pending_platform' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-orange-100 text-orange-700 border border-orange-200">รอเงินเข้า</span>}
                                     {!t.isCancelled && t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
                                     {!t.isCancelled && t.isAdjusted && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-blue-100 text-blue-700 border border-blue-200">มีการปรับยอด</span>}
+                                    
+                                    {/* --- FIX: ป้ายแจ้งเตือนบิลรายจ่ายอัตโนมัติที่ยังขาดเลขใบกำกับภาษี --- */}
+                                    {!t.isCancelled && t.type === 'expense' && t.isFromReconciliation && (!t.taxInvoiceNo || String(t.taxInvoiceNo).trim() === '') && (
+                                        <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200 flex items-center gap-0.5">
+                                            <AlertTriangle size={8}/> รอระบุเลขใบกำกับ
+                                        </span>
+                                    )}
+
                                     {(t.isReturned || t.refundAmount > 0) && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-pink-100 text-pink-700 border border-pink-200 flex items-center gap-0.5"><ArrowRightLeft size={8}/> {t.isCancelled ? 'ยกเลิก/คืนสินค้า' : 'คืนสินค้า/เงิน'}</span>}
                                 </div>
                                 <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
@@ -7410,15 +7517,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   <span className="text-sm font-black text-indigo-700 bg-indigo-100 border border-indigo-200 px-3 py-1 rounded-lg tracking-wider">SYS ID: {viewItem.sysDocId || 'NO-REF'}</span>
                   <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.isCashBill ? 'บิลเงินสด' : (viewItem.orderId || viewItem.linkedOrderNo || viewItem.taxInvoiceNo || '-')}</p>
                   <span className={`px-2 py-1 rounded-md text-[10px] font-bold text-center ${viewItem.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{viewItem.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span>
-                  <select 
-                      value={viewItem.channel || 'หน้าร้าน'} 
-                      onChange={(e) => handleUpdateChannel(viewItem, e.target.value)}
-                      className="bg-slate-200 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold text-center outline-none cursor-pointer hover:bg-slate-300 transition-colors"
-                      title="คลิกเพื่อแก้ไขช่องทางขาย"
-                  >
-                      {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
-                      <option value="IMPORTED">IMPORTED</option>
-                  </select>
+                  <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold text-center">{viewItem.channel || 'หน้าร้าน'}</span>
                   
                   {(viewItem.isReturned || viewItem.refundAmount > 0) && (
                       <span className="bg-pink-100 text-pink-700 border border-pink-200 px-2 py-1 rounded-md text-[10px] font-bold text-center flex items-center gap-1">
@@ -7445,17 +7544,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <p className="text-[9px] text-indigo-500 font-medium mt-1.5 text-left">*อิงตามเกณฑ์สิทธิ์: ใช้คำนวณผลประกอบการและยอดขายรวม</p>
                       </div>
                       <div className="bg-emerald-50/80 p-4 rounded-2xl border border-emerald-100">
-                          <div className="flex justify-between items-start mb-1">
-                              <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest text-left">วันที่รับเงินจริง (Settlement Date)</p>
-                              {(viewItem.paymentStatus === 'settled' || viewItem.status === 'paid') && (
-                                  <button onClick={() => {
-                                      setEditSettleDateItem(viewItem);
-                                      setNewSettleDate(formatDateISO(viewItem.settlementDate || viewItem.date));
-                                  }} className="text-emerald-600 hover:text-emerald-700 bg-emerald-100/50 hover:bg-emerald-200/50 p-1 rounded transition-colors" title="แก้ไขวันที่รับเงิน">
-                                      <Edit size={12}/>
-                                  </button>
-                              )}
-                          </div>
+                          <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1 text-left">วันที่รับเงินจริง (Settlement Date)</p>
                           <p className="font-black text-slate-800 text-base flex items-center gap-2 text-left">
                               {viewItem.settlementDate ? formatDate(viewItem.settlementDate) : ((viewItem.paymentStatus === 'settled' || viewItem.status === 'paid') ? formatDate(viewItem.date) : '-')}
                               {viewItem.type === 'income' && viewItem.paymentStatus === 'pending_platform' && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">รอเงินเข้า</span>}
@@ -7657,36 +7746,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   </button>
               </div>
           </div>
-      )}
-
-      {/* --- NEW: Edit Settle Date Modal --- */}
-      {editSettleDateItem && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-            <div className="bg-white rounded-[32px] p-8 max-w-sm w-full shadow-2xl animate-in zoom-in-95 flex flex-col text-center">
-                <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4 text-emerald-500">
-                    <Calendar size={32}/>
-                </div>
-                <h3 className="text-xl font-bold mb-2 text-slate-800">แก้ไขวันที่รับเงินเข้า</h3>
-                <p className="text-xs text-slate-400 mb-6 leading-relaxed">
-                    ออเดอร์: {editSettleDateItem.orderId || editSettleDateItem.sysDocId}
-                </p>
-                <div className="text-left mb-6">
-                    <label className="text-xs font-bold text-slate-500 uppercase">วันที่เงินเข้าจริงใหม่</label>
-                    <input 
-                        type="date" 
-                        value={newSettleDate} 
-                        onChange={e=>setNewSettleDate(e.target.value)} 
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-emerald-200 text-emerald-700" 
-                    />
-                </div>
-                <div className="flex gap-3">
-                    <button onClick={() => setEditSettleDateItem(null)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold text-slate-600 transition-colors">ยกเลิก</button>
-                    <button onClick={handleUpdateSettleDate} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-lg transition-colors flex items-center justify-center gap-2">
-                        <Save size={16}/> บันทึก
-                    </button>
-                </div>
-            </div>
-        </div>
       )}
     </div>
   );
@@ -10274,7 +10333,6 @@ export default function App() {
   const [targetIdToDelete, setTargetIdToDelete] = useState('');
   const [isMigrating, setIsMigrating] = useState(false);
   const [showMigrateConfirm, setShowMigrateConfirm] = useState(false);
-  const [showCleanUpConfirm, setShowCleanUpConfirm] = useState(false); // NEW: State สำหรับยืนยันการลบบิลค่าธรรมเนียมอัตโนมัติ
   const [promotions, setPromotions] = useState([]);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [tempApiKey, setTempApiKey] = useState('');
@@ -10675,43 +10733,6 @@ export default function App() {
     }
   };
 
-  const cleanUpAutoFeeBills = async () => {
-    setShowCleanUpConfirm(false);
-    setIsMigrating(true);
-    try {
-        let batchWriter = writeBatch(dbInstance);
-        let opsCount = 0;
-        let deletedCount = 0;
-
-        // --- FIX: กวาดล้างบิลจำลองอัตโนมัติทั้งหมด (ครอบคลุมทั้งค่าธรรมเนียมและค่าจัดส่ง) ---
-        // เพื่อเปิดทางให้ผู้ใช้นำบิลใบกำกับภาษีตัวจริงมาคีย์บันทึกเองได้โดยไม่ซ้ำซ้อน
-        const autoFeeBills = transactions.filter(t => t.type === 'expense' && t.isFromReconciliation);
-
-        for (const feeBill of autoFeeBills) {
-            batchWriter.delete(doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'transactions_expense', feeBill.id));
-            opsCount++;
-            deletedCount++;
-
-            if (opsCount >= 300) {
-                await batchWriter.commit();
-                batchWriter = writeBatch(dbInstance);
-                opsCount = 0;
-            }
-        }
-
-        if (opsCount > 0) {
-            await batchWriter.commit();
-        }
-
-        addToast(`จัดการลบบิลขยะ/บิลจำลองสำเร็จ ${deletedCount} รายการ`, "success");
-    } catch (e) {
-        console.error(e);
-        addToast("เกิดข้อผิดพลาดในการลบบิลจำลอง", "error");
-    } finally {
-        setIsMigrating(false);
-    }
-  };
-
   const renderContent = () => {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} />;
@@ -10815,28 +10836,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Clean Up Auto Fee Confirm Modal */}
-      {showCleanUpConfirm && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-          <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
-            <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
-              <Trash2 size={32}/>
-            </div>
-            <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันการลบบิลอัตโนมัติ?</h3>
-            <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
-              ระบบจะทำการลบ <b>"บิลค่าธรรมเนียม Platform"</b><br/>
-              ที่ระบบเคยสร้างไว้อัตโนมัติทั้งหมด<br/>
-              และนำยอดกลับไปรวมกับออเดอร์ตั้งต้น<br/>
-              <span className="text-rose-600 font-bold underline">แนะนำให้กดรัน 1 ครั้งเพื่อเคลียร์ข้อมูลขยะ</span>
-            </p>
-            <div className="flex gap-3 text-center">
-              <button onClick={() => setShowCleanUpConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
-              <button onClick={cleanUpAutoFeeBills} className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg text-center transition-colors">ยืนยันลบข้อมูล</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {showIdDeleteTool && (
         <div className="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-4 text-left">
           <div className="bg-white rounded-[40px] p-10 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-center"><div className="w-20 h-20 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-6 text-center"><AlertCircle size={40} className="text-center"/></div><h3 className="text-2xl font-black text-center mb-2 text-center text-slate-800 text-center">ระบุ ID ที่ต้องการลบ</h3><input value={targetIdToDelete} onChange={e=>setTargetIdToDelete(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl border-2 border-slate-100 mb-6 font-bold text-center text-lg text-slate-800 text-center" placeholder="ID, INV No. หรือ Tax Invoice No." /><div className="flex gap-4 text-center"><button onClick={()=>setShowIdDeleteTool(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-600 text-center">ยกเลิก</button><button onClick={forceDeleteById} className="flex-1 py-4 bg-rose-600 text-white rounded-2xl font-bold text-center">ยืนยัน</button></div></div>
@@ -10883,11 +10882,6 @@ export default function App() {
 
               <button onClick={syncInvoiceDates} disabled={isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-emerald-400 hover:bg-emerald-900/30 transition-all text-left">
                 <RefreshCw size={14} className="text-center"/> ซิงค์วันที่และแก้เลข ABB
-              </button>
-
-              <button onClick={() => setShowCleanUpConfirm(true)} disabled={isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-rose-400 hover:bg-rose-900/30 transition-all text-left">
-                {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <Trash2 size={14} className="text-center"/>} 
-                ลบบิลค่าธรรมเนียมอัตโนมัติ
               </button>
 
               <button onClick={() => { setTempApiKey(localStorage.getItem('gemini_api_key') || ''); setShowApiKeyModal(true); }} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-indigo-400 hover:bg-indigo-900/30 transition-all text-left">
