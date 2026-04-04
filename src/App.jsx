@@ -5837,7 +5837,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '',
     items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }],
     paymentStatus: 'settled', settlementDate: formatDateISO(new Date()),
-    isCashBill: false, isAdjusted: false, isFromReconciliation: false
+    isCashBill: false, isAdjusted: false, isFromReconciliation: false, isTaxOnly: false
   };
 
   const [formData, setFormData] = useState(defaultFormState);
@@ -5853,22 +5853,22 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           total: t.total || 0,
           channel: t.channel || 'หน้าร้าน',
           shopName: t.shopName || CONSTANTS.SHOPS[0],
-          transactionFee: t.transactionFee || '',
-          commissionFee: t.commissionFee || '',
-          serviceFee: t.serviceFee || '',
-          affiliateFee: t.affiliateFee || '',
-          infrastructureFee: t.infrastructureFee || '',
-          couponDiscount: t.couponDiscount || '',
-          cashCoupon: t.cashCoupon || '',
-          whtAmount: t.whtAmount || '',
+          transactionFee: t.transactionFee ?? '',
+          commissionFee: t.commissionFee ?? '',
+          serviceFee: t.serviceFee ?? '',
+          affiliateFee: t.affiliateFee ?? '',
+          infrastructureFee: t.infrastructureFee ?? '',
+          couponDiscount: t.couponDiscount ?? '',
+          cashCoupon: t.cashCoupon ?? '',
+          whtAmount: t.whtAmount ?? '',
           isNonCreditableVat: t.isNonCreditableVat || false,
           vatType: t.vatType || 'none',
-          manualVatAmount: t.manualVatAmount !== undefined ? t.manualVatAmount : '',
-          shippingFee: t.shippingFee || '',
-          estimatedShippingFee: t.estimatedShippingFee || '',
-          shippingFeeSubsidy: t.shippingFeeSubsidy || '',
-          shippingFeePaidBySeller: t.shippingFeePaidBySeller || '',
-          returnShippingFee: t.returnShippingFee || '',
+          manualVatAmount: t.manualVatAmount ?? '',
+          shippingFee: t.shippingFee ?? '',
+          estimatedShippingFee: t.estimatedShippingFee ?? '',
+          shippingFeeSubsidy: t.shippingFeeSubsidy ?? '',
+          shippingFeePaidBySeller: t.shippingFeePaidBySeller ?? '',
+          returnShippingFee: t.returnShippingFee ?? '',
           category: t.category || (t.type === 'income' ? 'รายได้จากการขายสินค้า' : 'ค่าใช้จ่ายทั่วไป'),
           orderId: t.orderId || t.linkedOrderNo || '',
           taxInvoiceNo: t.taxInvoiceNo || '',
@@ -5882,7 +5882,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           settlementDate: t.settlementDate ? formatDateISO(t.settlementDate) : formatDateISO(t.date),
           isCashBill: t.isCashBill || false,
           isAdjusted: t.isAdjusted || false,
-          isFromReconciliation: t.isFromReconciliation || false
+          isFromReconciliation: t.isFromReconciliation || false,
+          isTaxOnly: t.isTaxOnly || false
       });
       setSubTab('new');
       window.scrollTo(0,0);
@@ -6523,7 +6524,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           isExpense: formData.type === 'expense'
       });
 
-      setFormData({ type: 'income', date: formatDateISO(new Date()), description: '', total: 0, channel: 'หน้าร้าน', shopName: CONSTANTS.SHOPS[0], transactionFee: '', commissionFee: '', serviceFee: '', infrastructureFee: '', couponDiscount: '', cashCoupon: '', whtAmount: '', isNonCreditableVat: false, vatType: 'none', manualVatAmount: '', shippingFee: '', estimatedShippingFee: '', shippingFeeSubsidy: '', returnShippingFee: '', category: 'รายได้จากการขายสินค้า', orderId: '', taxInvoiceNo: '', partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '', items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }], paymentStatus: 'settled', isCashBill: false, isAdjusted: false });
+      setFormData(defaultFormState);
     } catch (e) { showToast("Error: " + e.message, "error"); }
   };
 
@@ -6819,35 +6820,64 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       {subTab === 'new' ? (
         <div className="grid grid-cols-1 xl:grid-cols-4 gap-8 items-start text-left">
           <div className="xl:col-span-3 space-y-8 text-left">
-            <div className="bg-white p-8 rounded-[40px] border shadow-sm space-y-8 text-left relative">
-              <div className="flex flex-col md:flex-row gap-6 items-center text-left">
-                <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit shrink-0 text-left">
-                  <button onClick={()=>setFormData({...formData, type:'income', category: 'รายได้จากการขายสินค้า', paymentStatus: 'settled'})} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='income'?'bg-emerald-600 text-white shadow-lg':'text-slate-400'}`}><TrendingUp size={18}/> รายรับ</button>
-                  <button onClick={()=>setFormData({...formData, type:'expense', category: 'ต้นทุนสินค้า', status: 'paid'})} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='expense'?'bg-rose-600 text-white shadow-lg':'text-slate-400'}`}><TrendingDown size={18}/> รายจ่าย</button>
-                </div>
-                {formData.type === 'expense' && (
-                    <div className="ml-auto w-full md:w-auto">
-                        <input type="file" ref={ocrInputRef} hidden accept="image/*" onChange={handleOcrUpload} />
-                        <button type="button" onClick={() => ocrInputRef.current?.click()} disabled={isOcrProcessing} className="w-full md:w-auto bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg transition-all disabled:opacity-50">
-                            {isOcrProcessing ? <Loader className="animate-spin" size={16}/> : <ScanText size={16}/>} 
-                            {isOcrProcessing ? 'กำลังสแกน...' : 'AI สแกนบิล/ใบเสร็จ'}
-                        </button>
-                    </div>
-                )}
+            <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6 text-left relative">
+              
+              {/* --- FIX: ปรับ Layout การกรอกข้อมูลให้กว้างขึ้น แบ่งเป็นสัดส่วนชัดเจน ไม่อึดอัด --- */}
+              <div className="flex flex-col gap-6 text-left">
                 
-                <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 flex-1 w-full text-left mt-2 md:mt-0`}>
-                  <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">วันที่</label><input type="date" value={formData.date} onChange={e=>setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-100 outline-none text-left"/></div>
-                  <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">ร้านค้า</label><select value={formData.shopName || CONSTANTS.SHOPS[0]} onChange={e=>setFormData({...formData, shopName: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left">{CONSTANTS.SHOPS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                  <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">ช่องทาง</label><select value={formData.channel} onChange={e=>setFormData({...formData, channel: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left">{CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                  <div className="space-y-1 text-left">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">{formData.type === 'expense' ? 'อ้างอิง Order ID (ถ้ามี)' : 'Order ID'}</label>
-                      <input placeholder={formData.type === 'expense' ? "เชื่อมกับรายรับ..." : "ระบุเลขที่..."} value={formData.orderId} onChange={e=>setFormData({...formData, orderId: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left"/>
+                {/* Section 1: Header - Toggle & AI Scan */}
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-5">
+                  <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit shrink-0 text-left shadow-inner">
+                    <button onClick={()=>setFormData({...formData, type:'income', category: 'รายได้จากการขายสินค้า', paymentStatus: 'settled'})} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='income'?'bg-white text-emerald-600 shadow-sm':'text-slate-500 hover:text-slate-700'}`}><TrendingUp size={18}/> รายรับ</button>
+                    <button onClick={()=>setFormData({...formData, type:'expense', category: 'ต้นทุนสินค้า', status: 'paid'})} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='expense'?'bg-white text-rose-600 shadow-sm':'text-slate-500 hover:text-slate-700'}`}><TrendingDown size={18}/> รายจ่าย</button>
                   </div>
+                  {formData.type === 'expense' && (
+                      <div className="w-full sm:w-auto">
+                          <input type="file" ref={ocrInputRef} hidden accept="image/*" onChange={handleOcrUpload} />
+                          <button type="button" onClick={() => ocrInputRef.current?.click()} disabled={isOcrProcessing} className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md transition-all disabled:opacity-50">
+                              {isOcrProcessing ? <Loader className="animate-spin" size={16}/> : <ScanText size={16}/>} 
+                              {isOcrProcessing ? 'กำลังสแกน...' : 'AI สแกนบิล/ใบเสร็จ'}
+                          </button>
+                      </div>
+                  )}
+                </div>
+                
+                {/* Section 2: Basic Info Grid */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 w-full text-left">
+                  <div className="space-y-1.5 text-left">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wide text-left">วันที่ทำรายการ</label>
+                      <input type="date" value={formData.date} onChange={e=>setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-100 outline-none transition-all text-left"/>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wide text-left">ร้านค้า</label>
+                      <select value={formData.shopName || CONSTANTS.SHOPS[0]} onChange={e=>setFormData({...formData, shopName: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer text-left">{CONSTANTS.SHOPS.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wide text-left">ช่องทางขาย</label>
+                      <select value={formData.channel} onChange={e=>setFormData({...formData, channel: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer text-left">{CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wide text-left">หมวดหมู่บัญชี</label>
+                      <select value={formData.category} onChange={e=>setFormData({...formData, category: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer text-left">{(formData.type === 'income' ? CONSTANTS.CATEGORIES.INCOME : CONSTANTS.CATEGORIES.EXPENSE).map(c => <option key={c} value={c}>{c}</option>)}</select>
+                  </div>
+                </div>
+
+                {/* Section 3: References & Status Container */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 w-full text-left bg-slate-50/50 p-5 rounded-2xl border border-slate-100">
+                  <div className="space-y-1.5 text-left">
+                      {/* --- FIX: เพิ่ม div wrapper พร้อม min-h-[32px] เพื่อให้ Label ทุกฝั่งสูงเท่ากัน --- */}
+                      <div className="flex items-center min-h-[32px]">
+                          <label className="text-xs font-bold text-indigo-500 uppercase tracking-wide flex items-center gap-1 text-left"><Hash size={14}/> {formData.type === 'expense' ? 'อ้างอิง Order ID (ถ้ามี)' : 'Order ID'}</label>
+                      </div>
+                      <input placeholder={formData.type === 'expense' ? "เชื่อมกับออเดอร์รายรับ..." : "ระบุเลขที่คำสั่งซื้อ..."} value={formData.orderId} onChange={e=>setFormData({...formData, orderId: e.target.value})} className="w-full bg-white p-3 rounded-xl border border-slate-200 text-sm font-bold text-indigo-700 outline-none focus:ring-2 focus:ring-indigo-100 transition-all shadow-sm text-left"/>
+                  </div>
+                  
                   {formData.type === 'expense' ? (
-                      <div className="space-y-1 text-left">
-                          <div className="flex justify-between items-center mb-1">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">เลขที่ใบกำกับภาษี</label>
-                              <label className="flex items-center gap-1 cursor-pointer">
+                      <div className="space-y-1.5 text-left md:col-span-1 lg:col-span-2">
+                          {/* --- FIX: เปลี่ยน mb-1 เป็น min-h-[32px] เพื่อให้สอดคล้องกับฝั่งซ้าย --- */}
+                          <div className="flex justify-between items-center min-h-[32px] text-left">
+                              <label className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 text-left"><FileText size={14}/> เลขที่ใบกำกับภาษี</label>
+                              <label className="flex items-center gap-1.5 cursor-pointer bg-white px-2 py-1 rounded-lg shadow-sm border border-slate-200 hover:bg-rose-50 transition-colors">
                                   <input type="checkbox" checked={formData.isCashBill} onChange={e => {
                                       const checked = e.target.checked;
                                       setFormData(prev => ({
@@ -6856,32 +6886,38 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                           taxInvoiceNo: checked ? '' : prev.taxInvoiceNo,
                                           vatType: checked ? 'none' : prev.vatType
                                       }));
-                                  }} className="w-3 h-3 rounded text-rose-500 focus:ring-rose-500 border-slate-300" />
-                                  <span className="text-[9px] font-bold text-rose-600">บิลเงินสด</span>
+                                  }} className="w-3.5 h-3.5 rounded text-rose-500 focus:ring-rose-500 border-slate-300 cursor-pointer" />
+                                  <span className="text-[10px] font-black text-rose-600 uppercase">ไม่มี VAT (บิลเงินสด)</span>
                               </label>
                           </div>
-                          <input disabled={formData.isCashBill} placeholder={formData.isCashBill ? "ไม่ต้องระบุ (บิลเงินสด)" : "ระบุเลขที่..."} value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} className={`w-full p-2.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-left transition-colors ${formData.isCashBill ? 'bg-slate-100 text-slate-400' : 'bg-slate-50 text-slate-700 focus:ring-2 focus:ring-indigo-100'}`}/>
+                          <input disabled={formData.isCashBill} placeholder={formData.isCashBill ? "ไม่ต้องระบุ (บิลเงินสด)" : "ระบุเลขที่ใบกำกับภาษี..."} value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} className={`w-full p-3 rounded-xl border text-sm font-bold outline-none transition-all shadow-sm text-left ${formData.isCashBill ? 'bg-slate-100 border-slate-200 text-slate-400' : 'bg-white border-slate-200 text-slate-700 focus:ring-2 focus:ring-indigo-100'}`}/>
                       </div>
                   ) : (
                       <>
-                          <div className="space-y-1 text-left">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">สถานะรับเงิน</label>
-                              <select value={formData.paymentStatus || 'settled'} onChange={e=>setFormData({...formData, paymentStatus: e.target.value, settlementDate: e.target.value === 'settled' ? (formData.settlementDate || formData.date) : ''})} className={`w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-left ${formData.paymentStatus === 'pending_platform' ? 'text-orange-600' : 'text-emerald-600'}`}>
-                                  <option value="settled">รับเงินแล้ว (เข้าบัญชี)</option>
-                                  <option value="pending_platform">รอเงินโอน (Platform)</option>
+                          <div className="space-y-1.5 text-left">
+                              {/* --- FIX: เพิ่ม div wrapper พร้อม min-h-[32px] --- */}
+                              <div className="flex items-center min-h-[32px]">
+                                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 text-left"><Wallet size={14}/> สถานะรับเงิน</label>
+                              </div>
+                              <select value={formData.paymentStatus || 'settled'} onChange={e=>setFormData({...formData, paymentStatus: e.target.value, settlementDate: e.target.value === 'settled' ? (formData.settlementDate || formData.date) : ''})} className={`w-full p-3 rounded-xl border text-sm font-bold outline-none focus:ring-2 transition-all shadow-sm cursor-pointer text-left ${formData.paymentStatus === 'pending_platform' ? 'bg-amber-50 border-amber-200 text-amber-700 focus:ring-amber-200' : 'bg-emerald-50 border-emerald-200 text-emerald-700 focus:ring-emerald-200'}`}>
+                                  <option value="settled">✅ รับเงินแล้ว (เข้าบัญชี)</option>
+                                  <option value="pending_platform">⏳ รอเงินโอน (Platform)</option>
                               </select>
                           </div>
                           {formData.paymentStatus === 'settled' && (
-                              <div className="space-y-1 text-left animate-fadeIn">
-                                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest text-left">วันที่รับเงินเข้า</label>
-                                  <input type="date" value={formData.settlementDate || formData.date} onChange={e=>setFormData({...formData, settlementDate: e.target.value})} className="w-full bg-emerald-50 p-2.5 rounded-xl border border-emerald-100 text-sm font-bold text-emerald-700 focus:ring-2 focus:ring-emerald-200 outline-none text-left"/>
+                              <div className="space-y-1.5 text-left animate-fadeIn">
+                                  {/* --- FIX: เพิ่ม div wrapper พร้อม min-h-[32px] --- */}
+                                  <div className="flex items-center min-h-[32px]">
+                                      <label className="text-xs font-bold text-emerald-600 uppercase tracking-wide flex items-center gap-1 text-left"><Calendar size={14}/> วันที่รับเงินเข้า</label>
+                                  </div>
+                                  <input type="date" value={formData.settlementDate || formData.date} onChange={e=>setFormData({...formData, settlementDate: e.target.value})} className="w-full bg-white p-3 rounded-xl border border-emerald-200 text-sm font-bold text-emerald-700 focus:ring-2 focus:ring-emerald-100 outline-none transition-all shadow-sm text-left"/>
                               </div>
                           )}
                       </>
                   )}
-                  <div className="space-y-1 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">หมวดหมู่</label><select value={formData.category} onChange={e=>setFormData({...formData, category: e.target.value})} className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-sm font-bold text-slate-700 outline-none text-left">{(formData.type === 'income' ? CONSTANTS.CATEGORIES.INCOME : CONSTANTS.CATEGORIES.EXPENSE).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                 </div>
               </div>
+              
               <div className="pt-6 border-t space-y-4 text-left">
                 <div className="flex justify-between items-center text-left">
                   <h4 className="text-sm font-black text-slate-800 flex items-center gap-2 text-left"><Users size={18} className="text-indigo-600"/> {formData.type === 'income' ? 'ข้อมูลลูกค้า' : 'ข้อมูลผู้ขาย'}</h4>
@@ -7108,6 +7144,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                            📌 รายการนี้มีการปรับยอด/แก้ไขบิล (Adjusted)
                         </span>
                       </label>
+                      
+                      {/* NEW: Checkbox สำหรับซ่อนจากแดชบอร์ด */}
+                      {formData.type === 'expense' && (
+                        <label className="flex items-center gap-2 cursor-pointer mt-3 w-fit group text-left">
+                          <input type="checkbox" checked={formData.isTaxOnly} onChange={e=>setFormData({...formData, isTaxOnly: e.target.checked})} className="w-4 h-4 rounded border-white/20 bg-white/5 text-purple-500 focus:ring-purple-500 focus:ring-offset-slate-900 cursor-pointer" />
+                          <span className="text-[10px] font-bold opacity-90 group-hover:opacity-100 transition-opacity text-left text-purple-300 flex items-center gap-1">
+                             🛡️ บันทึกเพื่อยื่นภาษีเท่านั้น (ซ่อนจากแดชบอร์ด ป้องกันยอดเบิ้ล)
+                          </span>
+                        </label>
+                      )}
                     </div>
                   </div>
                 </div>
