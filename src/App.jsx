@@ -6430,7 +6430,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         settlementDate: (formData.type === 'income' && (!formData.paymentStatus || formData.paymentStatus === 'settled')) ? normalizeDate(formData.date) : null
       };
       
-      if (formData.partnerName) {
+      // --- FIX: ไม่บันทึกลูกค้ารายรับอัตโนมัติ หากไม่มีเลขประจำตัวผู้เสียภาษี (ไม่ใช่ใบกำกับเต็มรูป) เพื่อไม่ให้ฐานข้อมูลลูกค้ารก ---
+      const shouldAutoSavePartner = formData.partnerName && (
+          formData.type === 'expense' || 
+          (formData.type === 'income' && formData.partnerTaxId && formData.partnerTaxId.trim() !== '')
+      );
+
+      if (shouldAutoSavePartner) {
         const existingPartner = partners.find(p => p.taxId === formData.partnerTaxId && p.name === formData.partnerName);
         if (!existingPartner) { await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners'), { name: formData.partnerName, taxId: formData.partnerTaxId, address: formData.partnerAddress, branch: formData.partnerBranch, branchName: formData.partnerBranchName, type: formData.type === 'income' ? 'buyer' : 'seller', createdAt: serverTimestamp() }); }
       }
@@ -7422,118 +7428,140 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     <tbody className="divide-y divide-slate-50 text-left">
                         {currentHistData.length > 0 ? currentHistData.map(t => (
                         <tr key={t.id} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : (t.isReturned || t.refundAmount > 0) ? 'bg-pink-50/40 hover:bg-pink-50' : 'hover:bg-slate-50/80'}`}>
-                            <td className="p-5 text-left">
-                                <p className={`font-black text-left ${t.isCancelled ? 'text-slate-400 line-through' : 'text-slate-700'}`} title="วันที่ทำรายการ/สั่งซื้อ">{formatDate(t.date)}</p>
-                                
-                                {/* NEW: แสดงวันที่รับเงิน (Settled) แยกให้ชัดเจน */}
-                                {!t.isCancelled && (t.paymentStatus === 'settled' || t.status === 'paid') ? (
-                                    <p className="text-[10px] font-bold text-emerald-600 mt-1 flex items-center gap-1 bg-emerald-50 w-fit px-1.5 py-0.5 rounded border border-emerald-100" title="วันที่เงินเข้าบัญชีจริง">
-                                        <Wallet size={10}/> {t.settlementDate ? formatDate(t.settlementDate) : formatDate(t.date)}
-                                    </p>
-                                ) : !t.isCancelled ? (
-                                    <p className="text-[10px] font-bold text-amber-500 mt-1 flex items-center gap-1 bg-amber-50 w-fit px-1.5 py-0.5 rounded border border-amber-100" title="รอเงินโอนเข้าบัญชี">
-                                        <Clock size={10}/> รอเงินเข้า
-                                    </p>
-                                ) : null}
-
-                                <p className="text-[10px] font-mono font-bold text-indigo-600 mt-1.5">{t.sysDocId || 'NO-REF'}</p>
-                                <div className="flex gap-1 mt-1 flex-wrap">
-                                    <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500 uppercase text-center">{t.channel || 'หน้าร้าน'}</span>
-                                    {t.shopName && t.shopName !== 'ไม่ระบุ' && <span className="inline-block px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 text-indigo-600 uppercase text-center">{t.shopName}</span>}
-                                </div>
-                                {t.isCancelled && <span className="ml-2 mt-1 inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
-                            </td>
-                            <td className="p-5 text-left">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                    <p className={`font-bold text-slate-800 line-clamp-1 text-left ${t.isCancelled ? 'line-through text-slate-400' : ''}`}>{t.description || '-'}</p>
-                                    {t.isCancelled && !t.isReturned && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
-                                    {!t.isCancelled && t.paymentStatus === 'pending_platform' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-orange-100 text-orange-700 border border-orange-200">รอเงินเข้า</span>}
-                                    {!t.isCancelled && t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
-                                    {!t.isCancelled && t.isAdjusted && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-blue-100 text-blue-700 border border-blue-200">มีการปรับยอด</span>}
+                            {/* 1. วันที่ / ช่องทาง */}
+                            <td className="p-4 align-top w-48">
+                                <div className="flex flex-col gap-2.5">
+                                    <div>
+                                        <p className={`font-black text-sm whitespace-nowrap ${t.isCancelled ? 'text-slate-400 line-through' : 'text-slate-800'}`} title="วันที่ทำรายการ/สั่งซื้อ">
+                                            {formatDate(t.date)}
+                                        </p>
+                                        {!t.isCancelled && (t.paymentStatus === 'settled' || t.status === 'paid') ? (
+                                            <p className="text-[10px] font-bold text-emerald-600 mt-1 flex items-center gap-1 bg-emerald-50 w-fit px-1.5 py-0.5 rounded border border-emerald-200 shadow-sm" title="วันที่เงินเข้าบัญชีจริง">
+                                                <Wallet size={10}/> {t.settlementDate ? formatDate(t.settlementDate) : formatDate(t.date)}
+                                            </p>
+                                        ) : !t.isCancelled ? (
+                                            <p className="text-[10px] font-bold text-amber-600 mt-1 flex items-center gap-1 bg-amber-50 w-fit px-1.5 py-0.5 rounded border border-amber-200 shadow-sm" title="รอเงินโอนเข้าบัญชี">
+                                                <Clock size={10}/> รอเงินเข้า
+                                            </p>
+                                        ) : null}
+                                    </div>
                                     
-                                    {/* --- FIX: ป้ายแจ้งเตือนบิลรายจ่ายอัตโนมัติที่ยังขาดเลขใบกำกับภาษี --- */}
-                                    {!t.isCancelled && t.type === 'expense' && t.isFromReconciliation && (!t.taxInvoiceNo || String(t.taxInvoiceNo).trim() === '') && (
-                                        <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200 flex items-center gap-0.5">
-                                            <AlertTriangle size={8}/> รอระบุเลขใบกำกับ
-                                        </span>
-                                    )}
+                                    <div className="flex flex-wrap gap-1.5">
+                                        <span className="px-2 py-1 rounded-md text-[9px] font-black bg-slate-100 text-slate-500 uppercase border border-slate-200 whitespace-nowrap">{t.channel || 'หน้าร้าน'}</span>
+                                        {t.shopName && t.shopName !== 'ไม่ระบุ' && (
+                                            <span className="px-2 py-1 rounded-md text-[9px] font-black bg-indigo-50 text-indigo-600 uppercase border border-indigo-200 whitespace-nowrap">{t.shopName}</span>
+                                        )}
+                                    </div>
+                                    {t.isCancelled && <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200 w-fit">ยกเลิกแล้ว</span>}
+                                </div>
+                            </td>
 
-                                    {(t.isReturned || t.refundAmount > 0) && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-pink-100 text-pink-700 border border-pink-200 flex items-center gap-0.5"><ArrowRightLeft size={8}/> {t.isCancelled ? 'ยกเลิก/คืนสินค้า' : 'คืนสินค้า/เงิน'}</span>}
-                                </div>
-                                <div className="flex items-center flex-wrap gap-2 mt-1 text-left">
-                                    <p className="text-[10px] font-mono text-slate-400 text-left">
-                                        {t.type === 'income' ? `Order ID: ${t.orderId || t.linkedOrderNo || '-'}` : (t.isCashBill ? 'Ref: บิลเงินสด' : (t.taxInvoiceNo ? `Tax Inv: ${t.taxInvoiceNo}` : `Ref: ${t.orderId || t.linkedOrderNo || '-'}`))}
-                                        {t.type === 'expense' && (t.orderId || t.linkedOrderNo) && (t.orderId || t.linkedOrderNo) !== t.taxInvoiceNo && <span className="ml-2 bg-indigo-50 text-indigo-600 px-1.5 rounded">Linked: {t.orderId || t.linkedOrderNo}</span>}
-                                    </p>
-                                    {t.issuedDocs && t.issuedDocs.length > 0 && t.issuedDocs.map((doc, idx) => {
-                                        let badgeColor = 'bg-slate-100 text-slate-600';
-                                        let docLabel = 'เอกสาร';
-                                        if (doc.type === 'invoice') { badgeColor = 'bg-indigo-100 text-indigo-600'; docLabel = 'ออกใบกำกับแล้ว'; }
-                                        else if (doc.type === 'abb') { badgeColor = 'bg-emerald-100 text-emerald-700'; docLabel = 'ออก ABB แล้ว'; }
-                                        else if (doc.type === 'credit_note') { badgeColor = 'bg-rose-100 text-rose-700'; docLabel = 'ลดหนี้แล้ว'; }
-                                        else if (doc.type === 'quotation') { badgeColor = 'bg-purple-100 text-purple-700'; docLabel = 'เสนอราคา'; }
-                                        else if (doc.type === 'receipt') { badgeColor = 'bg-teal-100 text-teal-700'; docLabel = 'ออกใบเสร็จแล้ว'; }
-                                        return (
-                                            <span key={idx} className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase text-center ${badgeColor}`}>
-                                                {docLabel}: {doc.no}
+                            {/* 2. รายการ/เลขที่อ้างอิง */}
+                            <td className="p-4 align-top text-left">
+                                <div className="flex flex-col gap-2">
+                                    <div className="flex items-start gap-2 flex-wrap">
+                                        <span className="text-[10px] font-mono font-black text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200 shadow-sm whitespace-nowrap">{t.sysDocId || 'NO-REF'}</span>
+                                        <p className={`font-bold text-slate-800 leading-snug ${t.isCancelled ? 'line-through text-slate-400' : ''}`}>{t.description || '-'}</p>
+                                    </div>
+                                    
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        {t.isCancelled && !t.isReturned && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
+                                        {!t.isCancelled && t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
+                                        {!t.isCancelled && t.isAdjusted && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-blue-100 text-blue-700 border border-blue-200">มีการปรับยอด</span>}
+                                        
+                                        {!t.isCancelled && t.type === 'expense' && t.isFromReconciliation && (!t.taxInvoiceNo || String(t.taxInvoiceNo).trim() === '') && (
+                                            <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200 flex items-center gap-0.5">
+                                                <AlertTriangle size={8}/> รอระบุเลขใบกำกับ
                                             </span>
-                                        );
-                                    })}
+                                        )}
+                                        {(t.isReturned || t.refundAmount > 0) && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-pink-100 text-pink-700 border border-pink-200 flex items-center gap-0.5"><ArrowRightLeft size={8}/> {t.isCancelled ? 'ยกเลิก/คืนสินค้า' : 'คืนสินค้า/เงิน'}</span>}
+                                        {!t.isCancelled && t.isTaxOnly && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-purple-100 text-purple-700 border border-purple-200">ยื่นภาษีเท่านั้น</span>}
+                                    </div>
+
+                                    <div className="flex flex-col gap-1 mt-1 text-left bg-slate-50 p-2 rounded-xl border border-slate-100 w-fit pr-6">
+                                        <p className="text-[10px] font-mono text-slate-500 text-left">
+                                            {t.type === 'income' ? `Order ID: ${t.orderId || t.linkedOrderNo || '-'}` : (t.isCashBill ? 'Ref: บิลเงินสด' : (t.taxInvoiceNo ? `Tax Inv: ${t.taxInvoiceNo}` : `Ref: ${t.orderId || t.linkedOrderNo || '-'}`))}
+                                            {t.type === 'expense' && (t.orderId || t.linkedOrderNo) && (t.orderId || t.linkedOrderNo) !== t.taxInvoiceNo && <span className="ml-2 bg-indigo-50 text-indigo-600 px-1.5 rounded">Linked: {t.orderId || t.linkedOrderNo}</span>}
+                                        </p>
+                                        <div className="flex flex-wrap gap-1">
+                                        {t.issuedDocs && t.issuedDocs.length > 0 && t.issuedDocs.map((doc, idx) => {
+                                            let badgeColor = 'bg-slate-100 text-slate-600 border-slate-200';
+                                            let docLabel = 'เอกสาร';
+                                            if (doc.type === 'invoice') { badgeColor = 'bg-indigo-100 text-indigo-700 border-indigo-200'; docLabel = 'ออกใบกำกับแล้ว'; }
+                                            else if (doc.type === 'abb') { badgeColor = 'bg-emerald-100 text-emerald-700 border-emerald-200'; docLabel = 'ออก ABB แล้ว'; }
+                                            else if (doc.type === 'credit_note') { badgeColor = 'bg-rose-100 text-rose-700 border-rose-200'; docLabel = 'ลดหนี้แล้ว'; }
+                                            else if (doc.type === 'quotation') { badgeColor = 'bg-purple-100 text-purple-700 border-purple-200'; docLabel = 'เสนอราคา'; }
+                                            else if (doc.type === 'receipt') { badgeColor = 'bg-teal-100 text-teal-700 border-teal-200'; docLabel = 'ออกใบเสร็จแล้ว'; }
+                                            return (
+                                                <span key={idx} className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase text-center border ${badgeColor}`}>
+                                                    {docLabel}: {doc.no}
+                                                </span>
+                                            );
+                                        })}
+                                        </div>
+                                    </div>
                                 </div>
                             </td>
-                            <td className="p-5 text-left">
-                                <p className={`font-bold text-left ${t.isCancelled ? 'text-slate-400' : 'text-indigo-600'}`}>{t.partnerName || 'คู่ค้าทั่วไป'}</p>
-                                <p className="text-[10px] text-slate-400 truncate max-w-[150px] text-left">Addr: {t.partnerAddress || '-'}</p>
+
+                            {/* 3. คู่ค้า */}
+                            <td className="p-4 align-top text-left w-48">
+                                <p className={`font-bold text-sm text-left mb-1 ${t.isCancelled ? 'text-slate-400' : 'text-indigo-700'}`}>{t.partnerName || 'คู่ค้าทั่วไป'}</p>
+                                <p className="text-[10px] text-slate-500 line-clamp-2 text-left">Addr: {t.partnerAddress || '-'}</p>
                             </td>
-                            <td className="p-5 text-right">
-                                <div className={`inline-flex flex-col items-end px-3 py-1.5 rounded-2xl text-right ${t.isCancelled ? 'bg-slate-50 text-slate-400' : (t.type==='income'?'bg-emerald-50 text-emerald-700':'bg-rose-50 text-rose-700')}`}>
+
+                            {/* 4. ยอดรวม */}
+                            <td className="p-4 align-top text-right">
+                                <div className={`inline-flex flex-col items-end px-3 py-2 rounded-2xl text-right shadow-sm border ${t.isCancelled ? 'bg-slate-50 text-slate-400 border-slate-200' : (t.type==='income'?'bg-emerald-50 text-emerald-700 border-emerald-200':'bg-rose-50 text-rose-700 border-rose-200')}`}>
                                     <p className="text-[9px] font-black uppercase opacity-60 leading-none mb-1 text-right">{t.type==='income'?'Income':'Expense'}</p>
                                     <p className={`text-base font-black leading-none text-right ${t.isCancelled ? 'line-through' : ''}`}>{formatCurrency(t.grandTotal || t.total)}</p>
                                     
-                                    {/* NEW: Highlight the exact difference directly under the total */}
                                     {t.type === 'income' && t.actualSettledAmt !== undefined && Math.abs((t.grandTotal || t.total) - t.actualSettledAmt) > 0.01 && (
                                         (t.grandTotal || t.total) > t.actualSettledAmt ? (
-                                            <div className="text-[9px] text-rose-500 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm cursor-pointer hover:bg-rose-50 transition-colors" title="คลิกเพื่อดูบิลปรับปรุง" onClick={() => setSearchTerm(t.orderId || t.sysDocId)}>
+                                            <div className="text-[9px] text-rose-600 font-bold mt-1.5 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-rose-100 cursor-pointer hover:bg-rose-50 transition-colors" title="คลิกเพื่อดูบิลปรับปรุง" onClick={() => setSearchTerm(t.orderId || t.sysDocId)}>
                                                 <AlertTriangle size={10}/> หายไป {formatCurrency((t.grandTotal || t.total) - t.actualSettledAmt)}
                                             </div>
                                         ) : (
-                                            <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center justify-end gap-0.5 bg-white px-1.5 py-0.5 rounded shadow-sm cursor-pointer hover:bg-emerald-50 transition-colors" title="คลิกเพื่อดูบิลปรับปรุง" onClick={() => setSearchTerm(t.orderId || t.sysDocId)}>
+                                            <div className="text-[9px] text-emerald-700 font-bold mt-1.5 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-emerald-100 cursor-pointer hover:bg-emerald-50 transition-colors" title="คลิกเพื่อดูบิลปรับปรุง" onClick={() => setSearchTerm(t.orderId || t.sysDocId)}>
                                                 <ArrowUp size={10}/> ได้เพิ่ม {formatCurrency(t.actualSettledAmt - (t.grandTotal || t.total))}
                                             </div>
                                         )
                                     )}
-                                    {/* --- FIX: เพิ่มการคลิกที่บิลปรับปรุง เพื่อค้นหากลับไปยังออเดอร์ต้นฉบับ --- */}
+                                    
                                     {t.type === 'expense' && t.isFromReconciliation && (
-                                        <div className="text-[9px] text-rose-600 font-bold mt-1 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-rose-100 cursor-pointer hover:bg-rose-50 transition-all" title="คลิกเพื่อเทียบกับออเดอร์ต้นฉบับ" onClick={() => {setSearchTerm(t.linkedOrderNo); setHistType('all');}}>
+                                        <div className="text-[9px] text-rose-600 font-bold mt-1.5 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-rose-100 cursor-pointer hover:bg-rose-50 transition-all" title="คลิกเพื่อเทียบกับออเดอร์ต้นฉบับ" onClick={() => {setSearchTerm(t.linkedOrderNo); setHistType('all');}}>
                                             <ArrowRightLeft size={10}/> ขาดทุน (อ้างอิง: {t.linkedOrderNo})
                                         </div>
                                     )}
                                     {t.type === 'income' && t.isFromReconciliation && (
-                                        <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-emerald-100 cursor-pointer hover:bg-emerald-50 transition-all" title="คลิกเพื่อเทียบกับออเดอร์ต้นฉบับ" onClick={() => {setSearchTerm(t.linkedOrderNo); setHistType('all');}}>
+                                        <div className="text-[9px] text-emerald-600 font-bold mt-1.5 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-emerald-100 cursor-pointer hover:bg-emerald-50 transition-all" title="คลิกเพื่อเทียบกับออเดอร์ต้นฉบับ" onClick={() => {setSearchTerm(t.linkedOrderNo); setHistType('all');}}>
                                             <ArrowRightLeft size={10}/> ได้เพิ่ม (อ้างอิง: {t.linkedOrderNo})
                                         </div>
                                     )}
                                 </div>
                             </td>
-                            <td className="p-5 text-center">
-                                <div className="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-all text-center">
+
+                            {/* 5. จัดการ (Actions) */}
+                            <td className="p-4 align-top text-center w-32">
+                                <div className="flex flex-wrap justify-center gap-2 text-center">
                                     {!t.isCancelled && t.type === 'income' && t.paymentStatus === 'pending_platform' && (
                                         <button onClick={()=>{
                                             setSettleConfirmId(t); 
                                             setSettleDate(formatDateISO(new Date())); 
                                             setSettleActualAmt(t.grandTotal || t.total); 
-                                            setSettleDiffCategory('ค่าขนส่งพัสดุ (ส่งลูกค้า)'); // แก้ไขให้ตอนกดปุ่มตั้งค่าเริ่มต้นเป็นค่าขนส่งพัสดุ
-                                        }} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-500 hover:shadow-md transition-all shadow-sm text-center" title="รับเงินเข้าบัญชี (Settle)"><CheckCircle size={16}/></button>
+                                            setSettleDiffCategory('ค่าขนส่งพัสดุ (ส่งลูกค้า)');
+                                        }} className="w-8 h-8 flex items-center justify-center bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-lg hover:bg-emerald-500 hover:text-white transition-all shadow-sm" title="รับเงินเข้าบัญชี (Settle)"><CheckCircle size={14}/></button>
                                     )}
                                     {!t.isCancelled && (
-                                        <button onClick={()=>toggleAdjustedStatus(t)} className={`w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl hover:shadow-md transition-all shadow-sm text-center ${t.isAdjusted ? 'text-blue-500 hover:text-slate-400' : 'text-slate-400 hover:text-blue-500'}`} title={t.isAdjusted ? "เอาแท็ก 'ปรับยอด' ออก" : "เพิ่มแท็ก 'ปรับยอด'"}><Tag size={16}/></button>
+                                        <button onClick={()=>toggleAdjustedStatus(t)} className={`w-8 h-8 flex items-center justify-center border rounded-lg hover:shadow-md transition-all shadow-sm ${t.isAdjusted ? 'bg-blue-500 text-white border-blue-600 hover:bg-slate-100 hover:text-slate-500 hover:border-slate-300' : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-500 hover:text-white'}`} title={t.isAdjusted ? "เอาแท็ก 'ปรับยอด' ออก" : "เพิ่มแท็ก 'ปรับยอด'"}><Tag size={14}/></button>
                                     )}
-                                    <button onClick={()=>setViewItem(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-indigo-600 hover:shadow-md transition-all shadow-sm text-center" title="ดูรายละเอียด"><Eye size={16}/></button>
-                                    {!t.isCancelled && t.type === 'income' && (<button onClick={()=>onIssueInvoice(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-emerald-600 hover:shadow-md transition-all shadow-sm text-center" title="ออกใบกำกับภาษี"><Printer size={16}/></button>)}
+                                    <button onClick={()=>setViewItem(t)} className="w-8 h-8 flex items-center justify-center bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm" title="ดูรายละเอียด"><Eye size={14}/></button>
+                                    {!t.isCancelled && t.type === 'income' && (
+                                        <button onClick={()=>onIssueInvoice(t)} className="w-8 h-8 flex items-center justify-center bg-teal-50 text-teal-600 border border-teal-200 rounded-lg hover:bg-teal-600 hover:text-white transition-all shadow-sm" title="ออกใบกำกับภาษี"><Printer size={14}/></button>
+                                    )}
                                     {!t.isCancelled && (
-                                        <button onClick={()=>setCancelConfirmId({id: t.id, type: t.type})} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-rose-600 hover:shadow-md transition-all shadow-sm text-center" title="ยกเลิกรายการ (Void)"><XCircle size={16}/></button>
+                                        <button onClick={()=>setCancelConfirmId({id: t.id, type: t.type})} className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-500 hover:text-white transition-all shadow-sm" title="ยกเลิกรายการ (Void)"><XCircle size={14}/></button>
                                     )}
-                                    <button onClick={()=>setHardDeleteConfirmId(t)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-rose-600 hover:shadow-md transition-all shadow-sm text-center" title="ลบถาวร (Hard Delete)"><Trash2 size={16}/></button>
+                                    <button onClick={()=>setHardDeleteConfirmId(t)} className="w-8 h-8 flex items-center justify-center bg-red-50 text-red-600 border border-red-200 rounded-lg hover:bg-red-600 hover:text-white transition-all shadow-sm" title="ลบถาวร (Hard Delete)"><Trash2 size={14}/></button>
                                 </div>
                             </td>
                         </tr>
