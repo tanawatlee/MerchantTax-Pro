@@ -7426,8 +7426,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50 text-left">
-                        {currentHistData.length > 0 ? currentHistData.map(t => (
-                        <tr key={t.id} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : (t.isReturned || t.refundAmount > 0) ? 'bg-pink-50/40 hover:bg-pink-50' : 'hover:bg-slate-50/80'}`}>
+                        {currentHistData.length > 0 ? currentHistData.map((t, idx) => (
+                        <tr key={t.id ? `${t.type}-${t.id}` : `hist-${idx}`} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : (t.isReturned || t.refundAmount > 0) ? 'bg-pink-50/40 hover:bg-pink-50' : 'hover:bg-slate-50/80'}`}>
                             {/* 1. วันที่ / ช่องทาง */}
                             <td className="p-4 align-top w-48">
                                 <div className="flex flex-col gap-2.5">
