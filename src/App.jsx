@@ -4910,14 +4910,17 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   };
 
   const handleDeleteRecord = async () => {
-    if (!deleteConfirm || !user) return;
+    if (!deleteConfirm?.id) {
+        showToast("ไม่พบข้อมูลรายการ (ไม่มี ID)", "error");
+        return;
+    }
     try {
       const batchWriter = writeBatch(dbInstance);
       
       if (deleteConfirm.sourceType === 'batch') {
           batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', deleteConfirm.id));
           const batchData = stockBatches.find(b => b.id === deleteConfirm.id);
-          if (batchData && batchData.parentExpenseId) {
+          if (batchData?.parentExpenseId) {
               batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', batchData.parentExpenseId));
           }
       } else {
@@ -4926,21 +4929,25 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
           
           if (deleteConfirm.sourceType === 'expense') {
               stockBatches.filter(b => b.parentExpenseId === deleteConfirm.id).forEach(b => {
-                  batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id));
+                  if (b?.id) batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id));
               });
           } else if (deleteConfirm.sourceType === 'income') {
               const saleDoc = transactions.find(t => t.id === deleteConfirm.id);
-              if (saleDoc && saleDoc.items) {
+              if (saleDoc?.items) {
                   for (const item of saleDoc.items) {
                       let toReturn = Number(item.qty);
+                      if (isNaN(toReturn) || toReturn <= 0) continue;
+
                       const affectedLots = stockBatches
                         .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
                         .sort(sortNewestFirst);
 
                       for (const lot of affectedLots) {
                           if (toReturn <= 0) break;
+                          if (!lot?.id) continue;
                           const canTakeBack = Math.min(toReturn, Number(lot.sold));
-                          batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) });
+                          // เปลี่ยนเป็น set พร้อม merge: true ป้องกันแอปพังถ้าไฟล์ปลายทางหาย
+                          batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
                           toReturn -= canTakeBack;
                       }
                   }
@@ -4949,9 +4956,12 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       }
 
       await batchWriter.commit();
-      showToast("ลบข้อมูล and รายการเชื่อมโยงสำเร็จ", "success");
+      showToast("ลบข้อมูลและรายการเชื่อมโยงสำเร็จ", "success");
       setDeleteConfirm(null);
-    } catch (e) { showToast("ลบไม่สำเร็จ", "error"); }
+    } catch (e) { 
+      console.error("Delete Record Error:", e);
+      showToast(`ลบไม่สำเร็จ: ${e.message}`, "error"); 
+    }
   };
 
   const getThaiMonthYear = (dateStr) => {
@@ -6161,37 +6171,52 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const totalFilteredPartners = useMemo(() => groupedPartners.reduce((sum, g) => sum + g.branches.length, 0), [groupedPartners]);
    
   const handleCancelTransaction = async () => { 
-    if (!cancelConfirmId || !user) return;
+    let targetId = cancelConfirmId?.id;
+    let coll = cancelConfirmId?.type === 'income' ? 'transactions_income' : 'transactions_expense';
+    
+    // --- 💡 SMART FALLBACK: หาก id หายไป ให้หาจากเลขระบบ (sysDocId) แทน ---
+    if (!targetId && cancelConfirmId?.sysDocId) {
+        const qSnap = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', coll), where('sysDocId', '==', cancelConfirmId.sysDocId)));
+        if (!qSnap.empty) targetId = qSnap.docs[0].id;
+    }
+
+    if (!targetId) {
+        showToast(`ไม่พบข้อมูลรายการที่จะยกเลิก (อ้างอิง: ${cancelConfirmId?.sysDocId || '-'})`, "error");
+        return;
+    }
+
     try { 
       const batchWriter = writeBatch(dbInstance);
-      const coll = cancelConfirmId.type === 'income' ? 'transactions_income' : 'transactions_expense'; 
-      
+      const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, targetId);
+
       // Soft Delete: เปลี่ยนสถานะเป็น isCancelled: true แทนการลบทิ้งถาวร
-      batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, cancelConfirmId.id), {
+      batchWriter.set(docRef, {
           isCancelled: true,
           cancelledAt: serverTimestamp()
-      });
+      }, { merge: true });
 
       if (cancelConfirmId.type === 'expense') {
           // สำหรับรายจ่าย (ต้นทุนสินค้า) หากยกเลิก ให้ลบสต็อกที่ถูกสร้างขึ้นจากบิลนี้ออก
-          const associatedLots = stockBatches.filter(b => b.parentExpenseId === cancelConfirmId.id);
+          const associatedLots = stockBatches.filter(b => b.parentExpenseId === targetId);
           associatedLots.forEach(lot => {
-              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
+              if (lot?.id) batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
           });
       } else if (cancelConfirmId.type === 'income') {
           // สำหรับรายรับ หากยกเลิก ให้ดึงสต็อกกลับเข้าคลังอัตโนมัติ
-          const saleDoc = transactions.find(t => t.id === cancelConfirmId.id);
-          if (saleDoc && saleDoc.items) {
-              for (const item of saleDoc.items) {
+          if (cancelConfirmId.items) {
+              for (const item of cancelConfirmId.items) {
                   let toReturn = Number(item.qty);
+                  if (isNaN(toReturn) || toReturn <= 0) continue;
+                  
                   const affectedLots = stockBatches
                     .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
                     .sort(sortNewestFirst);
 
                   for (const lot of affectedLots) {
                       if (toReturn <= 0) break;
+                      if (!lot?.id) continue;
                       const canTakeBack = Math.min(toReturn, Number(lot.sold));
-                      batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) });
+                      batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
                       toReturn -= canTakeBack;
                   }
               }
@@ -6201,36 +6226,53 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       await batchWriter.commit();
       showToast("ยกเลิกรายการและคืนยอดสต็อกเรียบร้อย", "success"); 
       setCancelConfirmId(null); 
-    } catch (e) { showToast("ไม่สามารถยกเลิกรายการได้", "error"); } 
+    } catch (e) { 
+      console.error("Cancel Transaction Error:", e);
+      showToast(`ไม่สามารถยกเลิกรายการได้: ${e.message}`, "error"); 
+    } 
   };
 
   const handleHardDeleteTransaction = async () => {
-      if (!hardDeleteConfirmId || !user) return;
+      let targetId = hardDeleteConfirmId?.id;
+      let coll = hardDeleteConfirmId?.type === 'income' ? 'transactions_income' : 'transactions_expense';
+
+      // --- 💡 SMART FALLBACK: หาก id หายไป ให้หาจากเลขระบบ (sysDocId) แทน ---
+      if (!targetId && hardDeleteConfirmId?.sysDocId) {
+          const qSnap = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', coll), where('sysDocId', '==', hardDeleteConfirmId.sysDocId)));
+          if (!qSnap.empty) targetId = qSnap.docs[0].id;
+      }
+
+      if (!targetId) {
+          showToast(`ไม่พบข้อมูลรายการที่จะลบถาวร (อ้างอิง: ${hardDeleteConfirmId?.sysDocId || '-'})`, "error");
+          return;
+      }
+
       try {
           const batchWriter = writeBatch(dbInstance);
-          const coll = hardDeleteConfirmId.type === 'income' ? 'transactions_income' : 'transactions_expense';
-          const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, hardDeleteConfirmId.id);
+          const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, targetId);
 
           // ถ้ายังไม่ได้ถูกยกเลิก (void) ต้องคืนสต็อกก่อน
           if (!hardDeleteConfirmId.isCancelled) {
               if (hardDeleteConfirmId.type === 'expense') {
-                  const associatedLots = stockBatches.filter(b => b.parentExpenseId === hardDeleteConfirmId.id);
+                  const associatedLots = stockBatches.filter(b => b.parentExpenseId === targetId);
                   associatedLots.forEach(lot => {
-                      batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
+                      if (lot?.id) batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
                   });
               } else if (hardDeleteConfirmId.type === 'income') {
-                  const saleDoc = transactions.find(t => t.id === hardDeleteConfirmId.id);
-                  if (saleDoc && saleDoc.items) {
-                      for (const item of saleDoc.items) {
+                  if (hardDeleteConfirmId.items) {
+                      for (const item of hardDeleteConfirmId.items) {
                           let toReturn = Number(item.qty);
+                          if (isNaN(toReturn) || toReturn <= 0) continue;
+
                           const affectedLots = stockBatches
                             .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
                             .sort(sortNewestFirst);
 
                           for (const lot of affectedLots) {
                               if (toReturn <= 0) break;
+                              if (!lot?.id) continue;
                               const canTakeBack = Math.min(toReturn, Number(lot.sold));
-                              batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) });
+                              batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
                               toReturn -= canTakeBack;
                           }
                       }
@@ -6245,7 +6287,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           showToast("ลบรายการนี้แบบถาวรเรียบร้อยแล้ว", "success");
           setHardDeleteConfirmId(null);
       } catch (e) {
-          showToast("ไม่สามารถลบรายการถาวรได้", "error");
+          console.error("Hard Delete Error:", e);
+          showToast(`ไม่สามารถลบรายการถาวรได้: ${e.message}`, "error");
       }
   };
 
@@ -7559,7 +7602,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                         <button onClick={()=>onIssueInvoice(t)} className="w-8 h-8 flex items-center justify-center bg-teal-50 text-teal-600 border border-teal-200 rounded-lg hover:bg-teal-600 hover:text-white transition-all shadow-sm" title="ออกใบกำกับภาษี"><Printer size={14}/></button>
                                     )}
                                     {!t.isCancelled && (
-                                        <button onClick={()=>setCancelConfirmId({id: t.id, type: t.type})} className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-500 hover:text-white transition-all shadow-sm" title="ยกเลิกรายการ (Void)"><XCircle size={14}/></button>
+                                        <button onClick={()=>setCancelConfirmId(t)} className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-500 hover:text-white transition-all shadow-sm" title="ยกเลิกรายการ (Void)"><XCircle size={14}/></button>
                                     )}
                                     <button onClick={()=>setHardDeleteConfirmId(t)} className="w-8 h-8 flex items-center justify-center bg-red-50 text-red-600 border border-red-200 rounded-lg hover:bg-red-600 hover:text-white transition-all shadow-sm" title="ลบถาวร (Hard Delete)"><Trash2 size={14}/></button>
                                 </div>
@@ -7751,10 +7794,46 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       )}
       
       {/* Cancel Item Confirm Modal */}
-      {cancelConfirmId && (<div className="fixed inset-0 bg-black/60 z-[900] flex items-center justify-center p-4 text-left"><div className="bg-white rounded-[32px] p-8 max-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center"><XCircle size={32}/></div><h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันการยกเลิกรายการ (Void)?</h3><p className="text-xs text-slate-400 mb-8 text-center leading-relaxed">ระบบจะทำเครื่องหมายรายการนี้เป็น "ยกเลิกแล้ว"<br/>และทำการดึงสต็อกสินค้ากลับคืนเข้าคลังให้อัตโนมัติ<br/><span className="font-bold text-rose-600">*เลขเอกสารจะยังคงอยู่เพื่อการตรวจสอบบัญชี</span></p><div className="flex gap-3 text-center"><button onClick={()=>setCancelConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ปิด</button><button onClick={handleCancelTransaction} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center">ยืนยันยกเลิก</button></div></div></div>)}
+      {cancelConfirmId && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+                <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
+                    <XCircle size={32}/>
+                </div>
+                <h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันการยกเลิกรายการ (Void)?</h3>
+                <p className="text-xs text-slate-400 mb-8 text-center leading-relaxed">
+                    ระบบจะทำเครื่องหมายรายการ <b className="text-slate-600">{cancelConfirmId.sysDocId || 'นี้'}</b> เป็น "ยกเลิกแล้ว"<br/>
+                    และทำการดึงสต็อกสินค้ากลับคืนเข้าคลังให้อัตโนมัติ<br/>
+                    <span className="font-bold text-rose-600">*เลขเอกสารจะยังคงอยู่เพื่อการตรวจสอบบัญชี</span>
+                </p>
+                <div className="flex gap-3 text-center">
+                    <button onClick={()=>setCancelConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ปิด</button>
+                    <button onClick={handleCancelTransaction} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center hover:bg-rose-700 transition-colors">ยืนยันยกเลิก</button>
+                </div>
+            </div>
+        </div>
+      )}
 
       {/* Hard Delete Confirm Modal */}
-      {hardDeleteConfirmId && (<div className="fixed inset-0 bg-black/60 z-[900] flex items-center justify-center p-4 text-left"><div className="bg-white rounded-[32px] p-8 max-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center"><div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center"><Trash2 size={32}/></div><h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันลบข้อมูลถาวร?</h3><p className="text-xs text-slate-400 mb-8 text-center leading-relaxed">ระบบจะลบข้อมูล <b>{hardDeleteConfirmId.sysDocId || 'รายการนี้'}</b> ออกจากฐานข้อมูลอย่างถาวร<br/>และจะทำการคืนยอดสต็อกสินค้าให้โดยอัตโนมัติ (ถ้ามียอดตัดไป)<br/><span className="font-bold text-rose-600">*การกระทำนี้ไม่สามารถเรียกคืนได้</span></p><div className="flex gap-3 text-center"><button onClick={()=>setHardDeleteConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button><button onClick={handleHardDeleteTransaction} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center">ยืนยันลบถาวร</button></div></div></div>)}
+      {hardDeleteConfirmId && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+                <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500 text-center">
+                    <Trash2 size={32}/>
+                </div>
+                <h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันลบข้อมูลถาวร?</h3>
+                <p className="text-xs text-slate-400 mb-8 text-center leading-relaxed">
+                    ระบบจะลบข้อมูล <b className="text-slate-600">{hardDeleteConfirmId.sysDocId || 'รายการนี้'}</b> ออกจากฐานข้อมูลอย่างถาวร<br/>
+                    และจะทำการคืนยอดสต็อกสินค้าให้โดยอัตโนมัติ (ถ้ามียอดตัดไป)<br/>
+                    <span className="font-bold text-red-600">*การกระทำนี้ไม่สามารถเรียกคืนได้</span>
+                </p>
+                <div className="flex gap-3 text-center">
+                    <button onClick={()=>setHardDeleteConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ยกเลิก</button>
+                    <button onClick={handleHardDeleteTransaction} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg shadow-red-100 text-center hover:bg-red-700 transition-colors">ยืนยันลบถาวร</button>
+                </div>
+            </div>
+        </div>
+      )}
 
       {/* Settlement (รับเงินเข้า) Confirm Modal */}
       {settleConfirmId && (
@@ -8641,46 +8720,74 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   };
 
   const handleCancelInvoice = async () => {
-      if (!cancelConfirmId || !user) return;
+      let targetId = cancelConfirmId?.id;
+        
+      // --- 💡 SMART FALLBACK: หาก id หายไป ให้หาจากเลขที่เอกสาร (invNo) แทน ---
+      if (!targetId && cancelConfirmId?.invNo) {
+          const qSnap = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'), where('invNo', '==', cancelConfirmId.invNo)));
+          if (!qSnap.empty) targetId = qSnap.docs[0].id;
+      }
+
+      if (!targetId) {
+          showToast(`ไม่พบข้อมูลเอกสารที่จะยกเลิก (อ้างอิง: ${cancelConfirmId?.invNo || '-'})`, "error");
+          return;
+      }
+
       try {
           const batchWriter = writeBatch(dbInstance);
-          const invRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', cancelConfirmId.id);
-          batchWriter.update(invRef, { status: 'cancelled', updatedAt: serverTimestamp() });
+          const invRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', targetId);
+
+          batchWriter.set(invRef, { status: 'cancelled', updatedAt: serverTimestamp() }, { merge: true });
           
           if (cancelConfirmId.orderId) {
-              const linkedTrans = transactions.filter(t => t.orderId === cancelConfirmId.orderId && t.type === 'income');
-              linkedTrans.forEach(t => { 
-                  const tRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', t.id); 
-                  batchWriter.update(tRef, { invoiceNo: null, isInvoiced: false }); 
+              // ใช้ Query ค้นหารายการอ้างอิงจาก orderId ตรงๆ เพื่อป้องกัน id หาย
+              const linkedTransQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income'), where('orderId', '==', cancelConfirmId.orderId)));
+              linkedTransQuery.docs.forEach(tDoc => {
+                  batchWriter.set(tDoc.ref, { invoiceNo: null, isInvoiced: false }, { merge: true });
               });
           }
           await batchWriter.commit();
           showToast("ยกเลิกเอกสารเรียบร้อยแล้ว", "success");
           setCancelConfirmId(null);
       } catch(e) { 
-          showToast("ยกเลิกไม่สำเร็จ", "error"); 
+          console.error("Cancel Invoice Error:", e);
+          showToast(`ยกเลิกไม่สำเร็จ: ${e.message}`, "error"); 
       }
   };
 
   const handleHardDeleteInvoice = async () => {
-      if (!hardDeleteInvoiceId || !user) return;
+      let targetId = hardDeleteInvoiceId?.id;
+
+      // --- 💡 SMART FALLBACK: หาก id หายไป ให้หาจากเลขที่เอกสาร (invNo) แทน ---
+      if (!targetId && hardDeleteInvoiceId?.invNo) {
+          const qSnap = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'), where('invNo', '==', hardDeleteInvoiceId.invNo)));
+          if (!qSnap.empty) targetId = qSnap.docs[0].id;
+      }
+
+      if (!targetId) {
+          showToast(`ไม่พบข้อมูลเอกสารที่จะลบถาวร (อ้างอิง: ${hardDeleteInvoiceId?.invNo || '-'})`, "error");
+          return;
+      }
+
       try {
           const batchWriter = writeBatch(dbInstance);
-          const invRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', hardDeleteInvoiceId.id);
+          const invRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', targetId);
+
           batchWriter.delete(invRef);
           
           if (hardDeleteInvoiceId.orderId) {
-              const linkedTrans = transactions.filter(t => t.orderId === hardDeleteInvoiceId.orderId && t.type === 'income');
-              linkedTrans.forEach(t => { 
-                  const tRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', t.id); 
-                  batchWriter.update(tRef, { invoiceNo: null, isInvoiced: false }); 
+              // ใช้ Query ค้นหารายการอ้างอิงจาก orderId ตรงๆ เพื่อป้องกัน id หาย
+              const linkedTransQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income'), where('orderId', '==', hardDeleteInvoiceId.orderId)));
+              linkedTransQuery.docs.forEach(tDoc => {
+                  batchWriter.set(tDoc.ref, { invoiceNo: null, isInvoiced: false }, { merge: true });
               });
           }
           await batchWriter.commit();
           showToast("ลบเอกสารแบบถาวรเรียบร้อยแล้ว", "success");
           setHardDeleteInvoiceId(null);
       } catch(e) { 
-          showToast("ลบเอกสารไม่สำเร็จ", "error"); 
+          console.error("Hard Delete Invoice Error:", e);
+          showToast(`ลบเอกสารไม่สำเร็จ: ${e.message}`, "error"); 
       }
   };
 
@@ -10474,44 +10581,65 @@ export default function App() {
   const forceDeleteById = async () => {
     if (!targetIdToDelete) return;
     try {
+      if (!currentAppId) throw new Error("ไม่พบ App ID");
       const batchWriter = writeBatch(dbInstance);
-      const invMatch = invoices.find(inv => inv.invNo === targetIdToDelete || inv.id === targetIdToDelete);
-      const transMatch = transactions.find(t => t.orderId === targetIdToDelete || t.id === targetIdToDelete || t.taxInvoiceNo === targetIdToDelete);
+      const cleanTarget = String(targetIdToDelete).trim().toLowerCase();
       
-      if (invMatch) { 
-          batchWriter.delete(doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'invoices', invMatch.id)); 
-          addToast("ลบใบกำกับสำเร็จ", "success"); 
-      } else if (transMatch) { 
+      const invMatch = invoices.find(inv => 
+          String(inv.invNo || '').toLowerCase() === cleanTarget || 
+          String(inv.id || '').toLowerCase() === cleanTarget
+      );
+      
+      const transMatch = transactions.find(t => 
+          String(t.orderId || '').toLowerCase() === cleanTarget || 
+          String(t.id || '').toLowerCase() === cleanTarget || 
+          String(t.taxInvoiceNo || '').toLowerCase() === cleanTarget ||
+          String(t.sysDocId || '').toLowerCase() === cleanTarget ||
+          String(t.linkedOrderNo || '').toLowerCase() === cleanTarget
+      );
+      
+      if (invMatch && invMatch.id) { 
+          batchWriter.delete(doc(dbInstance, 'artifacts', String(currentAppId), 'public', 'data', 'invoices', String(invMatch.id))); 
+          addToast(`ลบใบกำกับเลขที่ ${invMatch.invNo || invMatch.id} สำเร็จ`, "success"); 
+      } else if (transMatch && transMatch.id) { 
           const coll = transMatch.type === 'income' ? 'transactions_income' : 'transactions_expense'; 
-          batchWriter.delete(doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', coll, transMatch.id)); 
+          batchWriter.delete(doc(dbInstance, 'artifacts', String(currentAppId), 'public', 'data', coll, String(transMatch.id))); 
           
           if (transMatch.type === 'expense') {
               stockBatches.filter(b => b.parentExpenseId === transMatch.id).forEach(lot => {
-                  batchWriter.delete(doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'inventory_batches', lot.id));
+                  if (lot && lot.id) {
+                      batchWriter.delete(doc(dbInstance, 'artifacts', String(currentAppId), 'public', 'data', 'inventory_batches', String(lot.id)));
+                  }
               });
           } else {
               // คืนสต็อก LIFO เมื่อลบ Income
               for (const item of (transMatch.items || [])) {
                   let toReturn = Number(item.qty);
+                  if (isNaN(toReturn) || toReturn <= 0) continue;
                   const lots = stockBatches
                     .filter(b => (String(b.sku).toLowerCase() === String(item.sku).toLowerCase() || String(b.productName).toLowerCase() === String(item.desc).toLowerCase()) && Number(b.sold) > 0)
                     .sort(sortNewestFirst);
                   for (const lot of lots) {
                       if (toReturn <= 0) break;
+                      if (!lot || !lot.id) continue;
                       const back = Math.min(toReturn, Number(lot.sold));
-                      batchWriter.update(doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-back) });
+                      // เปลี่ยนเป็น set พร้อม merge: true ป้องกันแอปพังถ้าไฟล์ปลายทางหาย
+                      batchWriter.set(doc(dbInstance, 'artifacts', String(currentAppId), 'public', 'data', 'inventory_batches', String(lot.id)), { sold: increment(-back) }, { merge: true });
                       toReturn -= back;
                   }
               }
           }
-          addToast("ลบรายการ and คืนยอดสต็อกสำเร็จ", "success"); 
+          addToast(`ลบรายการ ${transMatch.sysDocId || transMatch.orderId || transMatch.id} และคืนยอดสต็อกสำเร็จ`, "success"); 
       } else { 
-          addToast("ไม่พบข้อมูล", "error"); 
+          addToast(`ไม่พบข้อมูลที่ตรงกับ "${targetIdToDelete}"`, "error"); 
           return;
       }
       await batchWriter.commit();
       setTargetIdToDelete(''); setShowIdDeleteTool(false);
-    } catch(e) { addToast("ลบไม่สำเร็จ", "error"); }
+    } catch(e) { 
+      console.error("Force Delete Error:", e);
+      addToast(`ลบไม่สำเร็จ: ${e.message}`, "error"); 
+    }
   };
 
   const handleBackup = async () => {
