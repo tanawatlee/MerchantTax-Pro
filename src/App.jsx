@@ -5930,6 +5930,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   
   // --- NEW: State for showing generated ID ---
   const [generatedDocId, setGeneratedDocId] = useState(null);
+
+  // --- NEW: PDF Password States ---
+  const [newPdfPassword, setNewPdfPassword] = useState('');
+  const [historyPdfPassword, setHistoryPdfPassword] = useState('');
    
   const defaultFormState = { 
     id: null, // NEW: เพิ่ม id เพื่อระบุว่าเป็นโหมด Edit
@@ -6036,57 +6040,93 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
       setIsUploadingFile(true);
       try {
-          const reader = new FileReader();
-          reader.onloadend = async () => {
-              try {
-                  const base64DataRaw = reader.result;
-                  const base64Data = base64DataRaw.split(',')[1]; // ตัดส่วน header ของ base64 ออก
-                  const mimeType = file.type;
-                  const fileExt = file.name.split('.').pop();
-                  
-                  // ดึงค่าวันที่จากบิล เพื่อสร้างโฟลเดอร์
-                  const d = normalizeDate(formData.date) || new Date();
-                  const year = String(d.getFullYear());
-                  const month = String(d.getMonth() + 1).padStart(2, '0');
-                  const day = String(d.getDate()).padStart(2, '0');
-                  const docTypeFolder = formData.type === 'income' ? 'Income' : 'Expense';
-                  
-                  // ตั้งชื่อไฟล์
-                  const refName = (formData.taxInvoiceNo || formData.orderId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9]/g, '_');
-                  const fileName = `${refName}.${fileExt}`;
-
-                  const payload = {
-                      base64Data, fileName, mimeType, year, month, day, type: docTypeFolder
-                  };
-
-                  showToast(`กำลังส่งไฟล์ไปที่ Google Drive...`, 'success');
-                  const res = await fetch(webhookUrl, {
-                      method: 'POST',
-                      headers: {
-                          'Content-Type': 'text/plain;charset=utf-8',
-                      },
-                      body: JSON.stringify(payload)
+          let base64Data = '';
+          
+          if (file.type === 'application/pdf' && newPdfPassword) {
+              showToast('กำลังปลดล็อกรหัสผ่าน PDF...', 'success');
+              if (!window.PDFLib) {
+                  await new Promise(res => {
+                      const s = document.createElement('script');
+                      s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+                      s.onload = res; document.body.appendChild(s);
                   });
-                  
-                  const data = await res.json();
-                  
-                  if (data.url) {
-                      setFormData(prev => ({ ...prev, attachmentUrl: data.url }));
-                      showToast(`จัดเก็บไฟล์ลงแฟ้ม ${year}/${month}/${day} เรียบร้อย`, 'success');
-                  } else {
-                      throw new Error(data.message || "Upload failed");
-                  }
-              } catch (err) {
-                  console.error("Drive Upload Error:", err);
-                  showToast('อัปโหลดล้มเหลว (ตรวจสอบ Webhook URL)', 'error');
-              } finally {
-                  setIsUploadingFile(false);
               }
+              try {
+                  const arrayBuffer = await file.arrayBuffer();
+                  const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: newPdfPassword });
+                  const savedPdfBytes = await pdfDoc.save();
+                  
+                  let binary = '';
+                  const bytes = new Uint8Array(savedPdfBytes);
+                  const chunkSize = 8192;
+                  for (let i = 0; i < bytes.length; i += chunkSize) {
+                      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+                  }
+                  base64Data = window.btoa(binary);
+                  showToast('ปลดล็อก PDF และลบรหัสผ่านสำเร็จ!', 'success');
+              } catch(err) {
+                  console.error(err);
+                  showToast('รหัสผ่าน PDF ไม่ถูกต้อง หรือไฟล์ไม่สามารถปลดล็อกได้', 'error');
+                  setIsUploadingFile(false);
+                  return;
+              }
+          } else {
+              base64Data = await new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result.split(',')[1]);
+                  reader.onerror = reject;
+                  reader.readAsDataURL(file);
+              });
+          }
+
+          const mimeType = file.type;
+          const fileExt = file.name.split('.').pop();
+          
+          // --- จัดโครงสร้าง Digital Filing ใหม่ (ปี -> ประเภท -> เดือน -> วันที่) ---
+          const d = normalizeDate(formData.date) || new Date();
+          const year = String(d.getFullYear());
+          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
+          const month = monthNames[d.getMonth()];
+          const day = String(d.getDate()).padStart(2, '0');
+          const docTypeFolder = formData.type === 'income' ? '1_Income' : '2_Expense';
+          
+          // ตั้งชื่อไฟล์
+          const refName = (formData.taxInvoiceNo || formData.orderId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9ก-๙]/g, '_');
+          const fileName = `${refName}.${fileExt}`;
+
+          const payload = {
+              base64Data, 
+              fileName, 
+              mimeType, 
+              rootFolder: 'MerchantTax_DigitalFiling',
+              year: year, 
+              type: docTypeFolder,
+              month: month,
+              day: day
           };
-          reader.readAsDataURL(file);
-      } catch (error) {
-          console.error("FileReader error:", error);
-          showToast('เกิดข้อผิดพลาดในการอ่านไฟล์', 'error');
+
+          showToast(`กำลังส่งไฟล์ไปที่ Google Drive...`, 'success');
+          const res = await fetch(webhookUrl, {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'text/plain;charset=utf-8',
+              },
+              body: JSON.stringify(payload)
+          });
+          
+          const data = await res.json();
+          
+          if (data.url) {
+              setFormData(prev => ({ ...prev, attachmentUrl: data.url }));
+              showToast(`จัดเก็บไฟล์ลงแฟ้ม ${year}/${month}/${day} เรียบร้อย`, 'success');
+              setNewPdfPassword(''); // เคลียร์รหัสผ่านเมื่ออัปโหลดสำเร็จ
+          } else {
+              throw new Error(data.message || "Upload failed");
+          }
+      } catch (err) {
+          console.error("Drive Upload Error:", err);
+          showToast('อัปโหลดล้มเหลว (ตรวจสอบ Webhook URL)', 'error');
+      } finally {
           setIsUploadingFile(false);
       }
   };
@@ -6104,56 +6144,96 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
       setIsUploadingFile(true);
       try {
-          const reader = new FileReader();
-          reader.onloadend = async () => {
-              try {
-                  const base64DataRaw = reader.result;
-                  const base64Data = base64DataRaw.split(',')[1];
-                  const mimeType = file.type;
-                  const fileExt = file.name.split('.').pop();
-                  
-                  const d = normalizeDate(viewItem.date) || new Date();
-                  const year = String(d.getFullYear());
-                  const month = String(d.getMonth() + 1).padStart(2, '0');
-                  const day = String(d.getDate()).padStart(2, '0');
-                  const docTypeFolder = viewItem.type === 'income' ? 'Income' : 'Expense';
-                  
-                  const refName = (viewItem.taxInvoiceNo || viewItem.orderId || viewItem.sysDocId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9]/g, '_');
-                  const fileName = `${refName}_${Date.now()}.${fileExt}`;
-
-                  const payload = { base64Data, fileName, mimeType, year, month, day, type: docTypeFolder };
-
-                  showToast(`กำลังส่งไฟล์ไปที่ Google Drive...`, 'success');
-                  const res = await fetch(webhookUrl, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                      body: JSON.stringify(payload)
+          let base64Data = '';
+          
+          if (file.type === 'application/pdf' && historyPdfPassword) {
+              showToast('กำลังปลดล็อกรหัสผ่าน PDF...', 'success');
+              if (!window.PDFLib) {
+                  await new Promise(res => {
+                      const s = document.createElement('script');
+                      s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+                      s.onload = res; document.body.appendChild(s);
                   });
-                  
-                  const data = await res.json();
-                  
-                  if (data.url) {
-                      // อัปเดตลงฐานข้อมูลโดยตรง
-                      const coll = viewItem.type === 'income' ? 'transactions_income' : 'transactions_expense';
-                      const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, viewItem.id);
-                      await updateDoc(docRef, { attachmentUrl: data.url, updatedAt: serverTimestamp() });
-                      
-                      // อัปเดตหน้าจอทันที
-                      setViewItem(prev => ({ ...prev, attachmentUrl: data.url }));
-                      showToast(`แนบไฟล์ย้อนหลังเรียบร้อยแล้ว`, 'success');
-                  } else {
-                      throw new Error(data.message || "Upload failed");
-                  }
-              } catch (err) {
-                  console.error("Drive Upload Error:", err);
-                  showToast('อัปโหลดล้มเหลว (ตรวจสอบ Webhook URL)', 'error');
-              } finally {
-                  setIsUploadingFile(false);
               }
+              try {
+                  const arrayBuffer = await file.arrayBuffer();
+                  const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: historyPdfPassword });
+                  const savedPdfBytes = await pdfDoc.save();
+                  
+                  let binary = '';
+                  const bytes = new Uint8Array(savedPdfBytes);
+                  const chunkSize = 8192;
+                  for (let i = 0; i < bytes.length; i += chunkSize) {
+                      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+                  }
+                  base64Data = window.btoa(binary);
+                  showToast('ปลดล็อก PDF และลบรหัสผ่านสำเร็จ!', 'success');
+              } catch(err) {
+                  console.error(err);
+                  showToast('รหัสผ่าน PDF ไม่ถูกต้อง หรือไฟล์ไม่สามารถปลดล็อกได้', 'error');
+                  setIsUploadingFile(false);
+                  return;
+              }
+          } else {
+              base64Data = await new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result.split(',')[1]);
+                  reader.onerror = reject;
+                  reader.readAsDataURL(file);
+              });
+          }
+
+          const mimeType = file.type;
+          const fileExt = file.name.split('.').pop();
+          
+          // --- จัดโครงสร้าง Digital Filing ใหม่ (อัปโหลดไฟล์ย้อนหลัง) ---
+          const d = normalizeDate(viewItem.date) || new Date();
+          const year = String(d.getFullYear());
+          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
+          const month = monthNames[d.getMonth()];
+          const day = String(d.getDate()).padStart(2, '0');
+          const docTypeFolder = viewItem.type === 'income' ? '1_Income' : '2_Expense';
+          
+          const refName = (viewItem.taxInvoiceNo || viewItem.orderId || viewItem.sysDocId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9ก-๙]/g, '_');
+          const fileName = `${refName}_${Date.now()}.${fileExt}`;
+
+          const payload = { 
+              base64Data, 
+              fileName, 
+              mimeType, 
+              rootFolder: 'MerchantTax_DigitalFiling',
+              year: year, 
+              type: docTypeFolder,
+              month: month,
+              day: day
           };
-          reader.readAsDataURL(file);
-      } catch (error) {
-          showToast('เกิดข้อผิดพลาดในการอ่านไฟล์', 'error');
+
+          showToast(`กำลังส่งไฟล์ไปที่ Google Drive...`, 'success');
+          const res = await fetch(webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(payload)
+          });
+          
+          const data = await res.json();
+          
+          if (data.url) {
+              // อัปเดตลงฐานข้อมูลโดยตรง
+              const coll = viewItem.type === 'income' ? 'transactions_income' : 'transactions_expense';
+              const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, viewItem.id);
+              await updateDoc(docRef, { attachmentUrl: data.url, updatedAt: serverTimestamp() });
+              
+              // อัปเดตหน้าจอทันที
+              setViewItem(prev => ({ ...prev, attachmentUrl: data.url }));
+              showToast(`แนบไฟล์ย้อนหลังเรียบร้อยแล้ว`, 'success');
+              setHistoryPdfPassword(''); // เคลียร์รหัสผ่าน
+          } else {
+              throw new Error(data.message || "Upload failed");
+          }
+      } catch (err) {
+          console.error("Drive Upload Error:", err);
+          showToast('อัปโหลดล้มเหลว (ตรวจสอบ Webhook URL)', 'error');
+      } finally {
           setIsUploadingFile(false);
       }
   };
@@ -7228,7 +7308,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         </div>
                     </div>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                     {formData.attachmentUrl ? (
                         <div className="relative group inline-block">
                             <a href={formData.attachmentUrl} target="_blank" rel="noopener noreferrer">
@@ -7244,21 +7324,33 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             <button type="button" onClick={() => setFormData({...formData, attachmentUrl: ''})} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
                         </div>
                     ) : (
-                        <label className="flex flex-col items-center justify-center w-full sm:w-auto sm:min-w-[200px] h-24 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50 px-6">
-                            {isUploadingFile ? (
-                                <div className="flex flex-col items-center gap-2">
-                                  <Loader className="animate-spin text-blue-500" size={20}/>
-                                  <span className="text-[10px] font-bold text-blue-500">กำลังอัปโหลด...</span>
-                                </div>
-                            ) : (
-                                <>
-                                    <FileUp size={20} className="text-slate-400 mb-1"/>
-                                    <span className="text-xs font-bold text-slate-600">คลิกอัปโหลดบิล/สลิป</span>
-                                    <span className="text-[9px] font-bold text-slate-400 mt-0.5">JPG, PNG, PDF</span>
-                                </>
-                            )}
-                            <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFile} disabled={isUploadingFile} />
-                        </label>
+                        <div className="flex flex-col gap-2 w-full sm:w-auto">
+                            <label className="flex flex-col items-center justify-center w-full sm:min-w-[200px] h-24 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50 px-6">
+                                {isUploadingFile ? (
+                                    <div className="flex flex-col items-center gap-2">
+                                      <Loader className="animate-spin text-blue-500" size={20}/>
+                                      <span className="text-[10px] font-bold text-blue-500">กำลังอัปโหลด...</span>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <FileUp size={20} className="text-slate-400 mb-1"/>
+                                        <span className="text-xs font-bold text-slate-600">คลิกอัปโหลดบิล/สลิป</span>
+                                        <span className="text-[9px] font-bold text-slate-400 mt-0.5">JPG, PNG, PDF</span>
+                                    </>
+                                )}
+                                <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFile} disabled={isUploadingFile} />
+                            </label>
+                            <div className="relative">
+                                <Lock size={12} className="absolute left-3 top-2.5 text-slate-400" />
+                                <input 
+                                    type="text" 
+                                    value={newPdfPassword}
+                                    onChange={e => setNewPdfPassword(e.target.value)}
+                                    placeholder="รหัสปลดล็อก PDF (ถ้ามี)"
+                                    className="w-full bg-white border border-slate-200 rounded-lg py-2 pl-8 pr-3 text-xs font-bold outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 shadow-sm"
+                                />
+                            </div>
+                        </div>
                     )}
                 </div>
               </div>
@@ -8042,20 +8134,32 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             <button type="button" onClick={handleDirectFileDelete} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600" title="ลบไฟล์แนบ"><X size={12}/></button>
                         </div>
                     ) : (
-                        <label className="flex flex-col items-center justify-center w-full max-w-[200px] h-24 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
-                            {isUploadingFile ? (
-                                <div className="flex flex-col items-center gap-2">
-                                    <Loader className="animate-spin text-blue-500" size={20}/>
-                                    <span className="text-[10px] font-bold text-blue-500">กำลังอัปโหลด...</span>
-                                </div>
-                            ) : (
-                                <>
-                                    <FileUp size={20} className="text-slate-400 mb-1"/>
-                                    <span className="text-[10px] font-bold text-slate-600">คลิกอัปโหลดบิลย้อนหลัง</span>
-                                </>
-                            )}
-                            <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleDirectFileUpload} disabled={isUploadingFile} />
-                        </label>
+                        <div className="flex flex-col gap-2 w-full max-w-[200px]">
+                            <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
+                                {isUploadingFile ? (
+                                    <div className="flex flex-col items-center gap-2">
+                                        <Loader className="animate-spin text-blue-500" size={20}/>
+                                        <span className="text-[10px] font-bold text-blue-500">กำลังอัปโหลด...</span>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <FileUp size={20} className="text-slate-400 mb-1"/>
+                                        <span className="text-[10px] font-bold text-slate-600">คลิกอัปโหลดบิลย้อนหลัง</span>
+                                    </>
+                                )}
+                                <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleDirectFileUpload} disabled={isUploadingFile} />
+                            </label>
+                            <div className="relative">
+                                <Lock size={12} className="absolute left-3 top-2.5 text-slate-400" />
+                                <input 
+                                    type="text" 
+                                    value={historyPdfPassword}
+                                    onChange={e => setHistoryPdfPassword(e.target.value)}
+                                    placeholder="รหัสปลดล็อก PDF (ถ้ามี)"
+                                    className="w-full bg-white border border-slate-200 rounded-lg py-2 pl-8 pr-3 text-xs font-bold outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 shadow-sm"
+                                />
+                            </div>
+                        </div>
                     )}
                 </div>
                 
