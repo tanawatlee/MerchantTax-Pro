@@ -9861,6 +9861,12 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                 <td className="p-4 text-slate-700 font-bold text-left">
                                     <p className={`text-left ${docItem.status === 'cancelled' ? 'line-through' : ''}`}>{docItem.invNo}</p>
                                     {docItem.orderId && <p className="text-[9px] text-slate-400 font-mono text-left">Ref: {docItem.orderId}</p>}
+                                    
+                                    {/* NEW: แสดง Firebase ID */}
+                                    <div className="flex items-center gap-1 text-[9px] text-slate-400 font-mono mt-1 w-fit" title="Firebase Document ID">
+                                        <Database size={10}/>
+                                        FB ID: {docItem.id}
+                                    </div>
                                 </td>
                                 <td className="p-4 text-left">{docItem.customerName}</td>
                                 <td className="p-4 text-right font-bold text-right">{formatCurrency(docItem.total * (docItem.docType === 'credit_note' ? -1 : 1))}</td>
@@ -11091,6 +11097,10 @@ export default function App() {
   const [restoreFileStats, setRestoreFileStats] = useState(null); // --- NEW: State เก็บสรุปข้อมูลก่อนกู้คืน
   const [restoreLogs, setRestoreLogs] = useState([]); 
   const terminalRef = useRef(null); 
+  
+  // --- NEW: State สำหรับเก็บข้อมูลและค้นหาในหน้ายืนยัน Restore ---
+  const [restoreDataPreview, setRestoreDataPreview] = useState(null);
+  const [restoreSearchTerm, setRestoreSearchTerm] = useState('');
 
   // --- NEW: Backup Analyzer State ---
   const [showBackupPreview, setShowBackupPreview] = useState(false);
@@ -11350,6 +11360,46 @@ export default function App() {
       return results.sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0)).slice(0, 100);
   }, [backupDataPreview, backupSearchTerm]);
 
+  // --- NEW: ระบบประมวลผลตัวอย่างข้อมูลก่อนกู้คืน (Restore Preview) ---
+  const restoreSearchResults = useMemo(() => {
+      if (!restoreDataPreview) return [];
+      const term = restoreSearchTerm.toLowerCase();
+      const results = [];
+
+      const safeString = (val) => String(val || '').toLowerCase();
+      const getBackupItemDate = (item) => {
+          if (item.date && item.date.seconds) return new Date(item.date.seconds * 1000);
+          if (item.date) return new Date(item.date);
+          if (item.createdAt && item.createdAt.seconds) return new Date(item.createdAt.seconds * 1000);
+          return null;
+      };
+
+      const checkMatch = (item, fields) => {
+          if (!term) return true;
+          return fields.some(f => safeString(item[f]).includes(term));
+      };
+
+      (restoreDataPreview.transactions_income || []).forEach(item => {
+          if (checkMatch(item, ['sysDocId', 'orderId', 'partnerName', 'description'])) {
+              results.push({ category: 'รายรับ', id: item.sysDocId || item.orderId || item.id, detail: item.description || item.partnerName, date: getBackupItemDate(item), amount: item.total || item.grandTotal });
+          }
+      });
+
+      (restoreDataPreview.transactions_expense || []).forEach(item => {
+          if (checkMatch(item, ['sysDocId', 'orderId', 'taxInvoiceNo', 'partnerName', 'description'])) {
+              results.push({ category: 'รายจ่าย', id: item.sysDocId || item.taxInvoiceNo || item.id, detail: item.description || item.partnerName, date: getBackupItemDate(item), amount: item.total || item.grandTotal });
+          }
+      });
+
+      (restoreDataPreview.invoices || []).forEach(item => {
+          if (checkMatch(item, ['invNo', 'orderId', 'customerName'])) {
+              results.push({ category: 'เอกสารภาษี', id: item.invNo, detail: item.customerName, date: getBackupItemDate(item), amount: item.total });
+          }
+      });
+
+      return results.sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0)).slice(0, 100);
+  }, [restoreDataPreview, restoreSearchTerm]);
+
   const handleRestoreFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -11399,11 +11449,14 @@ export default function App() {
                 invoiceCount: inv.length,
                 stockCount: stock.length
             });
+            setRestoreDataPreview(data); // เก็บ Data สำหรับแสดงผลในตาราง Preview
+            setRestoreSearchTerm('');
             setShowRestoreConfirm(true);
         } catch (err) {
             console.error(err);
             addToast("ไม่สามารถอ่านไฟล์ Backup ได้ ข้อมูลอาจเสียหาย", "error");
             setRestoreFile(null);
+            setRestoreDataPreview(null);
         }
         setLoading(false);
         if (restoreFileRef.current) restoreFileRef.current.value = '';
@@ -11418,7 +11471,6 @@ export default function App() {
     setRestoreError('');
     setRestoreLogs([{ msg: '➜ เริ่มต้นกระบวนการวิเคราะห์และกู้คืนข้อมูล...', type: 'info', time: new Date().toLocaleTimeString('th-TH') }]);
 
-    // --- 🔴 THE ULTIMATE FIX 3: Auto-Clean Terminal ---
     // ป้องกัน RAM บวมจากการพ่น Log เป็นหมื่นบรรทัด ให้เก็บแค่ 100 บรรทัดล่าสุด
     const addLog = (msg, type = 'info') => {
         setRestoreLogs(prev => {
@@ -11471,143 +11523,102 @@ export default function App() {
           return obj;
       };
 
-      // --- 🔴 THE ULTIMATE FIX 4: Safe Commit with Timeout ---
-      // ป้องกันอาการค้างที่ 2500 รายการ (Firebase Offline Pending Freeze)
-      const safeCommit = async (currentBatch) => {
-          for (let i = 0; i < 3; i++) { // ลองยิงซ้ำ 3 รอบ
-              try {
-                  await Promise.race([
-                      currentBatch.commit(),
-                      new Promise((_, reject) => setTimeout(() => reject(new Error('NETWORK_TIMEOUT')), 12000)) // ถ้าเกิน 12 วิ ให้ถือว่าเน็ตหลุด ตัดจบไม่ให้ค้าง
-                  ]);
-                  return true;
-              } catch (err) {
-                  if (i === 2) throw err;
-                  addLog(`⚠️ อินเทอร์เน็ตสะดุด! กำลังพยายามส่งข้อมูลใหม่รอบที่ ${i+1}...`, 'warn');
-                  await new Promise(r => setTimeout(r, 2000));
-              }
-          }
-      };
-
       addLog('➜ กำลังล้างโครงสร้างข้อมูล (Sanitizing)...', 'info');
       const revivedData = sanitizeForFirestore(reviveTimestamps(restoreData));
       const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
 
-      let totalItems = 0;
-      for (const collName of collectionsToRestore) {
-         if (revivedData[collName]) totalItems += revivedData[collName].length;
-      }
-      addLog(`✅ พบข้อมูลทั้งหมดที่ต้องกู้คืน: ${totalItems.toLocaleString()} รายการ`, 'success');
-      setRestoreProgress({ current: 0, total: totalItems, status: 'เตรียมเชื่อมต่อฐานข้อมูล' });
-
-      let batch = writeBatch(dbInstance);
-      let opsCount = 0;
-      const CHUNK_SIZE = 100; // ลดขนาดก้อนข้อมูลลงเหลือ 100 เพื่อให้วิ่งผ่านเน็ตได้ไวที่สุด ไม่ติดคอเบราว์เซอร์
-
-      // 1. ล้างข้อมูลเก่า
-      addLog('➜ --- เริ่มต้น: เคลียร์ข้อมูลเก่าออกจากระบบ ---', 'info');
-      for (const collName of collectionsToRestore) {
-        const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
-        if (snap.docs.length > 0) addLog(`➜ กำลังลบข้อมูลเดิมใน ${collName} (${snap.docs.length} รายการ)...`, 'info');
-        for (const docSnap of snap.docs) {
-          batch.delete(docSnap.ref);
-          opsCount++;
-          if (opsCount >= CHUNK_SIZE) {
-              await safeCommit(batch);
-              batch = writeBatch(dbInstance);
-              opsCount = 0;
-              await new Promise(r => setTimeout(r, 50)); 
-          }
-        }
-      }
-      if (opsCount > 0) {
-          await safeCommit(batch);
-          batch = writeBatch(dbInstance);
-          opsCount = 0;
-          await new Promise(r => setTimeout(r, 50));
-      }
-      addLog('✅ ล้างข้อมูลเก่าสำเร็จ 100%', 'success');
-
-      // 2. เขียนข้อมูลใหม่ (พร้อมระบบฉีกก้อน/สแกนรายตัว เมื่อเจอ Error)
-      let restoredCount = 0;
-      let currentBatchItems = []; 
-
-      addLog('➜ --- เริ่มต้น: อัปโหลดข้อมูลใหม่ลงคลาวด์ ---', 'info');
-      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังเขียนข้อมูลลงคลาวด์...' });
+      // --- 🔥 THE ULTIMATE FIX 6: Flatten & Multiplexing Engine 🔥 ---
+      // ยกเลิกการใช้ writeBatch ที่เป็นสาเหตุของคอขวดที่ 2,500 รายการ เปลี่ยนมาใช้การยิงข้อมูลคู่ขนานแทน
       
+      addLog('➜ กำลังรวมข้อมูลเพื่อเตรียมส่งออกแบบไร้รอยต่อ...', 'info');
+      const uploadQueue = [];
       for (const collName of collectionsToRestore) {
         if (!revivedData[collName] || !Array.isArray(revivedData[collName])) continue;
-        
         for (const item of revivedData[collName]) {
-          const docId = item.id;
+          // 🔴 FIX 3: SMART FALLBACK ถ้าไฟล์เก่ามี id: null ให้ใช้ sysDocId/invNo แทน หรือให้สร้าง ID ใหม่ ไม่ปล่อยให้ข้อมูลหาย
+          const docId = item.id || item.sysDocId || item.invNo || doc(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName)).id;
           if (!docId) continue;
           
           const docRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName, docId);
           const dataToSet = { ...item };
           delete dataToSet.id;
-          
-          batch.set(docRef, dataToSet);
-          currentBatchItems.push({ ref: docRef, data: dataToSet, id: docId, coll: collName, sysDocId: item.sysDocId || item.invNo || item.orderId || docId });
-          opsCount++;
-          
-          if (opsCount >= CHUNK_SIZE) {
-              try {
-                  await safeCommit(batch);
-                  restoredCount += currentBatchItems.length;
-                  setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
-                  addLog(`➜ บันทึกสำเร็จรวม ${restoredCount.toLocaleString()} รายการ...`, 'info');
-              } catch (batchErr) {
-                  // ก้อนพัง ให้ฉีกยิงทีละตัวเพื่อหาตัวการ!
-                  addLog(`⚠️ แจ้งเตือน: พบข้อมูลมีปัญหาในก้อนนี้! ระบบกำลังเปลี่ยนไปสแกนและบันทึกทีละ 1 รายการ...`, 'warn');
-                  
-                  for (const singleItem of currentBatchItems) {
-                      try {
-                          await Promise.race([
-                              setDoc(singleItem.ref, singleItem.data),
-                              new Promise((_, reject) => setTimeout(() => reject(new Error('NETWORK_TIMEOUT')), 5000))
-                          ]);
-                          restoredCount++;
-                          // อัปเดตหลอดโหลดแบบเว้นจังหวะ
-                          if (restoredCount % 20 === 0) {
-                              setRestoreProgress({ current: restoredCount, total: totalItems, status: `ซ่อมแซมและอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
-                              await new Promise(r => setTimeout(r, 50)); // หายใจ
-                          }
-                      } catch (singleErr) {
-                          addLog(`❌ [ข้ามรายการ] ID: ${singleItem.sysDocId} พังเพราะ: ${singleErr.message}`, 'error');
-                      }
-                  }
-                  addLog(`✅ สแกนรายตัวเสร็จสิ้น ทำงานต่อ...`, 'success');
-                  setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
-              }
-              batch = writeBatch(dbInstance);
-              opsCount = 0;
-              currentBatchItems = [];
-              await new Promise(r => setTimeout(r, 50)); // หายใจป้องกัน RAM พุ่ง
-          }
+          uploadQueue.push({ ref: docRef, data: dataToSet, sysDocId: item.sysDocId || item.invNo || item.orderId || docId });
         }
       }
 
-      // ส่งส่วนที่เหลือของลูปสุดท้าย
-      if (opsCount > 0) {
-          try {
-              await safeCommit(batch);
-              restoredCount += currentBatchItems.length;
-              addLog(`➜ เขียนข้อมูลชุดสุดท้ายผ่าน (${currentBatchItems.length} รายการ)`, 'info');
-          } catch (batchErr) {
-              addLog(`⚠️ แจ้งเตือน: พบข้อมูลมีปัญหาในก้อนสุดท้าย! กำลังสแกนทีละ 1 รายการ...`, 'warn');
-              for (const singleItem of currentBatchItems) {
-                  try {
-                      await Promise.race([
-                          setDoc(singleItem.ref, singleItem.data),
-                          new Promise((_, reject) => setTimeout(() => reject(new Error('NETWORK_TIMEOUT')), 5000))
-                      ]);
-                      restoredCount++;
-                  } catch (singleErr) {
-                      addLog(`❌ [ข้ามรายการ] ID: ${singleItem.sysDocId} พังเพราะ: ${singleErr.message}`, 'error');
-                  }
-                  await new Promise(r => setTimeout(r, 10)); // หายใจอ่อนๆ
+      const totalItems = uploadQueue.length;
+      addLog(`✅ พบข้อมูลทั้งหมดที่ต้องกู้คืน: ${totalItems.toLocaleString()} รายการ`, 'success');
+      setRestoreProgress({ current: 0, total: totalItems, status: 'เตรียมเชื่อมต่อฐานข้อมูล' });
+
+      // --- 1. ล้างข้อมูลเก่า (Queue Deletion) ---
+      addLog('➜ --- เริ่มต้น: เคลียร์ข้อมูลเก่าออกจากระบบ ---', 'info');
+      const deleteQueue = [];
+      for (const collName of collectionsToRestore) {
+        const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
+        for (const docSnap of snap.docs) {
+          deleteQueue.push(docSnap.ref);
+        }
+      }
+      
+      addLog(`➜ พบข้อมูลเก่าต้องลบ ${deleteQueue.length.toLocaleString()} รายการ กำลังดำเนินการ...`, 'info');
+      const DELETE_CHUNK_SIZE = 100;
+      for (let i = 0; i < deleteQueue.length; i += DELETE_CHUNK_SIZE) {
+          const chunk = deleteQueue.slice(i, i + DELETE_CHUNK_SIZE);
+          let success = false;
+          for (let retry = 0; retry < 3; retry++) {
+              try {
+                  await Promise.all(chunk.map(ref => deleteDoc(ref)));
+                  success = true;
+                  break;
+              } catch (e) {
+                  await new Promise(r => setTimeout(r, 1000));
               }
           }
+          if (!success) addLog(`⚠️ ไม่สามารถลบข้อมูลเก่าบางส่วนได้ (อาจถูกลบไปแล้ว)`, 'warn');
+          await new Promise(r => setTimeout(r, 50)); // หายใจ
+      }
+      addLog('✅ ล้างข้อมูลเก่าสำเร็จ 100%', 'success');
+
+      // --- 2. เขียนข้อมูลใหม่ (Multiplexing Upload) ---
+      addLog('➜ --- เริ่มต้น: อัปโหลดข้อมูลใหม่ลงคลาวด์แบบคู่ขนาน ---', 'info');
+      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังเขียนข้อมูลลงคลาวด์...' });
+      
+      let restoredCount = 0;
+      const UPLOAD_CHUNK_SIZE = 50; // ยิงทีละ 50 Request คู่ขนาน ป้องกันคอขวด
+      
+      for (let i = 0; i < uploadQueue.length; i += UPLOAD_CHUNK_SIZE) {
+          const chunk = uploadQueue.slice(i, i + UPLOAD_CHUNK_SIZE);
+          
+          let chunkSuccess = false;
+          for (let retry = 0; retry < 3; retry++) {
+              try {
+                  // ใช้ Promise.all(setDoc) ยิงทะลุตรงเข้าเซิร์ฟเวอร์ ไม่ต้องรอคิวแบบ Batch
+                  await Promise.all(chunk.map(item => 
+                      Promise.race([
+                          setDoc(item.ref, item.data),
+                          new Promise((_, rej) => setTimeout(() => rej(new Error('TIMEOUT')), 10000))
+                      ])
+                  ));
+                  chunkSuccess = true;
+                  break;
+              } catch (err) {
+                  addLog(`⚠️ เครือข่ายสะดุดที่รายการ ${i+1}! กำลังลองใหม่ (${retry+1}/3)...`, 'warn');
+                  await new Promise(r => setTimeout(r, 2000));
+              }
+          }
+
+          if (!chunkSuccess) {
+              addLog(`❌ ดรอปก้อนข้อมูลช่วงที่ ${i+1} เพราะเชื่อมต่อไม่ได้ (ระบบจะข้ามและรันก้อนต่อไปต่อทันที!)`, 'error');
+              // ระบบจะรับรู้ว่าพัง แต่ไม่สั่งหยุดทำงาน (ไม่ตัดจบเหมือนเวอร์ชันก่อน) ทำให้มันวิ่งต่อไปจนจบรายการทั้งหมดได้
+          } else {
+              restoredCount += chunk.length;
+              if (restoredCount % 100 === 0 || restoredCount === totalItems) {
+                  setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
+                  addLog(`➜ บันทึกสำเร็จรวม ${restoredCount.toLocaleString()} รายการ...`, 'info');
+              }
+          }
+          
+          await new Promise(r => setTimeout(r, 50)); // หายใจป้องกัน RAM บวม
       }
       
       setRestoreProgress({ current: restoredCount, total: totalItems, status: 'เสร็จสมบูรณ์!' });
@@ -11615,7 +11626,8 @@ export default function App() {
       
       window.removeEventListener("beforeunload", handleBeforeUnload);
       setRestoreFile(null);
-      setRestoreFileStats(null); // --- NEW: เคลียร์สรุปข้อมูล
+      setRestoreFileStats(null);
+      setRestoreDataPreview(null); // เคลียร์พรีวิว
       
       // หน่วงเวลา 3 วิให้ผู้ใช้อ่าน Log ก่อนรีเฟรชโชว์ข้อมูลใหม่
       setTimeout(() => {
@@ -11628,7 +11640,8 @@ export default function App() {
       setRestoreError(error.message || "เกิดข้อผิดพลาดไม่ทราบสาเหตุระหว่างเชื่อมต่อ");
       window.removeEventListener("beforeunload", handleBeforeUnload);
       setRestoreFile(null);
-      setRestoreFileStats(null); // --- NEW: เคลียร์สรุปข้อมูล
+      setRestoreFileStats(null);
+      setRestoreDataPreview(null); // เคลียร์พรีวิว
     }
   };
 
@@ -11976,7 +11989,7 @@ export default function App() {
 
             {restoreError ? (
                 <div className="mt-4 pt-4 border-t border-slate-700">
-                    <button onClick={() => { setIsRestoring(false); setRestoreError(''); }} className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-colors shadow-lg shadow-rose-900/50">
+                    <button onClick={() => { setIsRestoring(false); setRestoreError(''); setRestoreDataPreview(null); }} className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-colors shadow-lg shadow-rose-900/50">
                         รับทราบปัญหาและปิดหน้าต่าง
                     </button>
                 </div>
@@ -11989,45 +12002,109 @@ export default function App() {
         </div>
       )}
 
-      {/* Restore Confirm Modal */}
+      {/* Restore Confirm Modal (Enhanced with Data Preview) */}
       {showRestoreConfirm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 flex flex-col items-center">
-            <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
-              <AlertTriangle size={32}/>
-            </div>
-            <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันการกู้คืนข้อมูล?</h3>
+          <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
             
-            {/* --- NEW: Restore Stats Summary --- */}
-            {restoreFileStats && (
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 my-4 w-full text-left space-y-3">
-                    <div className="bg-blue-50 border border-blue-100 p-3 rounded-xl">
-                        <p className="text-[10px] font-bold text-blue-600 uppercase mb-1">ชื่อไฟล์ที่จะเขียนทับ</p>
-                        <p className="text-xs font-mono font-bold text-slate-700 break-all">{restoreFileStats.fileName}</p>
+            <div className="flex justify-between items-start mb-4">
+                 <div>
+                     <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><AlertTriangle className="text-rose-500"/> ยืนยันการเขียนทับและกู้คืนข้อมูล?</h3>
+                     <p className="text-xs text-slate-500 mt-1">ระบบจะทำการ <b className="text-rose-600">ล้างข้อมูลปัจจุบันทั้งหมด</b> และเขียนทับด้วยข้อมูลจากไฟล์นี้ (ไม่สามารถย้อนกลับได้)</p>
+                 </div>
+                 <button onClick={() => { setShowRestoreConfirm(false); setRestoreFile(null); setRestoreFileStats(null); setRestoreDataPreview(null); setRestoreSearchTerm(''); }} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-5">
+                {/* --- Restore Stats Summary --- */}
+                {restoreFileStats && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 w-full text-left space-y-3 shrink-0 shadow-sm">
+                        <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 p-3 rounded-xl">
+                            <FileUp size={16} className="text-blue-500 shrink-0"/>
+                            <div>
+                                <p className="text-[10px] font-bold text-blue-600 uppercase mb-0.5">ชื่อไฟล์ที่จะเขียนทับ</p>
+                                <p className="text-xs font-mono font-bold text-slate-700 break-all">{restoreFileStats.fileName}</p>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div className="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
+                                <p className="text-[10px] font-black text-emerald-600 mb-1 flex items-center gap-1"><TrendingUp size={12}/> รายรับ</p>
+                                <p className="text-sm font-black text-slate-800">{restoreFileStats.incomeCount.toLocaleString()} <span className="text-[10px] font-bold text-slate-400">รายการ</span></p>
+                                <p className="text-[9px] text-slate-500 mt-1 truncate">ถึง: {restoreFileStats.latestIncomeDate?.max ? formatDate(restoreFileStats.latestIncomeDate.max) : '-'}</p>
+                            </div>
+                            <div className="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
+                                <p className="text-[10px] font-black text-rose-600 mb-1 flex items-center gap-1"><TrendingDown size={12}/> รายจ่าย</p>
+                                <p className="text-sm font-black text-slate-800">{restoreFileStats.expenseCount.toLocaleString()} <span className="text-[10px] font-bold text-slate-400">รายการ</span></p>
+                                <p className="text-[9px] text-slate-500 mt-1 truncate">ถึง: {restoreFileStats.latestExpenseDate?.max ? formatDate(restoreFileStats.latestExpenseDate.max) : '-'}</p>
+                            </div>
+                            <div className="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
+                                <p className="text-[10px] font-black text-indigo-600 mb-1 flex items-center gap-1"><FileText size={12}/> เอกสาร/INV</p>
+                                <p className="text-sm font-black text-slate-800">{restoreFileStats.invoiceCount.toLocaleString()} <span className="text-[10px] font-bold text-slate-400">ฉบับ</span></p>
+                            </div>
+                            <div className="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
+                                <p className="text-[10px] font-black text-amber-600 mb-1 flex items-center gap-1"><Box size={12}/> สต็อกสินค้า</p>
+                                <p className="text-sm font-black text-slate-800">{restoreFileStats.stockCount.toLocaleString()} <span className="text-[10px] font-bold text-slate-400">Lats</span></p>
+                            </div>
+                        </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div className="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
-                            <p className="text-[10px] font-black text-rose-600 mb-1 flex items-center gap-1"><TrendingDown size={12}/> รายจ่าย (Expense)</p>
-                            <p className="text-sm font-black text-slate-800">{restoreFileStats.expenseCount.toLocaleString()} รายการ</p>
-                            <p className="text-[9px] text-slate-500 mt-1">ถึง: {restoreFileStats.latestExpenseDate?.max ? formatDate(restoreFileStats.latestExpenseDate.max) : '-'}</p>
+                )}
+
+                {/* --- NEW: Data Preview List --- */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 flex-1 flex flex-col min-h-[300px] shadow-sm">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+                        <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Search size={16} className="text-slate-400"/> ตรวจสอบรายการที่จะกู้คืน</h4>
+                        <div className="relative w-full sm:w-64">
+                            <Search className="absolute left-3 top-2 text-slate-400" size={14}/>
+                            <input 
+                                type="text" 
+                                value={restoreSearchTerm}
+                                onChange={e => setRestoreSearchTerm(e.target.value)}
+                                placeholder="ค้นหาชื่อ, Order ID, ยอดเงิน..."
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-8 py-1.5 text-xs font-bold outline-none focus:ring-1 focus:ring-indigo-300"
+                            />
+                            {restoreSearchTerm && <button onClick={() => setRestoreSearchTerm('')} className="absolute right-2 top-2 text-slate-400 hover:text-rose-500"><X size={12}/></button>}
                         </div>
-                        <div className="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
-                            <p className="text-[10px] font-black text-emerald-600 mb-1 flex items-center gap-1"><TrendingUp size={12}/> รายรับ (Income)</p>
-                            <p className="text-sm font-black text-slate-800">{restoreFileStats.incomeCount.toLocaleString()} รายการ</p>
-                            <p className="text-[9px] text-slate-500 mt-1">ถึง: {restoreFileStats.latestIncomeDate?.max ? formatDate(restoreFileStats.latestIncomeDate.max) : '-'}</p>
-                        </div>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto custom-scrollbar border border-slate-100 rounded-xl">
+                        <table className="w-full text-xs text-left">
+                            <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200">
+                                <tr>
+                                    <th className="p-3 pl-4 whitespace-nowrap">ประเภท</th>
+                                    <th className="p-3 whitespace-nowrap">วันที่</th>
+                                    <th className="p-3">เลขที่ / Order ID</th>
+                                    <th className="p-3">รายละเอียดสินค้า/ร้านค้า</th>
+                                    <th className="p-3 pr-4 text-right whitespace-nowrap">ยอดรวม</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {restoreSearchResults && restoreSearchResults.length > 0 ? restoreSearchResults.map((res, i) => (
+                                    <tr key={i} className="hover:bg-indigo-50/30 transition-colors">
+                                        <td className="p-3 pl-4">
+                                            <span className="text-[10px] font-bold text-white px-2 py-0.5 rounded shadow-sm" style={{backgroundColor: res.category === 'รายรับ' ? '#10b981' : res.category === 'รายจ่าย' ? '#f43f5e' : res.category === 'เอกสารภาษี' ? '#6366f1' : '#f59e0b'}}>{res.category}</span>
+                                        </td>
+                                        <td className="p-3 text-slate-500 font-bold whitespace-nowrap">{res.date ? formatDate(res.date) : '-'}</td>
+                                        <td className="p-3 font-mono font-bold text-indigo-600">{res.id}</td>
+                                        <td className="p-3 text-slate-700 font-medium truncate max-w-[200px]">{res.detail}</td>
+                                        <td className="p-3 pr-4 text-right font-black text-slate-800">{res.amount !== undefined ? formatCurrency(res.amount) : '-'}</td>
+                                    </tr>
+                                )) : (
+                                    <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ไม่พบรายการที่ค้นหา (ลองพิมพ์เลข Order ID หรือวันที่)</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="pt-3 text-[10px] text-slate-400 text-center font-bold">
+                        แสดงตัวอย่างข้อมูลสูงสุด 100 รายการล่าสุด
                     </div>
                 </div>
-            )}
+            </div>
 
-            <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
-              ระบบจะทำการ <b>"ล้างข้อมูลปัจจุบันทั้งหมด"</b><br/>
-              และเขียนทับด้วยข้อมูลตามรายการด้านบน<br/>
-              <span className="text-rose-600 font-bold underline">การกระทำนี้ไม่สามารถย้อนกลับได้ มั่นใจหรือไม่?</span>
-            </p>
-            <div className="flex gap-3 w-full text-center">
-              <button onClick={() => { setShowRestoreConfirm(false); setRestoreFile(null); setRestoreFileStats(null); }} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ยกเลิก</button>
-              <button onClick={executeRestore} className="flex-[2] py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-200 text-center transition-colors">ยืนยันกู้คืน (เขียนทับ)</button>
+            <div className="flex gap-3 w-full text-center mt-5 shrink-0">
+              <button onClick={() => { setShowRestoreConfirm(false); setRestoreFile(null); setRestoreFileStats(null); setRestoreDataPreview(null); setRestoreSearchTerm(''); }} className="flex-1 py-3.5 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ยกเลิก</button>
+              <button onClick={executeRestore} className="flex-[2] py-3.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-200 text-center transition-colors flex items-center justify-center gap-2">
+                  <RefreshCw size={18}/> ยืนยันกู้คืน (เขียนทับ 100%)
+              </button>
             </div>
           </div>
         </div>
