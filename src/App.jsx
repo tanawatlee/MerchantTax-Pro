@@ -11353,16 +11353,27 @@ export default function App() {
     if (!restoreFile || !user) return;
     setShowRestoreConfirm(false);
     setIsRestoring(true);
-    setRestoreError(''); // Clear previous errors
+    setRestoreError('');
+    setRestoreLogs([{ msg: '➜ เริ่มต้นกระบวนการวิเคราะห์และกู้คืนข้อมูล...', type: 'info', time: new Date().toLocaleTimeString('th-TH') }]);
 
-    // ป้องกันการเผลอรีเฟรชหน้าจอระหว่างกำลัง Restore ข้อมูล (เพื่อไม่ให้ฐานข้อมูลแหว่ง)
+    // --- 🔴 THE ULTIMATE FIX 3: Auto-Clean Terminal ---
+    // ป้องกัน RAM บวมจากการพ่น Log เป็นหมื่นบรรทัด ให้เก็บแค่ 100 บรรทัดล่าสุด
+    const addLog = (msg, type = 'info') => {
+        setRestoreLogs(prev => {
+            const newLogs = [...prev, { msg, type, time: new Date().toLocaleTimeString('th-TH') }];
+            if (newLogs.length > 100) return newLogs.slice(newLogs.length - 100);
+            return newLogs;
+        });
+    };
+
     const handleBeforeUnload = (e) => {
         e.preventDefault();
-        e.returnValue = "ระบบกำลังกู้คืนข้อมูล ห้ามปิดหน้านี้เด็ดขาด มิฉะนั้นข้อมูลอาจสูญหายบางส่วน";
+        e.returnValue = "ระบบกำลังกู้คืนข้อมูล ห้ามปิดหน้านี้เด็ดขาด";
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     try {
+      addLog('➜ กำลังอ่านไฟล์ Backup...', 'info');
       const fileText = await restoreFile.text();
       const restoreData = JSON.parse(fileText);
       
@@ -11371,7 +11382,6 @@ export default function App() {
         if (obj.seconds !== undefined && obj.nanoseconds !== undefined) {
           return new Date(obj.seconds * 1000);
         }
-        // รองรับกรณี Date ถูกบันทึกเป็น format ของ Firestore v9
         if (obj.type === "firestore/timestamp/1.0" && obj.seconds !== undefined) {
           return new Date(obj.seconds * 1000);
         }
@@ -11381,74 +11391,75 @@ export default function App() {
         return newObj;
       };
 
-      // --- 🔴 THE ULTIMATE FIX 2: ตัวกรองขยะ (Sanitizer) ---
-      // ป้องกัน Error "Unsupported field value: undefined" ที่ทำให้ Firebase หยุดเขียนข้อมูลกลางคันแบบเงียบๆ
       const sanitizeForFirestore = (obj) => {
-          if (obj === undefined) return null;
-          if (obj === null) return null;
+          if (obj === undefined || obj === null) return null;
           if (obj instanceof Date) return obj;
-          if (Array.isArray(obj)) return obj.map(sanitizeForFirestore).filter(v => v !== undefined);
+          if (Array.isArray(obj)) return obj.map(sanitizeForFirestore).filter(v => v !== null && v !== undefined);
           if (typeof obj === 'object') {
               const newObj = {};
               for (const key in obj) {
-                  if (obj[key] !== undefined) {
-                      newObj[key] = sanitizeForFirestore(obj[key]);
+                  const val = sanitizeForFirestore(obj[key]);
+                  if (val !== undefined && val !== null) {
+                      newObj[key] = val;
                   }
               }
               return newObj;
           }
+          if (typeof obj === 'number' && isNaN(obj)) return 0; // ป้องกัน NaN
           return obj;
       };
 
+      addLog('➜ กำลังล้างโครงสร้างข้อมูล (Sanitizing)...', 'info');
       const revivedData = sanitizeForFirestore(reviveTimestamps(restoreData));
       const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
 
-      // คำนวณจำนวนรายการทั้งหมดในไฟล์
       let totalItems = 0;
       for (const collName of collectionsToRestore) {
          if (revivedData[collName]) totalItems += revivedData[collName].length;
       }
-      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังเตรียมเชื่อมต่อฐานข้อมูล...' });
+      addLog(`✅ พบข้อมูลทั้งหมดที่ต้องกู้คืน: ${totalItems.toLocaleString()} รายการ`, 'success');
+      setRestoreProgress({ current: 0, total: totalItems, status: 'เตรียมเชื่อมต่อฐานข้อมูล' });
 
       let batch = writeBatch(dbInstance);
       let opsCount = 0;
-      const CHUNK_SIZE = 400; // เปลี่ยนกลับเป็น 400 เพื่อความรวดเร็วและลดโอกาสโดนแบนจาก Google Cloud
-      
-      // ฟังก์ชันช่วย Commit แบบปลอดภัย พร้อมระบบ Auto-Retry 3 รอบ
-      const commitBatchWithRetry = async () => {
-        if (opsCount > 0) { 
-            for(let i=0; i<3; i++) {
-                try {
-                    await batch.commit(); 
-                    break; // สำเร็จให้ออกลูป
-                } catch (err) {
-                    if (i === 2) throw err; // ถ้าลองครบ 3 รอบยังพัง ให้โยน error ออกไปให้ UI แสดงผล
-                    await new Promise(r => setTimeout(r, 2000)); // รอ 2 วิแล้วลองใหม่
-                }
-            }
-            batch = writeBatch(dbInstance); 
-            opsCount = 0; 
-        }
-      };
+      const CHUNK_SIZE = 400; 
 
-      // 1. ล้างข้อมูลเก่า (แบ่งลบทีละ 400)
-      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังล้างข้อมูลเก่าออก...' });
+      // 1. ล้างข้อมูลเก่า
+      addLog('➜ --- เริ่มต้น: เคลียร์ข้อมูลเก่าออกจากระบบ ---', 'info');
       for (const collName of collectionsToRestore) {
         const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
+        if (snap.docs.length > 0) addLog(`➜ กำลังลบข้อมูลเดิมใน ${collName} (${snap.docs.length} รายการ)...`, 'info');
         for (const docSnap of snap.docs) {
           batch.delete(docSnap.ref);
           opsCount++;
-          if (opsCount >= CHUNK_SIZE) await commitBatchWithRetry();
+          if (opsCount >= CHUNK_SIZE) {
+              await batch.commit();
+              batch = writeBatch(dbInstance);
+              opsCount = 0;
+              // --- 🔴 THE ULTIMATE FIX 1: Anti-Freeze (ระบบหายใจ) ---
+              // สั่งให้เบราว์เซอร์หยุดทำงาน 0.05 วินาที เพื่อให้มีเวลาระบาย RAM และ Render UI ไม่ให้จ้าง
+              await new Promise(r => setTimeout(r, 50)); 
+          }
         }
       }
-      await commitBatchWithRetry(); // บังคับ Commit ส่วนที่เหลือของการลบให้จบก่อน
+      if (opsCount > 0) {
+          await batch.commit();
+          batch = writeBatch(dbInstance);
+          opsCount = 0;
+          await new Promise(r => setTimeout(r, 50));
+      }
+      addLog('✅ ล้างข้อมูลเก่าสำเร็จ 100%', 'success');
 
-      // 2. เขียนทับด้วยข้อมูล Backup (แบ่งเขียนทีละ 400)
+      // 2. เขียนข้อมูลใหม่ (พร้อมระบบฉีกก้อน/สแกนรายตัว เมื่อเจอ Error)
       let restoredCount = 0;
-      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังอัปโหลดข้อมูลใหม่ลงคลาวด์...' });
+      let currentBatchItems = []; 
+
+      addLog('➜ --- เริ่มต้น: อัปโหลดข้อมูลใหม่ลงคลาวด์ ---', 'info');
+      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังเขียนข้อมูลลงคลาวด์...' });
       
       for (const collName of collectionsToRestore) {
         if (!revivedData[collName] || !Array.isArray(revivedData[collName])) continue;
+        
         for (const item of revivedData[collName]) {
           const docId = item.id;
           if (!docId) continue;
@@ -11458,31 +11469,78 @@ export default function App() {
           delete dataToSet.id;
           
           batch.set(docRef, dataToSet);
+          currentBatchItems.push({ ref: docRef, data: dataToSet, id: docId, coll: collName, sysDocId: item.sysDocId || item.invNo || item.orderId || docId });
           opsCount++;
-          restoredCount++;
           
           if (opsCount >= CHUNK_SIZE) {
-              await commitBatchWithRetry();
-              setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลดข้อมูล... (${Math.round((restoredCount/totalItems)*100)}%)` });
+              try {
+                  await batch.commit();
+                  restoredCount += currentBatchItems.length;
+                  setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
+                  addLog(`➜ เขียนข้อมูลก้อนนี้ผ่าน (${currentBatchItems.length} รายการ)`, 'info');
+              } catch (batchErr) {
+                  // ก้อนพัง ให้ฉีกยิงทีละตัวเพื่อหาตัวการ!
+                  addLog(`⚠️ แจ้งเตือน: พบข้อมูลมีปัญหาในก้อนนี้! ระบบกำลังเปลี่ยนไปสแกนและบันทึกทีละ 1 รายการ...`, 'warn');
+                  
+                  for (const singleItem of currentBatchItems) {
+                      try {
+                          await setDoc(singleItem.ref, singleItem.data);
+                          restoredCount++;
+                          // --- 🔴 THE ULTIMATE FIX 2: Smart UI Throttling ---
+                          // เพื่อไม่ให้หน้าจอค้างตอนเซฟทีละตัว จะอัปเดตหลอดโหลดแค่ทุกๆ 50 รายการ
+                          if (restoredCount % 50 === 0) {
+                              setRestoreProgress({ current: restoredCount, total: totalItems, status: `ซ่อมแซมและอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
+                              await new Promise(r => setTimeout(r, 50)); // หายใจ
+                          }
+                      } catch (singleErr) {
+                          addLog(`❌ [ข้ามรายการ] ID: ${singleItem.sysDocId} พังเพราะ: ${singleErr.message}`, 'error');
+                      }
+                  }
+                  addLog(`✅ สแกนรายตัวเสร็จสิ้น ทำงานต่อ...`, 'success');
+                  setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
+              }
+              batch = writeBatch(dbInstance);
+              opsCount = 0;
+              currentBatchItems = [];
+              await new Promise(r => setTimeout(r, 50)); // หายใจป้องกัน RAM พุ่ง
           }
         }
       }
-      await commitBatchWithRetry(); // บังคับ Commit ส่วนที่เหลือของการเขียนให้จบ
+
+      // ส่งส่วนที่เหลือของลูปสุดท้าย
+      if (opsCount > 0) {
+          try {
+              await batch.commit();
+              restoredCount += currentBatchItems.length;
+              addLog(`➜ เขียนข้อมูลชุดสุดท้ายผ่าน (${currentBatchItems.length} รายการ)`, 'info');
+          } catch (batchErr) {
+              addLog(`⚠️ แจ้งเตือน: พบข้อมูลมีปัญหาในก้อนสุดท้าย! กำลังสแกนทีละ 1 รายการ...`, 'warn');
+              for (const singleItem of currentBatchItems) {
+                  try {
+                      await setDoc(singleItem.ref, singleItem.data);
+                      restoredCount++;
+                  } catch (singleErr) {
+                      addLog(`❌ [ข้ามรายการ] ID: ${singleItem.sysDocId} พังเพราะ: ${singleErr.message}`, 'error');
+                  }
+                  await new Promise(r => setTimeout(r, 10)); // หายใจอ่อนๆ
+              }
+          }
+      }
       
-      setRestoreProgress({ current: restoredCount, total: totalItems, status: 'เสร็จสมบูรณ์! กำลังรีเฟรชระบบ...' });
+      setRestoreProgress({ current: restoredCount, total: totalItems, status: 'เสร็จสมบูรณ์!' });
+      addLog(`✅ 🎉 กู้คืนเสร็จสิ้น! นำเข้าสำเร็จ ${restoredCount.toLocaleString()} จาก ${totalItems.toLocaleString()} รายการ`, 'success');
       
-      // ปลดล็อกการป้องกันรีเฟรชหน้า
       window.removeEventListener("beforeunload", handleBeforeUnload);
       setRestoreFile(null);
       
-      // --- 🔴 THE ULTIMATE FIX 3: บังคับ Hard Reload ทันทีที่เสร็จ ---
-      // ป้องกันเบราว์เซอร์จำภาพเก่า และบังคับดึงข้อมูลสด 100% จาก Firebase
+      // หน่วงเวลา 3 วิให้ผู้ใช้อ่าน Log ก่อนรีเฟรชโชว์ข้อมูลใหม่
       setTimeout(() => {
           window.location.reload();
-      }, 1500);
+      }, 3000);
 
     } catch (error) {
       console.error("Restore failed:", error);
+      addLog(`❌ 💥 ข้อผิดพลาดร้ายแรง: ${error.message}`, 'error');
       setRestoreError(error.message || "เกิดข้อผิดพลาดไม่ทราบสาเหตุระหว่างเชื่อมต่อ");
       window.removeEventListener("beforeunload", handleBeforeUnload);
       setRestoreFile(null);
