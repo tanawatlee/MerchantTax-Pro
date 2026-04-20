@@ -164,21 +164,29 @@ const formatDateISO = (dateInput) => {
 };
 
 const sortNewestFirst = (a, b) => {
-  const createdA = a.createdAt?.seconds || 0;
-  const createdB = b.createdAt?.seconds || 0;
-  if (createdA !== createdB && createdA !== 0 && createdB !== 0) return createdB - createdA;
+  // --- FIX: ให้ความสำคัญกับ "วันที่เกิดรายการจริง (date)" เป็นอันดับแรก ---
   const timeA = normalizeDate(a.date)?.getTime() || 0;
   const timeB = normalizeDate(b.date)?.getTime() || 0;
-  return timeB - timeA;
+  
+  if (timeA !== timeB) return timeB - timeA; // เรียงตามวันที่ทำรายการ จากใหม่ -> เก่า
+
+  // ถ้าวันที่ทำรายการตรงกัน ค่อยไปเรียงตามเวลาที่บันทึกลงระบบ
+  const createdA = a.createdAt?.seconds || 0;
+  const createdB = b.createdAt?.seconds || 0;
+  return createdB - createdA;
 };
 
 const sortOldestFirst = (a, b) => {
-  const createdA = a.createdAt?.seconds || 0;
-  const createdB = b.createdAt?.seconds || 0;
-  if (createdA !== createdB && createdA !== 0 && createdB !== 0) return createdA - createdB;
+  // --- FIX: ให้ความสำคัญกับ "วันที่เกิดรายการจริง (date)" เป็นอันดับแรก ---
   const timeA = normalizeDate(a.date)?.getTime() || 0;
   const timeB = normalizeDate(b.date)?.getTime() || 0;
-  return timeA - timeB;
+  
+  if (timeA !== timeB) return timeA - timeB; // เรียงตามวันที่ทำรายการ จากเก่า -> ใหม่
+
+  // ถ้าวันที่ทำรายการตรงกัน ค่อยไปเรียงตามเวลาที่บันทึกลงระบบ
+  const createdA = a.createdAt?.seconds || 0;
+  const createdB = b.createdAt?.seconds || 0;
+  return createdA - createdB;
 };
 
 const generateNextDocId = (items, prefix, field) => {
@@ -11076,6 +11084,10 @@ export default function App() {
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   const [restoreFile, setRestoreFile] = useState(null);
   const restoreFileRef = useRef(null);
+  
+  // --- NEW: Restore Progress & Error States ---
+  const [restoreProgress, setRestoreProgress] = useState({ current: 0, total: 0, status: '' });
+  const [restoreError, setRestoreError] = useState('');
 
   // --- NEW: Backup Analyzer State ---
   const [showBackupPreview, setShowBackupPreview] = useState(false);
@@ -11336,6 +11348,7 @@ export default function App() {
     if (!restoreFile || !user) return;
     setShowRestoreConfirm(false);
     setIsRestoring(true);
+    setRestoreError(''); // Clear previous errors
 
     // ป้องกันการเผลอรีเฟรชหน้าจอระหว่างกำลัง Restore ข้อมูล (เพื่อไม่ให้ฐานข้อมูลแหว่ง)
     const handleBeforeUnload = (e) => {
@@ -11353,6 +11366,10 @@ export default function App() {
         if (obj.seconds !== undefined && obj.nanoseconds !== undefined) {
           return new Date(obj.seconds * 1000);
         }
+        // รองรับกรณี Date ถูกบันทึกเป็น format ของ Firestore v9
+        if (obj.type === "firestore/timestamp/1.0" && obj.seconds !== undefined) {
+          return new Date(obj.seconds * 1000);
+        }
         if (Array.isArray(obj)) return obj.map(reviveTimestamps);
         const newObj = {};
         for (const key in obj) newObj[key] = reviveTimestamps(obj[key]);
@@ -11362,30 +11379,49 @@ export default function App() {
       const revivedData = reviveTimestamps(restoreData);
       const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
 
+      // คำนวณจำนวนรายการทั้งหมดในไฟล์
+      let totalItems = 0;
+      for (const collName of collectionsToRestore) {
+         if (revivedData[collName]) totalItems += revivedData[collName].length;
+      }
+      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังล้างข้อมูลเก่าออก...' });
+
       let batch = writeBatch(dbInstance);
       let opsCount = 0;
+      const CHUNK_SIZE = 100; // ลดขนาดก้อนข้อมูลลงเหลือ 100 เพื่อความเสถียรสูงสุด
       
-      // ฟังก์ชันช่วย Commit แบบปลอดภัย (Safe Chunking)
-      const commitBatch = async () => {
+      // ฟังก์ชันช่วย Commit แบบปลอดภัย พร้อมระบบ Auto-Retry 3 รอบ
+      const commitBatchWithRetry = async () => {
         if (opsCount > 0) { 
-            await batch.commit(); 
+            for(let i=0; i<3; i++) {
+                try {
+                    await batch.commit(); 
+                    break; // สำเร็จให้ออกลูป
+                } catch (err) {
+                    if (i === 2) throw err; // ถ้าลองครบ 3 รอบยังพัง ให้โยน error ออกไปให้ UI แสดงผล
+                    await new Promise(r => setTimeout(r, 2000)); // รอ 2 วิแล้วลองใหม่
+                }
+            }
             batch = writeBatch(dbInstance); 
             opsCount = 0; 
         }
       };
 
-      // 1. ล้างข้อมูลเก่า (แบ่งลบทีละ 300 ป้องกันการค้าง)
+      // 1. ล้างข้อมูลเก่า (แบ่งลบทีละ 100)
       for (const collName of collectionsToRestore) {
         const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
         for (const docSnap of snap.docs) {
           batch.delete(docSnap.ref);
           opsCount++;
-          if (opsCount >= 300) await commitBatch();
+          if (opsCount >= CHUNK_SIZE) await commitBatchWithRetry();
         }
       }
-      await commitBatch(); // บังคับ Commit ส่วนที่เหลือของการลบให้จบก่อน
+      await commitBatchWithRetry(); // บังคับ Commit ส่วนที่เหลือของการลบให้จบก่อน
 
-      // 2. เขียนทับด้วยข้อมูล Backup (แบ่งเขียนทีละ 300)
+      // 2. เขียนทับด้วยข้อมูล Backup (แบ่งเขียนทีละ 100)
+      let restoredCount = 0;
+      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังเขียนข้อมูลใหม่ลงฐานข้อมูล...' });
+      
       for (const collName of collectionsToRestore) {
         if (!revivedData[collName] || !Array.isArray(revivedData[collName])) continue;
         for (const item of revivedData[collName]) {
@@ -11398,21 +11434,29 @@ export default function App() {
           
           batch.set(docRef, dataToSet);
           opsCount++;
-          if (opsCount >= 300) await commitBatch();
+          restoredCount++;
+          
+          if (opsCount >= CHUNK_SIZE) {
+              await commitBatchWithRetry();
+              setRestoreProgress({ current: restoredCount, total: totalItems, status: 'กำลังเขียนข้อมูลใหม่ลงฐานข้อมูล...' });
+          }
         }
       }
-      await commitBatch(); // บังคับ Commit ส่วนที่เหลือของการเขียนให้จบ
+      await commitBatchWithRetry(); // บังคับ Commit ส่วนที่เหลือของการเขียนให้จบ
       
-      addToast("กู้คืนข้อมูล (Restore) สำเร็จ!", "success");
+      setRestoreProgress({ current: restoredCount, total: totalItems, status: 'เสร็จสมบูรณ์!' });
+      addToast(`กู้คืนข้อมูล (Restore) สำเร็จ ${restoredCount} รายการ!`, "success");
+      
+      // ปลดล็อกการป้องกันรีเฟรชหน้า
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      setRestoreFile(null);
+      setIsRestoring(false);
     } catch (error) {
       console.error("Restore failed:", error);
-      addToast("การกู้คืนล้มเหลว หรือถูกขัดจังหวะ โปรดลองใหม่อีกครั้ง", "error");
+      setRestoreError(error.message || "เกิดข้อผิดพลาดไม่ทราบสาเหตุระหว่างเชื่อมต่อ");
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      setRestoreFile(null);
     }
-    
-    // ปลดล็อกการป้องกันรีเฟรชหน้า
-    window.removeEventListener("beforeunload", handleBeforeUnload);
-    setRestoreFile(null);
-    setIsRestoring(false);
   };
 
   const executeMigration = async () => {
@@ -11712,18 +11756,36 @@ export default function App() {
         </div>
       )}
 
-      {/* Restore Processing Modal */}
+      {/* Restore Processing Modal พร้อมระบบ Progress Bar แบบใหม่ */}
       {isRestoring && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-center">
-          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full shadow-2xl flex flex-col items-center text-center">
+          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95">
             <div className="w-20 h-20 bg-orange-50 text-orange-500 rounded-full flex items-center justify-center mb-6">
-              <RefreshCw size={40} className="animate-spin" />
+              <RefreshCw size={40} className={restoreError ? '' : 'animate-spin'} />
             </div>
-            <h3 className="text-2xl font-black mb-2 text-slate-800">กำลังกู้คืนข้อมูล</h3>
-            <p className="text-sm text-slate-500 leading-relaxed">
-              กำลังล้างข้อมูลเก่าและเขียนทับข้อมูลใหม่...<br/>
-              <span className="text-rose-500 font-bold mt-2 inline-block">กรุณารอสักครู่ ห้ามปิดหน้าต่างนี้</span>
-            </p>
+            
+            {restoreError ? (
+                <>
+                    <h3 className="text-2xl font-black mb-2 text-rose-600">กู้คืนไม่สำเร็จ!</h3>
+                    <p className="text-xs text-rose-500 bg-rose-50 p-3 rounded-lg mb-4 text-left font-mono break-words w-full">
+                        {restoreError}
+                    </p>
+                    <button onClick={() => { setIsRestoring(false); setRestoreError(''); }} className="w-full py-3 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold text-slate-600 transition-colors">
+                        รับทราบและปิดหน้าต่าง
+                    </button>
+                </>
+            ) : (
+                <>
+                    <h3 className="text-2xl font-black mb-2 text-slate-800">กำลังกู้คืนข้อมูล</h3>
+                    <p className="text-sm font-bold text-orange-600 bg-orange-50 px-4 py-1.5 rounded-full mb-4">
+                        {restoreProgress.status} {restoreProgress.current > 0 ? `(${restoreProgress.current.toLocaleString()} / ${restoreProgress.total.toLocaleString()})` : ''}
+                    </p>
+                    <div className="w-full bg-slate-100 rounded-full h-2 mb-4 overflow-hidden relative">
+                        <div className="bg-orange-500 h-full transition-all duration-300" style={{ width: restoreProgress.total > 0 ? `${(restoreProgress.current / restoreProgress.total) * 100}%` : '0%' }}></div>
+                    </div>
+                    <p className="text-[10px] text-rose-500 font-bold bg-rose-50 px-3 py-1 rounded">ห้ามปิดแท็บนี้ หรือรีเฟรชหน้าจอเด็ดขาด</p>
+                </>
+            )}
           </div>
         </div>
       )}
