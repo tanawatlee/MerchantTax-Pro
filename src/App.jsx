@@ -4471,8 +4471,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               itemMap[key].purchased += Number(item.qty) || 0;
           });
 
-          // ดึงยอดรับเข้าจากคลัง (Received) ที่ผูกกับบิลนี้ (parentExpenseId)
-          const relatedBatches = stockBatches.filter(b => b.parentExpenseId === trans.id);
+          // ดึงยอดรับเข้าจากคลัง (Received) ที่ผูกกับบิลนี้ (parentExpenseId หรือ linkedLotId)
+          const relatedBatches = stockBatches.filter(b => 
+              b.parentExpenseId === trans.id || 
+              trans.linkedLotId === b.id
+          );
+          
           relatedBatches.forEach(batch => {
               const key = batch.sku && batch.sku !== '-' ? batch.sku : batch.productName;
               if (!itemMap[key]) itemMap[key] = { name: batch.productName, sku: batch.sku || '-', purchased: 0, received: 0 };
@@ -4854,6 +4858,18 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                                     <span className={`px-2 py-0.5 rounded-lg font-black text-[10px] ${isLowest && !b.isAdjustment ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600'}`}>LOT {lotNum}</span>
                                     <span className="text-sm font-black text-slate-700 flex items-center gap-1.5"><Calendar size={14} className="text-slate-400"/> {formatDate(b.date)}</span>
                                 </div>
+                                
+                                {/* NEW: แสดงเลขใบกำกับ / เอกสารอ้างอิง (เฉพาะล็อตที่ไม่ได้มาจากการปรับปรุงยอด) */}
+                                {!b.isAdjustment && (() => {
+                                    const parentTx = transactions.find(t => t.type === 'expense' && (t.id === b.parentExpenseId || t.linkedLotId === b.id));
+                                    const refNo = parentTx ? (parentTx.taxInvoiceNo || parentTx.orderId || parentTx.sysDocId) : null;
+                                    return (
+                                        <div className="text-[10px] font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 w-fit flex items-center gap-1 mt-0.5" title="เลขที่ใบกำกับภาษี / เอกสารอ้างอิง">
+                                            <FileText size={10}/> Ref: {refNo || 'ไม่พบบิลอ้างอิง'}
+                                        </div>
+                                    );
+                                })()}
+
                                 <div className="flex items-center gap-1.5 flex-wrap mt-1">
                                     {b.isGiveaway && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5"><Gift size={10}/> แจกฟรี</span>}
                                     {isLowest && !b.isAdjustment && <span className="bg-emerald-600 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5"><TrendingUp size={10}/> Best Cost</span>}
@@ -12145,8 +12161,21 @@ export default function App() {
       // ค้นหาสต็อกที่มีรหัสเชื่อมโยงกับรายจ่าย (parentExpenseId) แต่หาตัวรายจ่ายต้นทางไม่เจอ
       const orphans = stockBatches.filter(batch => {
           if (batch.parentExpenseId && batch.category !== 'Imported' && !batch.isOpeningBalance) {
-              const expenseStillExists = transactions.some(t => t.id === batch.parentExpenseId);
-              return !expenseStillExists; // ถ้าไม่มี Expense ต้นทาง แสดงว่าเป็นสต็อกผีหลอก
+              // 1. หาแบบตรงไปตรงมา
+              let expenseStillExists = transactions.some(t => t.id === batch.parentExpenseId);
+              
+              // 2. ถ้าไม่เจอ ลองหาแบบ Smart Fallback (เผื่อโดนเปลี่ยน ID ตอนกู้คืนข้อมูล)
+              if (!expenseStillExists) {
+                  const bDate = normalizeDate(batch.date)?.getTime();
+                  expenseStillExists = transactions.some(t => {
+                      if (t.type !== 'expense') return false;
+                      const tDate = normalizeDate(t.date)?.getTime();
+                      if (!tDate || !bDate || Math.abs(tDate - bDate) > 86400000) return false;
+                      return (t.items || []).some(item => item.sku === batch.sku || item.desc === batch.productName);
+                  });
+              }
+              
+              return !expenseStillExists; // ถ้าหาไม่เจอทั้ง 2 วิธี แสดงว่าเป็นสต็อกผีหลอก
           }
           return false;
       });
