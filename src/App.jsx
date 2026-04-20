@@ -4752,56 +4752,97 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       
       {viewHistory && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[500] flex items-center justify-center p-4 text-left">
-          <div className="bg-white rounded-[40px] w-full max-w-3xl h-[80vh] flex flex-col shadow-2xl animate-in zoom-in-95 text-left">
-            <div className="p-6 border-b flex justify-between items-center text-left">
-                <div className="text-left">
-                    <h3 className="text-xl font-bold text-slate-800 text-left">Cost Tracking: {viewHistory.name}</h3>
-                    <p className="text-xs text-slate-400 text-left">ประวัติราคาต้นทุนและกำไรของสินค้าแต่ละล็อต</p>
+          <div className="bg-white rounded-[40px] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl animate-in zoom-in-95 text-left overflow-hidden">
+            <div className="p-6 md:p-8 border-b border-slate-100 flex justify-between items-start bg-slate-50 text-left">
+                <div className="flex gap-4 items-center">
+                    <div className="w-14 h-14 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner shrink-0">
+                        <History size={28}/>
+                    </div>
+                    <div>
+                        <h3 className="text-xl md:text-2xl font-black text-slate-800 text-left line-clamp-1">{viewHistory.name}</h3>
+                        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                            <p className="text-xs text-slate-500 font-mono bg-white px-2 py-0.5 rounded border border-slate-200 shadow-sm">SKU: {viewHistory.sku || '-'}</p>
+                            <p className="text-xs text-slate-500 font-bold">คลังรวมทั้งหมด: <span className="text-indigo-600 font-black">{viewHistory.totalQty}</span> ชิ้น</p>
+                        </div>
+                    </div>
                 </div>
-                <button onClick={() => setViewHistory(null)} className="p-2 hover:bg-slate-100 rounded-full text-center"><X/></button>
+                <button onClick={() => setViewHistory(null)} className="p-2.5 bg-white hover:bg-slate-200 rounded-full text-slate-400 hover:text-slate-600 transition-colors shadow-sm shrink-0"><X size={20}/></button>
             </div>
-            <div className="flex-1 overflow-auto p-6 space-y-4 text-left">
+            <div className="flex-1 overflow-auto p-4 md:p-6 space-y-3 text-left bg-slate-50/50 custom-scrollbar">
               {viewHistory.batches
                 .filter(b => b.quantity > 0) 
-                .sort(sortNewestFirst)
+                .sort(sortNewestFirst) // 🔴 FIX: เปลี่ยนการเรียงเป็น ใหม่ไปเก่า
                 .map((b, i) => {
-                    const isLowest = b.costPerUnit === Math.min(...viewHistory.batches.map(v => v.costPerUnit));
+                    const isLowest = b.costPerUnit === Math.min(...viewHistory.batches.filter(v=>v.quantity > 0).map(v => v.costPerUnit));
                     const margin = b.sellPrice > 0 ? ((b.sellPrice - b.costPerUnit) / b.sellPrice) * 100 : 0;
                     
+                    // คำนวณลำดับ Lot เดิม เพื่อให้ตัวเลข Lot ไม่สลับไปมา
+                    const chronoBatches = [...viewHistory.batches].filter(v=>v.quantity > 0).sort(sortOldestFirst);
+                    const originalIndex = chronoBatches.findIndex(cb => cb.id === b.id);
+                    const lotNum = originalIndex + 1;
+                    
                     return (
-                        <div key={i} className={`p-5 rounded-3xl border transition-all ${isLowest && !b.isAdjustment ? 'border-emerald-200 bg-emerald-50/50 shadow-sm' : 'border-slate-100 bg-slate-50/50'}`}>
-                            <div className="flex justify-between items-start text-left">
-                                <div className="space-y-1 text-left">
-                                    <div className="flex flex-wrap items-center gap-2 text-left mb-1">
-                                        <p className="text-[10px] font-bold text-indigo-600 uppercase text-left">Lot {i+1} - รับเข้า {formatDate(b.date)}</p>
-                                        {b.isGiveaway && <span className="text-[8px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-black uppercase inline-flex items-center gap-0.5"><Gift size={10}/> แจกฟรี</span>}
-                                        {isLowest && !b.isAdjustment && <span className="text-[8px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-black uppercase">Best Cost</span>}
-                                        {b.paymentStatus === 'credit' && <span className="text-[8px] bg-amber-500 text-white px-2 py-0.5 rounded-full font-black uppercase">Credit</span>}
-                                    </div>
-                                    
+                        <div key={i} className={`relative p-4 rounded-2xl border transition-all flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${isLowest && !b.isAdjustment ? 'border-emerald-300 bg-emerald-50/80 shadow-sm' : 'border-slate-200 bg-white hover:border-indigo-200 shadow-sm'}`}>
+                            
+                            {/* ส่วนที่ 1: วันที่ และ ป้ายกำกับ */}
+                            <div className="flex flex-col gap-1 w-full md:w-auto">
+                                <div className="flex items-center gap-2">
+                                    <span className={`px-2 py-0.5 rounded-lg font-black text-[10px] ${isLowest && !b.isAdjustment ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600'}`}>LOT {lotNum}</span>
+                                    <span className="text-sm font-black text-slate-700 flex items-center gap-1.5"><Calendar size={14} className="text-slate-400"/> {formatDate(b.date)}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                                    {b.isGiveaway && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5"><Gift size={10}/> แจกฟรี</span>}
+                                    {isLowest && !b.isAdjustment && <span className="bg-emerald-600 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5"><TrendingUp size={10}/> Best Cost</span>}
+                                    {b.paymentStatus === 'credit' && <span className="bg-amber-500 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5"><Clock size={10}/> Credit</span>}
                                     {b.isAdjustment && b.adjustReason && (
-                                        <div className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider mb-2">
+                                        <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[9px] font-black truncate max-w-[200px] flex items-center gap-0.5" title={b.adjustReason}>
                                             <ArrowRightLeft size={10}/> {b.adjustReason}
-                                        </div>
+                                        </span>
                                     )}
-                                    
-                                    <p className="text-xl font-black text-slate-900 text-left">{formatCurrency(b.costPerUnit)} <span className="text-xs font-bold text-slate-400">/ หน่วย</span></p>
-                                    <div className="flex items-center gap-4 text-left">
-                                        <p className="text-[10px] text-slate-500 font-bold">ราคาขาย: {formatCurrency(b.sellPrice || 0)}</p>
-                                        {!b.isAdjustment && <p className={`text-[10px] font-black ${margin > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Margin: {margin.toFixed(1)}%</p>}
+                                </div>
+                            </div>
+
+                            {/* ส่วนที่ 2: ข้อมูลการเงิน (ทุน / กำไร) */}
+                            <div className="flex items-center gap-6 bg-slate-50 md:bg-transparent p-3 md:p-0 rounded-xl border border-slate-100 md:border-none w-full md:w-auto">
+                                <div>
+                                    <p className="text-[9px] font-bold text-slate-400 uppercase">ทุน/หน่วย</p>
+                                    <p className="text-base font-black text-slate-800">{formatCurrency(b.costPerUnit)} <span className="text-[10px]">฿</span></p>
+                                </div>
+                                
+                                {b.sellPrice > 0 && (
+                                    <div className="border-l border-slate-200 pl-6">
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ขาย / กำไร</p>
+                                        <div className="flex items-center gap-2">
+                                            <p className="text-base font-black text-indigo-600">{formatCurrency(b.sellPrice)} <span className="text-[10px]">฿</span></p>
+                                            {!b.isAdjustment && (
+                                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-black ${margin > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                                    {margin > 0 ? '+' : ''}{margin.toFixed(0)}%
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
+                                )}
+                            </div>
+
+                            {/* ส่วนที่ 3: คงเหลือ และ ปุ่มลบ */}
+                            <div className="flex items-center justify-between w-full md:w-auto md:justify-end gap-6 border-t md:border-none border-slate-100 pt-3 md:pt-0">
+                                <div className="text-right flex flex-col md:items-end">
+                                    <p className="text-[9px] font-bold text-slate-400 uppercase">คงเหลือ</p>
+                                    <p className={`text-base font-black ${b.remaining === 0 ? 'text-rose-500' : 'text-slate-700'}`}>
+                                        {b.remaining} <span className="text-xs text-slate-400 font-medium">/ {b.quantity}</span>
+                                    </p>
                                 </div>
-                                <div className="text-right text-right">
-                                    <p className="text-[10px] text-slate-400 font-black uppercase text-right">คงเหลือ / ทั้งหมด</p>
-                                    <p className="text-xl font-black text-slate-900 text-right">{b.remaining} <span className="text-slate-300">/ {b.quantity}</span></p>
-                                    <button onClick={() => setDeleteBatchConfirm(b)} className="mt-2 p-2 text-rose-300 hover:text-rose-600 transition-all text-center"><Trash2 size={16}/></button>
-                                </div>
+                                <button onClick={() => setDeleteBatchConfirm(b)} className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-400 hover:bg-rose-500 hover:text-white rounded-xl transition-all shrink-0" title="ลบล็อตนี้">
+                                    <Trash2 size={14}/>
+                                </button>
                             </div>
                         </div>
                     );
                 })}
             </div>
-            <div className="p-6 border-t bg-slate-50 rounded-b-[40px] text-center"><button onClick={()=>setViewHistory(null)} className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-bold text-slate-600 text-center">ปิด</button></div>
+            <div className="p-6 border-t border-slate-100 bg-white flex justify-center text-center">
+                <button onClick={()=>setViewHistory(null)} className="px-10 py-3.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-2xl font-black text-slate-600 transition-colors shadow-sm">ปิดหน้าต่าง</button>
+            </div>
           </div>
         </div>
       )}
