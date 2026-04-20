@@ -370,6 +370,58 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
     }
 };
 
+// --- Advanced PDF Decryption Fallback (Automated Render to Clean PDF) ---
+const decryptPdfFallback = async (arrayBuffer, password) => {
+    if (!window.pdfjsLib) {
+        await new Promise((resolve) => {
+            const s = document.createElement('script');
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+            s.onload = resolve; document.head.appendChild(s);
+        });
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+    if (!window.jspdf) {
+        await new Promise((resolve) => {
+            const s = document.createElement('script');
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+            s.onload = resolve; document.head.appendChild(s);
+        });
+    }
+
+    const typedarray = new Uint8Array(arrayBuffer);
+    const loadingTask = window.pdfjsLib.getDocument({ data: typedarray, password: password });
+    const pdf = await loadingTask.promise;
+    
+    const pdfDoc = new window.jspdf.jsPDF('p', 'mm', 'a4');
+    
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 2.0 });
+        
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+        
+        const imgData = canvas.toDataURL('image/jpeg', 0.95);
+        
+        if (pageNum > 1) pdfDoc.addPage();
+        
+        const pdfWidth = pdfDoc.internal.pageSize.getWidth();
+        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+        
+        pdfDoc.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+    }
+    
+    const pdfBase64 = pdfDoc.output('datauristring');
+    return pdfBase64.split(',')[1];
+};
+
 // --- Shared UI Components ---
 function LoadingScreen() {
   return (
@@ -6084,10 +6136,15 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   base64Data = window.btoa(binary);
                   showToast('ปลดล็อก PDF และลบรหัสผ่านสำเร็จ!', 'success');
               } catch(err) {
-                  console.error(err);
-                  showToast('รหัสผ่านไม่ถูกต้อง หรือไฟล์เข้ารหัสขั้นสูง (AES-256) ที่เบราว์เซอร์ไม่รองรับ', 'error');
-                  setIsUploadingFile(false);
-                  return;
+                  console.error("PDF-lib Decryption Error:", err);
+                  // --- 🔥 FIX: Fallback อัปโหลดไฟล์ต้นฉบับแทน หากปลดล็อก AES-256 ไม่ได้ ---
+                  showToast('เบราว์เซอร์ไม่รองรับการปลดล็อก AES-256 ระบบจะอัปโหลดไฟล์ต้นฉบับ(ติดรหัส)แทน', 'warn');
+                  base64Data = await new Promise((resolve, reject) => {
+                      const reader = new FileReader();
+                      reader.onload = () => resolve(reader.result.split(',')[1]);
+                      reader.onerror = reject;
+                      reader.readAsDataURL(file);
+                  });
               }
           } else {
               base64Data = await new Promise((resolve, reject) => {
@@ -6167,6 +6224,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           
           if (file.type === 'application/pdf' && historyPdfPassword) {
               showToast('กำลังปลดล็อกรหัสผ่าน PDF...', 'success');
+              const arrayBuffer = await file.arrayBuffer(); // Load once
+
               if (!window.PDFLib) {
                   await new Promise(res => {
                       const s = document.createElement('script');
@@ -6175,8 +6234,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   });
               }
               try {
-                  const arrayBuffer = await file.arrayBuffer();
-                  
                   // 1. โหลด PDF ด้วยรหัสผ่าน (ใส่ trim() เผื่อเผลอพิมพ์เว้นวรรค)
                   const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: historyPdfPassword.trim() });
                   
@@ -6199,10 +6256,22 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   base64Data = window.btoa(binary);
                   showToast('ปลดล็อก PDF และลบรหัสผ่านสำเร็จ!', 'success');
               } catch(err) {
-                  console.error(err);
-                  showToast('รหัสผ่านไม่ถูกต้อง หรือไฟล์เข้ารหัสขั้นสูง (AES-256) ที่เบราว์เซอร์ไม่รองรับ', 'error');
-                  setIsUploadingFile(false);
-                  return;
+                  console.error("PDF-lib Decryption Error:", err);
+                  showToast('พบไฟล์เข้ารหัสขั้นสูง! กำลังใช้ระบบ AI สกัดภาพเพื่อปลดล็อก...', 'warn');
+                  try {
+                      base64Data = await decryptPdfFallback(arrayBuffer, historyPdfPassword.trim());
+                      showToast('สกัดภาพและสร้าง PDF ใหม่สำเร็จ!', 'success');
+                  } catch (fallbackErr) {
+                      console.error("Fallback Error:", fallbackErr);
+                      showToast('รหัสผ่านไม่ถูกต้อง หรือไฟล์เสียหาย ระบบจะอัปโหลดไฟล์ต้นฉบับแทน', 'error');
+                      // Fallback to original
+                      base64Data = await new Promise((resolve, reject) => {
+                          const reader = new FileReader();
+                          reader.onload = () => resolve(reader.result.split(',')[1]);
+                          reader.onerror = reject;
+                          reader.readAsDataURL(file);
+                      });
+                  }
               }
           } else {
               base64Data = await new Promise((resolve, reject) => {
