@@ -7852,7 +7852,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <input type="number" value={formData.shippingFee} onChange={e=>setFormData({...formData, shippingFee: e.target.value})} className="w-full bg-white/5 border border-white/10 p-2 rounded-lg text-xs font-bold focus:bg-white/10 outline-none text-left" placeholder="0.00" />
                         </div>
                         <div className="space-y-1 text-left">
-                          <label className="text-[9px] font-bold opacity-40 uppercase text-left">ค่าจัดส่งโดยประมาณ</label>
+                          <label className="text-[9px] font-bold opacity-40 uppercase text-left">ค่าจัดส่งโดยประมาณ / ร้านจ่ายเพิ่ม</label>
                           <input type="number" value={formData.estimatedShippingFee} onChange={e=>setFormData({...formData, estimatedShippingFee: e.target.value})} className="w-full bg-white/5 border border-white/10 p-2 rounded-lg text-xs font-bold focus:bg-white/10 outline-none text-left" placeholder="0.00" />
                         </div>
                         <div className="space-y-1 text-left">
@@ -7864,6 +7864,15 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <input type="number" value={formData.returnShippingFee} onChange={e=>setFormData({...formData, returnShippingFee: e.target.value})} className="w-full bg-white/5 border border-white/10 p-2 rounded-lg text-xs font-bold focus:bg-white/10 outline-none text-left" placeholder="0.00" />
                         </div>
                       </div>
+                      
+                      {(parseFloat(formData.estimatedShippingFee) > 0 || parseFloat(formData.returnShippingFee) > 0) && (
+                          <label className="flex items-center gap-2 cursor-pointer mt-3 pt-3 border-t border-white/10 w-fit group text-left">
+                              <input type="checkbox" checked={formData.autoCreateShippingExpense !== false} onChange={e=>setFormData({...formData, autoCreateShippingExpense: e.target.checked})} className="w-4 h-4 rounded border-white/20 bg-white/5 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-900 cursor-pointer" />
+                              <span className="text-[10px] font-bold opacity-90 group-hover:opacity-100 transition-opacity text-left text-emerald-300 flex items-center gap-1">
+                                 📦 บันทึกยอดนี้เป็น "บิลรายจ่ายค่าขนส่ง" ให้อัตโนมัติ
+                              </span>
+                          </label>
+                      )}
                     </div>
                   )}
                   
