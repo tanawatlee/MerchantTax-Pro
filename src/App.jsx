@@ -11118,6 +11118,11 @@ export default function App() {
    
   useEffect(() => {
     if (!user || !currentAppId) return;
+    
+    // --- 🔴 THE ULTIMATE FIX 1: ปิดระบบ Live Sync ชั่วคราวขณะกู้คืนข้อมูล ---
+    // ป้องกันเบราว์เซอร์สูบ RAM และเน็ตหลุดจากการพยายามโหลดข้อมูลนับหมื่นรายการแบบ Real-time พร้อมๆ กัน
+    if (isRestoring || isMigrating || isBackingUp) return; 
+
     setLoading(true);
     const path = (coll) => collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', coll);
     const errorFn = (e) => { console.error("Firestore error:", e); addToast("Sync Error", "error"); };
@@ -11129,7 +11134,7 @@ export default function App() {
     const unsubLogs = onSnapshot(query(path('import_logs')), (s) => setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)}))), errorFn);
     
     return () => { unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubPromo(); unsubLogs(); };
-  }, [user, currentAppId]);
+  }, [user, currentAppId, isRestoring, isMigrating, isBackingUp]);
 
   const forceDeleteById = async () => {
     if (!targetIdToDelete) return;
@@ -11376,7 +11381,26 @@ export default function App() {
         return newObj;
       };
 
-      const revivedData = reviveTimestamps(restoreData);
+      // --- 🔴 THE ULTIMATE FIX 2: ตัวกรองขยะ (Sanitizer) ---
+      // ป้องกัน Error "Unsupported field value: undefined" ที่ทำให้ Firebase หยุดเขียนข้อมูลกลางคันแบบเงียบๆ
+      const sanitizeForFirestore = (obj) => {
+          if (obj === undefined) return null;
+          if (obj === null) return null;
+          if (obj instanceof Date) return obj;
+          if (Array.isArray(obj)) return obj.map(sanitizeForFirestore).filter(v => v !== undefined);
+          if (typeof obj === 'object') {
+              const newObj = {};
+              for (const key in obj) {
+                  if (obj[key] !== undefined) {
+                      newObj[key] = sanitizeForFirestore(obj[key]);
+                  }
+              }
+              return newObj;
+          }
+          return obj;
+      };
+
+      const revivedData = sanitizeForFirestore(reviveTimestamps(restoreData));
       const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
 
       // คำนวณจำนวนรายการทั้งหมดในไฟล์
@@ -11384,11 +11408,11 @@ export default function App() {
       for (const collName of collectionsToRestore) {
          if (revivedData[collName]) totalItems += revivedData[collName].length;
       }
-      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังล้างข้อมูลเก่าออก...' });
+      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังเตรียมเชื่อมต่อฐานข้อมูล...' });
 
       let batch = writeBatch(dbInstance);
       let opsCount = 0;
-      const CHUNK_SIZE = 100; // ลดขนาดก้อนข้อมูลลงเหลือ 100 เพื่อความเสถียรสูงสุด
+      const CHUNK_SIZE = 400; // เปลี่ยนกลับเป็น 400 เพื่อความรวดเร็วและลดโอกาสโดนแบนจาก Google Cloud
       
       // ฟังก์ชันช่วย Commit แบบปลอดภัย พร้อมระบบ Auto-Retry 3 รอบ
       const commitBatchWithRetry = async () => {
@@ -11407,7 +11431,8 @@ export default function App() {
         }
       };
 
-      // 1. ล้างข้อมูลเก่า (แบ่งลบทีละ 100)
+      // 1. ล้างข้อมูลเก่า (แบ่งลบทีละ 400)
+      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังล้างข้อมูลเก่าออก...' });
       for (const collName of collectionsToRestore) {
         const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
         for (const docSnap of snap.docs) {
@@ -11418,9 +11443,9 @@ export default function App() {
       }
       await commitBatchWithRetry(); // บังคับ Commit ส่วนที่เหลือของการลบให้จบก่อน
 
-      // 2. เขียนทับด้วยข้อมูล Backup (แบ่งเขียนทีละ 100)
+      // 2. เขียนทับด้วยข้อมูล Backup (แบ่งเขียนทีละ 400)
       let restoredCount = 0;
-      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังเขียนข้อมูลใหม่ลงฐานข้อมูล...' });
+      setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังอัปโหลดข้อมูลใหม่ลงคลาวด์...' });
       
       for (const collName of collectionsToRestore) {
         if (!revivedData[collName] || !Array.isArray(revivedData[collName])) continue;
@@ -11438,19 +11463,24 @@ export default function App() {
           
           if (opsCount >= CHUNK_SIZE) {
               await commitBatchWithRetry();
-              setRestoreProgress({ current: restoredCount, total: totalItems, status: 'กำลังเขียนข้อมูลใหม่ลงฐานข้อมูล...' });
+              setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลดข้อมูล... (${Math.round((restoredCount/totalItems)*100)}%)` });
           }
         }
       }
       await commitBatchWithRetry(); // บังคับ Commit ส่วนที่เหลือของการเขียนให้จบ
       
-      setRestoreProgress({ current: restoredCount, total: totalItems, status: 'เสร็จสมบูรณ์!' });
-      addToast(`กู้คืนข้อมูล (Restore) สำเร็จ ${restoredCount} รายการ!`, "success");
+      setRestoreProgress({ current: restoredCount, total: totalItems, status: 'เสร็จสมบูรณ์! กำลังรีเฟรชระบบ...' });
       
       // ปลดล็อกการป้องกันรีเฟรชหน้า
       window.removeEventListener("beforeunload", handleBeforeUnload);
       setRestoreFile(null);
-      setIsRestoring(false);
+      
+      // --- 🔴 THE ULTIMATE FIX 3: บังคับ Hard Reload ทันทีที่เสร็จ ---
+      // ป้องกันเบราว์เซอร์จำภาพเก่า และบังคับดึงข้อมูลสด 100% จาก Firebase
+      setTimeout(() => {
+          window.location.reload();
+      }, 1500);
+
     } catch (error) {
       console.error("Restore failed:", error);
       setRestoreError(error.message || "เกิดข้อผิดพลาดไม่ทราบสาเหตุระหว่างเชื่อมต่อ");
@@ -12054,7 +12084,19 @@ export default function App() {
         </div>
       </aside>
       <main className="flex-1 flex flex-col h-full overflow-hidden relative text-left">
-        <header className="bg-white/95 backdrop-blur-md shadow-sm border-b border-slate-200 p-5 lg:px-10 flex justify-between items-center z-10 h-20 shrink-0 text-left"><div className="flex items-center gap-4 text-left"><h2 className="font-bold text-slate-800 text-sm uppercase tracking-widest text-left">{activeTab.replace('_', ' ')}</h2></div>{loading && <div className="text-[10px] font-black text-indigo-600 flex items-center gap-2 bg-indigo-50 px-4 py-1.5 rounded-full border border-indigo-100 animate-pulse text-left"><Loader size={12} className="animate-spin text-center"/> SYNCING</div>}</header>
+        <header className="bg-white/95 backdrop-blur-md shadow-sm border-b border-slate-200 p-5 lg:px-10 flex justify-between items-center z-10 h-20 shrink-0 text-left">
+            <div className="flex items-center gap-4 text-left">
+                <h2 className="font-bold text-slate-800 text-sm uppercase tracking-widest text-left">{activeTab.replace('_', ' ')}</h2>
+            </div>
+            <div className="flex items-center gap-3">
+                {loading && <div className="text-[10px] font-black text-indigo-600 flex items-center gap-2 bg-indigo-50 px-4 py-1.5 rounded-full border border-indigo-100 animate-pulse text-left"><Loader size={12} className="animate-spin text-center"/> SYNCING</div>}
+                
+                {/* --- NEW: ปุ่มบังคับล้างแคชและดึงข้อมูลใหม่จาก Firebase --- */}
+                <button onClick={() => window.location.reload()} className="text-[10px] font-bold text-slate-500 hover:text-indigo-600 flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm hover:shadow-md hover:border-indigo-200 transition-all">
+                    <RefreshCw size={12}/> รีเฟรชซิงค์ข้อมูล
+                </button>
+            </div>
+        </header>
         <div className="flex-1 overflow-auto p-6 lg:p-10 relative bg-[#f8fafc] text-left">{renderContent()}</div>
       </main>
 
