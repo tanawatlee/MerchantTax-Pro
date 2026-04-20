@@ -6053,8 +6053,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               }
               try {
                   const arrayBuffer = await file.arrayBuffer();
-                  const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: newPdfPassword });
-                  const savedPdfBytes = await pdfDoc.save();
+                  
+                  // 1. โหลด PDF ด้วยรหัสผ่าน (ใส่ trim() เผื่อเผลอพิมพ์เว้นวรรค)
+                  const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: newPdfPassword.trim() });
+                  
+                  // 2. สร้าง PDF ใหม่แบบคลีนๆ เพื่อเลี่ยงข้อจำกัดการห้ามเซฟไฟล์เข้ารหัส
+                  const newDoc = await window.PDFLib.PDFDocument.create();
+                  
+                  // 3. คัดลอกทุกหน้าจากไฟล์ที่ปลดล็อกแล้ว มาใส่ในไฟล์ใหม่
+                  const copiedPages = await newDoc.copyPages(pdfDoc, pdfDoc.getPageIndices());
+                  copiedPages.forEach((page) => newDoc.addPage(page));
+                  
+                  // 4. เซฟไฟล์ใหม่ (ตอนนี้ไฟล์ไม่มีรหัสผ่านแล้ว)
+                  const savedPdfBytes = await newDoc.save();
                   
                   let binary = '';
                   const bytes = new Uint8Array(savedPdfBytes);
@@ -6066,7 +6077,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   showToast('ปลดล็อก PDF และลบรหัสผ่านสำเร็จ!', 'success');
               } catch(err) {
                   console.error(err);
-                  showToast('รหัสผ่าน PDF ไม่ถูกต้อง หรือไฟล์ไม่สามารถปลดล็อกได้', 'error');
+                  showToast('รหัสผ่านไม่ถูกต้อง หรือไฟล์เข้ารหัสขั้นสูง (AES-256) ที่เบราว์เซอร์ไม่รองรับ', 'error');
                   setIsUploadingFile(false);
                   return;
               }
@@ -6157,8 +6168,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               }
               try {
                   const arrayBuffer = await file.arrayBuffer();
-                  const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: historyPdfPassword });
-                  const savedPdfBytes = await pdfDoc.save();
+                  
+                  // 1. โหลด PDF ด้วยรหัสผ่าน (ใส่ trim() เผื่อเผลอพิมพ์เว้นวรรค)
+                  const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: historyPdfPassword.trim() });
+                  
+                  // 2. สร้าง PDF ใหม่แบบคลีนๆ
+                  const newDoc = await window.PDFLib.PDFDocument.create();
+                  
+                  // 3. คัดลอกทุกหน้ามาไฟล์ใหม่
+                  const copiedPages = await newDoc.copyPages(pdfDoc, pdfDoc.getPageIndices());
+                  copiedPages.forEach((page) => newDoc.addPage(page));
+                  
+                  // 4. เซฟไฟล์ใหม่
+                  const savedPdfBytes = await newDoc.save();
                   
                   let binary = '';
                   const bytes = new Uint8Array(savedPdfBytes);
@@ -6170,7 +6192,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   showToast('ปลดล็อก PDF และลบรหัสผ่านสำเร็จ!', 'success');
               } catch(err) {
                   console.error(err);
-                  showToast('รหัสผ่าน PDF ไม่ถูกต้อง หรือไฟล์ไม่สามารถปลดล็อกได้', 'error');
+                  showToast('รหัสผ่านไม่ถูกต้อง หรือไฟล์เข้ารหัสขั้นสูง (AES-256) ที่เบราว์เซอร์ไม่รองรับ', 'error');
                   setIsUploadingFile(false);
                   return;
               }
