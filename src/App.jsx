@@ -3864,6 +3864,10 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [aiInsights, setAiInsights] = useState(null);
   const [isAnalyzingStock, setIsAnalyzingStock] = useState(false);
   
+  // --- NEW: Stock Audit States ---
+  const [showStockAuditModal, setShowStockAuditModal] = useState(false);
+  const [auditResults, setAuditResults] = useState([]);
+
   // --- NEW: Date Range Filter สำหรับดูยอดรับเข้า ---
   const [stockStartDate, setStockStartDate] = useState('');
   const [stockEndDate, setStockEndDate] = useState('');
@@ -4449,6 +4453,61 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       setIsAnalyzingStock(false);
   };
 
+  // --- NEW: ฟังก์ชันวิเคราะห์ยอดจัดซื้อ (Stock Audit) ---
+  const handleRunStockAudit = () => {
+      const discrepancies = [];
+      
+      // 1. ดึงบิลรายจ่ายทั้งหมด ที่เป็นหมวด 'ต้นทุนสินค้า' และยังไม่ถูกยกเลิก
+      const expenseTrans = transactions.filter(t => t.type === 'expense' && (t.category === 'ต้นทุนสินค้า' || t.isFromInventory) && !t.isCancelled);
+
+      expenseTrans.forEach(trans => {
+          const itemMap = {};
+          
+          // นำยอดซื้อจากบิลมาตั้งเป็นฐาน (Purchased)
+          (trans.items || []).forEach(item => {
+              if (String(item.desc).startsWith('[ของแจก/โปรโมท]')) return; // ข้ามของแจกที่ไม่ต้องเข้าคลัง
+              const key = item.sku && item.sku !== '-' ? item.sku : item.desc;
+              if (!itemMap[key]) itemMap[key] = { name: item.desc, sku: item.sku || '-', purchased: 0, received: 0 };
+              itemMap[key].purchased += Number(item.qty) || 0;
+          });
+
+          // ดึงยอดรับเข้าจากคลัง (Received) ที่ผูกกับบิลนี้ (parentExpenseId)
+          const relatedBatches = stockBatches.filter(b => b.parentExpenseId === trans.id);
+          relatedBatches.forEach(batch => {
+              const key = batch.sku && batch.sku !== '-' ? batch.sku : batch.productName;
+              if (!itemMap[key]) itemMap[key] = { name: batch.productName, sku: batch.sku || '-', purchased: 0, received: 0 };
+              itemMap[key].received += Number(batch.quantity) || 0;
+          });
+
+          // หาผลต่าง
+          Object.values(itemMap).forEach(data => {
+              const diff = data.received - data.purchased;
+              if (diff !== 0) {
+                  discrepancies.push({
+                      sysDocId: trans.sysDocId || '-',
+                      taxInvoiceNo: trans.taxInvoiceNo || trans.orderId || '-',
+                      date: trans.date,
+                      name: data.name,
+                      sku: data.sku,
+                      purchased: data.purchased,
+                      received: data.received,
+                      diff: diff
+                  });
+              }
+          });
+      });
+
+      // เรียงจากใหม่ไปเก่า
+      discrepancies.sort((a, b) => {
+          const tA = normalizeDate(a.date)?.getTime() || 0;
+          const tB = normalizeDate(b.date)?.getTime() || 0;
+          return tB - tA;
+      });
+      
+      setAuditResults(discrepancies);
+      setShowStockAuditModal(true);
+  };
+
   return (
     <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-20">
       <div className="flex justify-between items-center flex-wrap gap-4 text-left">
@@ -4456,6 +4515,11 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
         <div className="flex items-center gap-2 text-left flex-wrap">
           <button onClick={handleAiStockAnalysis} disabled={isAnalyzingStock} className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50">
             {isAnalyzingStock ? <Loader className="animate-spin" size={16}/> : <Sparkles size={16}/>} AI Smart Inventory
+          </button>
+
+          {/* NEW: ปุ่มเรียกใช้งานระบบ Stock Audit */}
+          <button onClick={handleRunStockAudit} disabled={isProcessing} className="bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-sm" title="ตรวจสอบยอดจัดซื้อเทียบกับยอดรับเข้าคลัง">
+            <ClipboardList size={16}/> ตรวจสอบยอดรับเข้า (Audit)
           </button>
           
           {/* NEW: Filter วันที่สำหรับเช็คสินค้ารับเข้า */}
@@ -5024,6 +5088,74 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   {isProcessing ? <Loader className="animate-spin" size={16}/> : <CheckCircle size={16}/>} ยืนยัน
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEW: Stock Audit Result Modal */}
+      {showStockAuditModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+            <div className="flex justify-between items-start mb-6 border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><ClipboardList className="text-blue-600"/> รายงานวิเคราะห์ยอดจัดซื้อ (Stock Audit)</h3>
+                <p className="text-xs text-slate-500 mt-1">เปรียบเทียบจำนวนสินค้าจาก "บิลรายจ่าย (ต้นทุน)" กับ "ยอดที่รับเข้าคลังจริง"</p>
+              </div>
+              <button onClick={() => setShowStockAuditModal(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
+            </div>
+
+            <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-800 uppercase sticky top-0 border-b border-slate-200 z-10">
+                  <tr>
+                    <th className="p-4 whitespace-nowrap">วันที่ / เอกสารอ้างอิง</th>
+                    <th className="p-4">สินค้า (Product / SKU)</th>
+                    <th className="p-4 text-center text-rose-600 bg-rose-50/50">ยอดจากบิล (ซื้อ)</th>
+                    <th className="p-4 text-center text-emerald-600 bg-emerald-50/50">รับเข้าจริง (คลัง)</th>
+                    <th className="p-4 text-right">ส่วนต่าง (Diff)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {auditResults.length > 0 ? auditResults.map((item, i) => (
+                    <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="p-4">
+                        <div className="flex flex-col gap-1">
+                          <span className="font-bold text-slate-700">{formatDate(item.date)}</span>
+                          <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded w-fit shadow-sm">{item.sysDocId}</span>
+                          {item.taxInvoiceNo !== '-' && <span className="text-[9px] text-slate-400 font-bold">Ref: {item.taxInvoiceNo}</span>}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <p className="font-bold text-slate-800 line-clamp-2">{item.name}</p>
+                        <p className="text-[10px] text-indigo-500 font-mono mt-0.5 font-bold">SKU: {item.sku}</p>
+                      </td>
+                      <td className="p-4 text-center font-black text-rose-600 bg-rose-50/20">{item.purchased}</td>
+                      <td className="p-4 text-center font-black text-emerald-600 bg-emerald-50/20">{item.received}</td>
+                      <td className="p-4 text-right">
+                        <span className={`px-2 py-1 rounded-md font-black text-[10px] shadow-sm ${item.diff > 0 ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-rose-100 text-rose-700 border border-rose-200'}`}>
+                          {item.diff > 0 ? `เกินมา +${item.diff}` : `หายไป ${item.diff}`}
+                        </span>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan="5" className="p-10 text-center">
+                        <div className="flex flex-col items-center justify-center text-slate-400">
+                          <CheckCircle size={40} className="text-emerald-400 mb-3 opacity-50"/>
+                          <p className="font-bold text-slate-600">ยอดเยี่ยม! ยอดสั่งซื้อและยอดรับเข้าคลังตรงกัน 100%</p>
+                          <p className="text-[10px] mt-1">ไม่พบรายการสินค้าที่ขาดหายหรือเกินมาจากบิลรายจ่าย</p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            
+            <div className="pt-4 mt-2 border-t border-slate-100 flex justify-between items-center">
+              <p className="text-[10px] font-bold text-rose-500">* หากพบยอดที่หายไป แนะนำให้ตรวจสอบว่ามีการลบ/ปรับปรุงสต็อกผิดพลาด หรือลืมบันทึกรับเข้าหรือไม่</p>
+              <button onClick={() => setShowStockAuditModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors shadow-md">ปิดหน้าต่าง</button>
             </div>
           </div>
         </div>
