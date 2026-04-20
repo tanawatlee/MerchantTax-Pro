@@ -6338,8 +6338,22 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   };
 
   const handleDirectFileDelete = async () => {
-      if(!window.confirm('ต้องการลบลิงก์ไฟล์แนบนี้หรือไม่? (ตัวไฟล์จริงใน Google Drive คุณต้องไปลบออกเอง)')) return;
+      if(!window.confirm('ยืนยันการลบไฟล์แนบ? (ระบบจะลบไฟล์ออกจาก Google Drive ด้วย)')) return;
       try {
+          const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+          if (webhookUrl && viewItem.attachmentUrl) {
+              showToast('กำลังลบไฟล์ออกจาก Google Drive...', 'success');
+              try {
+                  await fetch(webhookUrl, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                      body: JSON.stringify({ action: 'delete', fileUrl: viewItem.attachmentUrl })
+                  });
+              } catch(err) {
+                  console.warn("Drive Delete Error:", err);
+              }
+          }
+
           const coll = viewItem.type === 'income' ? 'transactions_income' : 'transactions_expense';
           const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, viewItem.id);
           await updateDoc(docRef, { attachmentUrl: '' });
@@ -6348,6 +6362,24 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       } catch(e) {
           showToast('ลบไม่สำเร็จ', 'error');
       }
+  };
+
+  const handleRemoveNewAttachment = async () => {
+      if(!window.confirm('ยืนยันการยกเลิกไฟล์แนบ? (ระบบจะลบไฟล์ออกจาก Google Drive ด้วย)')) return;
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (webhookUrl && formData.attachmentUrl) {
+          showToast('กำลังลบไฟล์ออกจาก Google Drive...', 'success');
+          try {
+              await fetch(webhookUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                  body: JSON.stringify({ action: 'delete', fileUrl: formData.attachmentUrl })
+              });
+          } catch(e) {
+              console.warn("Drive Delete Error:", e);
+          }
+      }
+      setFormData(prev => ({ ...prev, attachmentUrl: '' }));
   };
 
   const handleSavePartnerManual = async () => {
@@ -6671,6 +6703,22 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       try {
           const batchWriter = writeBatch(dbInstance);
           const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, targetId);
+
+          // NEW: ลบไฟล์จาก Drive ก่อนลบ Document ถาวร
+          if (hardDeleteConfirmId.attachmentUrl) {
+              const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+              if (webhookUrl) {
+                  try {
+                      await fetch(webhookUrl, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                          body: JSON.stringify({ action: 'delete', fileUrl: hardDeleteConfirmId.attachmentUrl })
+                  });
+                  } catch (e) {
+                      console.warn("Drive Delete Error:", e);
+                  }
+              }
+          }
 
           // ถ้ายังไม่ได้ถูกยกเลิก (void) ต้องคืนสต็อกก่อน
           if (!hardDeleteConfirmId.isCancelled) {
@@ -7420,7 +7468,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     <img src={formData.attachmentUrl} alt="Attachment" className="h-24 w-auto rounded-xl border border-slate-200 shadow-sm object-cover" />
                                 )}
                             </a>
-                            <button type="button" onClick={() => setFormData({...formData, attachmentUrl: ''})} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
+                            <button type="button" onClick={handleRemoveNewAttachment} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
                         </div>
                     ) : (
                         <div className="flex flex-col gap-2 w-full sm:w-auto">
