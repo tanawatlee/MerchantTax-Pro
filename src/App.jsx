@@ -11088,6 +11088,9 @@ export default function App() {
   // --- NEW: Restore Progress & Error States ---
   const [restoreProgress, setRestoreProgress] = useState({ current: 0, total: 0, status: '' });
   const [restoreError, setRestoreError] = useState('');
+  const [restoreFileStats, setRestoreFileStats] = useState(null); // --- NEW: State เก็บสรุปข้อมูลก่อนกู้คืน
+  const [restoreLogs, setRestoreLogs] = useState([]); 
+  const terminalRef = useRef(null); 
 
   // --- NEW: Backup Analyzer State ---
   const [showBackupPreview, setShowBackupPreview] = useState(false);
@@ -11107,6 +11110,12 @@ export default function App() {
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
   const toggleAppMode = () => { const ids = Object.values(CONSTANTS.IDS); const nextId = ids[(ids.indexOf(currentAppId) + 1) % ids.length]; setCurrentAppId(nextId); localStorage.setItem('merchant_app_id', nextId); addToast(`ฐานข้อมูล: ${nextId}`, "success"); };
+
+  useEffect(() => {
+    if (terminalRef.current) {
+        terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [restoreLogs]);
 
   useEffect(() => { 
     const unsubscribe = onAuthStateChanged(authInstance, (newUser) => { 
@@ -11345,8 +11354,61 @@ export default function App() {
     const file = e.target.files[0];
     if (!file) return;
     setRestoreFile(file);
-    setShowRestoreConfirm(true);
-    if (restoreFileRef.current) restoreFileRef.current.value = '';
+    setLoading(true);
+    
+    // --- NEW: อ่านไฟล์เพื่อดึงข้อมูลสรุปมาแสดงในหน้าจอยืนยัน ---
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+        try {
+            const data = JSON.parse(evt.target.result);
+            
+            const getLatestDate = (arr) => {
+                if (!arr || arr.length === 0) return { max: null, min: null };
+                let maxTime = 0;
+                let minTime = Infinity;
+                arr.forEach(item => {
+                    let time = 0;
+                    if (item.date && item.date.seconds) time = item.date.seconds * 1000;
+                    else if (item.date) {
+                        const d = new Date(item.date);
+                        if (!isNaN(d.getTime())) time = d.getTime();
+                    } else if (item.createdAt && item.createdAt.seconds) time = item.createdAt.seconds * 1000;
+                    
+                    if (time > 0) {
+                        if (time > maxTime) maxTime = time;
+                        if (time < minTime) minTime = time;
+                    }
+                });
+                return {
+                    max: maxTime > 0 ? new Date(maxTime) : null,
+                    min: minTime !== Infinity ? new Date(minTime) : null
+                };
+            };
+
+            const exp = data['transactions_expense'] || [];
+            const inc = data['transactions_income'] || [];
+            const inv = data['invoices'] || [];
+            const stock = data['inventory_batches'] || [];
+
+            setRestoreFileStats({
+                fileName: file.name,
+                expenseCount: exp.length,
+                latestExpenseDate: getLatestDate(exp),
+                incomeCount: inc.length,
+                latestIncomeDate: getLatestDate(inc),
+                invoiceCount: inv.length,
+                stockCount: stock.length
+            });
+            setShowRestoreConfirm(true);
+        } catch (err) {
+            console.error(err);
+            addToast("ไม่สามารถอ่านไฟล์ Backup ได้ ข้อมูลอาจเสียหาย", "error");
+            setRestoreFile(null);
+        }
+        setLoading(false);
+        if (restoreFileRef.current) restoreFileRef.current.value = '';
+    };
+    reader.readAsText(file);
   };
 
   const executeRestore = async () => {
@@ -11409,6 +11471,24 @@ export default function App() {
           return obj;
       };
 
+      // --- 🔴 THE ULTIMATE FIX 4: Safe Commit with Timeout ---
+      // ป้องกันอาการค้างที่ 2500 รายการ (Firebase Offline Pending Freeze)
+      const safeCommit = async (currentBatch) => {
+          for (let i = 0; i < 3; i++) { // ลองยิงซ้ำ 3 รอบ
+              try {
+                  await Promise.race([
+                      currentBatch.commit(),
+                      new Promise((_, reject) => setTimeout(() => reject(new Error('NETWORK_TIMEOUT')), 12000)) // ถ้าเกิน 12 วิ ให้ถือว่าเน็ตหลุด ตัดจบไม่ให้ค้าง
+                  ]);
+                  return true;
+              } catch (err) {
+                  if (i === 2) throw err;
+                  addLog(`⚠️ อินเทอร์เน็ตสะดุด! กำลังพยายามส่งข้อมูลใหม่รอบที่ ${i+1}...`, 'warn');
+                  await new Promise(r => setTimeout(r, 2000));
+              }
+          }
+      };
+
       addLog('➜ กำลังล้างโครงสร้างข้อมูล (Sanitizing)...', 'info');
       const revivedData = sanitizeForFirestore(reviveTimestamps(restoreData));
       const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
@@ -11422,7 +11502,7 @@ export default function App() {
 
       let batch = writeBatch(dbInstance);
       let opsCount = 0;
-      const CHUNK_SIZE = 400; 
+      const CHUNK_SIZE = 100; // ลดขนาดก้อนข้อมูลลงเหลือ 100 เพื่อให้วิ่งผ่านเน็ตได้ไวที่สุด ไม่ติดคอเบราว์เซอร์
 
       // 1. ล้างข้อมูลเก่า
       addLog('➜ --- เริ่มต้น: เคลียร์ข้อมูลเก่าออกจากระบบ ---', 'info');
@@ -11433,17 +11513,15 @@ export default function App() {
           batch.delete(docSnap.ref);
           opsCount++;
           if (opsCount >= CHUNK_SIZE) {
-              await batch.commit();
+              await safeCommit(batch);
               batch = writeBatch(dbInstance);
               opsCount = 0;
-              // --- 🔴 THE ULTIMATE FIX 1: Anti-Freeze (ระบบหายใจ) ---
-              // สั่งให้เบราว์เซอร์หยุดทำงาน 0.05 วินาที เพื่อให้มีเวลาระบาย RAM และ Render UI ไม่ให้จ้าง
               await new Promise(r => setTimeout(r, 50)); 
           }
         }
       }
       if (opsCount > 0) {
-          await batch.commit();
+          await safeCommit(batch);
           batch = writeBatch(dbInstance);
           opsCount = 0;
           await new Promise(r => setTimeout(r, 50));
@@ -11474,21 +11552,23 @@ export default function App() {
           
           if (opsCount >= CHUNK_SIZE) {
               try {
-                  await batch.commit();
+                  await safeCommit(batch);
                   restoredCount += currentBatchItems.length;
                   setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
-                  addLog(`➜ เขียนข้อมูลก้อนนี้ผ่าน (${currentBatchItems.length} รายการ)`, 'info');
+                  addLog(`➜ บันทึกสำเร็จรวม ${restoredCount.toLocaleString()} รายการ...`, 'info');
               } catch (batchErr) {
                   // ก้อนพัง ให้ฉีกยิงทีละตัวเพื่อหาตัวการ!
                   addLog(`⚠️ แจ้งเตือน: พบข้อมูลมีปัญหาในก้อนนี้! ระบบกำลังเปลี่ยนไปสแกนและบันทึกทีละ 1 รายการ...`, 'warn');
                   
                   for (const singleItem of currentBatchItems) {
                       try {
-                          await setDoc(singleItem.ref, singleItem.data);
+                          await Promise.race([
+                              setDoc(singleItem.ref, singleItem.data),
+                              new Promise((_, reject) => setTimeout(() => reject(new Error('NETWORK_TIMEOUT')), 5000))
+                          ]);
                           restoredCount++;
-                          // --- 🔴 THE ULTIMATE FIX 2: Smart UI Throttling ---
-                          // เพื่อไม่ให้หน้าจอค้างตอนเซฟทีละตัว จะอัปเดตหลอดโหลดแค่ทุกๆ 50 รายการ
-                          if (restoredCount % 50 === 0) {
+                          // อัปเดตหลอดโหลดแบบเว้นจังหวะ
+                          if (restoredCount % 20 === 0) {
                               setRestoreProgress({ current: restoredCount, total: totalItems, status: `ซ่อมแซมและอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
                               await new Promise(r => setTimeout(r, 50)); // หายใจ
                           }
@@ -11510,14 +11590,17 @@ export default function App() {
       // ส่งส่วนที่เหลือของลูปสุดท้าย
       if (opsCount > 0) {
           try {
-              await batch.commit();
+              await safeCommit(batch);
               restoredCount += currentBatchItems.length;
               addLog(`➜ เขียนข้อมูลชุดสุดท้ายผ่าน (${currentBatchItems.length} รายการ)`, 'info');
           } catch (batchErr) {
               addLog(`⚠️ แจ้งเตือน: พบข้อมูลมีปัญหาในก้อนสุดท้าย! กำลังสแกนทีละ 1 รายการ...`, 'warn');
               for (const singleItem of currentBatchItems) {
                   try {
-                      await setDoc(singleItem.ref, singleItem.data);
+                      await Promise.race([
+                          setDoc(singleItem.ref, singleItem.data),
+                          new Promise((_, reject) => setTimeout(() => reject(new Error('NETWORK_TIMEOUT')), 5000))
+                      ]);
                       restoredCount++;
                   } catch (singleErr) {
                       addLog(`❌ [ข้ามรายการ] ID: ${singleItem.sysDocId} พังเพราะ: ${singleErr.message}`, 'error');
@@ -11532,6 +11615,7 @@ export default function App() {
       
       window.removeEventListener("beforeunload", handleBeforeUnload);
       setRestoreFile(null);
+      setRestoreFileStats(null); // --- NEW: เคลียร์สรุปข้อมูล
       
       // หน่วงเวลา 3 วิให้ผู้ใช้อ่าน Log ก่อนรีเฟรชโชว์ข้อมูลใหม่
       setTimeout(() => {
@@ -11544,6 +11628,7 @@ export default function App() {
       setRestoreError(error.message || "เกิดข้อผิดพลาดไม่ทราบสาเหตุระหว่างเชื่อมต่อ");
       window.removeEventListener("beforeunload", handleBeforeUnload);
       setRestoreFile(null);
+      setRestoreFileStats(null); // --- NEW: เคลียร์สรุปข้อมูล
     }
   };
 
@@ -11844,35 +11929,61 @@ export default function App() {
         </div>
       )}
 
-      {/* Restore Processing Modal พร้อมระบบ Progress Bar แบบใหม่ */}
+      {/* Restore Processing Terminal Modal */}
       {isRestoring && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-center">
-          <div className="bg-white rounded-[40px] p-10 max-w-sm w-full shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95">
-            <div className="w-20 h-20 bg-orange-50 text-orange-500 rounded-full flex items-center justify-center mb-6">
-              <RefreshCw size={40} className={restoreError ? '' : 'animate-spin'} />
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-[32px] p-6 max-w-2xl w-full shadow-2xl flex flex-col animate-in zoom-in-95">
+            
+            <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-indigo-500/20 text-indigo-400 rounded-full flex items-center justify-center">
+                        <Activity size={20} className={restoreProgress.status.includes('เสร็จ') ? '' : 'animate-spin'} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-black text-white">System Restore Terminal</h3>
+                        <p className="text-xs text-indigo-300">ตัววิเคราะห์และกู้คืนข้อมูลขั้นสูง (Enterprise Mode)</p>
+                    </div>
+                </div>
+                {restoreProgress.status.includes('เสร็จ') && (
+                    <span className="bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold border border-emerald-500/30">
+                        SUCCESS
+                    </span>
+                )}
             </div>
             
-            {restoreError ? (
-                <>
-                    <h3 className="text-2xl font-black mb-2 text-rose-600">กู้คืนไม่สำเร็จ!</h3>
-                    <p className="text-xs text-rose-500 bg-rose-50 p-3 rounded-lg mb-4 text-left font-mono break-words w-full">
-                        {restoreError}
-                    </p>
-                    <button onClick={() => { setIsRestoring(false); setRestoreError(''); }} className="w-full py-3 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold text-slate-600 transition-colors">
-                        รับทราบและปิดหน้าต่าง
-                    </button>
-                </>
-            ) : (
-                <>
-                    <h3 className="text-2xl font-black mb-2 text-slate-800">กำลังกู้คืนข้อมูล</h3>
-                    <p className="text-sm font-bold text-orange-600 bg-orange-50 px-4 py-1.5 rounded-full mb-4">
-                        {restoreProgress.status} {restoreProgress.current > 0 ? `(${restoreProgress.current.toLocaleString()} / ${restoreProgress.total.toLocaleString()})` : ''}
-                    </p>
-                    <div className="w-full bg-slate-100 rounded-full h-2 mb-4 overflow-hidden relative">
-                        <div className="bg-orange-500 h-full transition-all duration-300" style={{ width: restoreProgress.total > 0 ? `${(restoreProgress.current / restoreProgress.total) * 100}%` : '0%' }}></div>
+            {/* Progress Bar */}
+            <div className="bg-slate-800 p-4 rounded-2xl mb-4 border border-slate-700">
+                <div className="flex justify-between items-center mb-2">
+                    <p className="text-xs font-bold text-slate-300">{restoreProgress.status}</p>
+                    <p className="text-xs font-black text-white">{restoreProgress.current.toLocaleString()} / {restoreProgress.total.toLocaleString()} Items</p>
+                </div>
+                <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden">
+                    <div className={`h-full transition-all duration-300 ${restoreProgress.status.includes('เสร็จ') ? 'bg-emerald-500' : 'bg-indigo-500'}`} style={{ width: restoreProgress.total > 0 ? `${(restoreProgress.current / restoreProgress.total) * 100}%` : '0%' }}></div>
+                </div>
+            </div>
+
+            {/* Terminal Window */}
+            <div ref={terminalRef} className="bg-black rounded-2xl p-4 h-64 overflow-y-auto font-mono text-[10px] space-y-2 border border-slate-700 custom-scrollbar">
+                {restoreLogs.map((log, idx) => (
+                    <div key={idx} className="flex gap-3">
+                        <span className="text-slate-600 shrink-0">[{log.time}]</span>
+                        <span className={`${log.type === 'error' ? 'text-rose-500' : log.type === 'warn' ? 'text-amber-400' : log.type === 'success' ? 'text-emerald-400' : 'text-slate-300'}`}>
+                            {log.msg}
+                        </span>
                     </div>
-                    <p className="text-[10px] text-rose-500 font-bold bg-rose-50 px-3 py-1 rounded">ห้ามปิดแท็บนี้ หรือรีเฟรชหน้าจอเด็ดขาด</p>
-                </>
+                ))}
+            </div>
+
+            {restoreError ? (
+                <div className="mt-4 pt-4 border-t border-slate-700">
+                    <button onClick={() => { setIsRestoring(false); setRestoreError(''); }} className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-colors shadow-lg shadow-rose-900/50">
+                        รับทราบปัญหาและปิดหน้าต่าง
+                    </button>
+                </div>
+            ) : (
+                <p className="text-[10px] text-center text-slate-500 mt-4 font-bold tracking-widest uppercase">
+                    {restoreProgress.status.includes('เสร็จ') ? 'ระบบกำลังรีเฟรชหน้าจออัตโนมัติ...' : 'ห้ามปิดหน้าต่างนี้ จนกว่ากระบวนการจะเสร็จสิ้น'}
+                </p>
             )}
           </div>
         </div>
@@ -11881,19 +11992,42 @@ export default function App() {
       {/* Restore Confirm Modal */}
       {showRestoreConfirm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-          <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 flex flex-col items-center">
             <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
               <AlertTriangle size={32}/>
             </div>
             <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันการกู้คืนข้อมูล?</h3>
+            
+            {/* --- NEW: Restore Stats Summary --- */}
+            {restoreFileStats && (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 my-4 w-full text-left space-y-3">
+                    <div className="bg-blue-50 border border-blue-100 p-3 rounded-xl">
+                        <p className="text-[10px] font-bold text-blue-600 uppercase mb-1">ชื่อไฟล์ที่จะเขียนทับ</p>
+                        <p className="text-xs font-mono font-bold text-slate-700 break-all">{restoreFileStats.fileName}</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
+                            <p className="text-[10px] font-black text-rose-600 mb-1 flex items-center gap-1"><TrendingDown size={12}/> รายจ่าย (Expense)</p>
+                            <p className="text-sm font-black text-slate-800">{restoreFileStats.expenseCount.toLocaleString()} รายการ</p>
+                            <p className="text-[9px] text-slate-500 mt-1">ถึง: {restoreFileStats.latestExpenseDate?.max ? formatDate(restoreFileStats.latestExpenseDate.max) : '-'}</p>
+                        </div>
+                        <div className="bg-white border border-slate-100 p-3 rounded-xl shadow-sm">
+                            <p className="text-[10px] font-black text-emerald-600 mb-1 flex items-center gap-1"><TrendingUp size={12}/> รายรับ (Income)</p>
+                            <p className="text-sm font-black text-slate-800">{restoreFileStats.incomeCount.toLocaleString()} รายการ</p>
+                            <p className="text-[9px] text-slate-500 mt-1">ถึง: {restoreFileStats.latestIncomeDate?.max ? formatDate(restoreFileStats.latestIncomeDate.max) : '-'}</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
               ระบบจะทำการ <b>"ล้างข้อมูลปัจจุบันทั้งหมด"</b><br/>
-              และเขียนทับด้วยข้อมูลจากไฟล์ Backup ที่คุณเลือก<br/>
-              <span className="text-rose-600 font-bold underline">การกระทำนี้ไม่สามารถย้อนกลับได้</span>
+              และเขียนทับด้วยข้อมูลตามรายการด้านบน<br/>
+              <span className="text-rose-600 font-bold underline">การกระทำนี้ไม่สามารถย้อนกลับได้ มั่นใจหรือไม่?</span>
             </p>
-            <div className="flex gap-3 text-center">
-              <button onClick={() => { setShowRestoreConfirm(false); setRestoreFile(null); }} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
-              <button onClick={executeRestore} className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg text-center transition-colors">ยืนยันกู้คืน</button>
+            <div className="flex gap-3 w-full text-center">
+              <button onClick={() => { setShowRestoreConfirm(false); setRestoreFile(null); setRestoreFileStats(null); }} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ยกเลิก</button>
+              <button onClick={executeRestore} className="flex-[2] py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-200 text-center transition-colors">ยืนยันกู้คืน (เขียนทับ)</button>
             </div>
           </div>
         </div>
