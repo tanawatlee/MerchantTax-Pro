@@ -37,7 +37,7 @@ const CONSTANTS = {
     EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าแพ็คกิ้ง/บรรจุภัณฑ์', 'อุปกรณ์/เครื่องใช้สำนักงาน', 'ค่าน้ำมัน (ซื้อของเข้าร้าน)', 'ค่าขนส่งพัสดุ (ส่งลูกค้า)', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า'],
     STOCK: ['อาหาร and เครื่องดื่ม', 'ของใช้ส่วนตัว', 'ผลิตภัณฑ์ในครัวเรือน', 'ผลิตภัณฑ์ดูแลผ้า', 'แม่ and เด็ก', 'สุขภาพ and ความงาม', 'สัตว์เลี้ยง', 'ขนม and ของว่าง', 'เครื่องปรุง/วัตถุดิบ', 'บรรจุภัณฑ์/อุปกรณ์แพ็ค', 'อื่นๆ']
   },
-  CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line্্রLine Shopping', 'Facebook', 'หน้าร้าน'],
+  CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
   VAT_RATES: { INCLUDED: 'included', EXCLUDED: 'excluded', NONE: 'none' }
 };
 
@@ -6003,6 +6003,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [summaryChannel, setSummaryChannel] = useState('all');
   const [summaryCategory, setSummaryCategory] = useState('all');
   
+  // --- NEW: Monthly Budget State ---
+  const [monthlyBudget, setMonthlyBudget] = useState(() => Number(localStorage.getItem('merchant_monthly_budget')) || 0);
+  const handleSaveBudget = (val) => {
+      setMonthlyBudget(val);
+      localStorage.setItem('merchant_monthly_budget', val);
+  };
+  
   // --- History Advanced Filters & Pagination State ---
   const [histType, setHistType] = useState('all');
   const [histStartDate, setHistStartDate] = useState('');
@@ -7553,17 +7560,50 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
               </div>
+              <div className="flex items-center gap-2 bg-rose-50 px-3 py-2 rounded-xl border border-rose-100 flex-1 xl:flex-none">
+                  <Wallet size={14} className="text-rose-500 shrink-0"/>
+                  <span className="text-[10px] font-bold text-rose-600 uppercase">ตั้งงบ:</span>
+                  <input 
+                      type="number" 
+                      value={monthlyBudget || ''} 
+                      onChange={e => handleSaveBudget(Number(e.target.value))} 
+                      className="bg-transparent border-0 text-xs font-bold outline-none text-rose-700 w-20 focus:ring-0 text-right p-0"
+                      placeholder="ไม่จำกัด"
+                  />
+                  <span className="text-[10px] text-rose-500 font-bold">฿</span>
+              </div>
             </div>
           </div>
 
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-             <div className="bg-gradient-to-br from-rose-500 to-orange-500 p-6 rounded-3xl text-white shadow-xl shadow-rose-200 relative overflow-hidden flex flex-col justify-center">
-                <TrendingDown size={80} className="absolute -bottom-4 -right-4 opacity-20"/>
-                <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">Total Business Costs</p>
-                <h3 className="text-3xl font-black mb-1">{formatCurrency(expenseSummary.totalBusinessCost)}</h3>
-                <p className="text-xs opacity-90">ต้นทุนและค่าใช้จ่ายรวมทั้งหมด</p>
-             </div>
+             {(() => {
+                 const budgetPct = monthlyBudget > 0 ? (expenseSummary.totalBusinessCost / monthlyBudget) * 100 : 0;
+                 const isOverBudget = monthlyBudget > 0 && expenseSummary.totalBusinessCost > monthlyBudget;
+                 const isNearBudget = monthlyBudget > 0 && budgetPct >= 80 && !isOverBudget;
+                 return (
+                     <div className={`bg-gradient-to-br ${isOverBudget ? 'from-rose-600 to-red-800' : isNearBudget ? 'from-amber-500 to-orange-600' : 'from-rose-400 to-rose-500'} p-6 rounded-3xl text-white shadow-xl ${isOverBudget ? 'shadow-rose-300' : 'shadow-rose-200'} relative overflow-hidden flex flex-col justify-center transition-colors duration-500`}>
+                        <TrendingDown size={80} className="absolute -bottom-4 -right-4 opacity-20"/>
+                        <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">Total Business Costs</p>
+                        <h3 className="text-3xl font-black mb-1">{formatCurrency(expenseSummary.totalBusinessCost)}</h3>
+                        {monthlyBudget > 0 ? (
+                            <div className="mt-2 relative z-10">
+                                <div className="flex justify-between text-[10px] font-bold mb-1">
+                                    <span>งบที่ตั้งไว้: {formatCurrency(monthlyBudget)}</span>
+                                    <span>{budgetPct.toFixed(1)}%</span>
+                                </div>
+                                <div className="w-full bg-white/20 rounded-full h-1.5 overflow-hidden">
+                                    <div className={`h-1.5 rounded-full transition-all duration-500 ${isOverBudget ? 'bg-red-300' : 'bg-white'}`} style={{ width: Math.min(budgetPct, 100) + '%' }}></div>
+                                </div>
+                                {isOverBudget && <p className="text-[10px] font-bold text-red-200 mt-1 flex items-center gap-1"><AlertTriangle size={10}/> ทะลุงบประมาณที่ตั้งไว้!</p>}
+                                {isNearBudget && <p className="text-[10px] font-bold text-amber-100 mt-1 flex items-center gap-1"><AlertTriangle size={10}/> ใกล้เกินงบประมาณที่ตั้งไว้</p>}
+                            </div>
+                        ) : (
+                            <p className="text-xs opacity-90">ต้นทุนและค่าใช้จ่ายรวมทั้งหมด</p>
+                        )}
+                     </div>
+                 );
+             })()}
              <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden">
                 <div className="flex justify-between items-start mb-2">
                     <div>
@@ -8761,7 +8801,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           const opt = {
               margin: 0,
               image: { type: 'jpeg', quality: 0.98 },
-              html2canvas: { scale: 2, useCORS: true, letterRendering: true },
+              html2canvas: { scale: 2, useCORS: true, allowTaint: true, letterRendering: true },
               jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
           };
 
@@ -9167,7 +9207,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         margin: 0,
         filename: `${invData.invNo}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, letterRendering: true },
+        html2canvas: { scale: 2, useCORS: true, allowTaint: true, letterRendering: true },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
       };
 
@@ -10911,8 +10951,20 @@ export default function App() {
   const [restoreFile, setRestoreFile] = useState(null);
   const restoreFileRef = useRef(null);
 
+  // --- NEW: Backup Analyzer State ---
+  const [showBackupPreview, setShowBackupPreview] = useState(false);
+  const [backupStats, setBackupStats] = useState(null);
+  const [backupDataPreview, setBackupDataPreview] = useState(null); // เพิ่ม State เก็บข้อมูลดิบไว้ค้นหา
+  const [backupSearchTerm, setBackupSearchTerm] = useState(''); // เพิ่ม State คำค้นหา
+  const backupPreviewFileRef = useRef(null);
+
   // --- NEW: Import Logs State ---
   const [importLogs, setImportLogs] = useState([]);
+
+  // --- NEW: Data Healer State (ระบบซ่อมแซมฐานข้อมูล) ---
+  const [showHealerModal, setShowHealerModal] = useState(false);
+  const [orphanLots, setOrphanLots] = useState([]);
+  const [isHealing, setIsHealing] = useState(false);
 
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
@@ -11022,7 +11074,9 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `MerchantTax_Backup_${currentAppId}_${formatDateISO(new Date())}.json`;
+      // เปลี่ยนชื่อไฟล์ Backup ป้องกันการโหลดซ้ำแล้วชื่อเพี้ยน
+      const timestampStr = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').split('.')[0];
+      link.download = `MerchantTax_Backup_${currentAppId}_${timestampStr}.json`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -11036,6 +11090,114 @@ export default function App() {
     setIsBackingUp(false);
   };
 
+  // --- NEW: ฟังก์ชันสแกนตรวจสอบไฟล์ Backup โดยไม่ต้อง Restore ทับข้อมูลเดิม ---
+  const handlePreviewBackupChange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      setLoading(true);
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+          try {
+              const data = JSON.parse(evt.target.result);
+              setBackupDataPreview(data); // เก็บข้อมูลไว้สำหรับระบบค้นหา
+              setBackupSearchTerm(''); // รีเซ็ตคำค้นหา
+              
+              const getLatestDate = (arr) => {
+                  if (!arr || arr.length === 0) return { max: null, min: null };
+                  let maxTime = 0;
+                  let minTime = Infinity;
+                  arr.forEach(item => {
+                      let time = 0;
+                      if (item.date && item.date.seconds) time = item.date.seconds * 1000;
+                      else if (item.date) {
+                          const d = new Date(item.date);
+                          if (!isNaN(d.getTime())) time = d.getTime();
+                      } else if (item.createdAt && item.createdAt.seconds) {
+                          time = item.createdAt.seconds * 1000;
+                      }
+                      
+                      if (time > 0) {
+                          if (time > maxTime) maxTime = time;
+                          if (time < minTime) minTime = time;
+                      }
+                  });
+                  return {
+                      max: maxTime > 0 ? new Date(maxTime) : null,
+                      min: minTime !== Infinity ? new Date(minTime) : null
+                  };
+              };
+
+              const exp = data['transactions_expense'] || [];
+              const inc = data['transactions_income'] || [];
+              const inv = data['invoices'] || [];
+              const stock = data['inventory_batches'] || [];
+
+              setBackupStats({
+                  fileName: file.name,
+                  expenseCount: exp.length,
+                  latestExpenseDate: getLatestDate(exp),
+                  incomeCount: inc.length,
+                  latestIncomeDate: getLatestDate(inc),
+                  invoiceCount: inv.length,
+                  stockCount: stock.length
+              });
+              setShowBackupPreview(true);
+          } catch (err) {
+              console.error(err);
+              addToast("ไม่สามารถอ่านไฟล์ Backup ได้ ข้อมูลอาจเสียหาย", "error");
+          }
+          setLoading(false);
+          if (backupPreviewFileRef.current) backupPreviewFileRef.current.value = '';
+      };
+      reader.readAsText(file);
+  };
+
+  // --- NEW: ระบบค้นหาข้อมูลภายในไฟล์ Backup ---
+  const backupSearchResults = useMemo(() => {
+      if (!backupDataPreview || !backupSearchTerm.trim()) return null;
+      const term = backupSearchTerm.toLowerCase();
+      const results = [];
+
+      const safeString = (val) => String(val || '').toLowerCase();
+      const getBackupItemDate = (item) => {
+          if (item.date && item.date.seconds) return new Date(item.date.seconds * 1000);
+          if (item.date) return new Date(item.date);
+          if (item.createdAt && item.createdAt.seconds) return new Date(item.createdAt.seconds * 1000);
+          return null;
+      };
+
+      // ค้นหาในรายรับ
+      (backupDataPreview.transactions_income || []).forEach(item => {
+          if (safeString(item.sysDocId).includes(term) || safeString(item.orderId).includes(term) || safeString(item.partnerName).includes(term) || safeString(item.description).includes(term)) {
+              results.push({ category: 'รายรับ', id: item.sysDocId || item.orderId || item.id, detail: item.description || item.partnerName, date: getBackupItemDate(item), amount: item.total || item.grandTotal });
+          }
+      });
+
+      // ค้นหาในรายจ่าย
+      (backupDataPreview.transactions_expense || []).forEach(item => {
+          if (safeString(item.sysDocId).includes(term) || safeString(item.orderId).includes(term) || safeString(item.taxInvoiceNo).includes(term) || safeString(item.partnerName).includes(term) || safeString(item.description).includes(term)) {
+              results.push({ category: 'รายจ่าย', id: item.sysDocId || item.taxInvoiceNo || item.id, detail: item.description || item.partnerName, date: getBackupItemDate(item), amount: item.total || item.grandTotal });
+          }
+      });
+
+      // ค้นหาในใบกำกับภาษี/ใบเสร็จ
+      (backupDataPreview.invoices || []).forEach(item => {
+          if (safeString(item.invNo).includes(term) || safeString(item.orderId).includes(term) || safeString(item.customerName).includes(term)) {
+              results.push({ category: 'เอกสารภาษี', id: item.invNo, detail: item.customerName, date: getBackupItemDate(item), amount: item.total });
+          }
+      });
+
+      // ค้นหาในคลังสินค้า
+      (backupDataPreview.inventory_batches || []).forEach(item => {
+          if (safeString(item.productName).includes(term) || safeString(item.sku).includes(term)) {
+              results.push({ category: 'สต็อกสินค้า', id: item.sku || '-', detail: item.productName, date: getBackupItemDate(item), amount: item.costPerUnit });
+          }
+      });
+
+      // เรียงจากใหม่ไปเก่า และจำกัดแสดงผล 100 รายการเพื่อไม่ให้หน่วง
+      return results.sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0)).slice(0, 100);
+  }, [backupDataPreview, backupSearchTerm]);
+
   const handleRestoreFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -11048,6 +11210,14 @@ export default function App() {
     if (!restoreFile || !user) return;
     setShowRestoreConfirm(false);
     setIsRestoring(true);
+
+    // ป้องกันการเผลอรีเฟรชหน้าจอระหว่างกำลัง Restore ข้อมูล (เพื่อไม่ให้ฐานข้อมูลแหว่ง)
+    const handleBeforeUnload = (e) => {
+        e.preventDefault();
+        e.returnValue = "ระบบกำลังกู้คืนข้อมูล ห้ามปิดหน้านี้เด็ดขาด มิฉะนั้นข้อมูลอาจสูญหายบางส่วน";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     try {
       const fileText = await restoreFile.text();
       const restoreData = JSON.parse(fileText);
@@ -11069,6 +11239,7 @@ export default function App() {
       let batch = writeBatch(dbInstance);
       let opsCount = 0;
       
+      // ฟังก์ชันช่วย Commit แบบปลอดภัย (Safe Chunking)
       const commitBatch = async () => {
         if (opsCount > 0) { 
             await batch.commit(); 
@@ -11077,18 +11248,18 @@ export default function App() {
         }
       };
 
-      // 1. ล้างข้อมูลเก่า
+      // 1. ล้างข้อมูลเก่า (แบ่งลบทีละ 300 ป้องกันการค้าง)
       for (const collName of collectionsToRestore) {
         const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
         for (const docSnap of snap.docs) {
           batch.delete(docSnap.ref);
           opsCount++;
-          if (opsCount >= 400) await commitBatch();
+          if (opsCount >= 300) await commitBatch();
         }
       }
-      await commitBatch();
+      await commitBatch(); // บังคับ Commit ส่วนที่เหลือของการลบให้จบก่อน
 
-      // 2. เขียนทับด้วยข้อมูล Backup
+      // 2. เขียนทับด้วยข้อมูล Backup (แบ่งเขียนทีละ 300)
       for (const collName of collectionsToRestore) {
         if (!revivedData[collName] || !Array.isArray(revivedData[collName])) continue;
         for (const item of revivedData[collName]) {
@@ -11101,16 +11272,19 @@ export default function App() {
           
           batch.set(docRef, dataToSet);
           opsCount++;
-          if (opsCount >= 400) await commitBatch();
+          if (opsCount >= 300) await commitBatch();
         }
       }
-      await commitBatch();
+      await commitBatch(); // บังคับ Commit ส่วนที่เหลือของการเขียนให้จบ
       
       addToast("กู้คืนข้อมูล (Restore) สำเร็จ!", "success");
     } catch (error) {
       console.error("Restore failed:", error);
-      addToast("การกู้คืนล้มเหลว ไฟล์อาจไม่ถูกต้อง", "error");
+      addToast("การกู้คืนล้มเหลว หรือถูกขัดจังหวะ โปรดลองใหม่อีกครั้ง", "error");
     }
+    
+    // ปลดล็อกการป้องกันรีเฟรชหน้า
+    window.removeEventListener("beforeunload", handleBeforeUnload);
     setRestoreFile(null);
     setIsRestoring(false);
   };
@@ -11320,6 +11494,52 @@ export default function App() {
     }
   };
 
+  // --- NEW: ฟังก์ชันหมอรักษาฐานข้อมูล (Data Healer) ---
+  const scanForOrphans = () => {
+      // ค้นหาสต็อกที่มีรหัสเชื่อมโยงกับรายจ่าย (parentExpenseId) แต่หาตัวรายจ่ายต้นทางไม่เจอ
+      const orphans = stockBatches.filter(batch => {
+          if (batch.parentExpenseId && batch.category !== 'Imported' && !batch.isOpeningBalance) {
+              const expenseStillExists = transactions.some(t => t.id === batch.parentExpenseId);
+              return !expenseStillExists; // ถ้าไม่มี Expense ต้นทาง แสดงว่าเป็นสต็อกผีหลอก
+          }
+          return false;
+      });
+      setOrphanLots(orphans);
+      setShowHealerModal(true);
+  };
+
+  const executeHeal = async () => {
+      if (orphanLots.length === 0 || !user) return;
+      setIsHealing(true);
+      try {
+          let batch = writeBatch(dbInstance);
+          let opsCount = 0;
+
+          for (const lot of orphanLots) {
+              const docRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'inventory_batches', lot.id);
+              batch.delete(docRef);
+              opsCount++;
+
+              if (opsCount >= 300) {
+                  await batch.commit();
+                  batch = writeBatch(dbInstance);
+                  opsCount = 0;
+              }
+          }
+
+          if (opsCount > 0) {
+              await batch.commit();
+          }
+
+          addToast(`เคลียร์สต็อกตกค้างสำเร็จ ${orphanLots.length} รายการ`, "success");
+          setShowHealerModal(false);
+      } catch (err) {
+          console.error(err);
+          addToast("เกิดข้อผิดพลาดในการซ่อมแซมฐานข้อมูล", "error");
+      }
+      setIsHealing(false);
+  };
+
   const renderContent = () => {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} />;
@@ -11347,6 +11567,7 @@ export default function App() {
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_STYLES }} />
       <ToastContainer toasts={toasts} removeToast={removeToast} />
       <input type="file" ref={restoreFileRef} accept=".json" className="hidden" onChange={handleRestoreFileChange} />
+      <input type="file" ref={backupPreviewFileRef} accept=".json" className="hidden" onChange={handlePreviewBackupChange} />
       
       {/* Migration Loading Modal */}
       {isMigrating && (
@@ -11402,6 +11623,103 @@ export default function App() {
         </div>
       )}
 
+      {/* NEW: Backup Preview / Scanner Modal */}
+      {showBackupPreview && backupStats && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-left flex flex-col max-h-[90vh]">
+            <div className="flex justify-between items-center mb-6 shrink-0">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Search className="text-blue-600"/> ตรวจสอบไฟล์ Backup</h3>
+              <button onClick={() => setShowBackupPreview(false)} className="text-slate-400 hover:text-slate-600"><X/></button>
+            </div>
+            
+            <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl mb-4 shrink-0">
+                <p className="text-[10px] font-bold text-blue-600 uppercase mb-1">ชื่อไฟล์ที่สแกน</p>
+                <p className="text-xs font-mono font-bold text-slate-700 break-all">{backupStats.fileName}</p>
+            </div>
+
+            {/* ช่องค้นหาข้อมูลในไฟล์ Backup */}
+            <div className="relative mb-4 shrink-0">
+                <Search className="absolute left-3 top-3 text-slate-400" size={16}/>
+                <input 
+                    type="text" 
+                    value={backupSearchTerm}
+                    onChange={e => setBackupSearchTerm(e.target.value)}
+                    placeholder="ค้นหารายการในไฟล์นี้ (ชื่อ, เลขที่, Order ID)..."
+                    className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-100 font-medium"
+                />
+                {backupSearchTerm && (
+                    <button onClick={() => setBackupSearchTerm('')} className="absolute right-3 top-3 text-slate-400 hover:text-rose-500"><X size={16}/></button>
+                )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 min-h-[200px]">
+                {backupSearchTerm.trim() !== '' && backupSearchResults ? (
+                    <div className="space-y-2">
+                        <div className="text-[10px] font-bold text-slate-500 mb-2">
+                            พบผลการค้นหา {backupSearchResults.length} {backupSearchResults.length === 100 ? '+' : ''} รายการ
+                        </div>
+                        {backupSearchResults.length > 0 ? backupSearchResults.map((res, i) => (
+                            <div key={i} className="bg-white p-3 rounded-xl border border-slate-100 flex flex-col gap-1.5 shadow-sm">
+                                <div className="flex justify-between items-start">
+                                    <span className="text-[10px] font-bold text-white px-2 py-0.5 rounded-md" style={{backgroundColor: res.category === 'รายรับ' ? '#10b981' : res.category === 'รายจ่าย' ? '#f43f5e' : res.category === 'เอกสารภาษี' ? '#6366f1' : '#f59e0b'}}>{res.category}</span>
+                                    <span className="text-[10px] text-slate-500 font-bold">{res.date ? formatDate(res.date) : '-'}</span>
+                                </div>
+                                <div className="flex justify-between items-center mt-1">
+                                    <p className="text-xs font-mono font-bold text-slate-800">{res.id}</p>
+                                    {res.amount !== undefined && <p className="text-xs font-black text-slate-700">฿{formatCurrency(res.amount)}</p>}
+                                </div>
+                                <p className="text-[10px] text-slate-500 line-clamp-1">{res.detail}</p>
+                            </div>
+                        )) : (
+                            <div className="text-center py-10 flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-2xl">
+                                <Search size={32} className="text-slate-300 mb-2"/>
+                                <span className="text-slate-400 text-xs font-bold">ไม่พบรายการที่ตรงกันในไฟล์ Backup นี้</span>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="space-y-4">
+                        <div className="border-b border-slate-100 pb-3">
+                            <p className="text-sm font-black text-rose-600 flex items-center gap-2 mb-2"><TrendingDown size={16}/> ข้อมูลรายจ่าย (Expense)</p>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="text-slate-500">จำนวนรายการ:</div>
+                                <div className="font-black text-right text-slate-800">{backupStats.expenseCount.toLocaleString()} รายการ</div>
+                                <div className="text-slate-500">บันทึกถึงวันที่:</div>
+                                <div className="font-black text-right text-rose-600">{backupStats.latestExpenseDate.max ? formatDate(backupStats.latestExpenseDate.max) : '-'}</div>
+                            </div>
+                        </div>
+                        
+                        <div className="border-b border-slate-100 pb-3">
+                            <p className="text-sm font-black text-emerald-600 flex items-center gap-2 mb-2"><TrendingUp size={16}/> ข้อมูลรายรับ (Income)</p>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="text-slate-500">จำนวนรายการ:</div>
+                                <div className="font-black text-right text-slate-800">{backupStats.incomeCount.toLocaleString()} รายการ</div>
+                                <div className="text-slate-500">บันทึกถึงวันที่:</div>
+                                <div className="font-black text-right text-emerald-600">{backupStats.latestIncomeDate.max ? formatDate(backupStats.latestIncomeDate.max) : '-'}</div>
+                            </div>
+                        </div>
+
+                        <div className="pt-2">
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="text-slate-500 flex items-center gap-1"><Box size={14}/> สต็อกสินค้า:</div>
+                                <div className="font-black text-right text-slate-800">{backupStats.stockCount.toLocaleString()} รายการ</div>
+                                <div className="text-slate-500 flex items-center gap-1"><FileText size={14}/> ใบกำกับภาษี:</div>
+                                <div className="font-black text-right text-slate-800">{backupStats.invoiceCount.toLocaleString()} รายการ</div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-slate-100 text-center shrink-0">
+                <button onClick={() => setShowBackupPreview(false)} className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors shadow-md">
+                    ปิดหน้าต่าง
+                </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Migration Confirm Modal */}
       {showMigrateConfirm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
@@ -11428,6 +11746,56 @@ export default function App() {
           <div className="bg-white rounded-[40px] p-10 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-center"><div className="w-20 h-20 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-6 text-center"><AlertCircle size={40} className="text-center"/></div><h3 className="text-2xl font-black text-center mb-2 text-center text-slate-800 text-center">ระบุ ID ที่ต้องการลบ</h3><input value={targetIdToDelete} onChange={e=>setTargetIdToDelete(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl border-2 border-slate-100 mb-6 font-bold text-center text-lg text-slate-800 text-center" placeholder="ID, INV No. หรือ Tax Invoice No." /><div className="flex gap-4 text-center"><button onClick={()=>setShowIdDeleteTool(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-600 text-center">ยกเลิก</button><button onClick={forceDeleteById} className="flex-1 py-4 bg-rose-600 text-white rounded-2xl font-bold text-center">ยืนยัน</button></div></div>
         </div>
       )}
+
+      {/* NEW: Data Healer Modal */}
+      {showHealerModal && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-8 max-w-lg w-full shadow-2xl animate-in zoom-in-95">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Activity size={24} className="text-teal-500"/> หมอรักษาฐานข้อมูล (Data Healer)</h3>
+              <button onClick={() => setShowHealerModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+            </div>
+            
+            {orphanLots.length > 0 ? (
+                <div className="space-y-4">
+                    <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl">
+                        <p className="font-bold text-rose-700 flex items-center gap-1.5 mb-2"><AlertTriangle size={16}/> ตรวจพบ "สต็อกตกค้าง" {orphanLots.length} รายการ</p>
+                        <p className="text-xs text-rose-600/80 leading-relaxed">
+                            ระบบพบรายการคลังสินค้าที่ <b>"บิลรายจ่ายต้นทางถูกลบไปแล้ว"</b> (เช่น เกิดจากการกู้คืนข้อมูลผิดพลาด) 
+                            หากปล่อยไว้จะทำให้สต็อกคงเหลือเพี้ยน ไม่ตรงกับรายจ่ายจริง
+                        </p>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl max-h-48 overflow-y-auto custom-scrollbar p-2">
+                        {orphanLots.slice(0, 20).map((lot, idx) => (
+                            <div key={idx} className="p-2 border-b border-slate-100 last:border-0 text-xs flex justify-between">
+                                <div>
+                                    <span className="font-bold text-slate-700">{lot.productName}</span>
+                                    <p className="text-[9px] text-slate-400 font-mono">Lot ID: {lot.id}</p>
+                                </div>
+                                <span className="font-black text-rose-500">{lot.quantity} ชิ้น</span>
+                            </div>
+                        ))}
+                        {orphanLots.length > 20 && <p className="text-center text-xs text-slate-400 py-2 font-bold">...และรายการอื่นๆ อีก {orphanLots.length - 20} รายการ</p>}
+                    </div>
+                    <div className="flex gap-3 pt-2">
+                        <button onClick={() => setShowHealerModal(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
+                        <button onClick={executeHeal} disabled={isHealing} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
+                            {isHealing ? <Loader size={16} className="animate-spin"/> : <CheckCircle size={16}/>} ล้างสต็อกตกค้างทิ้ง
+                        </button>
+                    </div>
+                </div>
+            ) : (
+                <div className="text-center py-8">
+                    <CheckCircle size={64} className="mx-auto text-emerald-400 mb-4 opacity-50"/>
+                    <h4 className="text-lg font-bold text-slate-700 mb-2">ฐานข้อมูลสมบูรณ์แบบ</h4>
+                    <p className="text-sm text-slate-500">ระบบไม่พบสต็อกตกค้าง หรือข้อมูลที่เชื่อมโยงกันไม่สมบูรณ์ครับ</p>
+                    <button onClick={() => setShowHealerModal(false)} className="mt-8 px-8 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ปิดหน้าต่าง</button>
+                </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <aside className="w-72 bg-slate-900 text-white flex flex-col border-r border-slate-800 shadow-2xl h-full shrink-0 text-left">
         <div className="p-8 border-b border-slate-800 flex items-center gap-3 text-left"><div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-center"><Wallet size={20} className="text-white text-center"/></div><h1 className="text-xl font-bold tracking-tight text-left">MerchantTax</h1></div>
         <nav className="p-6 space-y-4 flex-1 overflow-y-auto text-left">
@@ -11458,6 +11826,10 @@ export default function App() {
                 {isBackingUp ? <Loader size={14} className="text-center animate-spin"/> : <DownloadCloud size={14} className="text-center"/>} สำรองข้อมูล (Backup)
               </button>
 
+              <button onClick={() => backupPreviewFileRef.current?.click()} disabled={isBackingUp || isRestoring || isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-blue-400 hover:bg-blue-900/30 transition-all text-left">
+                <Search size={14} className="text-center"/> ตรวจสอบไฟล์ Backup (Preview)
+              </button>
+
               <button onClick={() => restoreFileRef.current?.click()} disabled={isBackingUp || isRestoring || isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-orange-400 hover:bg-orange-900/30 transition-all text-left">
                 {isRestoring ? <Loader size={14} className="text-center animate-spin"/> : <FileUp size={14} className="text-center"/>} กู้คืนข้อมูล (Restore)
               </button>
@@ -11465,6 +11837,11 @@ export default function App() {
               <button onClick={() => setShowMigrateConfirm(true)} disabled={isMigrating} className={`w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 transition-all text-left ${isMigrating ? 'bg-amber-900/50 text-amber-500 cursor-not-allowed' : 'text-amber-400 hover:bg-amber-900/30'}`}>
                 {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} 
                 {isMigrating ? 'กำลังรันเลข...' : 'รันเลขเอกสารที่ตกหล่น'}
+              </button>
+
+              {/* NEW: Data Healer Button */}
+              <button onClick={scanForOrphans} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-teal-400 hover:bg-teal-900/30 transition-all text-left">
+                <Activity size={14} className="text-center"/> สแกนซ่อมแซมฐานข้อมูล
               </button>
 
               <button onClick={syncInvoiceDates} disabled={isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-emerald-400 hover:bg-emerald-900/30 transition-all text-left">
