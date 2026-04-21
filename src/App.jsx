@@ -12757,7 +12757,8 @@ export default function App() {
   };
 
   const executeRestore = async () => {
-    if (!restoreFile || !user) return;
+    // --- FIX: เพิ่มการเช็ค restoreDataPreview ---
+    if (!restoreFile || !user || !restoreDataPreview) return;
     setShowRestoreConfirm(false);
     setIsRestoring(true);
     setRestoreError('');
@@ -12779,9 +12780,7 @@ export default function App() {
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     try {
-      addLog('➜ กำลังอ่านไฟล์ Backup...', 'info');
-      const fileText = await restoreFile.text();
-      const restoreData = JSON.parse(fileText);
+      addLog('➜ กำลังเตรียมข้อมูลที่อ่านไว้แล้ว...', 'info');
       
       const reviveTimestamps = (obj) => {
         if (obj === null || typeof obj !== 'object') return obj;
@@ -12816,7 +12815,9 @@ export default function App() {
       };
 
       addLog('➜ กำลังล้างโครงสร้างข้อมูล (Sanitizing)...', 'info');
-      const revivedData = sanitizeForFirestore(reviveTimestamps(restoreData));
+      
+      // --- 🔥 FIX: ใช้ restoreDataPreview ที่โหลดไว้แล้ว แทนการพยายามอ่านไฟล์ใหม่ที่มักจะ Error ---
+      const revivedData = sanitizeForFirestore(reviveTimestamps(restoreDataPreview));
       const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
 
       // --- 🔥 THE ULTIMATE FIX 6: Flatten & Multiplexing Engine 🔥 ---
@@ -13397,6 +13398,336 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* --- Hidden File Inputs for Admin Tools --- */}
+      <input type="file" ref={backupPreviewFileRef} hidden accept=".json" onChange={handlePreviewBackupChange} />
+      <input type="file" ref={restoreFileRef} hidden accept=".json" onChange={handleRestoreFileChange} />
+
+      {/* --- Admin Tool Modals --- */}
+      
+      {/* 1. Backup Preview Modal */}
+      {showBackupPreview && backupStats && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+                <div className="flex justify-between items-start mb-6">
+                    <div>
+                        <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Search className="text-blue-500"/> ตรวจสอบไฟล์สำรองข้อมูล (Preview)</h3>
+                        <p className="text-xs text-slate-500 mt-1">ไฟล์: {backupStats.fileName}</p>
+                    </div>
+                    <button onClick={() => {setShowBackupPreview(false); setBackupDataPreview(null);}} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                </div>
+                
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
+                        <p className="text-[10px] font-bold text-indigo-600 uppercase mb-1">รายรับ (Income)</p>
+                        <p className="text-xl font-black text-indigo-700">{backupStats.incomeCount.toLocaleString()}</p>
+                        <p className="text-[9px] text-slate-500 mt-1">ล่าสุด: {backupStats.latestIncomeDate?.max?.toLocaleDateString('th-TH') || '-'}</p>
+                    </div>
+                    <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100">
+                        <p className="text-[10px] font-bold text-rose-600 uppercase mb-1">รายจ่าย (Expense)</p>
+                        <p className="text-xl font-black text-rose-700">{backupStats.expenseCount.toLocaleString()}</p>
+                        <p className="text-[9px] text-slate-500 mt-1">ล่าสุด: {backupStats.latestExpenseDate?.max?.toLocaleDateString('th-TH') || '-'}</p>
+                    </div>
+                    <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
+                        <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">ใบกำกับภาษี (Invoice)</p>
+                        <p className="text-xl font-black text-emerald-700">{backupStats.invoiceCount.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100">
+                        <p className="text-[10px] font-bold text-amber-600 uppercase mb-1">สต็อกสินค้า (Batches)</p>
+                        <p className="text-xl font-black text-amber-700">{backupStats.stockCount.toLocaleString()}</p>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-hidden flex flex-col border border-slate-200 rounded-2xl">
+                    <div className="p-3 bg-slate-50 border-b border-slate-200">
+                        <div className="relative">
+                            <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
+                            <input 
+                                type="text" 
+                                value={backupSearchTerm}
+                                onChange={e => setBackupSearchTerm(e.target.value)}
+                                placeholder="ค้นหาข้อมูลในไฟล์ Backup (ชื่อ, เลขเอกสาร, รายการ)..." 
+                                className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-sm outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+                            />
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 bg-slate-50/50 custom-scrollbar">
+                        {backupSearchTerm.trim() === '' ? (
+                            <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                                <Search size={48} className="opacity-20 mb-4"/>
+                                <p className="text-sm font-bold">พิมพ์คำค้นหาเพื่อดูตัวอย่างข้อมูลในไฟล์</p>
+                            </div>
+                        ) : backupSearchResults?.length > 0 ? (
+                            <table className="w-full text-xs text-left">
+                                <thead className="text-slate-500 uppercase sticky top-0 bg-slate-50">
+                                    <tr>
+                                        <th className="p-2 border-b">หมวดหมู่</th>
+                                        <th className="p-2 border-b">วันที่</th>
+                                        <th className="p-2 border-b">ID / อ้างอิง</th>
+                                        <th className="p-2 border-b">รายละเอียด</th>
+                                        <th className="p-2 border-b text-right">ยอดเงิน</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {backupSearchResults.map((res, i) => (
+                                        <tr key={i} className="hover:bg-white border-b border-slate-100">
+                                            <td className="p-2"><span className="bg-slate-100 px-2 py-0.5 rounded text-[10px] font-bold text-slate-600">{res.category}</span></td>
+                                            <td className="p-2 text-slate-500">{(res.date && typeof res.date.toLocaleDateString === 'function') ? res.date.toLocaleDateString('th-TH') : '-'}</td>
+                                            <td className="p-2 font-mono font-bold text-indigo-600">{res.id}</td>
+                                            <td className="p-2 truncate max-w-[200px]" title={res.detail}>{res.detail}</td>
+                                            <td className="p-2 text-right font-bold text-slate-700">{formatCurrency(res.amount)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        ) : (
+                            <div className="p-8 text-center text-slate-500">ไม่พบข้อมูลที่ค้นหาในไฟล์ Backup นี้</div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* 2. Restore Confirm Modal */}
+      {showRestoreConfirm && restoreFileStats && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+                <div className="flex justify-between items-start mb-6">
+                    <div>
+                        <h3 className="text-xl font-black text-rose-600 flex items-center gap-2"><AlertTriangle/> ยืนยันการกู้คืนข้อมูล (Restore)</h3>
+                        <p className="text-xs text-slate-500 mt-1">ไฟล์: {restoreFileStats.fileName}</p>
+                    </div>
+                    <button onClick={() => {setShowRestoreConfirm(false); setRestoreDataPreview(null); setRestoreFile(null);}} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                </div>
+
+                <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl mb-6">
+                    <p className="text-sm font-bold text-rose-700 mb-2">⚠️ คำเตือน: ข้อมูลปัจจุบันในระบบจะถูกลบทิ้งทั้งหมด และแทนที่ด้วยข้อมูลจากไฟล์นี้</p>
+                    <p className="text-xs text-rose-600/80">กรุณาตรวจสอบข้อมูลสรุปจากไฟล์ด้านล่างให้แน่ใจก่อนดำเนินการกู้คืน</p>
+                </div>
+                
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
+                        <p className="text-[10px] font-bold text-indigo-600 uppercase mb-1">รายรับ (Income)</p>
+                        <p className="text-xl font-black text-indigo-700">{restoreFileStats.incomeCount.toLocaleString()}</p>
+                        <p className="text-[9px] text-slate-500 mt-1">ล่าสุด: {restoreFileStats.latestIncomeDate?.max?.toLocaleDateString('th-TH') || '-'}</p>
+                    </div>
+                    <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100">
+                        <p className="text-[10px] font-bold text-rose-600 uppercase mb-1">รายจ่าย (Expense)</p>
+                        <p className="text-xl font-black text-rose-700">{restoreFileStats.expenseCount.toLocaleString()}</p>
+                        <p className="text-[9px] text-slate-500 mt-1">ล่าสุด: {restoreFileStats.latestExpenseDate?.max?.toLocaleDateString('th-TH') || '-'}</p>
+                    </div>
+                    <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
+                        <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">ใบกำกับภาษี (Invoice)</p>
+                        <p className="text-xl font-black text-emerald-700">{restoreFileStats.invoiceCount.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100">
+                        <p className="text-[10px] font-bold text-amber-600 uppercase mb-1">สต็อกสินค้า (Batches)</p>
+                        <p className="text-xl font-black text-amber-700">{restoreFileStats.stockCount.toLocaleString()}</p>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-hidden flex flex-col border border-slate-200 rounded-2xl mb-6">
+                    <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                        <span className="text-xs font-bold text-slate-600">ค้นหาเพื่อตรวจสอบข้อมูลในไฟล์ (ทดสอบ)</span>
+                        <div className="relative w-64">
+                            <Search className="absolute left-3 top-2 text-slate-400" size={14}/>
+                            <input 
+                                type="text" 
+                                value={restoreSearchTerm}
+                                onChange={e => setRestoreSearchTerm(e.target.value)}
+                                placeholder="ค้นหาชื่อ, เลขเอกสาร..." 
+                                className="w-full bg-white border border-slate-200 rounded-lg pl-8 pr-3 py-1.5 text-xs outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+                            />
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-0 bg-white custom-scrollbar">
+                        {restoreSearchResults?.length > 0 ? (
+                            <table className="w-full text-[10px] text-left">
+                                <thead className="text-slate-500 uppercase sticky top-0 bg-slate-100">
+                                    <tr>
+                                        <th className="p-2 border-b">หมวดหมู่</th>
+                                        <th className="p-2 border-b">วันที่</th>
+                                        <th className="p-2 border-b">ID / อ้างอิง</th>
+                                        <th className="p-2 border-b">รายละเอียด</th>
+                                        <th className="p-2 border-b text-right">ยอดเงิน</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {restoreSearchResults.map((res, i) => (
+                                        <tr key={i} className="hover:bg-slate-50 border-b border-slate-100">
+                                            <td className="p-2"><span className="bg-slate-200 px-1.5 py-0.5 rounded font-bold text-slate-600">{res.category}</span></td>
+                                            <td className="p-2 text-slate-500">{(res.date && typeof res.date.toLocaleDateString === 'function') ? res.date.toLocaleDateString('th-TH') : '-'}</td>
+                                            <td className="p-2 font-mono font-bold text-indigo-600">{res.id}</td>
+                                            <td className="p-2 truncate max-w-[200px]" title={res.detail}>{res.detail}</td>
+                                            <td className="p-2 text-right font-bold text-slate-700">{formatCurrency(res.amount)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        ) : restoreSearchTerm ? (
+                            <div className="p-8 text-center text-slate-500 text-xs">ไม่พบข้อมูลที่ตรงกับ "{restoreSearchTerm}"</div>
+                        ) : (
+                            <div className="p-8 text-center text-slate-400 text-xs">พิมพ์คำค้นหาเพื่อสุ่มดูข้อมูลก่อนกู้คืน</div>
+                        )}
+                    </div>
+                </div>
+
+                <div className="flex gap-3 text-center">
+                    <button onClick={() => {setShowRestoreConfirm(false); setRestoreDataPreview(null); setRestoreFile(null);}} className="flex-1 py-3.5 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
+                    <button onClick={executeRestore} className="flex-[2] py-3.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-black shadow-lg shadow-rose-200 flex items-center justify-center gap-2 transition-colors">
+                        <AlertTriangle size={18}/> ยืนยันเขียนทับข้อมูลทั้งหมด
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* 3. Restore Progress Modal */}
+      {isRestoring && (
+          <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[9999] flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col h-[70vh] text-left">
+                  <div className="p-4 border-b border-slate-800 bg-slate-950 flex justify-between items-center">
+                      <div className="flex items-center gap-3">
+                          <Loader className="animate-spin text-indigo-500" size={20}/>
+                          <h3 className="font-bold text-slate-200">System Restoring Data...</h3>
+                      </div>
+                      <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono text-slate-500">{restoreProgress.current} / {restoreProgress.total}</span>
+                      </div>
+                  </div>
+                  
+                  <div className="h-1 w-full bg-slate-800">
+                      <div 
+                          className="h-full bg-indigo-500 transition-all duration-300" 
+                          style={{ width: `${restoreProgress.total > 0 ? (restoreProgress.current / restoreProgress.total) * 100 : 0}%` }}
+                      ></div>
+                  </div>
+
+                  <div className="p-4 bg-slate-950 border-b border-slate-800 text-center">
+                      <p className={`font-black text-sm ${restoreError ? 'text-rose-500' : 'text-indigo-400'}`}>
+                          {restoreError || restoreProgress.status}
+                      </p>
+                  </div>
+
+                  <div ref={terminalRef} className="flex-1 p-4 font-mono text-[11px] leading-relaxed overflow-y-auto text-slate-300 bg-slate-950/50 space-y-1 custom-scrollbar">
+                      {restoreLogs.map((log, idx) => (
+                          <div key={idx} className={`flex gap-3 ${log.type === 'error' ? 'text-rose-400' : log.type === 'warn' ? 'text-amber-400' : log.type === 'success' ? 'text-emerald-400' : 'text-slate-400'}`}>
+                              <span className="opacity-50 shrink-0">[{log.time}]</span>
+                              <span>{log.msg}</span>
+                          </div>
+                      ))}
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 4. Migration Confirm Modal */}
+      {showMigrateConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-sm w-full shadow-2xl animate-in zoom-in-95 text-center">
+                <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4 text-amber-500 text-center">
+                    <RefreshCw size={32}/>
+                </div>
+                <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">รันเลขเอกสารใหม่?</h3>
+                <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
+                    ระบบจะตรวจสอบและ <b className="text-slate-700">เติมเลขเอกสาร (SYS ID)</b> เฉพาะรายการที่ยังไม่มีเลข หรือตกหล่น<br/>
+                    โดยเรียงตามลำดับวันที่ทำรายการ
+                </p>
+                <div className="flex gap-3 text-center">
+                    <button onClick={() => setShowMigrateConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
+                    <button onClick={executeMigration} className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg flex justify-center items-center gap-2 transition-colors">
+                        เริ่มรันเลข
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* 5. Data Healer Modal */}
+      {showHealerModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-2xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[80vh]">
+                  <div className="flex justify-between items-center mb-6">
+                      <div>
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Activity className="text-teal-500"/> Data Healer (สแกนซ่อมแซมคลังสินค้า)</h3>
+                          <p className="text-xs text-slate-500 mt-1">ตรวจสอบสต็อกตกค้างที่หาบิลรายจ่ายต้นทางไม่เจอ</p>
+                      </div>
+                      <button onClick={() => setShowHealerModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                  </div>
+                  
+                  <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl p-4 bg-slate-50 text-center">
+                      {orphanLots.length > 0 ? (
+                          <>
+                              <div className="mb-4 bg-amber-50 border border-amber-200 p-4 rounded-xl text-left">
+                                  <p className="text-sm font-bold text-amber-700 flex items-center gap-2"><AlertTriangle size={16}/> พบสต็อกตกค้าง (Orphan Lots) จำนวน {orphanLots.length} รายการ</p>
+                                  <p className="text-xs text-amber-600/80 mt-1">เกิดจากบิลรายจ่ายต้นทางถูกลบหรือข้อมูลเชื่อมโยงสูญหาย ควรกด "ล้างสต็อกตกค้าง" เพื่อให้ยอดคงเหลือแม่นยำ</p>
+                              </div>
+                              <div className="space-y-2 text-left">
+                                  {orphanLots.slice(0, 20).map((lot, idx) => (
+                                      <div key={idx} className="bg-white p-3 rounded-lg border border-slate-200 text-xs flex justify-between items-center shadow-sm">
+                                          <div>
+                                              <p className="font-bold text-slate-700">{lot.productName}</p>
+                                              <p className="text-[10px] font-mono text-slate-400 mt-0.5">Lot ID: {lot.id} | Ref EXP: {lot.parentExpenseId || 'N/A'}</p>
+                                          </div>
+                                          <div className="text-right">
+                                              <p className="font-bold text-rose-500">คงเหลือ: {(Number(lot.quantity) - Number(lot.sold||0)).toLocaleString()} ชิ้น</p>
+                                          </div>
+                                      </div>
+                                  ))}
+                                  {orphanLots.length > 20 && <p className="text-xs text-slate-400 mt-2 font-bold text-center">... และรายการอื่นๆ อีก {orphanLots.length - 20} รายการ</p>}
+                              </div>
+                          </>
+                      ) : (
+                          <div className="py-10 flex flex-col items-center justify-center">
+                              <CheckCircle size={48} className="text-emerald-400 mb-4 opacity-50"/>
+                              <p className="font-bold text-slate-600">ฐานข้อมูลสมบูรณ์!</p>
+                              <p className="text-xs text-slate-500 mt-1">ไม่พบสต็อกตกค้าง (Orphan Lots) ทุก Lot มีบิลอ้างอิงครบถ้วน</p>
+                          </div>
+                      )}
+                  </div>
+                  
+                  <div className="pt-6 border-t border-slate-100 flex justify-end gap-3 text-center">
+                      <button onClick={() => setShowHealerModal(false)} className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
+                      {orphanLots.length > 0 && (
+                          <button onClick={executeHeal} disabled={isHealing} className="px-6 py-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold shadow-lg transition-colors flex items-center gap-2">
+                              {isHealing ? <Loader size={16} className="animate-spin"/> : <Trash2 size={16}/>} ล้างสต็อกตกค้าง
+                          </button>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 6. Delete By ID Modal */}
+      {showIdDeleteTool && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-8 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+                  <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-xl font-black text-rose-600 flex items-center gap-2"><Trash2 size={20}/> ลบข้อมูลด้วย ID</h3>
+                      <button onClick={() => setShowIdDeleteTool(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={16}/></button>
+                  </div>
+                  <div className="space-y-4 text-left">
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                          พิมพ์เลขที่เอกสาร, Order ID หรือ System ID เพื่อค้นหาและลบทิ้ง (และคืนสต็อก)<br/>
+                          <span className="font-bold text-rose-500">* ไม่สามารถกู้คืนได้</span>
+                      </p>
+                      <input 
+                          type="text" 
+                          value={targetIdToDelete} 
+                          onChange={e => setTargetIdToDelete(e.target.value)} 
+                          placeholder="INC-XXXX, INV-XXXX, Order ID..." 
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-mono outline-none focus:border-rose-400 focus:ring-1 focus:ring-rose-100 text-center"
+                      />
+                  </div>
+                  <div className="flex gap-3 mt-6 text-center">
+                      <button onClick={() => setShowIdDeleteTool(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
+                      <button onClick={forceDeleteById} disabled={!targetIdToDelete} className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg disabled:opacity-50 transition-colors">ยืนยันลบ</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
     </div>
   );
 }
