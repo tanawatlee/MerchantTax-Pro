@@ -4632,7 +4632,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               parentExpenseId: auditItem.transId,
               paymentStatus: auditItem.paymentStatus,
               isAdjustment: true,
-              adjustReason: 'ซ่อมแซมยอดดึงเข้าคลัง (Audit Sync)'
+              adjustReason: 'Audit Sync (ดึงเข้าคลัง)'
           };
 
           batchWriter.set(newBatchRef, newBatchData);
@@ -5093,11 +5093,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                                         <span className="text-sm font-black text-slate-700 flex items-center gap-1.5"><Calendar size={14} className="text-slate-400"/> {formatDate(b.date)}</span>
                                     </div>
                                     
-                                    {!b.isAdjustment && (() => {
+                                    {(!b.isAdjustment || b.parentExpenseId) && (() => {
                                         const parentTx = transactions.find(t => t.type === 'expense' && (t.id === b.parentExpenseId || t.linkedLotId === b.id));
+                                        if (b.isAdjustment && !parentTx) return null;
                                         const taxInv = parentTx?.taxInvoiceNo;
                                         const sysId = parentTx?.sysDocId;
-                                        const refDisplay = taxInv ? `ใบกำกับ: ${taxInv}` : (sysId ? `อ้างอิงระบบ: ${sysId}` : 'ไม่พบบิลอ้างอิง');
+                                        const refDisplay = (taxInv && String(taxInv).trim() !== '' && taxInv !== '-') ? `ใบกำกับ: ${taxInv}` : (sysId ? `อ้างอิงระบบ: ${sysId}` : 'ไม่พบบิลอ้างอิง');
                                         return (
                                             <div className="text-[10px] font-mono text-indigo-600 bg-indigo-50 px-2 py-1.5 rounded-md border border-indigo-100 w-fit flex items-center gap-1.5 mt-1 shadow-sm" title="เลขที่ใบกำกับภาษี / เอกสารอ้างอิงฝั่งซื้อ">
                                                 <FileText size={12}/> {refDisplay}
