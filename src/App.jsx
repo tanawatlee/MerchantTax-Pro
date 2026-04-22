@@ -6576,6 +6576,26 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       setSubTab('history');
   };
 
+  // --- NEW: Auto-Detect Existing Record for Smart Edit ---
+  const existingMatch = useMemo(() => {
+      if (formData.id) return null; // Already in edit mode
+      const cleanOrder = String(formData.orderId || '').trim().toLowerCase();
+      const cleanTax = String(formData.taxInvoiceNo || '').trim().toLowerCase();
+      
+      if (!cleanOrder && !cleanTax) return null;
+
+      if (formData.type === 'income' && cleanOrder) {
+          return transactions.find(t => t.type === 'income' && !t.isCancelled && (String(t.orderId || '').trim().toLowerCase() === cleanOrder || String(t.sysDocId || '').trim().toLowerCase() === cleanOrder));
+      }
+      if (formData.type === 'expense') {
+          return transactions.find(t => t.type === 'expense' && !t.isCancelled && (
+              (cleanOrder && (String(t.orderId || '').trim().toLowerCase() === cleanOrder || String(t.sysDocId || '').trim().toLowerCase() === cleanOrder)) ||
+              (cleanTax && String(t.taxInvoiceNo || '').trim().toLowerCase() === cleanTax)
+          ));
+      }
+      return null;
+  }, [formData.orderId, formData.taxInvoiceNo, formData.type, formData.id, transactions]);
+
   // --- Summary Filters State ---
   const [summaryStartDate, setSummaryStartDate] = useState(formatDateISO(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   const [summaryEndDate, setSummaryEndDate] = useState(formatDateISO(new Date()));
@@ -7447,7 +7467,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         // แก้ไข: ตรวจสอบเฉพาะรายการที่ "ยังไม่ถูกยกเลิก" และ ไม่ใช่รายการตัวเองที่กำลังแก้ไขอยู่
         const isDuplicate = transactions.some(t => t.type === 'income' && !t.isCancelled && String(t.orderId || '').trim().toLowerCase() === cleanRef && t.id !== formData.id);
         if (isDuplicate) {
-            showToast(`ข้อมูลซ้ำ! Order ID "${formData.orderId}" ถูกบันทึกในระบบไปแล้ว`, "error");
+            showToast(`ข้อมูลซ้ำ! Order ID "${formData.orderId}" มีในระบบแล้ว หากต้องการแก้ไข โปรดกดปุ่ม "เปลี่ยนเป็นโหมดแก้ไข" ด้านบน`, "error");
             return;
         }
     } else if (formData.type === 'expense' && formData.taxInvoiceNo && String(formData.taxInvoiceNo).trim() !== '') {
@@ -7462,7 +7482,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             t.id !== formData.id
         );
         if (isDuplicate && cleanPartner !== '') {
-            showToast(`ข้อมูลซ้ำ! ใบกำกับภาษี "${formData.taxInvoiceNo}" ของร้าน "${formData.partnerName}" มีอยู่แล้ว`, "error");
+            showToast(`ข้อมูลซ้ำ! ใบกำกับภาษี "${formData.taxInvoiceNo}" มีในระบบแล้ว หากต้องการแก้ไข โปรดกดปุ่ม "เปลี่ยนเป็นโหมดแก้ไข" ด้านบน`, "error");
             return;
         }
     }
@@ -8039,6 +8059,22 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <p className="font-bold text-sm">กำลังแก้ไขข้อมูลเดิม (Update Mode)</p>
                           <p className="text-xs opacity-80 mt-0.5">การบันทึกจะอัปเดตทับรายการเดิม (Ref: {formData.sysDocId}) และปรับสต็อกให้อัตโนมัติ โดยไม่สร้างรายการใหม่</p>
                       </div>
+                  </div>
+              )}
+
+              {/* --- NEW: Smart Edit Detector Banner --- */}
+              {existingMatch && !formData.id && (
+                  <div className="bg-blue-50 border border-blue-200 text-blue-700 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm mb-2 animate-fadeIn">
+                      <div className="flex items-center gap-3">
+                          <Info size={24} className="text-blue-500 shrink-0"/>
+                          <div>
+                              <p className="font-bold text-sm">พบข้อมูลนี้ในระบบแล้ว!</p>
+                              <p className="text-xs opacity-80 mt-0.5">คุณกำลังสร้างรายการที่มีเลขซ้ำกับของเดิม ต้องการแก้ไขข้อมูลเดิมแทนการสร้างใหม่หรือไม่?</p>
+                          </div>
+                      </div>
+                      <button type="button" onClick={() => handleEditTransaction(existingMatch)} className="w-full sm:w-auto bg-blue-600 text-white px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm shrink-0">
+                          ใช่, เปลี่ยนเป็นโหมดแก้ไข
+                      </button>
                   </div>
               )}
 
