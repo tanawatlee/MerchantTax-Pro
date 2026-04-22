@@ -619,6 +619,12 @@ function TaxGuide() {
             content: "การจัดเอกสารให้ตรงตามหลักบัญชี ควรแยกเป็น 4 แฟ้มหลักเพื่อความง่ายในการตรวจสอบ:\n\n1. แฟ้มรายได้: ใบกำกับภาษีขาย/บิลขาย (เรียงตามเลขที่), รายงานยอดขาย Shopee\n2. แฟ้มต้นทุนสินค้า: บิลซื้อของมาขาย, ค่าแพ็กเกจจิ้ง (กล่อง/เทป), ค่าน้ำมัน(เฉพาะขาไปรับของ)\n3. แฟ้มค่าใช้จ่าย: ค่าธรรมเนียม, โฆษณา, ค่าน้ำไฟ, เงินเดือน, ค่าน้ำมัน(วิ่งไปส่งของ/บริหาร)\n4. แฟ้มภาษี: แบบ ภ.พ.30, ใบหัก ณ ที่จ่าย (50 ทวิ)\n\n💡 ทริค: บิลรายจ่ายทุกใบ ควรเย็บแม็กติดกับ 'สลิปโอนเงิน' เสมอ เพื่อเป็นหลักฐานว่าจ่ายจริง"
         },
         {
+            title: "ใบเสร็จค่าส่ง Platform (เช่น SPX, Flash)",
+            icon: <TruckIcon {...iconProps}/>,
+            color: "blue",
+            content: "บิลค่าขนส่งที่ส่งมาจากแพลตฟอร์ม มักจะระบุหัวเอกสารว่าเป็นแค่ 'ใบเสร็จรับเงิน'\n\n✅ วิธีที่ถูกต้อง: \n1. ห้ามนำไปขอคืนภาษีซื้อ (VAT 7%) เด็ดขาด เพราะไม่ใช่ใบกำกับภาษีเต็มรูป\n2. บันทึกเป็น 'รายจ่าย' ปกติ (หมวด: ค่าขนส่งพัสดุ)\n3. ต้องติ๊ก ✅ 'ไม่มี VAT (บิลเงินสด)' ในระบบเสมอ เพื่อตัดยอดนี้ออกจากรายงาน ภ.พ.30"
+        },
+        {
             title: "บิลที่มี 'ของใช้ส่วนตัว' ปนมาด้วย",
             icon: <FileMinus {...iconProps}/>,
             color: "pink",
@@ -637,12 +643,6 @@ function TaxGuide() {
             content: "หากลูกค้าสั่งรสมินต์ แต่คุณเผลอตัดสต็อกรสสตรอว์เบอร์รี ไม่จำเป็นต้องกลับไปไล่ลบหรือแก้ไขบิลเก่าให้เหนื่อยและเสี่ยงข้อมูลรวน\n\n✅ วิธีที่ถูกต้อง: ไปที่เมนู 'คลังสินค้า FIFO' > กดปุ่ม '⇄ ปรับปรุงสต็อก' ที่ท้ายสินค้า > เลือกแท็บ '⇄ สลับ/โอนย้าย' > เลือกจำนวนและระบุสินค้าปลายทางที่ต้องการสลับยอด ระบบจะปรับสต็อกให้ตรง 100% ทันทีโดยไม่กระทบกำไรขาดทุน"
         },
         {
-            title: "เปลี่ยนไซส์/แพ็คสินค้า (Repacking)",
-            icon: <Package {...iconProps}/>,
-            color: "amber",
-            content: "กรณีของไซส์ใหญ่หมด แล้วต้องหยิบไซส์เล็กหลายชิ้นส่งไปแทนเพื่อให้ปริมาณเท่าเดิม (เช่น สั่ง 500g 1 ถุง แต่ส่ง 150g 4 ถุง)\n\n✅ วิธีที่ 1: เข้าไปกด 👁️ แก้ไข 'รายการสินค้าในบิลขายใบนั้น' ให้ตรงกับของที่ส่งจริง (สต็อกจะตัดเป๊ะ)\n✅ วิธีที่ 2: หากไม่อยากแก้บิล ให้ไปที่ 'คลังสินค้า FIFO' > กดปรับปรุงสต็อก 2 รอบ (กด '+ เพิ่มสต็อก' ไซส์ใหญ่กลับมา และ กด '- ลบสต็อก' ไซส์เล็กออกไปตามที่ส่งจริง)"
-        },
-        {
             title: "ค่าน้ำมันรถ สำหรับซื้อของ/ส่งของ",
             icon: <TruckIcon {...iconProps}/>,
             color: "emerald",
@@ -657,14 +657,8 @@ function TaxGuide() {
         {
             title: "การปรับปรุงค่าส่ง/ค่าธรรมเนียมย้อนหลัง",
             icon: <RefreshCw {...iconProps}/>,
-            color: "blue",
-            content: "เมื่อถูก Platform เรียกเก็บค่าส่งเพิ่ม หรือคืนเงินให้ย้อนหลัง ข้ามเดือนมาแล้ว \n\n✅ วิธีที่ถูกต้อง: ห้ามกลับไปแก้บิลขายเดิม! แต่ให้บันทึกเป็นรายการใหม่ในวันที่เกิดรายการจริง\n- หากถูกเก็บเพิ่ม: ลงเป็น 'รายจ่าย' (หมวดค่าจัดส่ง/ค่าธรรมเนียม) พร้อมระบุอ้างอิง Order ID\n- หากได้เงินคืน: ลงเป็น 'รายรับ' (หมวดรายได้อื่นๆ) พร้อมระบุอ้างอิง Order ID"
-        },
-        {
-            title: "บิลเงินสด / บิลที่ไม่มี VAT",
-            icon: <Receipt {...iconProps}/>,
             color: "teal",
-            content: "สำหรับการซื้อของจากร้านทั่วไป หรือบิลที่เขียนด้วยมือ ซึ่งไม่มีรูปแบบเป็นใบกำกับภาษีเต็มรูปที่ถูกต้อง\n\n✅ วิธีที่ถูกต้อง: ในหน้า 'บันทึกรายจ่าย' ให้ติ๊กทำเครื่องหมายที่ช่อง ✅ 'บิลเงินสด' ระบบจะทำการปิดช่องกรอกเลขใบกำกับ และบังคับเลือกประเภทภาษีเป็น 'ไม่มี VAT' ให้อัตโนมัติ เพื่อป้องกันการเผลอนำยอดไปยื่นขอคืนภาษีซื้อ"
+            content: "เมื่อถูก Platform เรียกเก็บค่าส่งเพิ่ม หรือคืนเงินให้ย้อนหลัง ข้ามเดือนมาแล้ว \n\n✅ วิธีที่ถูกต้อง: ห้ามกลับไปแก้บิลขายเดิม! แต่ให้บันทึกเป็นรายการใหม่ในวันที่เกิดรายการจริง\n- หากถูกเก็บเพิ่ม: ลงเป็น 'รายจ่าย' (หมวดค่าจัดส่ง/ค่าธรรมเนียม) พร้อมระบุอ้างอิง Order ID\n- หากได้เงินคืน: ลงเป็น 'รายรับ' (หมวดรายได้อื่นๆ) พร้อมระบุอ้างอิง Order ID"
         }
     ];
 
@@ -6675,13 +6669,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           const mimeType = file.type;
           const fileExt = file.name.split('.').pop();
           
-          // --- จัดโครงสร้าง Digital Filing ใหม่ (ปี -> ประเภท -> เดือน -> วันที่) ---
+          // --- จัดโครงสร้าง Digital Filing ใหม่ (ปี -> ประเภท -> เดือน -> หมวดหมู่ -> วันที่) ---
           const d = normalizeDate(formData.date) || new Date();
           const year = String(d.getFullYear());
           const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
           const month = monthNames[d.getMonth()];
           const day = String(d.getDate()).padStart(2, '0');
           const docTypeFolder = formData.type === 'income' ? '1_Income' : '2_Expense';
+          const safeCategory = String(formData.category || 'ทั่วไป').replace(/[\/\\]/g, '_'); // แยกโฟลเดอร์ตามหมวดหมู่
           
           // ตั้งชื่อไฟล์
           const refName = (formData.taxInvoiceNo || formData.orderId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9ก-๙]/g, '_');
@@ -6695,6 +6690,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               year: year, 
               type: docTypeFolder,
               month: month,
+              category: safeCategory, // เพิ่มระดับหมวดหมู่
               day: day
           };
 
@@ -6711,7 +6707,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           
           if (data.url) {
               setFormData(prev => ({ ...prev, attachmentUrl: data.url }));
-              showToast(`จัดเก็บไฟล์ลงแฟ้ม ${year}/${month}/${day} เรียบร้อย`, 'success');
+              showToast(`จัดเก็บไฟล์ลงแฟ้ม ${year}/${month}/${safeCategory}/${day} เรียบร้อย`, 'success');
               setNewPdfPassword(''); // เคลียร์รหัสผ่านเมื่ออัปโหลดสำเร็จ
           } else {
               throw new Error(data.message || "Upload failed");
@@ -6809,6 +6805,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           const month = monthNames[d.getMonth()];
           const day = String(d.getDate()).padStart(2, '0');
           const docTypeFolder = viewItem.type === 'income' ? '1_Income' : '2_Expense';
+          const safeCategory = String(viewItem.category || 'ทั่วไป').replace(/[\/\\]/g, '_'); // แยกโฟลเดอร์ตามหมวดหมู่
           
           const refName = (viewItem.taxInvoiceNo || viewItem.orderId || viewItem.sysDocId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9ก-๙]/g, '_');
           const fileName = `${refName}_${Date.now()}.${fileExt}`;
@@ -6821,6 +6818,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               year: year, 
               type: docTypeFolder,
               month: month,
+              category: safeCategory, // เพิ่มระดับหมวดหมู่
               day: day
           };
 
@@ -6841,7 +6839,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               
               // อัปเดตหน้าจอทันที
               setViewItem(prev => ({ ...prev, attachmentUrl: data.url }));
-              showToast(`แนบไฟล์ย้อนหลังเรียบร้อยแล้ว`, 'success');
+              showToast(`แนบไฟล์ย้อนหลังลงแฟ้ม ${year}/${month}/${safeCategory}/${day} เรียบร้อยแล้ว`, 'success');
               setHistoryPdfPassword(''); // เคลียร์รหัสผ่าน
           } else {
               throw new Error(data.message || "Upload failed");
@@ -7040,10 +7038,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               2. เลขประจำตัวผู้เสียภาษี (taxId)
               3. ยอดรวมสุทธิหลังรวม VAT (totalAmount) - ตัวเลข
               4. ยอดภาษีมูลค่าเพิ่ม VAT 7% (vatAmount) - ตัวเลข (ถ้าไม่มี VAT หรือ VAT 0 ให้ใส่ 0)
-              5. วันที่ในใบเสร็จ (date) - ขอแปลงเป็นรูปแบบ YYYY-MM-DD
-              
+              5. วันที่ในเอกสาร (date) - แปลงเป็นรูปแบบ YYYY-MM-DD
+              6. ประเภทเอกสาร (isTaxInvoice) - ให้ประเมินว่าเป็น "ใบกำกับภาษี" (true) หรือเป็นแค่ "ใบเสร็จรับเงิน/บิลเงินสด" (false)
+
               ตอบกลับเป็น JSON Object เท่านั้น:
-              { "partnerName": "...", "taxId": "...", "totalAmount": 0, "vatAmount": 0, "date": "YYYY-MM-DD" }
+              { "partnerName": "...", "taxId": "...", "totalAmount": 0, "vatAmount": 0, "date": "YYYY-MM-DD", "isTaxInvoice": false }
               `;
               
               showToast("AI กำลังอ่านข้อมูลจากใบเสร็จ...", "success");
@@ -7051,17 +7050,25 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               
               if (res) {
                   const items = [...formData.items];
-                  items[0] = { desc: 'ค่าใช้จ่ายทั่วไป (สแกนจากใบเสร็จ)', qty: 1, unit: 'ครั้ง', buyPrice: res.totalAmount || 0, sellPrice: 0, sku: '', category: '' };
+                  items[0] = { desc: 'ค่าใช้จ่ายทั่วไป (สแกนจากเอกสาร)', qty: 1, unit: 'ครั้ง', buyPrice: res.totalAmount || 0, sellPrice: 0, sku: '', category: '' };
                   
+                  const isCashBillMode = res.isTaxInvoice === false;
+
                   setFormData(prev => ({
                       ...prev,
                       partnerName: res.partnerName || prev.partnerName,
                       partnerTaxId: res.taxId || prev.partnerTaxId,
                       items: items,
                       date: res.date || prev.date,
-                      vatType: res.vatAmount > 0 ? 'included' : 'none'
+                      isCashBill: isCashBillMode,
+                      vatType: isCashBillMode ? 'none' : (res.vatAmount > 0 ? 'included' : 'none')
                   }));
-                  showToast("ดึงข้อมูลจากใบเสร็จสำเร็จ ตรวจสอบความถูกต้องก่อนบันทึก", "success");
+
+                  if (isCashBillMode) {
+                      showToast("AI ตรวจพบว่าเป็น 'ใบเสร็จรับเงิน' จึงตั้งค่าเป็น 'บิลเงินสด (ไม่มี VAT)' ให้อัตโนมัติ", "success");
+                  } else {
+                      showToast("ดึงข้อมูลจากใบกำกับภาษีสำเร็จ ตรวจสอบความถูกต้องก่อนบันทึก", "success");
+                  }
               }
           } catch (err) {
               console.error(err);
