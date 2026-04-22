@@ -5651,6 +5651,10 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       if (t.type !== 'expense') return false;
       if (t.isFromReconciliation && (!t.taxInvoiceNo || String(t.taxInvoiceNo).trim() === '')) return false;
 
+      // --- 🚨 NEW FIX: กรอง "ภาษีซื้อต้องห้าม" และ "บิลที่ไม่มี VAT" ออกจากรายงานภาษีซื้อให้ถูกต้องตามหลักสรรพากร ---
+      if (t.isNonCreditableVat) return false;
+      if (t.isCashBill || t.vatType === 'none') return false;
+
       const d = normalizeDate(t.date);
       const start = new Date(startDate);
       const end = new Date(endDate);
@@ -6502,6 +6506,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   // --- NEW: State for showing generated ID ---
   const [generatedDocId, setGeneratedDocId] = useState(null);
 
+  // --- NEW: Smart Edit Confirm State ---
+  const [confirmSmartEditMatch, setConfirmSmartEditMatch] = useState(null);
+
   // --- NEW: PDF Password States ---
   const [newPdfPassword, setNewPdfPassword] = useState('');
   const [historyPdfPassword, setHistoryPdfPassword] = useState('');
@@ -6574,6 +6581,27 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const cancelEdit = () => {
       setFormData(defaultFormState);
       setSubTab('history');
+  };
+
+  // --- NEW: ฟังก์ชันบังคับอัปเดต (แก้ไขบั๊กปุ่มไม่เปลี่ยนสี) ---
+  const handleForceUpdateMode = () => {
+      if (!confirmSmartEditMatch || !confirmSmartEditMatch.id) {
+          showToast("⚠️ ระบบเกิดข้อผิดพลาดในการดึง ID อ้างอิง กรุณากดแก้ไขจากหน้าประวัติแทน", "error");
+          return;
+      }
+      
+      // บังคับยัดค่า id ลงไปตรงๆ เพื่อให้ React รับรู้และเปลี่ยนหน้าตาปุ่มทันที
+      setFormData(prev => ({
+          ...prev,
+          id: confirmSmartEditMatch.id,
+          sysDocId: confirmSmartEditMatch.sysDocId || prev.sysDocId,
+          createdAt: confirmSmartEditMatch.createdAt || prev.createdAt,
+          status: confirmSmartEditMatch.status || prev.status,
+          paymentStatus: confirmSmartEditMatch.paymentStatus || prev.paymentStatus
+      }));
+      
+      setConfirmSmartEditMatch(null);
+      showToast("สลับเป็นโหมดอัปเดตแล้ว กรุณากดปุ่ม 'อัปเดตข้อมูล' สีส้มด้านล่างเพื่อเซฟทับ", "success");
   };
 
   // --- NEW: Auto-Detect Existing Record for Smart Edit ---
@@ -8068,12 +8096,12 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       <div className="flex items-center gap-3">
                           <Info size={24} className="text-blue-500 shrink-0"/>
                           <div>
-                              <p className="font-bold text-sm">พบข้อมูลนี้ในระบบแล้ว!</p>
-                              <p className="text-xs opacity-80 mt-0.5">คุณกำลังสร้างรายการที่มีเลขซ้ำกับของเดิม ต้องการแก้ไขข้อมูลเดิมแทนการสร้างใหม่หรือไม่?</p>
+                              <p className="font-bold text-sm">พบรหัสอ้างอิงนี้ในระบบแล้ว!</p>
+                              <p className="text-xs opacity-80 mt-0.5">คุณต้องการนำข้อมูลนี้ไปอัปเดตทับรายการเดิม หรือดึงข้อมูลเดิมกลับมาดูหรือไม่?</p>
                           </div>
                       </div>
-                      <button type="button" onClick={() => handleEditTransaction(existingMatch)} className="w-full sm:w-auto bg-blue-600 text-white px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm shrink-0">
-                          ใช่, เปลี่ยนเป็นโหมดแก้ไข
+                      <button type="button" onClick={() => setConfirmSmartEditMatch(existingMatch)} className="w-full sm:w-auto bg-blue-600 text-white px-4 py-2.5 rounded-xl text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm shrink-0">
+                          จัดการรายการซ้ำ
                       </button>
                   </div>
               )}
@@ -8487,16 +8515,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                 <div className="pt-6 border-t border-white/20 text-left">
                   <div className="flex gap-3">
                     {formData.id && (
-                      <button onClick={cancelEdit} type="button" className="flex-1 bg-slate-100 text-slate-600 py-4 rounded-2xl font-black text-lg shadow-sm transition-all hover:bg-slate-200 active:scale-95 text-center">
+                      <button onClick={cancelEdit} type="button" className="flex-1 bg-slate-100 text-slate-700 py-4 rounded-2xl font-black text-lg shadow-sm transition-all hover:bg-slate-200 active:scale-95 text-center">
                         ยกเลิกแก้ไข
                       </button>
                     )}
-                    <button onClick={handleSubmit} className={`${formData.id ? 'flex-[2] bg-amber-500 text-white hover:bg-amber-600' : 'w-full bg-white text-slate-900 hover:bg-slate-50'} py-4 rounded-2xl font-black text-lg shadow-xl transition-all flex items-center justify-center gap-3 active:scale-95 group text-center`}>
+                    <button onClick={handleSubmit} className={`${formData.id ? 'flex-[2] bg-orange-500 text-white hover:bg-orange-600' : 'w-full bg-white text-slate-900 hover:bg-slate-100'} py-4 rounded-2xl font-black text-lg shadow-xl transition-all flex items-center justify-center gap-3 active:scale-95 group text-center`}>
                       <Save size={24} className={`${formData.id ? 'text-white' : 'text-indigo-600'} transition-transform group-hover:scale-110 text-center`}/> 
-                      {formData.id ? 'อัปเดตรายการ' : 'บันทึกรายการ'}
+                      {formData.id ? 'อัปเดตข้อมูล' : 'บันทึกรายการ'}
                     </button>
                   </div>
-                  <p className="text-[10px] text-white/30 mt-4 text-center">ระบบจะบันทึกลงฐานข้อมูล and หักลบสต็อก FIFO อัตโนมัติ</p>
+                  <p className="text-[10px] text-white/30 mt-4 text-center">ระบบจะบันทึกลงฐานข้อมูล และหักลบสต็อก FIFO อัตโนมัติ</p>
                 </div>
               </div>
             </div>
@@ -9199,6 +9227,39 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                 <div className="flex gap-3 text-center">
                     <button onClick={()=>setHardDeleteConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ยกเลิก</button>
                     <button onClick={handleHardDeleteTransaction} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg shadow-red-100 text-center hover:bg-red-700 transition-colors">ยืนยันลบถาวร</button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* Smart Edit Confirm Modal */}
+      {confirmSmartEditMatch && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-md w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><LayersIcon className="text-blue-600"/> จัดการรายการซ้ำ</h3>
+                    <button onClick={() => setConfirmSmartEditMatch(null)} className="text-slate-400 hover:text-slate-600 transition-colors"><X size={20}/></button>
+                </div>
+                
+                <p className="text-sm text-slate-600 mb-6 text-left leading-relaxed">
+                    ระบบพบว่าอ้างอิง <b className="text-blue-600">{confirmSmartEditMatch.sysDocId || confirmSmartEditMatch.orderId || confirmSmartEditMatch.taxInvoiceNo || '-'}</b> มีอยู่ในระบบแล้ว คุณต้องการทำสิ่งใด?
+                </p>
+                
+                <div className="space-y-3">
+                    <button onClick={handleForceUpdateMode} className="w-full p-4 bg-orange-50 border border-orange-200 rounded-2xl hover:bg-orange-500 hover:text-white text-orange-700 font-bold transition-all text-left flex flex-col group shadow-sm">
+                        <span className="text-base flex items-center gap-2"><Save size={18}/> นำข้อมูลที่กำลังพิมพ์อยู่นี้ ไปอัปเดตทับของเดิม</span>
+                        <span className="text-xs opacity-80 mt-1 font-medium group-hover:text-orange-100">(เก็บข้อมูลบนหน้าจอนี้ไว้ แล้วให้ปุ่มเซฟเปลี่ยนเป็นโหมดอัปเดต)</span>
+                    </button>
+                    
+                    <button onClick={() => {
+                        // โหลดข้อมูลเก่าจาก DB มาทับหน้าจอ
+                        handleEditTransaction(confirmSmartEditMatch);
+                        setConfirmSmartEditMatch(null);
+                        showToast("โหลดข้อมูลเดิมจากระบบมาแสดงแล้ว", "success");
+                    }} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl hover:bg-slate-100 text-slate-700 font-bold transition-all text-left flex flex-col group shadow-sm">
+                        <span className="text-base flex items-center gap-2"><Download size={18}/> โหลดข้อมูลเดิมจากระบบกลับมาดู</span>
+                        <span className="text-xs opacity-80 mt-1 font-medium">(ล้างข้อมูลที่คุณกำลังพิมพ์อยู่ทิ้ง แล้วดึงของเก่ามาแสดงแทน)</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -11124,9 +11185,18 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                       <button onClick={addLineItem} className="text-[10px] bg-indigo-600 text-white px-4 py-1.5 rounded-lg flex items-center gap-1 w-fit font-bold shadow-md text-center"><PlusCircle size={14}/> เพิ่มรายการ</button>
                   </div>
                 </div>
-                <div className="flex gap-4 text-center">
-                  <button onClick={handleSaveInvoice} className={"flex-1 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition-all text-center " + (editingDocId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-emerald-600 hover:bg-emerald-700') + " flex items-center justify-center gap-2 text-center"}><Save size={18}/> {editingDocId ? 'อัปเดตข้อมูล' : 'บันทึกเอกสาร'}</button>
-                  <button onClick={handleDownloadPDF} className="bg-slate-700 hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-all text-center"><Download size={18}/> Download ZIP</button>
+                <div className="flex flex-wrap sm:flex-nowrap gap-4 text-center">
+                  {editingDocId && (
+                      <button onClick={handleNewInvoice} type="button" className="flex-1 bg-slate-100 text-slate-700 px-6 py-3 rounded-xl font-bold shadow-sm transition-all hover:bg-slate-200 text-center min-w-[120px]">
+                          ยกเลิกแก้ไข
+                      </button>
+                  )}
+                  <button onClick={handleSaveInvoice} className={`flex-[2] text-white px-6 py-3 rounded-xl font-bold shadow-lg transition-all text-center ${editingDocId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-emerald-600 hover:bg-emerald-700'} flex items-center justify-center gap-2 text-center min-w-[150px]`}>
+                      <Save size={18}/> {editingDocId ? 'อัปเดตข้อมูล' : 'บันทึกเอกสาร'}
+                  </button>
+                  <button onClick={handleDownloadPDF} className="flex-1 bg-slate-700 hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg transition-all text-center min-w-[150px]">
+                      <Download size={18}/> Download ZIP
+                  </button>
                 </div>
             </div>
             <div className="overflow-x-auto pb-10 flex justify-center print:p-0 print:absolute print:left-0 print:top-0 print:w-full print:h-full print:z-50 print:bg-white text-left">
@@ -11984,9 +12054,11 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
               </div>
 
               <div className="pt-4 flex gap-3">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-4 bg-white border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition-colors shadow-sm">ยกเลิก</button>
+                <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-4 bg-white border border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-colors shadow-sm">
+                    {editingId ? 'ยกเลิกแก้ไข' : 'ยกเลิก'}
+                </button>
                 <button onClick={handleSave} className={`flex-[2] py-4 text-white rounded-xl font-black shadow-lg transition-all text-lg flex items-center justify-center gap-2 ${formData.type.includes('shopee') ? 'bg-orange-500 hover:bg-orange-600 shadow-orange-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}>
-                    <Save size={20}/> บันทึกแคมเปญ
+                    <Save size={20}/> {editingId ? 'อัปเดตข้อมูล' : 'บันทึกแคมเปญ'}
                 </button>
               </div>
             </div>
