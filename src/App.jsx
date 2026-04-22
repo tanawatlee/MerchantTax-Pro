@@ -1720,14 +1720,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             const val = findVal(row, kws);
             return val !== undefined && val !== null && String(val).trim() !== '' ? Math.abs(cleanNum(val)) : 0;
         };
-
-        // --- 🔥 NEW FIX: EXACT MATCH EXTRACTOR FOR TIKTOK 🔥 ---
-        // ป้องกันการดึงคอลัมน์ชื่อคล้ายกัน เช่น "Refund of Transaction fee"
+        // --- 🔥 NEW FIX: EXACT MATCH EXTRACTOR FOR TIKTOK & SHOPEE 🔥 ---
+        // ป้องกันการดึงคอลัมน์ชื่อคล้ายกัน เช่น "Refund of Transaction fee" หรือ "ค่าคอมมิชชั่น AMS"
         const getExactRowValAbs = (row, exactKeys) => {
             const keys = Object.keys(row);
             for (let k of exactKeys) {
-                // เปรียบเทียบแบบเป๊ะๆ 100% (ไม่ใช้ Includes) แต่ข้ามเรื่องตัวพิมพ์เล็ก-ใหญ่ และช่องว่างหัวท้าย
-                const match = keys.find(rk => rk.trim().toLowerCase() === k.trim().toLowerCase());
+                // เปรียบเทียบแบบเป๊ะๆ (ตัดช่องว่างทิ้งทั้งหมด ป้องกันปัญหาเว้นวรรคไม่เท่ากันใน Excel)
+                const cleanK = String(k).replace(/\s+/g, '').toLowerCase();
+                const match = keys.find(rk => String(rk).replace(/\s+/g, '').toLowerCase() === cleanK);
                 if (match) {
                     const val = row[match];
                     if (val !== undefined && val !== null && String(val).trim() !== '') {
@@ -1756,33 +1756,33 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                     totalFeeVal = t1 + t2 + t3 + t4;
                 }
 
-                // รวบยอดค่าธรรมเนียมทั้งหมดไว้ก้อนเดียว เพื่อไม่ให้ซ้ำซ้อน
                 transFee = totalFeeVal;
                 comm = 0;
                 affiliateRow = 0;
                 infraRow = 0;
-                serv = 0; // ล็อก Service Fee เป็น 0 เพื่อไม่ให้ดึงคอลัมน์อื่นมากวน
+                serv = 0;
 
-                // 2. ดึงเฉพาะค่าจัดส่ง 3 คอลัมน์ที่คุณลูกค้าระบุเป๊ะๆ แบบ Exact Match
                 let sellerShip = getExactRowValAbs(row, ['Seller shipping fee', 'ค่าจัดส่งของผู้ขาย']);
                 let actualShip = getExactRowValAbs(row, ['Actual shipping fee', 'ค่าจัดส่งตามจริง']);
                 
-                // ระบบจะใช้ Actual ก่อน ถ้าไม่มีถึงจะถอยไปใช้ Seller
                 shipEstRow = actualShip > 0 ? actualShip : sellerShip;
-                
                 shipSubsidyRow = getExactRowValAbs(row, ['Platform shipping fee discount', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม']);
                 
-                // ล็อกค่าส่งอื่นๆ เป็น 0 ป้องกันยอดบวม
                 shipBuyerRow = 0; 
                 shipReturnRow = 0; 
             } else {
-                // สำหรับ Shopee/Lazada ดึงตามปกติ
-                transFee = getRowValAbs(row, schema.transFee);
-                comm = getRowValAbs(row, schema.commFee);
-                serv = getRowValAbs(row, schema.servFee);
-                affiliateRow = getRowValAbs(row, schema.affiliateFee);
-                infraRow = getRowValAbs(row, schema.infraFee);
+                // สำหรับ Shopee/Lazada ดึงตามปกติโดยใช้ Exact Match แบบตัดช่องว่างทิ้ง ป้องกันการดึงคอลัมน์ชื่อคล้ายกันมาผิด
+                transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
+                comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']); 
+                serv = getExactRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
                 
+                const baseInfra = getExactRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
+                const shippingProg = getExactRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
+                infraRow = baseInfra + shippingProg;
+                
+                affiliateRow = getExactRowValAbs(row, ['ค่าคอมมิชชั่น Affiliate', 'Affiliate Commission']);
+                
+                // สำหรับค่าจัดส่ง ดึงตามปกติ (ใช้ Includes ได้เพราะไม่ค่อยมีชื่อซ้ำซ้อน)
                 shipBuyerRow = getRowValAbs(row, schema.shippingFeeByBuyer);
                 shipSubsidyRow = getRowValAbs(row, schema.shippingFeeSubsidy);
                 shipEstRow = getRowValAbs(row, schema.estimatedShippingFee);
@@ -1816,12 +1816,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 isCancelledOrUnpaid = false;
             }
 
-            const transFee = getRowValAbs(row, schema.transFee);
-            const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']);
-            const serv = getRowValAbs(row, schema.servFee);
-            const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', 'ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
-            const shippingProgFee = getRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'ค่าธรรมเนียม ของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
-            const rowTotalFees = transFee + comm + serv + infraRow + shippingProgFee;
+            const transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
+            const comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']);
+            const serv = getExactRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
+            const baseInfra = getExactRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
+            const shippingProgFee = getExactRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
+            const rowTotalFees = transFee + comm + serv + baseInfra + shippingProgFee;
 
             // ข้ามรายการที่ยกเลิกและไม่มีการหักค่าธรรมเนียม (เหมือนที่ Shopee ทำ)
             if (isCancelledOrUnpaid && Math.abs(rowTotalFees) < 0.01) return;
@@ -1831,7 +1831,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             detailedStats.sellerDiscount += getRowValAbs(row, ['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount']);
             detailedStats.feeComm += comm;
             detailedStats.feeServ += serv;
-            detailedStats.feeInfra += (infraRow + shippingProgFee);
+            detailedStats.feeInfra += (baseInfra + shippingProgFee);
             detailedStats.feeTrans += transFee;
 
             // 2. หมวดรายออเดอร์ (Order Level) - ต้องบวกแค่ครั้งเดียวต่อ 1 Order ID เพื่อป้องกันยอดเบิ้ล
@@ -1895,6 +1895,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 const shipSubsidyRow = fees.shipSubsidyRow;
                 const shipEstRow = fees.shipEstRow;
                 const shipReturnRow = fees.shipReturnRow;
+                
+                // --- 🔥 FIX: ดึงข้อมูลส่วนลดผู้ขายและยอดคืนเงินในโหมด 3 ด้วย ---
+                const sellerDiscount = getRowValAbs(row, schema.sellerDiscount);
 
                 // --- FIX: เพิ่มคำว่า ยอดเงินที่ชำระทั้งหมด ---
                 const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'Total settlement amount', 'ยอดเงินที่ชำระทั้งหมด']);
@@ -1918,6 +1921,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                 newCommissionFee: comm,
                                 newServiceFee: serv,
                                 newInfrastructureFee: infra,
+                                newShippingFee: shipBuyerRow,
+                                newShippingFeeSubsidy: shipSubsidyRow,
+                                newEstimatedShippingFee: shipEstRow,
+                                newReturnShippingFee: shipReturnRow,
+                                newCouponDiscount: sellerDiscount,
+                                newRefundAmount: refundAmtRow,
                                 actualSettledAmt: actualSettledAmtFromRow !== undefined ? actualSettledAmtFromRow : 0,
                                 newSettlementDate: finalSettleDate || existingTrans.settlementDate || existingTrans.date || new Date()
                             };
@@ -1927,6 +1936,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             matchedMap[existingTrans.id].newCommissionFee = (matchedMap[existingTrans.id].newCommissionFee || 0) + comm;
                             matchedMap[existingTrans.id].newServiceFee = (matchedMap[existingTrans.id].newServiceFee || 0) + serv;
                             matchedMap[existingTrans.id].newInfrastructureFee = (matchedMap[existingTrans.id].newInfrastructureFee || 0) + infra;
+                            matchedMap[existingTrans.id].newShippingFee = Math.max(matchedMap[existingTrans.id].newShippingFee || 0, shipBuyerRow);
+                            matchedMap[existingTrans.id].newShippingFeeSubsidy = Math.max(matchedMap[existingTrans.id].newShippingFeeSubsidy || 0, shipSubsidyRow);
+                            matchedMap[existingTrans.id].newEstimatedShippingFee = Math.max(matchedMap[existingTrans.id].newEstimatedShippingFee || 0, shipEstRow);
+                            matchedMap[existingTrans.id].newReturnShippingFee = Math.max(matchedMap[existingTrans.id].newReturnShippingFee || 0, shipReturnRow);
+                            matchedMap[existingTrans.id].newCouponDiscount = Math.max(matchedMap[existingTrans.id].newCouponDiscount || 0, sellerDiscount);
+                            matchedMap[existingTrans.id].newRefundAmount = Math.max(matchedMap[existingTrans.id].newRefundAmount || 0, refundAmtRow);
                         }
                     } 
                     else if (existingTrans.paymentStatus === 'pending_platform' && !existingTrans.isCancelled) {
@@ -1940,7 +1955,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                 newTransactionFee: transFee,
                                 newCommissionFee: comm,
                                 newServiceFee: serv,
-                                newInfrastructureFee: infra
+                                newInfrastructureFee: infra,
+                                newShippingFee: shipBuyerRow,
+                                newShippingFeeSubsidy: shipSubsidyRow,
+                                newEstimatedShippingFee: shipEstRow,
+                                newReturnShippingFee: shipReturnRow,
+                                newCouponDiscount: sellerDiscount,
+                                newRefundAmount: refundAmtRow
                             };
                             if (actualSettledAmtFromRow === undefined) {
                                 matchedMap[existingTrans.id].actualSettledAmt = undefined; 
@@ -1951,6 +1972,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             matchedMap[existingTrans.id].newCommissionFee += comm;
                             matchedMap[existingTrans.id].newServiceFee += serv;
                             matchedMap[existingTrans.id].newInfrastructureFee += infra;
+                            matchedMap[existingTrans.id].newShippingFee = Math.max(matchedMap[existingTrans.id].newShippingFee || 0, shipBuyerRow);
+                            matchedMap[existingTrans.id].newShippingFeeSubsidy = Math.max(matchedMap[existingTrans.id].newShippingFeeSubsidy || 0, shipSubsidyRow);
+                            matchedMap[existingTrans.id].newEstimatedShippingFee = Math.max(matchedMap[existingTrans.id].newEstimatedShippingFee || 0, shipEstRow);
+                            matchedMap[existingTrans.id].newReturnShippingFee = Math.max(matchedMap[existingTrans.id].newReturnShippingFee || 0, shipReturnRow);
+                            matchedMap[existingTrans.id].newCouponDiscount = Math.max(matchedMap[existingTrans.id].newCouponDiscount || 0, sellerDiscount);
+                            matchedMap[existingTrans.id].newRefundAmount = Math.max(matchedMap[existingTrans.id].newRefundAmount || 0, refundAmtRow);
 
                             if (actualSettledAmtFromRow !== undefined && matchedMap[existingTrans.id].actualSettledAmt !== undefined) {
                                 matchedMap[existingTrans.id].actualSettledAmt = Math.max(matchedMap[existingTrans.id].actualSettledAmt || 0, actualSettledAmtFromRow);
@@ -1968,6 +1995,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                 newCommissionFee: comm,
                                 newServiceFee: serv,
                                 newInfrastructureFee: infra,
+                                newShippingFee: shipBuyerRow,
+                                newShippingFeeSubsidy: shipSubsidyRow,
+                                newEstimatedShippingFee: shipEstRow,
+                                newReturnShippingFee: shipReturnRow,
+                                newCouponDiscount: sellerDiscount,
+                                newRefundAmount: refundAmtRow,
                                 actualSettledAmt: actualSettledAmtFromRow !== undefined ? actualSettledAmtFromRow : 0,
                                 newSettlementDate: finalSettleDate || existingTrans.settlementDate || existingTrans.date || new Date()
                             };
@@ -1977,6 +2010,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             matchedMap[existingTrans.id].newCommissionFee = (matchedMap[existingTrans.id].newCommissionFee || 0) + comm;
                             matchedMap[existingTrans.id].newServiceFee = (matchedMap[existingTrans.id].newServiceFee || 0) + serv;
                             matchedMap[existingTrans.id].newInfrastructureFee = (matchedMap[existingTrans.id].newInfrastructureFee || 0) + infra;
+                            matchedMap[existingTrans.id].newShippingFee = Math.max(matchedMap[existingTrans.id].newShippingFee || 0, shipBuyerRow);
+                            matchedMap[existingTrans.id].newShippingFeeSubsidy = Math.max(matchedMap[existingTrans.id].newShippingFeeSubsidy || 0, shipSubsidyRow);
+                            matchedMap[existingTrans.id].newEstimatedShippingFee = Math.max(matchedMap[existingTrans.id].newEstimatedShippingFee || 0, shipEstRow);
+                            matchedMap[existingTrans.id].newReturnShippingFee = Math.max(matchedMap[existingTrans.id].newReturnShippingFee || 0, shipReturnRow);
+                            matchedMap[existingTrans.id].newCouponDiscount = Math.max(matchedMap[existingTrans.id].newCouponDiscount || 0, sellerDiscount);
+                            matchedMap[existingTrans.id].newRefundAmount = Math.max(matchedMap[existingTrans.id].newRefundAmount || 0, refundAmtRow);
+                            
                             if (actualSettledAmtFromRow !== undefined && matchedMap[existingTrans.id].actualSettledAmt !== undefined) {
                                 matchedMap[existingTrans.id].actualSettledAmt = Math.max(matchedMap[existingTrans.id].actualSettledAmt || 0, actualSettledAmtFromRow);
                             }
@@ -2461,9 +2501,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       updateData.estimatedShippingFee = item.newEstimatedShippingFee !== undefined ? item.newEstimatedShippingFee : (item.estimatedShippingFee || 0);
                       updateData.returnShippingFee = item.newReturnShippingFee !== undefined ? item.newReturnShippingFee : (item.returnShippingFee || 0);
                       
+                      // --- 🔥 FIX: อัปเดตส่วนลดใหม่ทั้งหมดจากไฟล์กระทบยอด ---
+                      updateData.couponDiscount = item.newCouponDiscount !== undefined ? item.newCouponDiscount : (item.couponDiscount || 0);
+                      updateData.refundAmount = item.newRefundAmount !== undefined ? item.newRefundAmount : (item.refundAmount || 0);
+                      
                       const newNetShip = updateData.shippingFee + updateData.shippingFeeSubsidy - updateData.estimatedShippingFee - updateData.returnShippingFee;
-                      const originalDiscount = (item.couponDiscount || 0) + (item.refundAmount || 0);
-                      updateData.grandTotal = (item.total || 0) - updateData.platformFee - originalDiscount + newNetShip;
+                      const currentDiscount = updateData.couponDiscount + updateData.refundAmount;
+                      
+                      updateData.grandTotal = (item.total || 0) - updateData.platformFee - currentDiscount + newNetShip;
                   }
                   
                   let diff = 0;
@@ -12079,6 +12124,366 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     const [selectedShop, setSelectedShop] = useState('all');
     const [isExporting, setIsExporting] = useState(false);
 
+    // --- NEW: Data Audit System ---
+    const auditFileRef = useRef(null);
+    const [isAuditing, setIsAuditing] = useState(false);
+    const [auditResults, setAuditResults] = useState(null);
+
+    const handleRunShopeeAudit = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        setIsAuditing(true);
+
+        if (!window.XLSX) {
+            const script = document.createElement('script');
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+            await new Promise(res => { script.onload = res; document.body.appendChild(script); });
+        }
+
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+            try {
+                const bstr = evt.target.result;
+                const wb = window.XLSX.read(bstr, { type: 'binary' });
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                const rawAoA = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+                let headerRowIdx = 0;
+                for (let i = 0; i < Math.min(rawAoA.length, 20); i++) {
+                    if (rawAoA[i].join('').replace(/\s/g, '').toLowerCase().includes('หมายเลขคำสั่งซื้อ')) {
+                        headerRowIdx = i; break;
+                    }
+                }
+
+                const headers = rawAoA[headerRowIdx] || [];
+                const raw = [];
+                for (let i = headerRowIdx + 1; i < rawAoA.length; i++) {
+                    const rowObj = {};
+                    let hasData = false;
+                    headers.forEach((h, colIdx) => {
+                        if (h && String(h).trim() !== '') {
+                            rowObj[String(h).trim()] = rawAoA[i][colIdx];
+                            if (rawAoA[i][colIdx] !== '' && rawAoA[i][colIdx] !== undefined) hasData = true;
+                        }
+                    });
+                    if (hasData) raw.push(rowObj);
+                }
+
+                const cleanForSearch = (str) => String(str).replace(/[^a-zA-Z0-9ก-๙]/g, '').toLowerCase();
+                const findVal = (row, kws) => {
+                    if (!kws) return undefined;
+                    const keys = Object.keys(row);
+                    const cleanKeys = keys.map(k => ({ original: k, clean: cleanForSearch(k) }));
+                    for (let i = 0; i < kws.length; i++) {
+                        const ckw = cleanForSearch(kws[i]);
+                        const matches = cleanKeys.filter(x => x.clean.includes(ckw));
+                        for (const match of matches) {
+                            const val = row[match.original];
+                            if (val !== undefined && val !== null && String(val).trim() !== '') return val;
+                        }
+                    }
+                    return undefined;
+                };
+
+                const cleanNum = (val) => { 
+                    if (typeof val === 'number') return val; 
+                    if (!val) return 0; 
+                    const parsed = parseFloat(String(val).replace(/[^0-9.-]+/g, ""));
+                    return isNaN(parsed) ? 0 : parsed;
+                };
+
+                const getRowValAbs = (row, kws) => {
+                    const val = findVal(row, kws);
+                    return val !== undefined && val !== null && String(val).trim() !== '' ? Math.abs(cleanNum(val)) : 0;
+                };
+
+                const getExactRowValAbs = (row, exactKeys) => {
+                    const keys = Object.keys(row);
+                    for (let k of exactKeys) {
+                        const cleanK = String(k).replace(/\s+/g, '').toLowerCase();
+                        const match = keys.find(rk => String(rk).replace(/\s+/g, '').toLowerCase() === cleanK);
+                        if (match) {
+                            const val = row[match];
+                            if (val !== undefined && val !== null && String(val).trim() !== '') {
+                                return Math.abs(cleanNum(val));
+                            }
+                        }
+                    }
+                    return 0;
+                };
+
+                const excelData = {};
+                raw.forEach(row => {
+                    const orderId = String(findVal(row, ['หมายเลขคำสั่งซื้อ', 'Order ID']) || '').replace(/^['"]|['"]$/g, '').trim();
+                    if (!orderId) return;
+
+                    const status = String(findVal(row, ['สถานะการสั่งซื้อ', 'Order Status']) || '').toLowerCase();
+                    let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || status.includes('unpaid') || status.includes('รอชำระเงิน') || (status.includes('ไม่สำเร็จ') && !status.includes('จัดส่งไม่สำเร็จ'));
+                    
+                    const refundAmtRow = getRowValAbs(row, ['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน']);
+                    if (status.includes('คืน') || status.includes('refund') || status.includes('return') || refundAmtRow > 0) {
+                        isCancelledOrUnpaid = false;
+                    }
+                    if (status.includes('สามารถยื่น') || status.includes('ได้รับสินค้าแล้ว')) {
+                        isCancelledOrUnpaid = false; 
+                    }
+
+                    const transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
+                    const comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']);
+                    const serv = getExactRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
+                    const baseInfra = getExactRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
+                    const shippingProgFee = getExactRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
+                    const affiliate = getExactRowValAbs(row, ['ค่าคอมมิชชั่น Affiliate', 'Affiliate Commission']);
+                    
+                    const infraRow = baseInfra + shippingProgFee;
+                    const rowTotalFees = transFee + comm + serv + infraRow + affiliate;
+
+                    if (isCancelledOrUnpaid && Math.abs(rowTotalFees) < 0.01) return;
+
+                    if (!excelData[orderId]) {
+                        excelData[orderId] = {
+                            orderId,
+                            productPrice: 0,
+                            discount: 0,
+                            refund: refundAmtRow,
+                            fees: 0,
+                            shipBuyer: 0,
+                            shipShopee: 0,
+                            shipActual: 0,
+                            shipReturn: 0,
+                            payout: 0,
+                            hasPayout: false,
+                            rawFees: { comm: 0, serv: 0, infra: 0, trans: 0, affiliate: 0 }
+                        };
+                    }
+
+                    excelData[orderId].productPrice += getRowValAbs(row, ['สินค้าราคาปกติ', 'Original Price', 'Product Price', 'ราคาเสนอ']);
+                    excelData[orderId].discount += getRowValAbs(row, ['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount']);
+                    excelData[orderId].fees += rowTotalFees;
+                    
+                    excelData[orderId].rawFees.comm += comm;
+                    excelData[orderId].rawFees.serv += serv;
+                    excelData[orderId].rawFees.infra += infraRow;
+                    excelData[orderId].rawFees.trans += transFee;
+                    excelData[orderId].rawFees.affiliate += affiliate;
+                    
+                    excelData[orderId].shipBuyer += getRowValAbs(row, ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ', 'Shipping Fee Paid by Buyer']);
+                    excelData[orderId].shipShopee += getRowValAbs(row, ['ค่าจัดส่งสินค้าที่ออกโดย Shopee', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง']);
+                    excelData[orderId].shipActual += getRowValAbs(row, ['ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee']);
+                    excelData[orderId].shipReturn += getRowValAbs(row, ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee']);
+
+                    const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'ยอดเงินที่ชำระทั้งหมด']);
+                    if (actualSettledAmtRaw !== undefined) {
+                        excelData[orderId].payout += cleanNum(actualSettledAmtRaw);
+                        excelData[orderId].hasPayout = true;
+                    }
+                });
+
+                const discrepancies = [];
+                let checkedCount = 0;
+                let matchCount = 0;
+
+                Object.values(excelData).forEach(ex => {
+                    const cleanRef = ex.orderId.toLowerCase();
+                    const dbMatch = transactions.find(t => t.type === 'income' && !t.isCancelled && (String(t.orderId || '').trim().toLowerCase() === cleanRef || String(t.sysDocId || '').trim().toLowerCase() === cleanRef));
+
+                    if (!dbMatch) {
+                        discrepancies.push({
+                            orderId: ex.orderId,
+                            issue: 'ไม่พบออเดอร์ในระบบ',
+                            desc: 'รายการนี้มีในไฟล์ Excel แต่ยังไม่ได้ Import เข้าระบบ (หรือถูกลบ/ยกเลิกไปแล้ว)',
+                            details: []
+                        });
+                        return;
+                    }
+
+                    checkedCount++;
+                    
+                    // คำนวณยอดดิบจาก DB ปัจจุบัน
+                    const dbProductPrice = (dbMatch.items || []).reduce((sum, i) => sum + (Number(i.qty)*Number(i.sellPrice || i.price || 0)), 0);
+                    const dbDiscount = Number(dbMatch.couponDiscount || 0);
+                    const dbRefund = Number(dbMatch.refundAmount || 0);
+                    const dbFees = Number(dbMatch.platformFee || 0);
+                    
+                    const dbShipBuyer = Number(dbMatch.shippingFee || 0);
+                    const dbShipShopee = Number(dbMatch.shippingFeeSubsidy || 0);
+                    const dbShipActual = Number(dbMatch.estimatedShippingFee || 0);
+                    const dbShipReturn = Number(dbMatch.returnShippingFee || 0);
+
+                    const dbPayout = dbMatch.actualSettledAmt !== undefined ? Number(dbMatch.actualSettledAmt) : (Number(dbMatch.grandTotal || dbMatch.total) || 0);
+
+                    const diffs = [];
+                    const tol = 0.05; // Tolerance 5 satang
+
+                    if (Math.abs(ex.productPrice - dbProductPrice) > tol) diffs.push({ label: 'ยอดขายสินค้า', db: dbProductPrice, excel: ex.productPrice, diff: ex.productPrice - dbProductPrice });
+                    if (Math.abs(ex.discount - dbDiscount) > tol) diffs.push({ label: 'ส่วนลดร้านค้า', db: dbDiscount, excel: ex.discount, diff: ex.discount - dbDiscount });
+                    if (Math.abs(ex.refund - dbRefund) > tol) diffs.push({ label: 'ยอดเงินคืนลูกค้า', db: dbRefund, excel: ex.refund, diff: ex.refund - dbRefund });
+                    if (Math.abs(ex.fees - dbFees) > tol) diffs.push({ label: 'ค่าธรรมเนียมรวม', db: dbFees, excel: ex.fees, diff: ex.fees - dbFees });
+                    
+                    if (Math.abs(ex.shipBuyer - dbShipBuyer) > tol) diffs.push({ label: 'ค่าจัดส่งชำระโดยผู้ซื้อ', db: dbShipBuyer, excel: ex.shipBuyer, diff: ex.shipBuyer - dbShipBuyer });
+                    if (Math.abs(ex.shipShopee - dbShipShopee) > tol) diffs.push({ label: 'ค่าจัดส่งที่แพลตฟอร์มออกให้', db: dbShipShopee, excel: ex.shipShopee, diff: ex.shipShopee - dbShipShopee });
+                    if (Math.abs(ex.shipActual - dbShipActual) > tol) diffs.push({ label: 'ค่าจัดส่งที่จ่ายจริง', db: dbShipActual, excel: ex.shipActual, diff: ex.shipActual - dbShipActual });
+                    if (Math.abs(ex.shipReturn - dbShipReturn) > tol) diffs.push({ label: 'ค่าจัดส่งสินค้าคืน', db: dbShipReturn, excel: ex.shipReturn, diff: ex.shipReturn - dbShipReturn });
+                    
+                    if (ex.hasPayout && Math.abs(ex.payout - dbPayout) > tol) diffs.push({ label: 'ยอดเงินโอนเข้าจริง', db: dbPayout, excel: ex.payout, diff: ex.payout - dbPayout });
+
+                    if (diffs.length > 0) {
+                        discrepancies.push({
+                            orderId: ex.orderId,
+                            issue: 'ข้อมูลคลาดเคลื่อน',
+                            desc: `พบยอดที่ไม่ตรงกัน ${diffs.length} จุด (ดิฟ)`,
+                            details: diffs,
+                            dbId: dbMatch.id,
+                            rawData: ex // เก็บข้อมูลดิบไว้สำหรับฟังก์ชัน Auto-Fix
+                        });
+                    } else {
+                        matchCount++;
+                    }
+                });
+
+                setAuditResults({
+                    totalExcel: Object.keys(excelData).length,
+                    checked: checkedCount,
+                    matched: matchCount,
+                    discrepancies: discrepancies
+                });
+
+            } catch (err) {
+                console.error(err);
+                if (showToast) showToast('เกิดข้อผิดพลาดในการตรวจสอบไฟล์ แนะนำให้ใช้ไฟล์ Income Report เต็ม', 'error');
+            }
+            setIsAuditing(false);
+            if (auditFileRef.current) auditFileRef.current.value = '';
+        };
+        reader.readAsBinaryString(file);
+    };
+
+    // --- 🪄 NEW: Auto-Fix Function (ซิงค์ยอดเข้าฐานข้อมูลอัตโนมัติ) ---
+    const handleAutoFixDiscrepancies = async () => {
+        if (!auditResults || auditResults.discrepancies.length === 0 || !user) return;
+        if (!window.confirm('ยืนยันการปรับปรุงยอดเงินในระบบให้ตรงกับไฟล์ Shopee 100%?\n(ระบบจะเขียนทับยอดขาย, ส่วนลด, ค่าจัดส่ง และค่าธรรมเนียมของออเดอร์ที่คลาดเคลื่อนให้ถูกต้องทั้งหมด)')) return;
+        
+        setIsAuditing(true);
+        try {
+            let batchWriter = writeBatch(dbInstance);
+            let opsCount = 0;
+
+            for (const item of auditResults.discrepancies) {
+                const ex = item.rawData; 
+                const dbMatchId = item.dbId;
+                if (!dbMatchId || !ex) continue;
+
+                const incRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', dbMatchId);
+                const existingDoc = transactions.find(t => t.id === dbMatchId);
+                
+                let newItems = existingDoc?.items ? [...existingDoc.items] : [];
+                
+                // Adjust items' sellPrice so their subtotal equals the EXCEL GMV (Product Price)
+                if (newItems.length > 0) {
+                    const currentSum = newItems.reduce((s, i) => s + (Number(i.qty)*Number(i.sellPrice || i.price || 0)), 0);
+                    if (currentSum !== ex.productPrice) {
+                         const diff = ex.productPrice - currentSum;
+                         // ดันส่วนต่างไปที่สินค้าชิ้นแรก เพื่อให้ยอดรวม (Subtotal) ตรงกับไฟล์
+                         newItems[0].sellPrice = Number(newItems[0].sellPrice || newItems[0].price || 0) + (diff / Number(newItems[0].qty || 1));
+                    }
+                }
+
+                // คำนวณ Grand Total ใหม่ตามสูตร Shopee
+                const netShip = ex.shipBuyer + ex.shipShopee - ex.shipActual - ex.shipReturn;
+                const newGrandTotal = ex.productPrice - ex.fees - ex.discount - ex.refund + netShip;
+
+                // 1. อัปเดตฝั่งรายรับ (Income)
+                batchWriter.update(incRef, {
+                    total: ex.productPrice,
+                    couponDiscount: ex.discount,
+                    refundAmount: ex.refund,
+                    shippingFee: ex.shipBuyer,
+                    shippingFeeSubsidy: ex.shipShopee,
+                    estimatedShippingFee: ex.shipActual,
+                    returnShippingFee: ex.shipReturn,
+                    actualSettledAmt: ex.payout,
+                    grandTotal: newGrandTotal,
+                    items: newItems,
+                    platformFee: ex.fees, 
+                    paymentStatus: 'settled',
+                    isAdjusted: true, // ติดแท็กให้รู้ว่าผ่านการ Sync มาแล้ว
+                    updatedAt: serverTimestamp()
+                });
+                opsCount++;
+
+                // 2. ค้นหาและอัปเดตฝั่งรายจ่าย (Expense - ค่าธรรมเนียม) ที่พ่วงอยู่
+                const feeExp = transactions.find(t => t.type === 'expense' && t.isFromReconciliation && t.category === 'ค่าธรรมเนียม Platform' && t.linkedOrderNo === ex.orderId);
+                
+                if (feeExp) {
+                    // มีบิลรายจ่ายอยู่แล้ว -> อัปเดตยอดและแยกไอเทมค่าธรรมเนียมใหม่
+                    const expRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', feeExp.id);
+                    batchWriter.update(expRef, {
+                        total: ex.fees,
+                        items: [
+                            { desc: 'ค่าคอมมิชชั่น', qty: 1, buyPrice: ex.rawFees.comm, sellPrice: 0, sku: '' },
+                            { desc: 'ค่าบริการ', qty: 1, buyPrice: ex.rawFees.serv, sellPrice: 0, sku: '' },
+                            { desc: 'ค่าธรรมเนียมโครงสร้างพื้นฐานฯ', qty: 1, buyPrice: ex.rawFees.infra, sellPrice: 0, sku: '' },
+                            { desc: 'ค่าธุรกรรมการชำระเงิน', qty: 1, buyPrice: ex.rawFees.trans, sellPrice: 0, sku: '' },
+                            { desc: 'ค่าคอมมิชชั่น Affiliate', qty: 1, buyPrice: ex.rawFees.affiliate, sellPrice: 0, sku: '' }
+                        ].filter(i => i.buyPrice > 0), // เซฟเฉพาะค่าธรรมเนียมที่มีตัวเลข
+                        updatedAt: serverTimestamp()
+                    });
+                    opsCount++;
+                } else if (ex.fees > 0) {
+                    // ไม่มีบิลรายจ่ายค่าธรรมเนียม -> สร้างใหม่ให้เลย
+                    const prefix = getExpensePrefix('ค่าธรรมเนียม Platform');
+                    const expSysDocId = generateDateBasedDocId(transactions.filter(tx => tx.type === 'expense'), prefix, new Date(), 'sysDocId');
+                    const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                    
+                    batchWriter.set(expRef, {
+                        sysDocId: expSysDocId,
+                        type: 'expense',
+                        category: 'ค่าธรรมเนียม Platform',
+                        description: `ค่าธรรมเนียม Platform: ออเดอร์ ${ex.orderId}`,
+                        items: [
+                            { desc: 'ค่าคอมมิชชั่น', qty: 1, buyPrice: ex.rawFees.comm, sellPrice: 0, sku: '' },
+                            { desc: 'ค่าบริการ', qty: 1, buyPrice: ex.rawFees.serv, sellPrice: 0, sku: '' },
+                            { desc: 'ค่าธรรมเนียมโครงสร้างพื้นฐานฯ', qty: 1, buyPrice: ex.rawFees.infra, sellPrice: 0, sku: '' },
+                            { desc: 'ค่าธุรกรรมการชำระเงิน', qty: 1, buyPrice: ex.rawFees.trans, sellPrice: 0, sku: '' },
+                            { desc: 'ค่าคอมมิชชั่น Affiliate', qty: 1, buyPrice: ex.rawFees.affiliate, sellPrice: 0, sku: '' }
+                        ].filter(i => i.buyPrice > 0),
+                        total: ex.fees,
+                        date: existingDoc?.settlementDate || existingDoc?.date || new Date(),
+                        userId: user.uid,
+                        createdAt: serverTimestamp(),
+                        status: 'paid',
+                        partnerName: 'Platform (Shopee)',
+                        partnerBranch: '00000',
+                        isFromReconciliation: true,
+                        linkedOrderId: dbMatchId,
+                        linkedOrderNo: ex.orderId,
+                        orderId: ex.orderId,
+                        channel: 'Shopee',
+                        shopName: existingDoc?.shopName || 'ไม่ระบุ'
+                    });
+                    opsCount++;
+                }
+
+                if (opsCount >= 300) {
+                    await batchWriter.commit();
+                    batchWriter = writeBatch(dbInstance);
+                    opsCount = 0;
+                }
+            }
+
+            if (opsCount > 0) {
+                await batchWriter.commit();
+            }
+
+            showToast('ปรับปรุงยอดเงินในระบบให้ตรงกับไฟล์ Shopee เรียบร้อยแล้ว!', 'success');
+            setAuditResults(null); 
+        } catch (e) {
+            console.error(e);
+            showToast('เกิดข้อผิดพลาดในการ Auto-Fix ขออภัยในความไม่สะดวก', 'error');
+        }
+        setIsAuditing(false);
+    };
+
     const reportData = useMemo(() => {
         // --- 1. กลุ่มข้อมูลผลประกอบการ (Performance) อิงตามวันที่ลูกค้าสั่งซื้อ (Order Date) ---
         let perf = {
@@ -12092,8 +12497,8 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
         // จัดโครงสร้างให้ตรงกับรายงานของ Shopee 100%
         let settle = {
             income: { productPrice: 0, sellerDiscount: 0, refundAmount: 0, total: 0 },
-            shipping: { buyer: 0, shopee: 0, actual: 0, return: 0, net: 0 },
-            fees: { comm: 0, serv: 0, infra: 0, trans: 0, affiliate: 0, total: 0 },
+            shipping: { buyer: 0, net: 0 },
+            fees: { comm: 0, serv: 0, infra: 0, trans: 0, affiliate: 0, other: 0, total: 0 },
             totalPlatformExpense: 0, // ค่าจัดส่งสุทธิ + ค่าธรรมเนียมรวม
             totalTransferred: 0, // จำนวนเงินทั้งหมดที่โอนแล้ว
             directExpPaidInMonth: 0 // บิลรายจ่ายอื่นๆ (หน้าร้าน) ที่จ่ายเงินออกไปในเดือนนี้
@@ -12184,26 +12589,52 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                     settle.income.sellerDiscount += Number(t.couponDiscount || 0);
                     settle.income.refundAmount += Number(t.refundAmount || 0);
 
-                    // 2. ค่าจัดส่ง
+                    // 2. ค่าจัดส่ง (เหลือแค่ที่ผู้ซื้อชำระ)
                     settle.shipping.buyer += Number(t.shippingFee || 0);
-                    settle.shipping.shopee += Number(t.shippingFeeSubsidy || 0);
-                    settle.shipping.actual += Number(t.estimatedShippingFee || 0);
-                    settle.shipping.return += Number(t.returnShippingFee || 0);
-
-                    // 3. ค่าธรรมเนียม
-                    settle.fees.comm += Number(t.commissionFee || 0);
-                    settle.fees.serv += Number(t.serviceFee || 0);
-                    settle.fees.infra += Number(t.infrastructureFee || 0);
-                    settle.fees.trans += Number(t.transactionFee || 0);
-                    settle.fees.affiliate += Number(t.affiliateFee || 0);
 
                     const expectedAmt = t.grandTotal !== undefined ? t.grandTotal : t.total;
                     settle.totalTransferred += (t.actualSettledAmt !== undefined ? t.actualSettledAmt : expectedAmt);
                 } 
-                else if (t.type === 'expense' && t.isFromReconciliation && t.category === 'ค่าธรรมเนียม Platform') {
-                    // รวมค่าธรรมเนียมจากออเดอร์ที่ถูกยกเลิกแต่ถูกเก็บเงิน
-                    settle.fees.trans += Number(t.total || 0); 
-                    settle.totalTransferred -= Number(t.total || 0);
+                else if (t.type === 'expense' && t.category === 'ค่าธรรมเนียม Platform' && !t.isCancelled) {
+                    // ดึงค่าธรรมเนียมจากเอกสารใบกำกับภาษี (รายจ่าย) ตามเดือนที่ระบุ
+                    const amt = Number(t.total) || 0;
+                    settle.fees.total += amt;
+
+                    let hasItemized = false;
+                    (t.items || []).forEach(item => {
+                        const desc = String(item.desc).toLowerCase();
+                        const itemAmt = Number(item.buyPrice || item.price || 0) * Number(item.qty || 1);
+                        
+                        if (desc.includes('commission') || desc.includes('คอมมิชชั่น')) {
+                            settle.fees.comm += itemAmt;
+                            hasItemized = true;
+                        } else if (desc.includes('service') || desc.includes('บริการ')) {
+                            settle.fees.serv += itemAmt;
+                            hasItemized = true;
+                        } else if (desc.includes('transaction') || desc.includes('ธุรกรรม')) {
+                            settle.fees.trans += itemAmt;
+                            hasItemized = true;
+                        } else if (desc.includes('infra') || desc.includes('โครงสร้าง')) {
+                            settle.fees.infra += itemAmt;
+                            hasItemized = true;
+                        } else if (desc.includes('affiliate')) {
+                            settle.fees.affiliate += itemAmt;
+                            hasItemized = true;
+                        } else if (itemAmt > 0) {
+                            settle.fees.other += itemAmt;
+                            hasItemized = true;
+                        }
+                    });
+
+                    // ถ้าไม่มีการแยกย่อยไอเทม ให้ลงรวมในช่อง "ค่าธรรมเนียมอื่นๆ"
+                    if (!hasItemized) {
+                        settle.fees.other += amt;
+                    }
+
+                    // นำมาหักลบออกจากยอดโอนเข้าด้วย (ถ้าเป็นบิลที่ระบบสร้างให้จาก Reconcile)
+                    if (t.isFromReconciliation) {
+                        settle.totalTransferred -= amt;
+                    }
                 }
                 else if (t.type === 'income' && t.isFromReconciliation && t.category.includes('รายได้')) {
                     // ยอดส่วนต่างได้เพิ่ม
@@ -12224,9 +12655,8 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
 
         // --- Finalize Settlement Math ---
         settle.income.total = settle.income.productPrice - settle.income.sellerDiscount - settle.income.refundAmount;
-        settle.shipping.net = settle.shipping.buyer + settle.shipping.shopee - settle.shipping.actual - settle.shipping.return;
-        settle.fees.total = settle.fees.comm + settle.fees.serv + settle.fees.infra + settle.fees.trans + settle.fees.affiliate;
-        settle.totalPlatformExpense = settle.shipping.net - settle.fees.total; // ค่าใช้จ่ายรวมในรายงานแพลตฟอร์ม (ค่าส่งได้คืน - ค่าธรรมเนียมที่จ่าย)
+        settle.shipping.net = settle.shipping.buyer; 
+        settle.totalPlatformExpense = settle.shipping.net - settle.fees.total; // ค่าส่งที่เก็บมาได้ หัก ค่าธรรมเนียมรวม
 
         // Data for charts
         const [year, month] = selectedMonth.split('-');
@@ -12393,6 +12823,11 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                     <button onClick={handleExportMonthlyExcel} disabled={isExporting} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-3 rounded-2xl text-xs font-bold transition-all border border-emerald-200 flex items-center gap-2 disabled:opacity-50 shadow-sm whitespace-nowrap">
                         {isExporting ? <Loader size={16} className="animate-spin" /> : <FileSpreadsheet size={16}/>} Export Excel
                     </button>
+                    {/* --- NEW: ปุ่มเรียก Audit ยอดเงินกับไฟล์ Shopee --- */}
+                    <input type="file" ref={auditFileRef} hidden accept=".xlsx, .xls" onChange={handleRunShopeeAudit} />
+                    <button onClick={() => auditFileRef.current?.click()} disabled={isAuditing} className="bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-3 rounded-2xl text-xs font-bold transition-all border border-blue-200 flex items-center gap-2 disabled:opacity-50 shadow-sm whitespace-nowrap">
+                        {isAuditing ? <Loader size={16} className="animate-spin" /> : <Search size={16}/>} Audit ตรวจสอบยอด (Shopee)
+                    </button>
                 </div>
             </div>
 
@@ -12509,21 +12944,22 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                                         <div className="flex justify-between font-bold text-slate-700 mb-1"><span>ค่าจัดส่ง</span><span>{formatCurrency(reportData.settle.shipping.net)}</span></div>
                                         <div className="space-y-1 pl-4 text-slate-600 text-xs">
                                             <div className="flex justify-between"><span>ค่าจัดส่งที่ชำระโดยผู้ซื้อ</span><span className="font-mono">{formatCurrency(reportData.settle.shipping.buyer)}</span></div>
-                                            <div className="flex justify-between"><span>ค่าจัดส่งสินค้าที่ออกโดย Platform</span><span className="font-mono">{formatCurrency(reportData.settle.shipping.shopee)}</span></div>
-                                            <div className="flex justify-between text-rose-500"><span>ค่าจัดส่งที่ Platform ชำระโดยชื่อของคุณ (Actual)</span><span className="font-mono">-{formatCurrency(reportData.settle.shipping.actual)}</span></div>
-                                            <div className="flex justify-between text-rose-500"><span>ค่าจัดส่งสินค้าคืน</span><span className="font-mono">-{formatCurrency(reportData.settle.shipping.return)}</span></div>
                                         </div>
                                     </div>
                                     
                                     {/* หมวดค่าธรรมเนียม */}
                                     <div>
-                                        <div className="flex justify-between font-bold text-slate-700 mb-1"><span>ค่าธรรมเนียม</span><span className="text-rose-500">-{formatCurrency(reportData.settle.fees.total)}</span></div>
+                                        <div className="flex justify-between font-bold text-slate-700 mb-1">
+                                            <span>ค่าธรรมเนียม</span>
+                                            <span className="text-rose-500">-{formatCurrency(reportData.settle.fees.total)}</span>
+                                        </div>
                                         <div className="space-y-1 pl-4 text-slate-600 text-xs">
-                                            <div className="flex justify-between text-rose-500"><span>ค่าคอมมิชชั่น</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.comm)}</span></div>
-                                            <div className="flex justify-between text-rose-500"><span>ค่าบริการ</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.serv)}</span></div>
-                                            <div className="flex justify-between text-rose-500"><span>ค่าธรรมเนียมโครงสร้างพื้นฐานฯ</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.infra)}</span></div>
-                                            <div className="flex justify-between text-rose-500"><span>ค่าธุรกรรมการชำระเงิน</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.trans)}</span></div>
+                                            {reportData.settle.fees.comm > 0 && <div className="flex justify-between text-rose-500"><span>ค่าคอมมิชชั่น</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.comm)}</span></div>}
+                                            {reportData.settle.fees.serv > 0 && <div className="flex justify-between text-rose-500"><span>ค่าบริการ</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.serv)}</span></div>}
+                                            {reportData.settle.fees.infra > 0 && <div className="flex justify-between text-rose-500"><span>ค่าธรรมเนียมโครงสร้างพื้นฐานฯ</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.infra)}</span></div>}
+                                            {reportData.settle.fees.trans > 0 && <div className="flex justify-between text-rose-500"><span>ค่าธุรกรรมการชำระเงิน</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.trans)}</span></div>}
                                             {reportData.settle.fees.affiliate > 0 && <div className="flex justify-between text-rose-500"><span>ค่าคอมมิชชั่น Affiliate</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.affiliate)}</span></div>}
+                                            {reportData.settle.fees.other > 0 && <div className="flex justify-between text-rose-500"><span>ค่าธรรมเนียมอื่นๆ</span><span className="font-mono">-{formatCurrency(reportData.settle.fees.other)}</span></div>}
                                         </div>
                                     </div>
                                 </div>
@@ -12687,6 +13123,107 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                     </table>
                 </div>
             </div>
+
+            {/* --- NEW: Audit Results Modal --- */}
+            {auditResults && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+                    <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+                        <div className="flex justify-between items-center mb-6">
+                            <div>
+                                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Search className="text-blue-600"/> สรุปผลการตรวจสอบ (Audit Report)</h3>
+                                <p className="text-xs text-slate-500 mt-1">เปรียบเทียบข้อมูลในระบบ กับ รายงานจากไฟล์ Shopee</p>
+                            </div>
+                            <button onClick={() => setAuditResults(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-center shadow-sm">
+                                <p className="text-[10px] font-black uppercase text-slate-400 mb-1">ออเดอร์ในไฟล์</p>
+                                <p className="text-xl font-black text-slate-700">{auditResults.totalExcel} <span className="text-[10px]">รายการ</span></p>
+                            </div>
+                            <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl text-center shadow-sm">
+                                <p className="text-[10px] font-black uppercase text-indigo-500 mb-1">พบในระบบ</p>
+                                <p className="text-xl font-black text-indigo-700">{auditResults.checked} <span className="text-[10px]">รายการ</span></p>
+                            </div>
+                            <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl text-center shadow-sm">
+                                <p className="text-[10px] font-black uppercase text-emerald-600 mb-1">ข้อมูลตรงกันเป๊ะ</p>
+                                <p className="text-xl font-black text-emerald-700">{auditResults.matched} <span className="text-[10px]">รายการ</span></p>
+                            </div>
+                            <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl text-center shadow-sm relative overflow-hidden">
+                                <p className="text-[10px] font-black uppercase text-rose-600 mb-1">พบความคลาดเคลื่อน</p>
+                                <p className="text-xl font-black text-rose-700">{auditResults.discrepancies.length} <span className="text-[10px]">รายการ</span></p>
+                            </div>
+                        </div>
+
+                        {/* --- 🔥 NEW: ปุ่มเวทมนตร์ (Auto-Fix) ซิงค์ข้อมูลให้ตรงกับไฟล์อัตโนมัติ --- */}
+                        {auditResults.discrepancies.length > 0 && (
+                            <div className="mb-4 bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex flex-col sm:flex-row justify-between items-center gap-4 animate-fadeIn shadow-sm">
+                                <div>
+                                    <p className="text-sm font-bold text-emerald-800 flex items-center gap-2"><Wand2 size={18}/> ต้องการให้ระบบแก้ตัวเลขให้ตรงกับไฟล์อัตโนมัติไหม?</p>
+                                    <p className="text-xs text-emerald-700/80 mt-1">ระบบจะเขียนทับ "ยอดขายสุทธิ", "ส่วนลด", "ค่าจัดส่งทุกประเภท" และ "ค่าธรรมเนียม" ให้ตรงกับไฟล์นี้เป๊ะ 100% ทันที</p>
+                                </div>
+                                <button 
+                                    onClick={handleAutoFixDiscrepancies} 
+                                    disabled={isAuditing}
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 transition-all flex items-center gap-2 shrink-0 disabled:opacity-50"
+                                >
+                                    {isAuditing ? <Loader className="animate-spin" size={16}/> : <RefreshCw size={16}/>} ซิงค์ยอดให้ตรงไฟล์ 100%
+                                </button>
+                            </div>
+                        )}
+
+                        <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl">
+                            <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 border-b border-slate-200">
+                                    <tr>
+                                        <th className="p-4 pl-6 w-16">No.</th>
+                                        <th className="p-4">Order ID</th>
+                                        <th className="p-4">ปัญหาที่พบ (Issues)</th>
+                                        <th className="p-4 text-right pr-6">รายละเอียด (Details)</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {auditResults.discrepancies.map((item, idx) => (
+                                        <tr key={idx} className="hover:bg-rose-50/20 transition-colors group">
+                                            <td className="p-4 pl-6 text-slate-400 font-bold">{idx + 1}</td>
+                                            <td className="p-4 font-mono font-bold text-slate-800">{item.orderId}</td>
+                                            <td className="p-4">
+                                                <span className={`px-2 py-1 rounded text-[10px] font-bold ${item.issue === 'ไม่พบในระบบ' ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'}`}>
+                                                    {item.issue}
+                                                </span>
+                                                <p className="text-[10px] text-slate-500 mt-1">{item.desc}</p>
+                                            </td>
+                                            <td className="p-4 pr-6 text-right space-y-2">
+                                                {item.details.map((diff, i) => (
+                                                    <div key={i} className="flex flex-col items-end gap-0.5 bg-white p-2 rounded-lg border border-slate-100 shadow-sm ml-auto w-full max-w-[280px]">
+                                                        <div className="flex justify-between w-full border-b border-slate-50 pb-1 mb-1">
+                                                            <span className="text-[10px] font-bold text-slate-500">{diff.label}</span>
+                                                            <span className={`text-[10px] font-black ${diff.diff > 0 ? 'text-emerald-500' : 'text-rose-500'}`}>ดิฟ {diff.diff > 0 ? '+' : ''}{formatCurrency(diff.diff)}</span>
+                                                        </div>
+                                                        <div className="flex justify-between w-full text-[10px]">
+                                                            <span className="text-slate-400">ระบบ: <b className="text-slate-700">{formatCurrency(diff.db)}</b></span>
+                                                            <span className="text-slate-400">ไฟล์: <b className="text-slate-700">{formatCurrency(diff.excel)}</b></span>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                                {item.details.length === 0 && <span className="text-slate-300">-</span>}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {auditResults.discrepancies.length === 0 && (
+                                        <tr><td colSpan="4" className="p-10 text-center text-slate-500 font-bold">สุดยอด! ยอดเงินทุกออเดอร์ในระบบตรงกับไฟล์ Shopee 100%</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div className="pt-6 mt-4 border-t border-slate-100 flex justify-between items-center">
+                            <p className="text-[10px] font-bold text-slate-400">*สามารถซิงค์ยอดผ่านปุ่ม Auto-Fix เพื่อปรับปรุงบัญชีให้สมบูรณ์แบบได้ทันที</p>
+                            <button onClick={() => setAuditResults(null)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
