@@ -6515,6 +6515,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     partnerName: '', partnerTaxId: '', partnerAddress: '', partnerBranch: '00000', partnerBranchName: '',
     items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }],
     paymentStatus: 'settled', settlementDate: formatDateISO(new Date()),
+    status: 'paid', // --- FIX: เพิ่ม state status เป็นค่าเริ่มต้น ---
     isCashBill: false, isAdjusted: false, isFromReconciliation: false, isTaxOnly: false, autoCreateShippingExpense: true
   };
 
@@ -6561,7 +6562,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           isCashBill: t.isCashBill || false,
           isAdjusted: t.isAdjusted || false,
           isFromReconciliation: t.isFromReconciliation || false,
-          isTaxOnly: t.isTaxOnly || false
+          isTaxOnly: t.isTaxOnly || false,
+          status: t.status || 'paid', // --- FIX: ดึงค่า status ของรายจ่ายเดิมมาให้ครบถ้วน ---
+          attachmentUrl: t.attachmentUrl || '', // --- FIX: ดึงไฟล์ที่เคยแนบไว้มาแสดง ---
+          createdAt: t.createdAt // --- FIX: ดึง Timestamp เดิมมาป้องกันการอัปเดตเป็นเวลาปัจจุบัน ---
       });
       setSubTab('new');
       window.scrollTo(0,0);
@@ -7491,13 +7495,18 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         estimatedShippingFee: parseFloat(formData.estimatedShippingFee) || 0,
         shippingFeeSubsidy: parseFloat(formData.shippingFeeSubsidy) || 0,
         returnShippingFee: parseFloat(formData.returnShippingFee) || 0,
-        total: subTotal, platformFee: totalFees, grandTotal, date: normalizeDate(formData.date), description: formData.items.map(i => i.desc).join(', '), userId: user.uid, createdAt: formData.createdAt || serverTimestamp(),
+        total: subTotal, platformFee: totalFees, grandTotal, date: normalizeDate(formData.date), description: formData.items.map(i => i.desc).join(', '), userId: user.uid, 
         paymentStatus: formData.type === 'income' ? (formData.paymentStatus || 'settled') : (formData.status === 'unpaid' ? 'unpaid' : 'paid'),
         settlementDate: (formData.type === 'income' && (!formData.paymentStatus || formData.paymentStatus === 'settled')) ? normalizeDate(formData.settlementDate || formData.date) : null
       };
 
-      // หากเป็นการอัปเดตให้บันทึกเวลาแก้ไขล่าสุด
-      if (formData.id) dataToSave.updatedAt = serverTimestamp();
+      // --- FIX: ลบการสร้าง Timestamp ผิดพลาด และจัดเก็บเวลาให้ถูกต้องทั้งโหมดแก้ไขและโหมดสร้างใหม่ ---
+      if (formData.id) {
+          dataToSave.updatedAt = serverTimestamp();
+          delete dataToSave.createdAt; // ป้องกันการเขียนทับ createdAt ตอนแก้ไข
+      } else {
+          dataToSave.createdAt = serverTimestamp();
+      }
       
       const shouldAutoSavePartner = formData.partnerName && (
           formData.type === 'expense' || 
@@ -7666,6 +7675,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                               productName: matchItem.desc,
                               sku: matchItem.sku || '-',
                               costPerUnit: trueCostUnit,
+                              quantity: Number(matchItem.qty), // --- FIX: อัปเดตจำนวน Quantity ใหม่หากมีการแก้ไขบิลซื้อ ---
                               sellPrice: Number(matchItem.sellPrice || 0),
                               date: normalizeDate(formData.date)
                           });
@@ -7690,6 +7700,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           }
                       }
                   });
+
+                  // --- FIX: ลบ Lot สต็อกออกอัตโนมัติ หากผู้ใช้ลบรายการสินค้าในบิลออกตอนแก้ไข ---
+                  if (childBatches.length > formData.items.length) {
+                      for (let i = formData.items.length; i < childBatches.length; i++) {
+                          batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', childBatches[i].id));
+                      }
+                  }
               }
           }
       }
@@ -8054,25 +8071,37 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   </div>
                   
                   {formData.type === 'expense' ? (
-                      <div className="space-y-1.5 text-left md:col-span-1 lg:col-span-2">
-                          {/* --- FIX: เปลี่ยน mb-1 เป็น min-h-[32px] เพื่อให้สอดคล้องกับฝั่งซ้าย --- */}
-                          <div className="flex justify-between items-center min-h-[32px] text-left">
-                              <label className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 text-left"><FileText size={14}/> เลขที่ใบกำกับภาษี</label>
-                              <label className="flex items-center gap-1.5 cursor-pointer bg-white px-2 py-1 rounded-lg shadow-sm border border-slate-200 hover:bg-rose-50 transition-colors">
-                                  <input type="checkbox" checked={formData.isCashBill} onChange={e => {
-                                      const checked = e.target.checked;
-                                      setFormData(prev => ({
-                                          ...prev, 
-                                          isCashBill: checked, 
-                                          taxInvoiceNo: checked ? '' : prev.taxInvoiceNo,
-                                          vatType: checked ? 'none' : prev.vatType
-                                      }));
-                                  }} className="w-3.5 h-3.5 rounded text-rose-500 focus:ring-rose-500 border-slate-300 cursor-pointer" />
-                                  <span className="text-[10px] font-black text-rose-600 uppercase">ไม่มี VAT (บิลเงินสด)</span>
-                              </label>
+                      <>
+                          <div className="space-y-1.5 text-left md:col-span-1 lg:col-span-1">
+                              <div className="flex justify-between items-center min-h-[32px] text-left">
+                                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 text-left"><FileText size={14}/> เลขที่ใบกำกับภาษี</label>
+                                  <label className="flex items-center gap-1.5 cursor-pointer bg-white px-2 py-1 rounded-lg shadow-sm border border-slate-200 hover:bg-rose-50 transition-colors">
+                                      <input type="checkbox" checked={formData.isCashBill} onChange={e => {
+                                          const checked = e.target.checked;
+                                          setFormData(prev => ({
+                                              ...prev, 
+                                              isCashBill: checked, 
+                                              taxInvoiceNo: checked ? '' : prev.taxInvoiceNo,
+                                              vatType: checked ? 'none' : prev.vatType
+                                          }));
+                                      }} className="w-3.5 h-3.5 rounded text-rose-500 focus:ring-rose-500 border-slate-300 cursor-pointer" />
+                                      <span className="text-[10px] font-black text-rose-600 uppercase">ไม่มี VAT</span>
+                                  </label>
+                              </div>
+                              <input disabled={formData.isCashBill} placeholder={formData.isCashBill ? "ไม่ต้องระบุ (บิลเงินสด)" : "ระบุเลขที่ใบกำกับภาษี..."} value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} className={`w-full p-3 rounded-xl border text-sm font-bold outline-none transition-all shadow-sm text-left ${formData.isCashBill ? 'bg-slate-100 border-slate-200 text-slate-400' : 'bg-white border-slate-200 text-slate-700 focus:ring-2 focus:ring-indigo-100'}`}/>
                           </div>
-                          <input disabled={formData.isCashBill} placeholder={formData.isCashBill ? "ไม่ต้องระบุ (บิลเงินสด)" : "ระบุเลขที่ใบกำกับภาษี..."} value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} className={`w-full p-3 rounded-xl border text-sm font-bold outline-none transition-all shadow-sm text-left ${formData.isCashBill ? 'bg-slate-100 border-slate-200 text-slate-400' : 'bg-white border-slate-200 text-slate-700 focus:ring-2 focus:ring-indigo-100'}`}/>
-                      </div>
+
+                          {/* --- FIX: เพิ่มช่องให้ปรับแก้สถานะการจ่ายเงิน (Paid/Unpaid) ได้ในหมวดรายจ่าย --- */}
+                          <div className="space-y-1.5 text-left md:col-span-1 lg:col-span-1">
+                              <div className="flex items-center min-h-[32px] text-left">
+                                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 text-left"><Wallet size={14}/> สถานะการจ่ายเงิน</label>
+                              </div>
+                              <select value={formData.status || 'paid'} onChange={e=>setFormData({...formData, status: e.target.value})} className={`w-full p-3 rounded-xl border text-sm font-bold outline-none focus:ring-2 transition-all shadow-sm cursor-pointer text-left ${formData.status === 'unpaid' ? 'bg-amber-50 border-amber-200 text-amber-700 focus:ring-amber-200' : 'bg-emerald-50 border-emerald-200 text-emerald-700 focus:ring-emerald-200'}`}>
+                                  <option value="paid">✅ จ่ายเงินแล้ว</option>
+                                  <option value="unpaid">⏳ ค้างชำระ (เครดิต)</option>
+                              </select>
+                          </div>
+                      </>
                   ) : (
                       <>
                           <div className="space-y-1.5 text-left">
@@ -9455,12 +9484,25 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
     
     const totalDisc = Number(data.couponDiscount) || 0; 
     
-    const mappedItems = (data.items || []).map(it => ({ 
+    // 1. เตรียมรายการดิบ
+    const rawItems = (data.items || []).map(it => ({ 
       desc: it.desc || it.description || '', 
       qty: Number(it.qty) || 1, 
       unit: 'ชิ้น', 
       price: isExpense ? (Number(it.buyPrice) || Number(it.price) || 0) : (Number(it.sellPrice) || Number(it.price) || 0) 
     }));
+
+    // 2. จับกลุ่มรายการที่ซ้ำกัน (ชื่อเหมือนกันและราคาเท่ากัน) ให้รวมจำนวนเข้าด้วยกัน
+    const groupedMap = {};
+    rawItems.forEach(item => {
+        const key = `${item.desc}_${item.price}`;
+        if (groupedMap[key]) {
+            groupedMap[key].qty += item.qty;
+        } else {
+            groupedMap[key] = { ...item };
+        }
+    });
+    const mappedItems = Object.values(groupedMap);
     
     if (data.type === 'income' && data.shippingFee && Number(data.shippingFee) > 0) {
         mappedItems.push({
@@ -9496,7 +9538,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         branch: data.partnerBranch || data.branch || '00000', 
         items: mappedItems.length > 0 ? mappedItems : [{ desc: '', qty: 1, unit: 'ชิ้น', price: 0 }], 
         date: formatDateISO(data.date || new Date()), 
-        orderId: data.sysDocId || data.orderId || '', 
+        orderId: data.orderId || data.sysDocId || '', 
         orderDate: formatDateISO(data.date),
         discount: totalDisc,
         notes: defaultDocType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน'
@@ -9570,13 +9612,27 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
   const calculateTransactionTotals = (trans, overrideVatType = 'excluded') => {
       const totalDisc = Number(trans.couponDiscount) || 0;
-      const mappedItems = (trans.items || []).map(it => ({ 
+      
+      // 1. เตรียมรายการดิบ
+      const rawItems = (trans.items || []).map(it => ({ 
         desc: it.desc || it.description || '', 
         qty: Number(it.qty) || 1, 
         unit: 'ชิ้น', 
         price: trans.type === 'income' ? (Number(it.sellPrice) || Number(it.price) || 0) : (Number(it.buyPrice) || Number(it.price) || 0) 
       }));
       
+      // 2. จับกลุ่มรายการที่ซ้ำกัน (ชื่อเหมือนกันและราคาเท่ากัน) ให้รวมจำนวนเข้าด้วยกัน
+      const groupedMap = {};
+      rawItems.forEach(item => {
+          const key = `${item.desc}_${item.price}`;
+          if (groupedMap[key]) {
+              groupedMap[key].qty += item.qty;
+          } else {
+              groupedMap[key] = { ...item };
+          }
+      });
+      const mappedItems = Object.values(groupedMap);
+
       if (trans.type === 'income' && trans.shippingFee && Number(trans.shippingFee) > 0) {
           mappedItems.push({
               desc: 'ค่าจัดส่ง (Shipping Fee)',
@@ -9652,7 +9708,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   address: trans.shippingAddress || trans.partnerAddress || trans.address || '',
                   taxId: trans.partnerTaxId || trans.taxId || '',
                   branch: trans.partnerBranch || trans.branch || '00000',
-                  orderId: trans.sysDocId || trans.orderId || '',
+                  orderId: trans.orderId || trans.sysDocId || '',
                   items: calc.mappedItems,
                   date: transDate, 
                   orderDate: transDate, 
@@ -9708,12 +9764,13 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
               processedCount++;
 
-              if (opsInCurrentBatch >= 400 || i === uploadQueue.length - 1) {
+              // FIX: ลดขนาดของ Batch ลงเหลือ 100 operations เพื่อป้องกัน Database Throttling เมื่อทำรายการจำนวนมาก
+              if (opsInCurrentBatch >= 100 || i === uploadQueue.length - 1) {
                   await batch.commit();
                   batch = writeBatch(dbInstance);
                   opsInCurrentBatch = 0;
-                  // ใส่ดีเลย์สั้นๆ ให้ UI อัปเดตและป้องกัน Firebase ลิมิต
-                  await new Promise(r => setTimeout(r, 50));
+                  // ใส่ดีเลย์ให้ UI อัปเดตและป้องกัน Firebase ลิมิต
+                  await new Promise(r => setTimeout(r, 200));
               }
           }
 
