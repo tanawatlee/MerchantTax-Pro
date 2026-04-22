@@ -7477,6 +7477,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       if (formData.id) {
           // โหมดแก้ไข (Update): ใช้ Document Reference ของเดิม
           mainRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, formData.id);
+          
+          // --- FIX: อัปเดต sysDocId ให้ตรงกับหมวดหมู่ใหม่ หากมีการเปลี่ยนหมวดหมู่ (เฉพาะรายจ่าย) ---
+          if (formData.type === 'expense') {
+              const expectedPrefix = getExpensePrefix(formData.category);
+              if (sysDocId && !sysDocId.startsWith(expectedPrefix)) {
+                  sysDocId = generateDateBasedDocId(transactions.filter(t => t.type === formData.type), expectedPrefix, formData.date, 'sysDocId');
+              }
+          }
       } else {
           // โหมดสร้างใหม่ (Create): สร้าง ID ระบบ และ Document Reference ใหม่
           let prefix = '';
@@ -7660,51 +7668,54 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   // หากแก้ไขรายจ่าย (ซื้อของเข้า) ให้ระบบอัปเดตราคาต้นทุนให้ใหม่ด้วย และสร้าง Batch หากมีการเพิ่มสินค้าใหม่เข้ามาในบิล
                   const childBatches = stockBatches.filter(b => b.parentExpenseId === formData.id);
                   
-                  formData.items.forEach((matchItem, idx) => {
-                      const existingBatch = childBatches[idx];
-                      
-                      const itemTotal = Number(matchItem.buyPrice) * Number(matchItem.qty);
-                      const proportion = subTotal > 0 ? (itemTotal / subTotal) : 0;
-                      const itemDiscount = totalDiscounts * proportion;
-                      let itemAmountForCost = itemTotal - itemDiscount;
-                      if (formData.vatType === 'excluded') itemAmountForCost = itemAmountForCost * 1.07;
-                      const trueCostUnit = matchItem.qty > 0 ? itemAmountForCost / matchItem.qty : 0;
+                  // --- 🔥 FIX: ป้องกันการสร้างสต็อกเบิ้ลสำหรับบิลเก่า (Legacy) ที่ไม่มีการลิงก์สต็อกไว้ตั้งแต่แรก ---
+                  if (childBatches.length > 0 || originalTrans.isFromInventory) {
+                      formData.items.forEach((matchItem, idx) => {
+                          const existingBatch = childBatches[idx];
+                          
+                          const itemTotal = Number(matchItem.buyPrice) * Number(matchItem.qty);
+                          const proportion = subTotal > 0 ? (itemTotal / subTotal) : 0;
+                          const itemDiscount = totalDiscounts * proportion;
+                          let itemAmountForCost = itemTotal - itemDiscount;
+                          if (formData.vatType === 'excluded') itemAmountForCost = itemAmountForCost * 1.07;
+                          const trueCostUnit = matchItem.qty > 0 ? itemAmountForCost / matchItem.qty : 0;
 
-                      if (existingBatch) {
-                          batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', existingBatch.id), {
-                              productName: matchItem.desc,
-                              sku: matchItem.sku || '-',
-                              costPerUnit: trueCostUnit,
-                              quantity: Number(matchItem.qty), // --- FIX: อัปเดตจำนวน Quantity ใหม่หากมีการแก้ไขบิลซื้อ ---
-                              sellPrice: Number(matchItem.sellPrice || 0),
-                              date: normalizeDate(formData.date)
-                          });
-                      } else {
-                          // สร้าง Batch ใหม่สำหรับ Item ที่เพิ่งเพิ่มเข้ามาตอนแก้ไขบิล
-                          if (!String(matchItem.desc).startsWith('[ของแจก/โปรโมท]')) {
-                              const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
-                              batchWriter.set(newBatchRef, {
-                                  productName: String(matchItem.desc).trim(),
-                                  sku: String(matchItem.sku || '-').trim(),
-                                  quantity: Number(matchItem.qty),
-                                  costPerUnit: trueCostUnit, 
+                          if (existingBatch) {
+                              batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', existingBatch.id), {
+                                  productName: matchItem.desc,
+                                  sku: matchItem.sku || '-',
+                                  costPerUnit: trueCostUnit,
+                                  quantity: Number(matchItem.qty), 
                                   sellPrice: Number(matchItem.sellPrice || 0),
-                                  date: normalizeDate(formData.date),
-                                  sold: 0,
-                                  userId: user.uid,
-                                  createdAt: serverTimestamp(),
-                                  category: matchItem.category || 'อื่นๆ',
-                                  parentExpenseId: formData.id,
-                                  paymentStatus: formData.status === 'unpaid' ? 'credit' : 'paid'
+                                  date: normalizeDate(formData.date)
                               });
+                          } else {
+                              // สร้าง Batch ใหม่สำหรับ Item ที่เพิ่งเพิ่มเข้ามาตอนแก้ไขบิล (เฉพาะบิลที่มีการลิงก์สต็อกไว้อยู่แล้ว)
+                              if (!String(matchItem.desc).startsWith('[ของแจก/โปรโมท]')) {
+                                  const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+                                  batchWriter.set(newBatchRef, {
+                                      productName: String(matchItem.desc).trim(),
+                                      sku: String(matchItem.sku || '-').trim(),
+                                      quantity: Number(matchItem.qty),
+                                      costPerUnit: trueCostUnit, 
+                                      sellPrice: Number(matchItem.sellPrice || 0),
+                                      date: normalizeDate(formData.date),
+                                      sold: 0,
+                                      userId: user.uid,
+                                      createdAt: serverTimestamp(),
+                                      category: matchItem.category || 'อื่นๆ',
+                                      parentExpenseId: formData.id,
+                                      paymentStatus: formData.status === 'unpaid' ? 'credit' : 'paid'
+                                  });
+                              }
                           }
-                      }
-                  });
+                      });
 
-                  // --- FIX: ลบ Lot สต็อกออกอัตโนมัติ หากผู้ใช้ลบรายการสินค้าในบิลออกตอนแก้ไข ---
-                  if (childBatches.length > formData.items.length) {
-                      for (let i = formData.items.length; i < childBatches.length; i++) {
-                          batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', childBatches[i].id));
+                      // ลบ Lot สต็อกออกอัตโนมัติ หากผู้ใช้ลบรายการสินค้าในบิลออกตอนแก้ไข
+                      if (childBatches.length > formData.items.length) {
+                          for (let i = formData.items.length; i < childBatches.length; i++) {
+                              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', childBatches[i].id));
+                          }
                       }
                   }
               }
@@ -8020,14 +8031,25 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           <div className="xl:col-span-3 space-y-8 text-left">
             <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6 text-left relative">
               
+              {/* --- NEW: Banner แจ้งเตือนสถานะการแก้ไขข้อมูลเดิม --- */}
+              {formData.id && (
+                  <div className="bg-amber-50 border border-amber-200 text-amber-700 p-4 rounded-2xl flex items-center gap-3 shadow-sm mb-2 animate-fadeIn">
+                      <Edit size={24} className="text-amber-500 shrink-0"/>
+                      <div>
+                          <p className="font-bold text-sm">กำลังแก้ไขข้อมูลเดิม (Update Mode)</p>
+                          <p className="text-xs opacity-80 mt-0.5">การบันทึกจะอัปเดตทับรายการเดิม (Ref: {formData.sysDocId}) และปรับสต็อกให้อัตโนมัติ โดยไม่สร้างรายการใหม่</p>
+                      </div>
+                  </div>
+              )}
+
               {/* --- FIX: ปรับ Layout การกรอกข้อมูลให้กว้างขึ้น แบ่งเป็นสัดส่วนชัดเจน ไม่อึดอัด --- */}
               <div className="flex flex-col gap-6 text-left">
                 
                 {/* Section 1: Header - Toggle & AI Scan */}
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-5">
                   <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit shrink-0 text-left shadow-inner">
-                    <button onClick={()=>setFormData({...formData, type:'income', category: 'รายได้จากการขายสินค้า', paymentStatus: 'settled'})} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='income'?'bg-white text-emerald-600 shadow-sm':'text-slate-500 hover:text-slate-700'}`}><TrendingUp size={18}/> รายรับ</button>
-                    <button onClick={()=>setFormData({...formData, type:'expense', category: 'ต้นทุนสินค้า', status: 'paid'})} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='expense'?'bg-white text-rose-600 shadow-sm':'text-slate-500 hover:text-slate-700'}`}><TrendingDown size={18}/> รายจ่าย</button>
+                    <button onClick={()=>setFormData({...formData, type:'income', category: 'รายได้จากการขายสินค้า', paymentStatus: 'settled'})} disabled={formData.id} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='income'?'bg-white text-emerald-600 shadow-sm':'text-slate-500 hover:text-slate-700'} ${formData.id ? 'opacity-50 cursor-not-allowed' : ''}`}><TrendingUp size={18}/> รายรับ</button>
+                    <button onClick={()=>setFormData({...formData, type:'expense', category: 'ต้นทุนสินค้า', status: 'paid'})} disabled={formData.id} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='expense'?'bg-white text-rose-600 shadow-sm':'text-slate-500 hover:text-slate-700'} ${formData.id ? 'opacity-50 cursor-not-allowed' : ''}`}><TrendingDown size={18}/> รายจ่าย</button>
                   </div>
                   {formData.type === 'expense' && (
                       <div className="w-full sm:w-auto">
