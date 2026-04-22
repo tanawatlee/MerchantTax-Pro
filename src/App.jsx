@@ -7354,6 +7354,25 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
   };
 
+  // --- NEW: Handle Category Change for Auto-populating Fees ---
+  const handleCategoryChange = (e) => {
+      const newCategory = e.target.value;
+      if (formData.type === 'expense' && newCategory === 'ค่าธรรมเนียม Platform') {
+          setFormData(prev => ({
+              ...prev,
+              category: newCategory,
+              items: [
+                  { desc: 'Commission fee', qty: 1, unit: 'ครั้ง', buyPrice: 0, sellPrice: 0, sku: '', category: newCategory },
+                  { desc: 'Transaction fee', qty: 1, unit: 'ครั้ง', buyPrice: 0, sellPrice: 0, sku: '', category: newCategory },
+                  { desc: 'Service fee', qty: 1, unit: 'ครั้ง', buyPrice: 0, sellPrice: 0, sku: '', category: newCategory },
+                  { desc: 'Platform Infrastructure Fee', qty: 1, unit: 'ครั้ง', buyPrice: 0, sellPrice: 0, sku: '', category: newCategory }
+              ]
+          }));
+      } else {
+          setFormData(prev => ({ ...prev, category: newCategory }));
+      }
+  };
+
   const financialSummary = useMemo(() => {
     const subTotal = formData.items.reduce((sum, item) => sum + ((formData.type === 'income' ? Number(item.sellPrice) : Number(item.buyPrice)) * (Number(item.qty) || 0)), 0);
     const transFee = parseFloat(formData.transactionFee) || 0;
@@ -8013,7 +8032,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   </div>
                   <div className="space-y-1.5 text-left">
                       <label className="text-xs font-bold text-slate-500 uppercase tracking-wide text-left">หมวดหมู่บัญชี</label>
-                      <select value={formData.category} onChange={e=>setFormData({...formData, category: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer text-left">{(formData.type === 'income' ? CONSTANTS.CATEGORIES.INCOME : CONSTANTS.CATEGORIES.EXPENSE).map(c => <option key={c} value={c}>{c}</option>)}</select>
+                      <select value={formData.category} onChange={handleCategoryChange} className="w-full bg-slate-50 p-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer text-left">{(formData.type === 'income' ? CONSTANTS.CATEGORIES.INCOME : CONSTANTS.CATEGORIES.EXPENSE).map(c => <option key={c} value={c}>{c}</option>)}</select>
                   </div>
                 </div>
 
