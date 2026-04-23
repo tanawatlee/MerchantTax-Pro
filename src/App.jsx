@@ -1792,6 +1792,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 shipReturnRow = getRowValAbs(row, schema.returnShippingFee);
             }
 
+            // --- 🔥 THE ULTIMATE FIX: กฎเหล็ก! ถ้าเป็นโหมดนำเข้าใหม่ (1 หรือ 2) ให้บังคับค่าส่งเป็น 0 ทั้งหมด เพื่อรอรับยอดจริงในโหมด 3 ---
+            if (mode !== 'update_settled') {
+                shipEstRow = 0;      // ตัดค่าจัดส่งโดยประมาณทิ้ง (ไม่นำเข้าระบบ)
+                shipSubsidyRow = 0;  // ตัดเงินสนับสนุนค่าจัดส่งโดยประมาณทิ้ง
+                shipReturnRow = 0;   // ตัดค่าจัดส่งสินค้าคืนทิ้ง
+            }
+
             return { transFee, comm, serv, affiliateRow, infraRow, shipBuyerRow, shipSubsidyRow, shipEstRow, shipReturnRow };
         };
 
