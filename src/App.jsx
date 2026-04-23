@@ -725,6 +725,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     let perfCogs = 0;
     let perfFees = 0;
     let perfExp = 0;
+    let perfBuyerShipping = 0; // --- FIX: เพิ่มตัวแปรเก็บยอดค่าส่งฝั่ง Performance ---
 
     let cashSettled = 0;
     let cashPending = 0;
@@ -775,6 +776,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     perfSales += trueNetSales; 
                     perfFees += fee;
                     perfCogs += cogs;
+                    perfBuyerShipping += ship; // --- FIX: สะสมยอดค่าจัดส่งฝั่งขาย ---
                 }
 
                 if (matchSettleMonth && (t.paymentStatus === 'settled' || t.status === 'paid')) {
@@ -801,7 +803,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 }
             }
         } else if (t.type === 'expense') {
-            if (!t.isCancelled) {
+            if (!t.isCancelled && !t.isTaxOnly) {
                 const amt = Number(t.total) || 0;
                 const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
 
@@ -838,7 +840,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
         .reduce((sum, b) => sum + (Number(b.quantity) * Number(b.costPerUnit)), 0);
 
     return { 
-        perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: perfSales - perfCogs - perfFees - perfExp },
+        perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: perfSales - perfCogs - perfFees - perfExp, buyerShipping: perfBuyerShipping },
         cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt, cogs: cashCogs, grossSales: cashGrossSales }
     };
   }, [transactions, stockBatches, selectedChannel, selectedShop, selectedMonth]);
@@ -902,7 +904,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 }
             }
         } else if (t.type === 'expense') {
-            if (!t.isCancelled) {
+            if (!t.isCancelled && !t.isTaxOnly) {
                 const amt = Number(t.total) || 0;
                 const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
 
@@ -1090,13 +1092,42 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
                     <StatCard title="ยอดขายรวม (Sales)" value={analytics.perf.sales} color="indigo" icon={<TrendingUp />} subtitle="รายรับรวมตามวันที่ลูกค้าสั่งซื้อ" />
                     <StatCard title="รายจ่าย (Expense)" value={analytics.perf.expense} color="rose" icon={<TrendingDown />} subtitle="ค่าใช้จ่ายตามวันที่เกิดรายการ" />
                     <StatCard title="กำไรสุทธิ (Net Profit)" value={analytics.perf.netProfit} color="emerald" icon={<ProfitIcon />} subtitle="หักต้นทุนและค่าธรรมเนียมแพลตฟอร์ม" />
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* --- 🔥 NEW: แถบกระทบยอดภาษีขาย (Tax Base Reconciliation) --- */}
+                <div className="mt-4 bg-indigo-50/80 border border-indigo-200 rounded-[24px] p-5 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 shadow-sm animate-fadeIn">
+                    <div className="flex items-center gap-3">
+                        <div className="p-3 bg-indigo-600 rounded-xl text-white shadow-md">
+                            <FileCheck size={20} />
+                        </div>
+                        <div>
+                            <p className="text-sm font-black text-indigo-900 uppercase tracking-wide">ยอดกระทบฐานภาษีขาย (Sales Tax Base)</p>
+                            <p className="text-xs text-indigo-700/80 mt-1 font-medium">สมการตรวจสอบ: <span className="font-bold">ยอดขายสุทธิ + ค่าจัดส่ง(ผู้ซื้อจ่าย) = ฐานภาษีขาย</span> (ตรงกับหน้า ภ.พ.30)</p>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-4 bg-white px-5 py-3 rounded-2xl shadow-sm border border-indigo-100 w-full xl:w-auto">
+                        <div className="text-right">
+                            <p className="text-[10px] text-slate-400 font-bold uppercase">ยอดขายสุทธิ (Net Sales)</p>
+                            <p className="font-black text-slate-700 text-base">{formatCurrency(analytics.perf.netSales)}</p>
+                        </div>
+                        <div className="text-indigo-300 font-black text-lg">+</div>
+                        <div className="text-right">
+                            <p className="text-[10px] text-emerald-500 font-bold uppercase">ค่าส่งที่เรียกเก็บ (Shipping)</p>
+                            <p className="font-black text-emerald-600 text-base">{formatCurrency(analytics.perf.buyerShipping || analytics.cash.shipping)}</p>
+                        </div>
+                        <div className="text-indigo-300 font-black text-lg">=</div>
+                        <div className="text-right pl-3 border-l-2 border-indigo-50">
+                            <p className="text-[10px] text-indigo-600 font-black uppercase">ฐานภาษีรวม (Tax Base)</p>
+                            <p className="font-black text-indigo-700 text-xl">{formatCurrency(analytics.perf.netSales + (analytics.perf.buyerShipping || analytics.cash.shipping))}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
                     <div className="lg:col-span-2 bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex flex-col w-full">
                         <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChart2 className="text-indigo-600"/> กราฟผลประกอบการ (Sales vs Expense)</h3>
                         <div className="flex-1 flex flex-col justify-end text-slate-300 w-full mt-4 min-h-[250px]">
@@ -12603,6 +12634,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     const auditFileRef = useRef(null);
     const [isAuditing, setIsAuditing] = useState(false);
     const [auditResults, setAuditResults] = useState(null);
+    const [showShippingDetailsModal, setShowShippingDetailsModal] = useState(false); // --- NEW: State สำหรับเปิดตารางดูค่าขนส่ง
 
     const handleRunShopeeAudit = async (e) => {
         const file = e.target.files[0];
@@ -12966,7 +12998,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
             orders: 0, gmv: 0, discounts: 0, refunds: 0, netSales: 0,
             cogs: 0, grossProfit: 0, 
             platformFees: 0, directExp: 0, shippingBalance: 0, totalOpEx: 0,
-            netProfit: 0
+            netProfit: 0, buyerShipping: 0, buyerShippingDetails: [] // --- FIX: เพิ่ม array เก็บรายละเอียดบิลที่มีค่าส่ง ---
         };
 
         // --- 2. กลุ่มข้อมูลกระแสเงินสดรับ (Settlement) อิงตามวันที่เงินโอนเข้า (Settled Date) ---
@@ -13005,7 +13037,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
             // ==========================================
             // LOGIC 1: ผลประกอบการ (PERFORMANCE)
             // ==========================================
-            if (orderMonthStr === selectedMonth && !t.isCancelled && !t.isFromReconciliation) {
+            if (orderMonthStr === selectedMonth && !t.isCancelled && !t.isFromReconciliation && !t.isTaxOnly) {
                 if (t.type === 'income') {
                     perf.orders++;
                     
@@ -13016,6 +13048,19 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                     perf.discounts += (Number(t.couponDiscount || 0) + Number(t.cashCoupon || 0));
                     perf.refunds += Number(t.refundAmount || 0);
                     perf.platformFees += Number(t.platformFee || 0);
+                    
+                    // --- FIX: สะสมยอดค่าส่ง และเก็บ Log ไว้โชว์ในตาราง ---
+                    const shipFeeAmt = Number(t.shippingFee || 0);
+                    perf.buyerShipping += shipFeeAmt; 
+                    if (shipFeeAmt > 0) {
+                        perf.buyerShippingDetails.push({
+                            id: t.id,
+                            orderId: t.orderId || t.sysDocId,
+                            date: t.date,
+                            partnerName: t.partnerName || 'ลูกค้าทั่วไป',
+                            shippingFee: shipFeeAmt
+                        });
+                    }
                     
                     // ส่วนต่างค่าส่ง = (เก็บลูกค้า + แพลตฟอร์มออกให้) - (จ่ายขนส่งจริง + ค่าส่งคืน)
                     const shipBal = (Number(t.shippingFee || 0) + Number(t.shippingFeeSubsidy || 0)) - (Number(t.estimatedShippingFee || 0) + Number(t.returnShippingFee || 0));
@@ -13127,6 +13172,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
         perf.grossProfit = perf.netSales - perf.cogs;
         perf.totalOpEx = perf.platformFees + perf.directExp - perf.shippingBalance; // ถ้าค่าส่งเป็นบวก จะไปลดค่าใช้จ่ายรวม
         perf.netProfit = perf.grossProfit - perf.totalOpEx;
+        perf.buyerShippingDetails.sort((a, b) => normalizeDate(b.date) - normalizeDate(a.date)); // เรียงวันที่ใหม่->เก่า
 
         // --- Finalize Settlement Math ---
         settle.income.total = settle.income.productPrice - settle.income.sellerDiscount - settle.income.refundAmount;
@@ -13332,12 +13378,15 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                             <h3 className="text-3xl font-black">{formatCurrency(reportData.perf.netSales)}</h3>
                             <p className="text-xs font-medium opacity-90 mt-2"><Package size={12} className="inline mr-1"/> AOV: {formatCurrency(reportData.aov)}/บิล</p>
                         </div>
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 p-4 bg-slate-800 border border-slate-600 text-white text-[10px] rounded-2xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none">
-                            <p className="font-bold border-b border-slate-600 pb-1.5 mb-1.5 text-indigo-300">สูตร: ยอดขายสุทธิ</p>
+                        {/* --- 🔥 FIX: อัปเดต Popup ของยอดขายสุทธิ ให้โชว์การเชื่อมโยงไปถึงฐานภาษีตามที่ลูกค้าต้องการตรวจสอบ --- */}
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-64 p-4 bg-slate-800 border border-slate-600 text-white text-[10px] rounded-2xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none">
+                            <p className="font-bold border-b border-slate-600 pb-1.5 mb-1.5 text-indigo-300">สูตร: ยอดขายสุทธิ & ฐานภาษี</p>
                             <div className="flex justify-between mb-1"><span>ยอดสั่งซื้อรวม (GMV)</span><span>{formatCurrency(reportData.perf.gmv)}</span></div>
                             <div className="flex justify-between text-rose-300 mb-1"><span>หัก ส่วนลดให้ลูกค้า</span><span>-{formatCurrency(reportData.perf.discounts)}</span></div>
-                            <div className="flex justify-between text-rose-300"><span>หัก คืนเงินลูกค้า</span><span>-{formatCurrency(reportData.perf.refunds)}</span></div>
-                            <div className="flex justify-between font-bold border-t border-slate-600 mt-1.5 pt-1.5 text-emerald-400 text-xs"><span>= ยอดขายสุทธิ</span><span>{formatCurrency(reportData.perf.netSales)}</span></div>
+                            <div className="flex justify-between text-rose-300 mb-1"><span>หัก คืนเงินลูกค้า</span><span>-{formatCurrency(reportData.perf.refunds)}</span></div>
+                            <div className="flex justify-between font-bold border-y border-slate-600 py-1.5 my-1.5 text-indigo-200"><span>= ยอดขายสุทธิ (Net Sales)</span><span>{formatCurrency(reportData.perf.netSales)}</span></div>
+                            <div className="flex justify-between text-emerald-300 mb-1"><span>บวก ค่าจัดส่ง (ลูกค้าจ่าย)</span><span>+{formatCurrency(reportData.perf.buyerShipping)}</span></div>
+                            <div className="flex justify-between font-bold text-emerald-400 text-xs mt-1.5"><span>= ฐานภาษี (Tax Base)</span><span>{formatCurrency(reportData.perf.netSales + reportData.perf.buyerShipping)}</span></div>
                         </div>
                     </div>
 
@@ -13375,6 +13424,37 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                         </div>
                     </div>
                 </div>
+
+                {/* --- 🔥 NEW: แถบกระทบยอดภาษีขาย (Tax Base Reconciliation) ใส่ไว้ถูกหน้าแล้วครับ --- */}
+                <div className="mt-6 bg-indigo-50/80 border border-indigo-200 rounded-[24px] p-5 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 shadow-sm animate-fadeIn">
+                    <div className="flex items-center gap-3">
+                        <div className="p-3 bg-indigo-600 rounded-xl text-white shadow-md">
+                            <FileCheck size={20} />
+                        </div>
+                        <div>
+                            <p className="text-sm font-black text-indigo-900 uppercase tracking-wide">ยอดกระทบฐานภาษีขาย (Sales Tax Base)</p>
+                            <p className="text-xs text-indigo-700/80 mt-1 font-medium">สมการตรวจสอบ: <span className="font-bold">ยอดขายสุทธิ + ค่าจัดส่ง(ผู้ซื้อจ่าย) = ฐานภาษีขาย</span> (เทียบกับหน้า ภ.พ.30)</p>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-4 bg-white px-5 py-3 rounded-2xl shadow-sm border border-indigo-100 w-full xl:w-auto">
+                        <div className="text-right">
+                            <p className="text-[10px] text-slate-400 font-bold uppercase">ยอดขายสุทธิ (Net Sales)</p>
+                            <p className="font-black text-slate-700 text-base">{formatCurrency(reportData.perf.netSales)}</p>
+                        </div>
+                        <div className="text-indigo-300 font-black text-lg">+</div>
+                        {/* --- 🔥 FIX: กดปุ่มเพื่อเปิดดูรายการออเดอร์ที่มีค่าจัดส่ง --- */}
+                        <div className="text-right cursor-pointer group" onClick={() => setShowShippingDetailsModal(true)} title="คลิกเพื่อดูรายการที่ลูกค้าจ่ายค่าส่ง">
+                            <p className="text-[10px] text-emerald-500 font-bold uppercase flex items-center justify-end gap-1 group-hover:text-emerald-600 transition-colors">ค่าส่งที่เรียกเก็บ (Shipping) <Search size={10}/></p>
+                            <p className="font-black text-emerald-600 text-base group-hover:text-emerald-700 transition-colors border-b border-dashed border-emerald-300">{formatCurrency(reportData.perf.buyerShipping)}</p>
+                        </div>
+                        <div className="text-indigo-300 font-black text-lg">=</div>
+                        <div className="text-right pl-3 border-l-2 border-indigo-50">
+                            <p className="text-[10px] text-indigo-600 font-black uppercase">ฐานภาษีรวม (Tax Base)</p>
+                            <p className="font-black text-indigo-700 text-xl">{formatCurrency(reportData.perf.netSales + reportData.perf.buyerShipping)}</p>
+                        </div>
+                    </div>
+                </div>
+
             </div>
 
             {/* KPI Cards: Settlement (อิงวันที่รับเงิน แบบ Shopee Report) */}
@@ -13695,6 +13775,59 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                         <div className="pt-6 mt-4 border-t border-slate-100 flex justify-between items-center">
                             <p className="text-[10px] font-bold text-slate-400">*สามารถซิงค์ยอดผ่านปุ่ม Auto-Fix เพื่อปรับปรุงบัญชีให้สมบูรณ์แบบได้ทันที</p>
                             <button onClick={() => setAuditResults(null)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* --- NEW: Shipping Details Modal --- */}
+            {showShippingDetailsModal && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+                    <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+                        <div className="flex justify-between items-center mb-6">
+                            <div>
+                                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><TruckIcon className="text-emerald-600"/> รายการที่เรียกเก็บค่าจัดส่งจากลูกค้า</h3>
+                                <p className="text-xs text-slate-500 mt-1">ออเดอร์ที่มีการบวกค่าจัดส่งเพิ่ม ซึ่งจะถูกนำไปรวมในฐานภาษีขาย (เดือน {selectedMonth})</p>
+                            </div>
+                            <button onClick={() => setShowShippingDetailsModal(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
+                        </div>
+
+                        <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl">
+                            <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 border-b border-slate-200">
+                                    <tr>
+                                        <th className="p-4 pl-6 w-16 text-center">No.</th>
+                                        <th className="p-4">วันที่ (Order Date)</th>
+                                        <th className="p-4">Order ID</th>
+                                        <th className="p-4">ลูกค้า</th>
+                                        <th className="p-4 text-right pr-6">ค่าส่งที่เรียกเก็บ (฿)</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {reportData.perf.buyerShippingDetails.length > 0 ? reportData.perf.buyerShippingDetails.map((item, idx) => (
+                                        <tr key={idx} className="hover:bg-emerald-50/30 transition-colors">
+                                            <td className="p-4 pl-6 text-center text-slate-400 font-bold">{idx + 1}</td>
+                                            <td className="p-4 text-slate-600 font-bold">{formatDate(item.date)}</td>
+                                            <td className="p-4 font-mono font-bold text-indigo-600">{item.orderId}</td>
+                                            <td className="p-4 text-slate-700">{item.partnerName}</td>
+                                            <td className="p-4 text-right pr-6 font-black text-emerald-600">+{formatCurrency(item.shippingFee)}</td>
+                                        </tr>
+                                    )) : (
+                                        <tr><td colSpan="5" className="p-10 text-center text-slate-500 font-bold">ไม่มีรายการออเดอร์ที่เรียกเก็บค่าส่งจากลูกค้าในเดือนนี้</td></tr>
+                                    )}
+                                </tbody>
+                                {reportData.perf.buyerShippingDetails.length > 0 && (
+                                    <tfoot className="bg-slate-50 sticky bottom-0 border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                                        <tr>
+                                            <td colSpan="4" className="p-4 text-right font-black text-slate-600 uppercase tracking-widest text-xs">รวมค่าจัดส่งทั้งหมด</td>
+                                            <td className="p-4 text-right pr-6 font-black text-emerald-700 text-base">{formatCurrency(reportData.perf.buyerShipping)}</td>
+                                        </tr>
+                                    </tfoot>
+                                )}
+                            </table>
+                        </div>
+                        <div className="pt-6 mt-4 border-t border-slate-100 flex justify-end">
+                            <button onClick={() => setShowShippingDetailsModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors shadow-md">ปิดหน้าต่าง</button>
                         </div>
                     </div>
                 </div>
