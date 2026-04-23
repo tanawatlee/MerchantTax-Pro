@@ -4107,6 +4107,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           } else {
               // --- โหมดลดสต็อกปกติ ---
               let needed = qty;
+              let totalCostLost = 0; // --- 🔥 FIX: เพิ่มตัวแปรคำนวณต้นทุนที่สูญเสีย ---
               const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
 
               for (const b of availableBatches) {
@@ -4114,6 +4115,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   const take = Math.min(needed, b.remaining);
                   const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
                   batchWriter.update(batchRef, { sold: increment(take) });
+                  totalCostLost += take * (Number(b.costPerUnit) || 0); // --- 🔥 FIX: ดึงต้นทุน FIFO ของชิ้นที่เสีย ---
                   needed -= take;
               }
               
@@ -4121,6 +4123,36 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   showToast(`สต็อกมีไม่พอให้ตัด (ขาดอีก ${needed} ชิ้น)`, "error");
                   setIsProcessing(false);
                   return;
+              }
+
+              // --- 🔥 THE ULTIMATE FIX: สร้างบิลรายจ่ายอัตโนมัติ สำหรับบันทึกสินค้าชำรุด เพื่อให้ตัดกำไรสุทธิได้ถูกต้อง ---
+              if (adjustData.reason === 'สินค้าชำรุด/สูญหาย' && totalCostLost > 0) {
+                  const prefix = getExpensePrefix('สินค้าเสียหาย/หมดอายุ');
+                  const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), prefix, new Date(), 'sysDocId');
+                  
+                  const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                  batchWriter.set(expRef, {
+                      sysDocId: expSysDocId,
+                      type: 'expense',
+                      category: 'สินค้าเสียหาย/หมดอายุ',
+                      description: `บันทึกตัดจำหน่ายสินค้าชำรุด: ${adjustStockItem.name}`,
+                      items: [{ 
+                          desc: `ตัดสต็อกชำรุด: ${adjustStockItem.name}`, 
+                          qty: qty, 
+                          buyPrice: totalCostLost / qty, 
+                          sellPrice: 0, 
+                          sku: adjustStockItem.sku || '-' 
+                      }],
+                      total: totalCostLost,
+                      date: new Date(),
+                      userId: user.uid,
+                      createdAt: serverTimestamp(),
+                      status: 'paid',
+                      partnerName: 'Internal (ตัดจำหน่าย)',
+                      partnerBranch: '00000',
+                      isFromReconciliation: true,
+                      isTaxOnly: false // เปิดให้บิลนี้โชว์ใน Dashboard เพื่อตัดกำไรสุทธิ
+                  });
               }
           }
 
@@ -4131,6 +4163,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           setTransferSearchTerm('');
           setShowTransferList(false);
       } catch (err) {
+          console.error(err);
           showToast("ปรับปรุงสต็อกไม่สำเร็จ", "error");
       }
       setIsProcessing(false);
