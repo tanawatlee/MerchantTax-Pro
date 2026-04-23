@@ -6465,6 +6465,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [viewItem, setViewItem] = useState(null);
   const [cancelConfirmId, setCancelConfirmId] = useState(null); // แก้ไขชื่อ State สำหรับยกเลิกรายการ
   const [hardDeleteConfirmId, setHardDeleteConfirmId] = useState(null); // NEW: State สำหรับลบถาวร
+  const [showBulkHardDeleteConfirm, setShowBulkHardDeleteConfirm] = useState(false); // --- NEW: State สำหรับยืนยันลบถาวรแบบกลุ่ม ---
   const [showPartnerModal, setShowPartnerModal] = useState(false);
   const [showStockSelectModal, setShowStockSelectModal] = useState(false);
   const [stockSearchTerm, setStockSearchTerm] = useState('');
@@ -9952,6 +9953,121 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       setIsBulkProcessing(false);
   };
 
+  // --- NEW: ฟังก์ชันลบถาวรแบบกลุ่ม (Bulk Hard Delete) ---
+  const executeBulkHardDelete = async () => {
+      setShowBulkHardDeleteConfirm(false);
+      const docsToDelete = combinedDocs.filter(d => selectedDocIds.includes(d.id));
+      if (docsToDelete.length === 0) return;
+
+      setIsBulkProcessing(true);
+      try {
+          let batchWriter = writeBatch(dbInstance);
+          let opsCount = 0;
+          let processedCount = 0;
+
+          const checkAndCommit = async () => {
+              if (opsCount >= 300) {
+                  await batchWriter.commit();
+                  batchWriter = writeBatch(dbInstance);
+                  opsCount = 0;
+              }
+          };
+
+          const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+
+          for (let i = 0; i < docsToDelete.length; i++) {
+              const target = docsToDelete[i];
+              setBulkStatus({ current: i + 1, total: docsToDelete.length, message: `กำลังลบรายการ ${target.invNo || target.sysDocId || target.id}...` });
+
+              // 1. Delete Drive File (ถ้ามีแนบไว้)
+              if (target.attachmentUrl && webhookUrl) {
+                  try {
+                      await fetch(webhookUrl, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                          body: JSON.stringify({ action: 'delete', fileUrl: target.attachmentUrl })
+                      });
+                  } catch (e) { console.warn("Drive Delete Error:", e); }
+              }
+
+              // 2. Handle Logic based on source type
+              if (target.source === 'invoice') {
+                  batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', target.id));
+                  opsCount++;
+
+                  if (target.orderId) {
+                      const isExpenseType = target.docType === 'payment_voucher';
+                      const collName = isExpenseType ? 'transactions_expense' : 'transactions_income';
+                      
+                      // Unlink Invoice No จากออเดอร์ต้นทาง (ใช้ทั้ง OrderID และ SysDocID เผื่อไว้)
+                      const linkedTransQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', collName), where('sysDocId', '==', target.orderId)));
+                      linkedTransQuery.docs.forEach(tDoc => {
+                          batchWriter.set(tDoc.ref, { invoiceNo: null, isInvoiced: false }, { merge: true });
+                          opsCount++;
+                      });
+                      
+                      const linkedTransQuery2 = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', collName), where('orderId', '==', target.orderId)));
+                      linkedTransQuery2.docs.forEach(tDoc => {
+                          batchWriter.set(tDoc.ref, { invoiceNo: null, isInvoiced: false }, { merge: true });
+                          opsCount++;
+                      });
+                  }
+              } else if (target.source === 'transaction') {
+                  const collName = target.type === 'income' ? 'transactions_income' : 'transactions_expense';
+                  batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', collName, target.id));
+                  opsCount++;
+
+                  // คืนสต็อกเฉพาะรายการที่ยังไม่ได้ถูกยกเลิกไปแล้ว
+                  if (!target.isCancelled) {
+                      if (target.type === 'expense') {
+                          const associatedLots = stockBatches.filter(b => b.parentExpenseId === target.id);
+                          associatedLots.forEach(lot => {
+                              if (lot?.id) {
+                                  batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
+                                  opsCount++;
+                              }
+                          });
+                      } else if (target.type === 'income') {
+                          if (target.items) {
+                              for (const item of target.items) {
+                                  let toReturn = Number(item.qty);
+                                  if (isNaN(toReturn) || toReturn <= 0) continue;
+
+                                  const affectedLots = stockBatches
+                                      .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
+                                      .sort(sortNewestFirst);
+
+                                  for (const lot of affectedLots) {
+                                      if (toReturn <= 0) break;
+                                      if (!lot?.id) continue;
+                                      const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                                      batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                                      opsCount++;
+                                      toReturn -= canTakeBack;
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+
+              await checkAndCommit();
+              processedCount++;
+          }
+
+          if (opsCount > 0) {
+              await batchWriter.commit();
+          }
+
+          showToast(`ลบข้อมูลถาวรสำเร็จ ${processedCount} รายการ`, "success");
+          setSelectedDocIds([]);
+      } catch (e) {
+          console.error("Bulk Hard Delete Error:", e);
+          showToast(`เกิดข้อผิดพลาดในการลบข้อมูล: ${e.message}`, "error");
+      }
+      setIsBulkProcessing(false);
+  };
+
   const handleSaveInvoice = async () => {
     if (!user) return;
     try {
@@ -10766,12 +10882,16 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
             {selectedDocIds.length > 0 && (
                 <div className="bg-indigo-50 border border-indigo-100 p-3 mb-4 rounded-2xl flex flex-wrap justify-between items-center animate-fadeIn gap-4">
                     <span className="text-sm font-bold text-indigo-800 ml-2">เลือกแล้ว {selectedDocIds.length} รายการ</span>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                         <button onClick={() => setShowBulkIssueModal(true)} disabled={isBulkProcessing} className="bg-white hover:bg-indigo-100 text-indigo-600 border border-indigo-200 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1 disabled:opacity-50">
                             <PlusCircle size={14}/> ออกใบกำกับทั้งหมด (Bulk Issue)
                         </button>
                         <button onClick={handleBulkDownload} disabled={isBulkProcessing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1 disabled:opacity-50">
                             <Download size={14}/> โหลด PDF (Bulk Download)
+                        </button>
+                        {/* --- NEW: ปุ่มลบถาวรแบบกลุ่ม --- */}
+                        <button onClick={() => setShowBulkHardDeleteConfirm(true)} disabled={isBulkProcessing} className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1 disabled:opacity-50">
+                            <Trash2 size={14}/> ลบถาวรทั้งหมด
                         </button>
                     </div>
                 </div>
@@ -10921,13 +11041,34 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                       <span className="text-rose-600 font-bold underline">การกระทำนี้ไม่สามารถย้อนกลับได้</span>
                     </p>
                     <div className="flex gap-3 text-center">
-              <button onClick={() => setHardDeleteInvoiceId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
-              <button onClick={handleHardDeleteInvoice} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center">ยืนยันลบถาวร</button>
+              <button onClick={() => setHardDeleteInvoiceId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ยกเลิก</button>
+              <button onClick={handleHardDeleteInvoice} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center hover:bg-rose-700 transition-colors">ยืนยันลบถาวร</button>
             </div>
           </div>
         </div>
       )}
       
+      {/* --- NEW: Bulk Hard Delete Confirm Modal --- */}
+      {showBulkHardDeleteConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+                  <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+                    <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
+                      <Trash2 size={32}/>
+                    </div>
+                    <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันลบข้อมูลถาวร {selectedDocIds.length} รายการ?</h3>
+                    <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
+                      ระบบจะลบข้อมูลที่เลือกออกจากฐานข้อมูลอย่างถาวร<br/>
+                      และจะทำการคืนยอดสต็อกสินค้าให้โดยอัตโนมัติ (ถ้ามียอดตัดไป)<br/>
+                      <span className="font-bold text-rose-600">*การกระทำนี้ไม่สามารถย้อนกลับได้</span>
+                    </p>
+                    <div className="flex gap-3 text-center">
+              <button onClick={() => setShowBulkHardDeleteConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ยกเลิก</button>
+              <button onClick={executeBulkHardDelete} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center hover:bg-rose-700 transition-colors">ยืนยันลบถาวร</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Bulk Issue Modal */}
       {showBulkIssueModal && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
