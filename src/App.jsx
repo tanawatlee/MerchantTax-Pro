@@ -5814,34 +5814,58 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     return { base, vat, total };
   };
 
+  // --- 🔥 FIX: แก้ไขบั๊กทศนิยม 6 สตางค์ โดยบังคับปัดเศษ 2 ตำแหน่ง "รายบิล" ก่อนนำมาบวกสะสม (ให้ตรงกับ Excel 100%) ---
   const vatAnalysis = useMemo(() => {
-    // --- FIX: ถ้าเอกสารถูกยกเลิก (cancelled) ให้คิดยอดภาษีเป็น 0 เพื่อไม่ให้ ภ.พ.30 เพี้ยน ---
-    const outputVat = filteredInvoices.reduce((s, inv) => s + (inv.status === 'cancelled' ? 0 : ((Number(inv.vat) || 0) * (inv.docType === 'credit_note' ? -1 : 1))), 0);
-    const outputBase = filteredInvoices.reduce((s, inv) => s + (inv.status === 'cancelled' ? 0 : ((Number(inv.preVat) || 0) * (inv.docType === 'credit_note' ? -1 : 1))), 0);
+    const toFixedNum = (num) => Number(Number(num).toFixed(2));
+
+    const outputVat = filteredInvoices.reduce((s, inv) => {
+        if (inv.status === 'cancelled') return s;
+        const mult = inv.docType === 'credit_note' ? -1 : 1;
+        return s + (toFixedNum(Number(inv.vat) || 0) * mult);
+    }, 0);
+
+    const outputBase = filteredInvoices.reduce((s, inv) => {
+        if (inv.status === 'cancelled') return s;
+        const mult = inv.docType === 'credit_note' ? -1 : 1;
+        return s + (toFixedNum(Number(inv.preVat) || 0) * mult);
+    }, 0);
     
-    const inputVat = filteredExpenses.reduce((s, t) => s + (t.isNonCreditableVat ? 0 : getExpenseTaxDetails(t).vat), 0);
-    const inputBase = filteredExpenses.reduce((s, t) => s + (t.isNonCreditableVat ? 0 : getExpenseTaxDetails(t).base), 0);
+    const inputVat = filteredExpenses.reduce((s, t) => {
+        if (t.isNonCreditableVat) return s;
+        return s + toFixedNum(getExpenseTaxDetails(t).vat);
+    }, 0);
+
+    const inputBase = filteredExpenses.reduce((s, t) => {
+        if (t.isNonCreditableVat) return s;
+        return s + toFixedNum(getExpenseTaxDetails(t).base);
+    }, 0);
+
     return { outputVat, outputBase, inputVat, inputBase, net: outputVat - inputVat };
   }, [filteredInvoices, filteredExpenses]);
 
+  // --- 🔥 FIX: บังคับปัดเศษ 2 ตำแหน่งให้ยอดรวมท้ายตารางตรงกับยอดจริง (Round then Sum) ---
   const salesFooter = useMemo(() => {
+    const toFixedNum = (num) => Number(Number(num).toFixed(2));
     return filteredInvoices.reduce((acc, inv) => { 
-      // --- FIX: ถ้าเอกสารถูกยกเลิก ไม่นำยอดมาบวกรวมในท้ายตารางรายงานภาษีขาย ---
       if (inv.status === 'cancelled') return acc;
-      
       const mult = inv.docType === 'credit_note' ? -1 : 1; 
       return { 
-        base: acc.base + ((Number(inv.preVat) || 0) * mult), 
-        vat: acc.vat + ((Number(inv.vat) || 0) * mult), 
-        total: acc.total + ((Number(inv.total) || 0) * mult) 
+        base: acc.base + (toFixedNum(Number(inv.preVat) || 0) * mult), 
+        vat: acc.vat + (toFixedNum(Number(inv.vat) || 0) * mult), 
+        total: acc.total + (toFixedNum(Number(inv.total) || 0) * mult) 
       }; 
     }, { base: 0, vat: 0, total: 0 });
   }, [filteredInvoices]);
 
   const purchaseFooter = useMemo(() => {
+    const toFixedNum = (num) => Number(Number(num).toFixed(2));
     return filteredExpenses.reduce((acc, row) => { 
       const taxDetails = getExpenseTaxDetails(row);
-      return { base: acc.base + taxDetails.base, vat: acc.vat + taxDetails.vat, total: acc.total + taxDetails.total }; 
+      return { 
+          base: acc.base + toFixedNum(taxDetails.base), 
+          vat: acc.vat + toFixedNum(taxDetails.vat), 
+          total: acc.total + toFixedNum(taxDetails.total) 
+      }; 
     }, { base: 0, vat: 0, total: 0 });
   }, [filteredExpenses]);
 
@@ -7178,6 +7202,35 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     }
     setSummaryStartDate(formatDateISO(start));
     setSummaryEndDate(formatDateISO(end));
+  };
+
+  // --- NEW: Helper for Month Picker Buttons ---
+  const changeSummaryMonth = (offset) => {
+      let baseDate = new Date();
+      if (summaryStartDate && summaryEndDate) {
+          const s = new Date(summaryStartDate);
+          const e = new Date(summaryEndDate);
+          if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
+              baseDate = s;
+          }
+      }
+      baseDate.setMonth(baseDate.getMonth() + offset);
+      setSummaryStartDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1)));
+      setSummaryEndDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0)));
+  };
+
+  const changeHistMonth = (offset) => {
+      let baseDate = new Date();
+      if (histStartDate && histEndDate) {
+          const s = new Date(histStartDate);
+          const e = new Date(histEndDate);
+          if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
+              baseDate = s;
+          }
+      }
+      baseDate.setMonth(baseDate.getMonth() + offset);
+      setHistStartDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1)));
+      setHistEndDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0)));
   };
 
   useEffect(() => { if (!user) return; const unsub = onSnapshot(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners'), (snap) => { setPartners(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); return () => unsub(); }, [user, appId]);
@@ -8693,6 +8746,31 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               </div>
               <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200 shrink-0">
                   <Calendar size={14} className="text-slate-400 ml-1 shrink-0"/>
+                  <button onClick={() => changeSummaryMonth(-1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronDown className="rotate-90" size={14}/></button>
+                  <input 
+                      type="month" 
+                      value={(() => {
+                          if (summaryStartDate && summaryEndDate) {
+                              const s = new Date(summaryStartDate);
+                              const e = new Date(summaryEndDate);
+                              if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
+                                  return `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}`;
+                              }
+                          }
+                          return '';
+                      })()}
+                      onChange={e => {
+                          const val = e.target.value;
+                          if (!val) { setSummaryStartDate(''); setSummaryEndDate(''); return; }
+                          const [year, month] = val.split('-');
+                          setSummaryStartDate(formatDateISO(new Date(year, month - 1, 1)));
+                          setSummaryEndDate(formatDateISO(new Date(year, month, 0)));
+                      }}
+                      className="bg-white border border-slate-200 rounded-md text-xs font-bold outline-none text-indigo-700 cursor-pointer focus:ring-1 focus:ring-indigo-200 px-1"
+                      title="เลือกทั้งเดือน"
+                  />
+                  <button onClick={() => changeSummaryMonth(1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronUp className="rotate-90" size={14}/></button>
+                  <span className="text-slate-300 mx-1">|</span>
                   <input type="date" value={summaryStartDate} onChange={e=>setSummaryStartDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0"/>
                   <span className="text-slate-300"><ArrowRight size={12}/></span>
                   <input type="date" value={summaryEndDate} onChange={e=>setSummaryEndDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0"/>
@@ -8915,6 +8993,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                  {/* Month / Date Range */}
                  <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200 shrink-0 flex-wrap">
                       <Calendar size={14} className="text-slate-400 ml-2 shrink-0"/>
+                      <button onClick={() => changeHistMonth(-1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronDown className="rotate-90" size={14}/></button>
                       <input 
                           type="month" 
                           value={(() => {
@@ -8937,6 +9016,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           className="bg-white border border-slate-200 rounded-md text-xs font-bold outline-none text-indigo-700 cursor-pointer focus:ring-1 focus:ring-indigo-200 px-1"
                           title="เลือกทั้งเดือน"
                       />
+                      <button onClick={() => changeHistMonth(1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronUp className="rotate-90" size={14}/></button>
                       <span className="text-slate-300 mx-1">|</span>
                       <input type="date" value={histStartDate} onChange={e=>setHistStartDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-24 cursor-pointer focus:ring-0 p-0" placeholder="Start Date"/>
                       <span className="text-slate-300"><ArrowRight size={10}/></span>
@@ -9698,6 +9778,21 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
     }
     setHistoryStartDate(formatDateISO(start));
     setHistoryEndDate(formatDateISO(end));
+  };
+
+  // --- NEW: Helper for Month Picker Buttons in Invoice Generator ---
+  const changeHistoryMonth = (offset) => {
+      let baseDate = new Date();
+      if (historyStartDate && historyEndDate && historyStartDate !== '2000-01-01' && historyEndDate !== '2099-12-31') {
+          const s = new Date(historyStartDate);
+          const e = new Date(historyEndDate);
+          if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
+              baseDate = s;
+          }
+      }
+      baseDate.setMonth(baseDate.getMonth() + offset);
+      setHistoryStartDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1)));
+      setHistoryEndDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0)));
   };
 
   const docStats = useMemo(() => {
@@ -11134,6 +11229,31 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
                     <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200 shrink-0">
                           <Calendar size={14} className="text-slate-400 ml-1 shrink-0"/>
+                          <button onClick={() => changeHistoryMonth(-1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronDown className="rotate-90" size={14}/></button>
+                          <input 
+                              type="month" 
+                              value={(() => {
+                                  if (historyStartDate !== '2000-01-01' && historyEndDate !== '2099-12-31' && historyStartDate && historyEndDate) {
+                                      const s = new Date(historyStartDate);
+                                      const e = new Date(historyEndDate);
+                                      if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
+                                          return `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}`;
+                                      }
+                                  }
+                                  return '';
+                              })()}
+                              onChange={e => {
+                                  const val = e.target.value;
+                                  if (!val) { setHistoryStartDate('2000-01-01'); setHistoryEndDate('2099-12-31'); return; }
+                                  const [year, month] = val.split('-');
+                                  setHistoryStartDate(formatDateISO(new Date(year, month - 1, 1)));
+                                  setHistoryEndDate(formatDateISO(new Date(year, month, 0)));
+                              }}
+                              className="bg-white border border-slate-200 rounded-md text-xs font-bold outline-none text-indigo-700 cursor-pointer focus:ring-1 focus:ring-indigo-200 px-1"
+                              title="เลือกทั้งเดือน"
+                          />
+                          <button onClick={() => changeHistoryMonth(1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronUp className="rotate-90" size={14}/></button>
+                          <span className="text-slate-300 mx-1">|</span>
                           <input type="date" value={historyStartDate === '2000-01-01' ? '' : historyStartDate} onChange={e=>setHistoryStartDate(e.target.value || '2000-01-01')} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0"/>
                           <span className="text-slate-300"><ArrowRight size={12}/></span>
                           <input type="date" value={historyEndDate === '2099-12-31' ? '' : historyEndDate} onChange={e=>setHistoryEndDate(e.target.value || '2099-12-31')} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0"/>
