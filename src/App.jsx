@@ -2296,19 +2296,24 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         let currentDiffDetails = []; 
 
         final.forEach((t) => {
-            const netShip = (t.shippingFee || 0) + (t.shippingFeeSubsidy || 0) - (t.estimatedShippingFee || 0) - (t.returnShippingFee || 0);
-            t.grandTotal = t.total - t.platformFee - t.couponDiscount - (t.refundAmount || 0) + netShip;
+            // --- FIX: ให้ grandTotal ใน Preview ตรงกับสูตรที่จะบันทึกลง Database จริง (Gross Sales + Buyer Shipping - Discount) ---
+            const currentDiscount = t.newCouponDiscount !== undefined ? t.newCouponDiscount : (t.couponDiscount || 0);
+            const currentBuyerShip = t.newShippingFee !== undefined ? t.newShippingFee : (t.shippingFee || 0);
+            
+            t.grandTotal = t.total - currentDiscount - (t.refundAmount || 0) + currentBuyerShip;
             
             finalActualSettled += t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total);
-            finalTotalPlatformFee += (t.platformFee || 0);
+            
+            const currentFee = t.newPlatformFee !== undefined ? t.newPlatformFee : (t.platformFee || 0);
+            finalTotalPlatformFee += currentFee;
 
             // --- FIX: ดึงค่าธรรมเนียมของออเดอร์ยกเลิก/ตีคืน มาแสดงใน Simulator เพื่อสร้างบิลแยก ---
-            if (t.isCancelled && t.platformFee > 0) {
+            if (t.isCancelled && currentFee > 0) {
                 currentDiffDetails.push({ 
                     orderId: t.orderId, 
                     expected: 0, 
-                    actual: -t.platformFee, 
-                    diff: t.platformFee, 
+                    actual: -currentFee, 
+                    diff: currentFee, 
                     type: 'cancel_fee',
                     category: 'ค่าธรรมเนียม Platform' 
                 });
@@ -3422,30 +3427,23 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                             <p className="text-[10px] font-bold text-rose-500 mt-1">{it.reason}</p>
                                         </>
                                     ) : (
-                                        <>
-                                            <p className="font-black text-indigo-600 text-right">{formatCurrency(it.actualSettledAmt !== undefined ? it.actualSettledAmt : (it.grandTotal || it.total))}</p>
-                                            {it.actualSettledAmt !== undefined && Math.abs((it.grandTotal || it.total) - it.actualSettledAmt) > 0.01 ? (
-                                                ((it.grandTotal || it.total) > it.actualSettledAmt) ? (
-                                                    <p className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
-                                                        <AlertTriangle size={10}/>
-                                                        ส่วนต่าง (ขาด): {formatCurrency((it.grandTotal || it.total) - it.actualSettledAmt)}
-                                                    </p>
-                                                ) : (
-                                                    <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
-                                                        <ArrowUp size={10}/>
-                                                        ส่วนต่าง (เกิน): {formatCurrency(it.actualSettledAmt - (it.grandTotal || it.total))}
-                                                    </p>
-                                                )
-                                            ) : (
-                                                <p className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-1 flex items-center gap-1">
-                                                    <CheckCircle size={10}/> ยอดตรงกัน
-                                                </p>
-                                            )}
-                                        </>
+                                        <div className="bg-white p-2.5 rounded-xl border border-slate-200 text-right min-w-[160px] shadow-sm">
+                                            <div className="flex justify-between text-[10px] text-slate-500 font-bold mb-1">
+                                                <span>Gross Sales:</span>
+                                                <span>{formatCurrency(it.grandTotal || it.total)}</span>
+                                            </div>
+                                            <div className="flex justify-between text-[10px] text-rose-500 font-bold mb-1 pb-1.5 border-b border-slate-200 border-dashed">
+                                                <span>หัก ค่าธรรมเนียม:</span>
+                                                <span>-{formatCurrency(it.newPlatformFee !== undefined ? it.newPlatformFee : (it.platformFee || 0))}</span>
+                                            </div>
+                                            <div className="flex justify-between text-xs text-emerald-600 font-black mt-1.5">
+                                                <span>โอนเข้าจริง:</span>
+                                                <span>{formatCurrency(it.actualSettledAmt !== undefined ? it.actualSettledAmt : (it.grandTotal || it.total))}</span>
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
                             ) : (
-                                // --- FIX: เพิ่มบรรทัดแสดงยอดที่โอนเข้าจริงๆ ในตาราง Preview ด้วย (เพื่อแก้ปัญหาที่ผู้ใช้เห็นแต่ยอด 109k) ---
                                 <div className="flex flex-col items-end">
                                     <p className="font-black text-indigo-600 text-right">
                                         {formatCurrency(it.actualSettledAmt !== undefined ? it.actualSettledAmt : (it.grandTotal || it.total))}
@@ -9059,29 +9057,32 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             {/* 4. ยอดรวม */}
                             <td className="p-4 align-top text-right">
                                 <div className={`inline-flex flex-col items-end px-3 py-2 rounded-2xl text-right shadow-sm border ${t.isCancelled ? 'bg-slate-50 text-slate-400 border-slate-200' : (t.type==='income'?'bg-emerald-50 text-emerald-700 border-emerald-200':'bg-rose-50 text-rose-700 border-rose-200')}`}>
-                                    <p className="text-[9px] font-black uppercase opacity-60 leading-none mb-1 text-right">{t.type==='income'?'Income':'Expense'}</p>
+                                    <p className="text-[9px] font-black uppercase opacity-60 leading-none mb-1 text-right">{t.type==='income'?'Gross Sales':'Expense'}</p>
                                     <p className={`text-base font-black leading-none text-right ${t.isCancelled ? 'line-through' : ''}`}>{formatCurrency(t.grandTotal || t.total)}</p>
                                     
-                                    {t.type === 'income' && t.actualSettledAmt !== undefined && Math.abs((t.grandTotal || t.total) - t.actualSettledAmt) > 0.01 && (
-                                        (t.grandTotal || t.total) > t.actualSettledAmt ? (
-                                            <div className="text-[9px] text-rose-600 font-bold mt-1.5 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-rose-100 cursor-pointer hover:bg-rose-50 transition-colors" title="คลิกเพื่อดูบิลปรับปรุง" onClick={() => setSearchTerm(t.orderId || t.sysDocId)}>
-                                                <AlertTriangle size={10}/> หายไป {formatCurrency((t.grandTotal || t.total) - t.actualSettledAmt)}
+                                    {t.type === 'income' && t.actualSettledAmt !== undefined && !t.isCancelled && (
+                                        <div className="mt-1.5 pt-1.5 border-t border-emerald-200/50 flex flex-col items-end gap-1 w-full min-w-[140px]">
+                                            {t.platformFee > 0 && (
+                                                <div className="text-[9px] text-rose-500 font-bold flex justify-between w-full gap-2">
+                                                    <span>หัก ค่าธรรมเนียม:</span>
+                                                    <span>-{formatCurrency(t.platformFee)}</span>
+                                                </div>
+                                            )}
+                                            <div className="text-[10px] text-emerald-700 font-black flex justify-between w-full gap-2 bg-emerald-100/50 px-1.5 py-1 rounded shadow-sm border border-emerald-200" title="ยอดเงินโอนเข้าบัญชีสุทธิ">
+                                                <span className="flex items-center gap-1"><Wallet size={10}/> โอนเข้าจริง:</span>
+                                                <span>{formatCurrency(t.actualSettledAmt)}</span>
                                             </div>
-                                        ) : (
-                                            <div className="text-[9px] text-emerald-700 font-bold mt-1.5 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-emerald-100 cursor-pointer hover:bg-emerald-50 transition-colors" title="คลิกเพื่อดูบิลปรับปรุง" onClick={() => setSearchTerm(t.orderId || t.sysDocId)}>
-                                                <ArrowUp size={10}/> ได้เพิ่ม {formatCurrency(t.actualSettledAmt - (t.grandTotal || t.total))}
-                                            </div>
-                                        )
+                                        </div>
                                     )}
                                     
                                     {t.type === 'expense' && t.isFromReconciliation && (
                                         <div className="text-[9px] text-rose-600 font-bold mt-1.5 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-rose-100 cursor-pointer hover:bg-rose-50 transition-all" title="คลิกเพื่อเทียบกับออเดอร์ต้นฉบับ" onClick={() => {setSearchTerm(t.linkedOrderNo); setHistType('all');}}>
-                                            <ArrowRightLeft size={10}/> ขาดทุน (อ้างอิง: {t.linkedOrderNo})
+                                            <ArrowRightLeft size={10}/> อ้างอิง: {t.linkedOrderNo}
                                         </div>
                                     )}
                                     {t.type === 'income' && t.isFromReconciliation && (
                                         <div className="text-[9px] text-emerald-600 font-bold mt-1.5 flex items-center justify-end gap-1 bg-white px-2 py-1 rounded-md shadow-sm border border-emerald-100 cursor-pointer hover:bg-emerald-50 transition-all" title="คลิกเพื่อเทียบกับออเดอร์ต้นฉบับ" onClick={() => {setSearchTerm(t.linkedOrderNo); setHistType('all');}}>
-                                            <ArrowRightLeft size={10}/> ได้เพิ่ม (อ้างอิง: {t.linkedOrderNo})
+                                            <ArrowRightLeft size={10}/> อ้างอิง: {t.linkedOrderNo}
                                         </div>
                                     )}
                                 </div>
