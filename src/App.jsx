@@ -6465,7 +6465,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [viewItem, setViewItem] = useState(null);
   const [cancelConfirmId, setCancelConfirmId] = useState(null); // แก้ไขชื่อ State สำหรับยกเลิกรายการ
   const [hardDeleteConfirmId, setHardDeleteConfirmId] = useState(null); // NEW: State สำหรับลบถาวร
-  const [showBulkHardDeleteConfirm, setShowBulkHardDeleteConfirm] = useState(false); // --- NEW: State สำหรับยืนยันลบถาวรแบบกลุ่ม ---
   const [showPartnerModal, setShowPartnerModal] = useState(false);
   const [showStockSelectModal, setShowStockSelectModal] = useState(false);
   const [stockSearchTerm, setStockSearchTerm] = useState('');
@@ -6621,6 +6620,12 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [showDiscrepancyOnly, setShowDiscrepancyOnly] = useState(false); // NEW: กรองเฉพาะยอดที่หายไป
   const [histPaymentStatus, setHistPaymentStatus] = useState('all'); // NEW: Payment status filter
   const histItemsPerPage = 20;
+  
+  // --- 🔥 NEW: State สำหรับระบบ ลบถาวรแบบกลุ่ม (Bulk Hard Delete) ของหน้าบันทึกขาย ---
+  const [selectedDocIds, setSelectedDocIds] = useState([]);
+  const [showBulkHardDeleteConfirm, setShowBulkHardDeleteConfirm] = useState(false);
+  const [isBulkProcessing, setIsBulkProcessing] = useState(false);
+  const [bulkStatus, setBulkStatus] = useState({ current: 0, total: 0, message: '' });
   
   const [isOcrProcessing, setIsOcrProcessing] = useState(false);
   const ocrInputRef = useRef(null);
@@ -7826,6 +7831,109 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const histTotalPages = Math.max(1, Math.ceil(filteredHistory.length / histItemsPerPage));
   const currentHistData = filteredHistory.slice((histPage - 1) * histItemsPerPage, histPage * histItemsPerPage);
 
+  // --- 🔥 NEW: ฟังก์ชันเลือกรายการ และ ลบถาวรแบบกลุ่ม (Bulk Hard Delete) ---
+  const toggleSelectAll = (e) => {
+      if (e.target.checked) {
+          setSelectedDocIds(filteredHistory.map(d => d.id));
+      } else {
+          setSelectedDocIds([]);
+      }
+  };
+
+  const toggleSelectDoc = (id) => {
+      setSelectedDocIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const executeBulkHardDelete = async () => {
+      setShowBulkHardDeleteConfirm(false);
+      const docsToDelete = filteredHistory.filter(d => selectedDocIds.includes(d.id));
+      if (docsToDelete.length === 0) return;
+
+      setIsBulkProcessing(true);
+      try {
+          let batchWriter = writeBatch(dbInstance);
+          let opsCount = 0;
+          let processedCount = 0;
+
+          const checkAndCommit = async () => {
+              if (opsCount >= 300) {
+                  await batchWriter.commit();
+                  batchWriter = writeBatch(dbInstance);
+                  opsCount = 0;
+              }
+          };
+
+          const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+
+          for (let i = 0; i < docsToDelete.length; i++) {
+              const target = docsToDelete[i];
+              setBulkStatus({ current: i + 1, total: docsToDelete.length, message: `กำลังลบรายการ ${target.sysDocId || target.orderId || target.id}...` });
+
+              // 1. Delete Drive File (ถ้ามีแนบไว้)
+              if (target.attachmentUrl && webhookUrl) {
+                  try {
+                      await fetch(webhookUrl, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                          body: JSON.stringify({ action: 'delete', fileUrl: target.attachmentUrl })
+                      });
+                  } catch (e) { console.warn("Drive Delete Error:", e); }
+              }
+
+              const collName = target.type === 'income' ? 'transactions_income' : 'transactions_expense';
+              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', collName, target.id));
+              opsCount++;
+
+              // 2. คืนสต็อกเฉพาะรายการที่ยังไม่ได้ถูกยกเลิก
+              if (!target.isCancelled) {
+                  if (target.type === 'expense') {
+                      const associatedLots = stockBatches.filter(b => b.parentExpenseId === target.id);
+                      associatedLots.forEach(lot => {
+                          if (lot?.id) {
+                              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
+                              opsCount++;
+                          }
+                      });
+                  } else if (target.type === 'income') {
+                      if (target.items) {
+                          for (const item of target.items) {
+                              let toReturn = Number(item.qty);
+                              if (isNaN(toReturn) || toReturn <= 0) continue;
+
+                              const affectedLots = stockBatches
+                                  .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
+                                  .sort(sortNewestFirst);
+
+                              for (const lot of affectedLots) {
+                                  if (toReturn <= 0) break;
+                                  if (!lot?.id) continue;
+                                  const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                                  batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                                  opsCount++;
+                                  toReturn -= canTakeBack;
+                              }
+                          }
+                      }
+                  }
+              }
+
+              await checkAndCommit();
+              processedCount++;
+          }
+
+          if (opsCount > 0) {
+              await batchWriter.commit();
+          }
+
+          showToast(`ลบข้อมูลถาวรและคืนสต็อกสำเร็จ ${processedCount} รายการ`, "success");
+          setSelectedDocIds([]);
+      } catch (e) {
+          console.error("Bulk Hard Delete Error:", e);
+          showToast(`เกิดข้อผิดพลาดในการลบข้อมูล: ${e.message}`, "error");
+      }
+      setIsBulkProcessing(false);
+  };
+
   const expenseSummary = useMemo(() => {
     let explicitExpenseTotal = 0;
     let platformFeeTotal = 0;
@@ -8771,11 +8879,32 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               </div>
           </div>
 
+          {/* --- 🔥 NEW: แถบเครื่องมือลบแบบกลุ่ม (จะโชว์เมื่อมีการติ๊กเลือกรายการ) --- */}
+          {selectedDocIds.length > 0 && (
+              <div className="bg-rose-50 border border-rose-100 p-3 rounded-2xl flex flex-wrap justify-between items-center animate-fadeIn gap-4">
+                  <span className="text-sm font-bold text-rose-800 ml-2">เลือกแล้ว {selectedDocIds.length} รายการ</span>
+                  <div className="flex flex-wrap gap-2">
+                      <button onClick={() => setShowBulkHardDeleteConfirm(true)} disabled={isBulkProcessing} className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1 disabled:opacity-50">
+                          <Trash2 size={14}/> ลบถาวรทั้งหมด
+                      </button>
+                  </div>
+              </div>
+          )}
+
           <div className="bg-white rounded-[32px] border shadow-sm overflow-hidden text-left flex flex-col flex-1">
             <div className="overflow-x-auto text-left flex-1 custom-scrollbar">
                 <table className="w-full text-sm text-left">
                     <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-400 text-left sticky top-0 z-10 border-b">
                         <tr>
+                            {/* --- 🔥 NEW: หัวตาราง Checkbox สำหรับเลือกทั้งหมด --- */}
+                            <th className="p-5 w-12 text-center border-b">
+                                <input 
+                                    type="checkbox" 
+                                    className="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                                    onChange={toggleSelectAll} 
+                                    checked={selectedDocIds.length > 0 && selectedDocIds.length === filteredHistory.length} 
+                                />
+                            </th>
                             <th className="p-5 text-left">วันที่ / ช่องทาง</th>
                             <th className="p-5 text-left">รายการ/เลขที่อ้างอิง</th>
                             <th className="p-5 text-left">คู่ค้า</th>
@@ -8786,6 +8915,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     <tbody className="divide-y divide-slate-50 text-left">
                         {currentHistData.length > 0 ? currentHistData.map((t, idx) => (
                         <tr key={t.id ? `${t.type}-${t.id}` : `hist-${idx}`} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : (t.isReturned || t.refundAmount > 0) ? 'bg-pink-50/40 hover:bg-pink-50' : 'hover:bg-slate-50/80'}`}>
+                            {/* --- 🔥 NEW: คอลัมน์ Checkbox สำหรับเลือกทีละรายการ --- */}
+                            <td className="p-4 text-center align-top">
+                                <input 
+                                    type="checkbox" 
+                                    className="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                                    checked={selectedDocIds.includes(t.id)} 
+                                    onChange={() => toggleSelectDoc(t.id)} 
+                                />
+                            </td>
+                            
                             {/* 1. วันที่ / ช่องทาง */}
                             <td className="p-4 align-top w-48">
                                 <div className="flex flex-col gap-2.5">
@@ -9208,6 +9347,42 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         </div>
       )}
 
+      {/* --- 🔥 NEW: Bulk Hard Delete Confirm Modal --- */}
+      {showBulkHardDeleteConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+                <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
+                    <Trash2 size={32}/>
+                </div>
+                <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันลบข้อมูลถาวร {selectedDocIds.length} รายการ?</h3>
+                <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
+                    ระบบจะลบข้อมูลที่เลือกออกจากฐานข้อมูลอย่างถาวร<br/>
+                    และจะทำการคืนยอดสต็อกสินค้าให้โดยอัตโนมัติ (ถ้ามียอดตัดไป)<br/>
+                    <span className="font-bold text-rose-600">*การกระทำนี้ไม่สามารถย้อนกลับได้</span>
+                </p>
+                <div className="flex gap-3 text-center">
+                    <button onClick={() => setShowBulkHardDeleteConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ยกเลิก</button>
+                    <button onClick={executeBulkHardDelete} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center hover:bg-rose-700 transition-colors">ยืนยันลบถาวร</button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* --- 🔥 NEW: Bulk Processing Status Modal --- */}
+      {isBulkProcessing && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+            <div className="bg-white rounded-[40px] p-10 max-w-sm w-full shadow-2xl flex flex-col items-center text-center">
+                <Loader className="animate-spin text-rose-600 mb-6" size={48} />
+                <h3 className="text-2xl font-black mb-2 text-slate-800">กำลังประมวลผล...</h3>
+                <p className="text-sm font-bold text-rose-600 bg-rose-50 px-4 py-1.5 rounded-full mb-4">
+                    รายการที่ {bulkStatus.current} จาก {bulkStatus.total}
+                </p>
+                <p className="text-xs text-slate-500">{bulkStatus.message}</p>
+                <p className="text-[10px] text-rose-500 font-bold mt-4">กรุณารอสักครู่ ห้ามปิดหน้าต่างนี้</p>
+            </div>
+        </div>
+      )}
+
       {/* Smart Edit Confirm Modal */}
       {confirmSmartEditMatch && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
@@ -9337,6 +9512,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [cancelConfirmId, setCancelConfirmId] = useState(null);
   const [hardDeleteInvoiceId, setHardDeleteInvoiceId] = useState(null);
   const [historyFilter, setHistoryFilter] = useState('all');
+
+  const [showBulkHardDeleteConfirm, setShowBulkHardDeleteConfirm] = useState(false); // --- NEW: State สำหรับลบถาวรแบบกลุ่ม ---
 
   const [isAnalyzingDocs, setIsAnalyzingDocs] = useState(false);
   const [docTeamAnalysis, setDocTeamAnalysis] = useState([]);
@@ -9953,7 +10130,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       setIsBulkProcessing(false);
   };
 
-  // --- NEW: ฟังก์ชันลบถาวรแบบกลุ่ม (Bulk Hard Delete) ---
+  // --- NEW: ฟังก์ชันลบถาวรแบบกลุ่ม (Bulk Hard Delete) สำหรับหน้าใบกำกับภาษี ---
   const executeBulkHardDelete = async () => {
       setShowBulkHardDeleteConfirm(false);
       const docsToDelete = combinedDocs.filter(d => selectedDocIds.includes(d.id));
@@ -9999,7 +10176,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                       const isExpenseType = target.docType === 'payment_voucher';
                       const collName = isExpenseType ? 'transactions_expense' : 'transactions_income';
                       
-                      // Unlink Invoice No จากออเดอร์ต้นทาง (ใช้ทั้ง OrderID และ SysDocID เผื่อไว้)
+                      // Unlink Invoice No จากออเดอร์ต้นทาง
                       const linkedTransQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', collName), where('sysDocId', '==', target.orderId)));
                       linkedTransQuery.docs.forEach(tDoc => {
                           batchWriter.set(tDoc.ref, { invoiceNo: null, isInvoiced: false }, { merge: true });
@@ -11047,7 +11224,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           </div>
         </div>
       )}
-      
+
       {/* --- NEW: Bulk Hard Delete Confirm Modal --- */}
       {showBulkHardDeleteConfirm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
@@ -11068,7 +11245,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           </div>
         </div>
       )}
-
+      
       {/* Bulk Issue Modal */}
       {showBulkIssueModal && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
