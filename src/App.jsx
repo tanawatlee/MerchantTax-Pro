@@ -6664,6 +6664,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [histType, setHistType] = useState('all');
   const [histStartDate, setHistStartDate] = useState('');
   const [histEndDate, setHistEndDate] = useState('');
+  const [histChannel, setHistChannel] = useState('all'); // NEW: ตัวกรองช่องทาง
+  const [histShop, setHistShop] = useState('all'); // NEW: ตัวกรองร้านค้า
   const [histPage, setHistPage] = useState(1);
   const [showDiscrepancyOnly, setShowDiscrepancyOnly] = useState(false); // NEW: กรองเฉพาะยอดที่หายไป
   const [histPaymentStatus, setHistPaymentStatus] = useState('all'); // NEW: Payment status filter
@@ -7843,6 +7845,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             end.setHours(23,59,59,999);
             if (d > end) return false;
         }
+        
+        // 3.5. Channel & Shop Filter (NEW)
+        if (histChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== histChannel.toUpperCase()) return false;
+        if (histShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(histShop).toLowerCase()) return false;
 
         // 4. Discrepancy Filter (กรองเฉพาะรายการที่เงินหาย/ส่วนต่าง)
         if (showDiscrepancyOnly) {
@@ -7860,10 +7866,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
         return true;
     }).map(t => ({ ...t, issuedDocs: docStatusMap[t.orderId] || [] })).sort(sortNewestFirst);
-  }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus]);
+  }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histChannel, histShop]);
 
   // Reset page when filters change
-  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus]);
+  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histChannel, histShop]);
 
   // History Quick Stats
   const histStats = useMemo(() => {
@@ -8862,43 +8868,93 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       ) : (
         <div className="space-y-6 text-left animate-fadeIn h-full flex flex-col">
           
-          {/* Top Filter & Search Row */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4">
-             <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full xl:w-auto">
-                 <div className="relative w-full md:w-80 text-left shrink-0">
+          {/* Top Filter & Search Row (2 Rows Layout) */}
+          <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4">
+             {/* Row 1: Search & Main Toggles */}
+             <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 w-full">
+                 <div className="relative w-full xl:w-96 text-left shrink-0">
                      <Search className="absolute left-4 top-3 text-slate-400 text-center" size={18}/>
                      <input className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-11 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-100 outline-none transition-all shadow-sm text-left" placeholder="ค้นหา: ชื่อ, เลขระบบ, Order ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
                  </div>
-                 <div className="flex bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto">
-                    <button onClick={() => setHistType('all')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${histType === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ทั้งหมด</button>
-                    <button onClick={() => setHistType('income')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${histType === 'income' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายรับ</button>
-                    <button onClick={() => setHistType('expense')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${histType === 'expense' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายจ่าย</button>
+                 <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto">
+                     <div className="flex bg-slate-100 p-1.5 rounded-xl overflow-x-auto">
+                        <button onClick={() => setHistType('all')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${histType === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ทั้งหมด</button>
+                        <button onClick={() => setHistType('income')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${histType === 'income' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายรับ</button>
+                        <button onClick={() => setHistType('expense')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${histType === 'expense' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายจ่าย</button>
+                     </div>
+                     <button 
+                        onClick={() => setShowDiscrepancyOnly(!showDiscrepancyOnly)} 
+                        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1.5 shrink-0 ${showDiscrepancyOnly ? 'bg-rose-500 text-white shadow-md shadow-rose-200' : 'bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-100'}`}
+                     >
+                        <AlertTriangle size={14}/> ตรวจสอบยอดดิฟ (หาย)
+                     </button>
                  </div>
-                 <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-xl border border-slate-200 shrink-0">
+             </div>
+
+             {/* Row 2: Secondary Filters (Shop, Channel, Month, Payment Status) */}
+             <div className="flex flex-wrap items-center gap-3 w-full border-t border-slate-100 pt-4">
+                 {/* Shop */}
+                 <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
+                    <Store size={14} className="text-slate-400 shrink-0"/>
+                    <select value={histShop} onChange={e=>setHistShop(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:ring-0 p-0">
+                        <option value="all">ทุกร้านค้า</option>
+                        {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                 </div>
+                 
+                 {/* Channel */}
+                 <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
+                    <Filter size={14} className="text-slate-400 shrink-0"/>
+                    <select value={histChannel} onChange={e=>setHistChannel(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:ring-0 p-0">
+                        <option value="all">ทุกช่องทาง</option>
+                        {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
+                        <option value="IMPORTED">IMPORTED</option>
+                    </select>
+                 </div>
+
+                 {/* Month / Date Range */}
+                 <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200 shrink-0 flex-wrap">
                       <Calendar size={14} className="text-slate-400 ml-2 shrink-0"/>
-                      <input type="date" value={histStartDate} onChange={e=>setHistStartDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0" placeholder="Start Date"/>
-                      <span className="text-slate-300"><ArrowRight size={12}/></span>
-                      <input type="date" value={histEndDate} onChange={e=>setHistEndDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0" placeholder="End Date"/>
+                      <input 
+                          type="month" 
+                          value={(() => {
+                              if (histStartDate && histEndDate) {
+                                  const s = new Date(histStartDate);
+                                  const e = new Date(histEndDate);
+                                  if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
+                                      return `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}`;
+                                  }
+                              }
+                              return '';
+                          })()}
+                          onChange={e => {
+                              const val = e.target.value;
+                              if (!val) { setHistStartDate(''); setHistEndDate(''); return; }
+                              const [year, month] = val.split('-');
+                              setHistStartDate(formatDateISO(new Date(year, month - 1, 1)));
+                              setHistEndDate(formatDateISO(new Date(year, month, 0)));
+                          }}
+                          className="bg-white border border-slate-200 rounded-md text-xs font-bold outline-none text-indigo-700 cursor-pointer focus:ring-1 focus:ring-indigo-200 px-1"
+                          title="เลือกทั้งเดือน"
+                      />
+                      <span className="text-slate-300 mx-1">|</span>
+                      <input type="date" value={histStartDate} onChange={e=>setHistStartDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-24 cursor-pointer focus:ring-0 p-0" placeholder="Start Date"/>
+                      <span className="text-slate-300"><ArrowRight size={10}/></span>
+                      <input type="date" value={histEndDate} onChange={e=>setHistEndDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-24 cursor-pointer focus:ring-0 p-0" placeholder="End Date"/>
                       {(histStartDate || histEndDate) && (
                           <button onClick={()=>{setHistStartDate(''); setHistEndDate('');}} className="p-1 text-slate-400 hover:text-rose-500 mr-1"><X size={14}/></button>
                       )}
                  </div>
-                 {/* NEW: Payment Status Filter */}
+                 
+                 {/* Payment Status */}
                  <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
                     <CreditCard size={14} className="text-slate-400 shrink-0"/>
-                    <select value={histPaymentStatus} onChange={e=>setHistPaymentStatus(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:ring-0">
+                    <select value={histPaymentStatus} onChange={e=>setHistPaymentStatus(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:ring-0 p-0">
                         <option value="all">ทุกสถานะชำระเงิน</option>
                         <option value="paid">ชำระแล้ว</option>
                         <option value="unpaid">ค้างชำระ</option>
                     </select>
                  </div>
-                 {/* NEW: Toggle button for Auditing Discrepancies */}
-                 <button 
-                    onClick={() => setShowDiscrepancyOnly(!showDiscrepancyOnly)} 
-                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1.5 shrink-0 ${showDiscrepancyOnly ? 'bg-rose-500 text-white shadow-md shadow-rose-200' : 'bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-100'}`}
-                 >
-                    <AlertTriangle size={14}/> ตรวจสอบยอดดิฟ (หาย)
-                 </button>
              </div>
           </div>
 
