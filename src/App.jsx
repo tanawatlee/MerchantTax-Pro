@@ -186,27 +186,39 @@ const sortOldestFirst = (a, b) => {
 };
 
 const generateNextDocId = (items, prefix, field) => {
-  const max = items.reduce((m, item) => {
-    if (item[field] && item[field].startsWith(prefix)) {
-      const num = parseInt(item[field].replace(prefix, ''), 10);
-      return !isNaN(num) && num > m ? num : m;
+  const nums = items.reduce((acc, item) => {
+    if (item[field] && String(item[field]).startsWith(prefix)) {
+      const num = parseInt(String(item[field]).replace(prefix, ''), 10);
+      if (!isNaN(num)) acc.push(num);
     }
-    return m;
-  }, 0);
-  return `${prefix}${String(max + 1).padStart(5, '0')}`;
+    return acc;
+  }, []).sort((a, b) => a - b);
+
+  let nextNum = 1;
+  for (const n of nums) {
+    if (n === nextNum) nextNum++;
+    else if (n > nextNum) break;
+  }
+  return `${prefix}${String(nextNum).padStart(5, '0')}`;
 };
 
 const generateDateBasedDocId = (items, prefix, dateInput, field) => {
   const dateStr = formatDateISO(dateInput).replace(/-/g, '');
   const fullPrefix = `${prefix}${dateStr}-`;
-  const max = items.reduce((m, item) => {
+  const nums = items.reduce((acc, item) => {
     if (item[field] && String(item[field]).startsWith(fullPrefix)) {
       const num = parseInt(String(item[field]).replace(fullPrefix, ''), 10);
-      return !isNaN(num) && num > m ? num : m;
+      if (!isNaN(num)) acc.push(num);
     }
-    return m;
-  }, 0);
-  return `${fullPrefix}${String(max + 1).padStart(5, '0')}`;
+    return acc;
+  }, []).sort((a, b) => a - b);
+
+  let nextNum = 1;
+  for (const n of nums) {
+    if (n === nextNum) nextNum++;
+    else if (n > nextNum) break;
+  }
+  return `${fullPrefix}${String(nextNum).padStart(5, '0')}`;
 };
 
 const THBText = (amount) => {
@@ -726,6 +738,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     let perfFees = 0;
     let perfExp = 0;
     let perfBuyerShipping = 0; 
+    let lostGmv = 0; // NEW: ตัวแปรเก็บยอดสูญเสีย/ตีกลับ
 
     let cashSettled = 0;
     let cashPending = 0;
@@ -761,7 +774,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
             const itemSubtotal = (t.items || []).reduce((itemSum, item) => itemSum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
             const discount = Number(t.couponDiscount || 0) + Number(t.refundAmount || 0) + Number(t.cashCoupon || 0);
             
-            if (!t.isCancelled) {
+            if (!t.isCancelled && !t.isDeliveryFailed) {
                 const trueNetSales = itemSubtotal - discount + ship;
                 const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total);
                 
@@ -775,6 +788,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     perfFees += fee;
                     perfCogs += cogs;
                     perfBuyerShipping += ship;
+                    lostGmv += Number(t.refundAmount || 0); // NEW: บวกยอดคืนเงินบางส่วนเข้าเป็นยอดสูญเสีย
                 }
 
                 if (matchSettleMonth && (t.paymentStatus === 'settled' || t.status === 'paid')) {
@@ -785,8 +799,11 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     cashGrossSales += Math.max(0, itemSubtotal - Number(t.refundAmount || 0)); 
                 }
             } else {
-                if (matchOrderMonth && fee > 0) {
-                    perfFees += fee;
+                if (matchOrderMonth) {
+                    lostGmv += itemSubtotal; // NEW: ถ้ายกเลิก/ตีกลับ ให้นำยอดขายเต็มจำนวนไปเป็น Lost GMV
+                    if (fee > 0) {
+                        perfFees += fee;
+                    }
                 }
                 
                 const cancelSettleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.cancelledAt ? normalizeDate(t.cancelledAt) : orderD);
@@ -844,7 +861,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
         .reduce((sum, b) => sum + (Number(b.quantity) * Number(b.costPerUnit)), 0);
 
     return { 
-        perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: perfSales - perfCogs - perfFees - perfExp, buyerShipping: perfBuyerShipping },
+        perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: perfSales - perfCogs - perfFees - perfExp, buyerShipping: perfBuyerShipping, netSales: perfSales - perfBuyerShipping, lostGmv },
         cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt, cogs: cashCogs, grossSales: cashGrossSales }
     };
   }, [transactions, stockBatches, selectedChannel, selectedShop, selectedMonth]);
@@ -1113,6 +1130,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
                     <StatCard title="ยอดขายรวม (Sales)" value={analytics.perf.sales} color="indigo" icon={<TrendingUp />} subtitle="รายรับรวมตามวันที่ลูกค้าสั่งซื้อ" />
                     <StatCard title="รายจ่าย (Expense)" value={analytics.perf.expense} color="rose" icon={<TrendingDown />} subtitle="ค่าใช้จ่ายตามวันที่เกิดรายการ" />
+                    <StatCard title="สูญเสีย/ตีกลับ (Lost GMV)" value={analytics.perf.lostGmv} color="amber" icon={<AlertTriangle />} subtitle="ยอดขายที่ถูกยกเลิก/คืนเงิน" />
                     <StatCard title="กำไรสุทธิ (Net Profit)" value={analytics.perf.netProfit} color="emerald" icon={<ProfitIcon />} subtitle="หักต้นทุนและค่าธรรมเนียมแพลตฟอร์ม" />
                 </div>
 
@@ -2443,16 +2461,21 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const dateStr = formatDateISO(dateObj).replace(/-/g, '');
           const fullPrefix = `${basePrefix}${dateStr}-`;
           if (docCounters[fullPrefix] === undefined) {
-              docCounters[fullPrefix] = transactions.filter(t => t.type === type).reduce((m, t) => {
-                  if (t.sysDocId && t.sysDocId.startsWith(fullPrefix)) {
+              const usedNums = new Set();
+              transactions.forEach(t => {
+                  if (t.type === type && t.sysDocId && t.sysDocId.startsWith(fullPrefix)) {
                       const num = parseInt(t.sysDocId.replace(fullPrefix, ''), 10);
-                      return !isNaN(num) && num > m ? num : m;
+                      if (!isNaN(num)) usedNums.add(num);
                   }
-                  return m;
-              }, 0);
+              });
+              docCounters[fullPrefix] = usedNums;
           }
-          docCounters[fullPrefix]++;
-          return `${fullPrefix}${String(docCounters[fullPrefix]).padStart(5, '0')}`;
+          let nextNum = 1;
+          while (docCounters[fullPrefix].has(nextNum)) {
+              nextNum++;
+          }
+          docCounters[fullPrefix].add(nextNum);
+          return `${fullPrefix}${String(nextNum).padStart(5, '0')}`;
       };
 
       if (importMode === 'update_settled') {
@@ -5772,6 +5795,38 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     }).sort(sortOldestFirst); // --- FIX: เรียงลำดับจากเก่าไปใหม่ (วันที่ 1 อยู่บนสุด) ตามหลักบัญชี ---
   }, [transactions, startDate, endDate, selectedBranch]);
 
+  // --- NEW: กรองรายการยกเลิก/ตีกลับ/คืนเงิน (Cancellations Report) ---
+  const filteredCancellations = useMemo(() => {
+    return transactions.filter(t => {
+      if (t.type !== 'income') return false;
+      if (!t.isCancelled && !t.isDeliveryFailed && !(Number(t.refundAmount) > 0)) return false;
+
+      const d = normalizeDate(t.date);
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      start.setHours(0,0,0,0);
+      end.setHours(23,59,59,999);
+      const dateMatch = d >= start && d <= end;
+      const branchMatch = selectedBranch === 'all' || selectedBranch === '00000';
+      
+      return dateMatch && branchMatch;
+    }).sort(sortOldestFirst);
+  }, [transactions, startDate, endDate, selectedBranch]);
+
+  // --- NEW: คำนวณยอดรวมของรายการที่ยกเลิก/ตีกลับ ---
+  const cancelFooter = useMemo(() => {
+    const toFixedNum = (num) => Number(Number(num).toFixed(2));
+    return filteredCancellations.reduce((acc, t) => {
+        const itemSubtotal = (t.items || []).reduce((sum, item) => sum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
+        const lost = (t.isCancelled || t.isDeliveryFailed) ? itemSubtotal : Number(t.refundAmount || 0);
+        const fee = Number(t.platformFee || 0);
+        return { 
+            lostGmv: acc.lostGmv + toFixedNum(lost), 
+            wastedFee: acc.wastedFee + toFixedNum(fee) 
+        };
+    }, { lostGmv: 0, wastedFee: 0 });
+  }, [filteredCancellations]);
+
   const filteredMovement = useMemo(() => {
     const movements = [];
     const start = new Date(startDate);
@@ -6098,6 +6153,24 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         m.issueQty > 0 ? m.issueQty : '-', m.issueTotal > 0 ? toFixedNum(m.issueTotal) : '-',
         m.balanceQty, toFixedNum(m.balanceTotal)
       ])];
+    } else if (reportTab === 'cancellations') {
+      fileName = `Cancelled_Returned_Report_${startDate}.xlsx`;
+      const tableHeader = ["ลำดับ", "วันที่", "Order ID", "ชื่อลูกค้า (ช่องทาง)", "รายการสินค้า", "สถานะ/สาเหตุ", "ยอดสูญเสีย (Lost GMV)", "ค่าธรรมเนียมเสียฟรี"];
+      const body = filteredCancellations.map((t, i) => {
+          const itemSubtotal = (t.items || []).reduce((sum, item) => sum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
+          const lost = (t.isCancelled || t.isDeliveryFailed) ? itemSubtotal : Number(t.refundAmount || 0);
+          const fee = Number(t.platformFee || 0);
+          const itemsStr = (t.items || []).map(it => it.desc).join(', ');
+          let reason = '';
+          if (t.isCancelled) reason = 'ยกเลิกคำสั่งซื้อ';
+          if (t.isDeliveryFailed) reason = (reason ? reason + ' / ' : '') + 'จัดส่งไม่สำเร็จ/ตีกลับ';
+          if (t.refundAmount > 0) reason = (reason ? reason + ' / ' : '') + 'คืนเงิน/คืนสินค้า';
+          if (t.cancelReason) reason += ` (${t.cancelReason})`;
+
+          return [ i + 1, formatDate(t.date), t.orderId || t.sysDocId || '-', `${t.partnerName || 'ลูกค้าทั่วไป'} (${t.channel || 'หน้าร้าน'})`, itemsStr, reason, toFixedNum(lost), toFixedNum(fee) ];
+      });
+      const footer = [ "รวมทั้งสิ้น", "", "", "", "", "", toFixedNum(cancelFooter.lostGmv), toFixedNum(cancelFooter.wastedFee) ];
+      dataRows = [...headerRows, tableHeader, ...body, footer];
     }
 
     try {
@@ -6218,6 +6291,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         <TabBtn id="sales" label="ภาษีขาย (Sales Tax)" icon={<FileText size={18}/>} />
         <TabBtn id="purchase" label="ภาษีซื้อ (Purchase Tax)" icon={<ShoppingCart size={18}/>} />
         <TabBtn id="inventory" label="คุมสินค้า (Stock)" icon={<Box size={18}/>} />
+        <TabBtn id="cancellations" label="รายการยกเลิก/ตีกลับ" icon={<FileMinus size={18}/>} />
         <TabBtn id="pp30" label="สรุป ภ.พ.30" icon={<Calculator size={18}/>} />
         <TabBtn id="pit90" label="ภ.ง.ด. 90/94 (บุคคลธรรมดา)" icon={<User size={18}/>} />
       </div>
@@ -6360,6 +6434,65 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
               </tbody>
               {filteredMovement.length === 0 && (
                 <tbody><tr><td colSpan="9" className="p-10 text-center text-slate-400 font-bold">ไม่พบความเคลื่อนไหวในช่วงเวลานี้</td></tr></tbody>
+              )}
+            </table>
+          )}
+
+          {reportTab === 'cancellations' && (
+            <table className="w-full text-sm text-left">
+              <thead className="bg-white text-slate-400 text-[10px] font-bold uppercase sticky top-0 border-b z-10 text-left">
+                <tr>
+                  <th className="p-5 text-left">วันที่</th>
+                  <th className="p-5 text-left">Order ID</th>
+                  <th className="p-5 text-left">ชื่อลูกค้า (ช่องทาง)</th>
+                  <th className="p-5 text-left">รายการสินค้า</th>
+                  <th className="p-5 text-left">สถานะ / สาเหตุ</th>
+                  <th className="p-5 text-right text-amber-600 bg-amber-50/50">ยอดสูญเสีย (Lost GMV)</th>
+                  <th className="p-5 text-right text-rose-600 bg-rose-50/50">ค่าธรรมเนียมเสียฟรี</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 text-left">
+                {filteredCancellations.map((row, i) => {
+                  const itemSubtotal = (row.items || []).reduce((sum, item) => sum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
+                  const lost = (row.isCancelled || row.isDeliveryFailed) ? itemSubtotal : Number(row.refundAmount || 0);
+                  const fee = Number(row.platformFee || 0);
+                  
+                  let reason = '';
+                  if (row.isCancelled) reason = 'ยกเลิกคำสั่งซื้อ';
+                  if (row.isDeliveryFailed) reason = (reason ? reason + ' / ' : '') + 'จัดส่งไม่สำเร็จ/ตีกลับ';
+                  if (row.refundAmount > 0) reason = (reason ? reason + ' / ' : '') + 'คืนเงิน/คืนสินค้า';
+
+                  return (
+                    <tr key={i} className="hover:bg-slate-50/80 transition-colors text-left">
+                      <td className="p-5 text-xs text-slate-500 whitespace-nowrap text-left">{formatDate(row.date)}</td>
+                      <td className="p-5 font-mono text-xs font-bold text-indigo-600 text-left">{row.orderId || row.sysDocId || '-'}</td>
+                      <td className="p-5 text-left">
+                        <p className="font-bold text-left">{row.partnerName || 'ลูกค้าทั่วไป'}</p>
+                        <p className="text-[10px] text-slate-400 text-left">CH: {row.channel || 'หน้าร้าน'}</p>
+                      </td>
+                      <td className="p-5 text-left">
+                          <p className="text-xs text-slate-600 line-clamp-2 max-w-[200px]">{row.description || (row.items || []).map(it => it.desc).join(', ')}</p>
+                      </td>
+                      <td className="p-5 text-left">
+                          <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold">{reason}</span>
+                          {row.cancelReason && <p className="text-[10px] text-slate-400 mt-1 line-clamp-1 max-w-[150px]">{row.cancelReason}</p>}
+                      </td>
+                      <td className="p-5 text-right font-black text-amber-600 bg-amber-50/20">{formatCurrency(lost)}</td>
+                      <td className="p-5 text-right font-black text-rose-600 bg-rose-50/20">{formatCurrency(fee)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              {filteredCancellations.length > 0 ? (
+                <tfoot className="bg-slate-900 text-white font-bold sticky bottom-0 text-left">
+                    <tr>
+                        <td colSpan="5" className="p-5 text-right uppercase tracking-widest text-xs opacity-60 text-right">รวมยอดสุทธิ</td>
+                        <td className="p-5 text-right text-amber-400 text-right">{formatCurrency(cancelFooter.lostGmv)}</td>
+                        <td className="p-5 text-right text-rose-400 text-right">{formatCurrency(cancelFooter.wastedFee)}</td>
+                    </tr>
+                </tfoot>
+              ) : (
+                <tbody><tr><td colSpan="7" className="p-10 text-center text-slate-400 font-bold">ไม่พบรายการยกเลิก/ตีกลับ ในช่วงเวลานี้</td></tr></tbody>
               )}
             </table>
           )}
@@ -7728,6 +7861,17 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       } else {
           dataToSave.createdAt = serverTimestamp();
       }
+
+      // --- 🔥 FIX: ป้องกัน Firebase Error ด้วยการล้างค่า undefined ออกทั้งหมด ---
+      Object.keys(dataToSave).forEach(k => { if (dataToSave[k] === undefined) delete dataToSave[k]; });
+      delete dataToSave.id; // ห้ามเซฟ ID ทับลงไปในฟิลด์ข้อมูล
+      if (dataToSave.items) {
+          dataToSave.items = dataToSave.items.map(i => {
+              const cleanI = {...i};
+              Object.keys(cleanI).forEach(k => { if (cleanI[k] === undefined) delete cleanI[k]; });
+              return cleanI;
+          });
+      }
       
       const shouldAutoSavePartner = formData.partnerName && (
           formData.type === 'expense' || 
@@ -7886,16 +8030,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       });
                   }
 
-                  // คำนวณส่วนต่างของสต็อกรายรับ (ถ้ามีการแก้จำนวน/สินค้า)
+                  // --- 🔥 THE ULTIMATE FIX: แก้ไขการจัดกลุ่มคีย์ในการเช็คสต็อกให้แม่นยำ 100% ---
                   const oldItemsMap = {};
                   (originalTrans.items || []).forEach(it => {
-                      const key = it.sku || it.desc;
+                      const key = `${it.sku || '-'}::${it.desc}`;
                       oldItemsMap[key] = (oldItemsMap[key] || 0) + Number(it.qty);
                   });
 
                   const newItemsMap = {};
                   formData.items.forEach(it => {
-                      const key = it.sku || it.desc;
+                      const key = `${it.sku || '-'}::${it.desc}`;
                       newItemsMap[key] = (newItemsMap[key] || 0) + Number(it.qty);
                   });
 
@@ -7903,6 +8047,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   const stockSnap = [...stockBatches];
 
                   for (const key of allKeys) {
+                      const [targetSku, targetDesc] = key.split('::');
                       const oldQty = oldItemsMap[key] || 0;
                       const newQty = newItemsMap[key] || 0;
                       const diff = newQty - oldQty; // >0: ตัดสต็อกเพิ่ม, <0: คืนสต็อก
@@ -7910,7 +8055,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       if (diff > 0) {
                           // ต้องตัดสต็อกเพิ่ม
                           let needed = diff;
-                          const lots = stockSnap.filter(b => matchItemToBatch(key, key, b.sku, b.productName)).sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+                          const lots = stockSnap.filter(b => matchItemToBatch(targetSku, targetDesc, b.sku, b.productName)).sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
                           for (let i = 0; i < lots.length; i++) {
                               const lot = lots[i];
                               if (needed <= 0) break;
@@ -7925,9 +8070,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           }
                           if (needed > 0) {
                               const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
-                              const sellP = formData.items.find(i => (i.sku===key || i.desc===key))?.sellPrice || 0;
+                              const sellP = formData.items.find(i => ((i.sku || '-') === targetSku && i.desc === targetDesc))?.sellPrice || 0;
                               batchWriter.set(dummyRef, {
-                                  productName: key, sku: key, category: 'อื่นๆ', quantity: 0, costPerUnit: 0, sellPrice: sellP,
+                                  productName: targetDesc, sku: targetSku, category: 'อื่นๆ', quantity: 0, costPerUnit: 0, sellPrice: sellP,
                                   date: normalizeDate(formData.date) || new Date(), sold: needed, userId: user.uid, createdAt: serverTimestamp(),
                                   paymentStatus: 'paid', isAdjustment: true, adjustReason: 'สต็อกติดลบ (แก้ไขบิล)'
                               });
@@ -7935,7 +8080,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       } else if (diff < 0) {
                           // ต้องคืนสต็อก
                           let toReturn = Math.abs(diff);
-                          const affectedLots = stockSnap.filter(b => matchItemToBatch(key, key, b.sku, b.productName) && Number(b.sold) > 0).sort(sortNewestFirst);
+                          const affectedLots = stockSnap.filter(b => matchItemToBatch(targetSku, targetDesc, b.sku, b.productName) && Number(b.sold) > 0).sort(sortNewestFirst);
                           for (const lot of affectedLots) {
                               if (toReturn <= 0) break;
                               const canTakeBack = Math.min(toReturn, Number(lot.sold));
@@ -10309,17 +10454,22 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
               const fullPrefix = `${prefix}${dateStr}-`;
 
               if (counters[fullPrefix] === undefined) {
-                  counters[fullPrefix] = allInvs.reduce((max, item) => {
+                  const usedNums = new Set();
+                  allInvs.forEach(item => {
                       if (item.invNo && String(item.invNo).startsWith(fullPrefix)) {
                           const num = parseInt(String(item.invNo).replace(fullPrefix, ''), 10);
-                          return !isNaN(num) && num > max ? num : max;
+                          if (!isNaN(num)) usedNums.add(num);
                       }
-                      return max;
-                  }, 0);
+                  });
+                  counters[fullPrefix] = usedNums;
               }
 
-              counters[fullPrefix]++;
-              const newInvNo = `${fullPrefix}${String(counters[fullPrefix]).padStart(5, '0')}`;
+              let nextNum = 1;
+              while (counters[fullPrefix].has(nextNum)) {
+                  nextNum++;
+              }
+              counters[fullPrefix].add(nextNum);
+              const newInvNo = `${fullPrefix}${String(nextNum).padStart(5, '0')}`;
 
               const calc = calculateTransactionTotals(trans, bulkSettings.vatType);
               
@@ -13116,7 +13266,8 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
             orders: 0, settledOrders: 0, pendingOrders: 0, gmv: 0, discounts: 0, refunds: 0, netSales: 0,
             cogs: 0, grossProfit: 0, 
             platformFees: 0, directExp: 0, shippingBalance: 0, totalOpEx: 0,
-            netProfit: 0, buyerShipping: 0, buyerShippingDetails: [] 
+            netProfit: 0, buyerShipping: 0, buyerShippingDetails: [],
+            lostGmv: 0, wastedFee: 0 // <-- NEW: เก็บยอดสูญเสีย/ค่าธรรมเนียมเสียฟรี
         };
 
         // --- 2. กลุ่มข้อมูลกระแสเงินสดรับ (Settlement) อิงตามวันที่เงินโอนเข้า (Settled Date) ---
@@ -13164,7 +13315,10 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
             // ==========================================
             if (orderMonthStr === selectedMonth && !t.isTaxOnly) {
                 if (t.type === 'income') {
-                    if (!t.isCancelled && !t.isFromReconciliation) {
+                    const itemSubtotal = (t.items || []).reduce((sum, it) => sum + (Number(it.qty) * Number(it.sellPrice || it.price || 0)), 0);
+                    const fee = Number(t.platformFee) || 0;
+
+                    if (!t.isCancelled && !t.isDeliveryFailed && !t.isFromReconciliation) {
                         perf.orders++;
                         if (t.paymentStatus === 'settled') {
                             perf.settledOrders++;
@@ -13172,12 +13326,13 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                             perf.pendingOrders++;
                         }
                         
-                        const itemSubtotal = (t.items || []).reduce((sum, it) => sum + (Number(it.qty) * Number(it.sellPrice || it.price || 0)), 0);
                         perf.gmv += itemSubtotal;
                         
                         perf.discounts += (Number(t.couponDiscount || 0) + Number(t.cashCoupon || 0));
                         perf.refunds += Number(t.refundAmount || 0);
-                        perf.platformFees += Number(t.platformFee || 0);
+                        perf.platformFees += fee;
+                        
+                        perf.lostGmv += Number(t.refundAmount || 0); // NEW: คืนเงินบางส่วนนับเป็นยอดสูญเสีย
                         
                         const shipFeeAmt = Number(t.shippingFee || 0);
                         perf.buyerShipping += shipFeeAmt; 
@@ -13215,6 +13370,10 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                             productSales[prodKey].qty += Number(item.qty);
                             productSales[prodKey].revenue += (Number(item.qty) * Number(item.sellPrice || item.price || 0));
                         });
+                    } else if ((t.isCancelled || t.isDeliveryFailed) && !t.isFromReconciliation) {
+                        // NEW: ถ้ายกเลิก/ตีกลับ นำยอดมาคำนวณเป็นยอดสูญเสีย
+                        perf.lostGmv += itemSubtotal;
+                        perf.wastedFee += fee;
                     }
                 } else if (t.type === 'expense' && !t.isCancelled) {
                     const isLinkedToValidIncome = t.linkedOrderNo && transactions.some(inc => 
@@ -13411,6 +13570,8 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                 [],
                 ["=== ผลประกอบการ (ตามวันที่สั่งซื้อ) ==="],
                 ["ยอดสั่งซื้อรวม (GMV)", reportData.perf.gmv],
+                ["สูญเสีย/ตีกลับ (Lost GMV)", reportData.perf.lostGmv], // <-- NEW
+                ["ค่าธรรมเนียมเสียฟรี (Wasted Fee)", reportData.perf.wastedFee], // <-- NEW
                 ["ส่วนลดร้านค้า/เงินคืน", reportData.perf.discounts + reportData.perf.refunds],
                 ["ยอดขายสุทธิ (Net Sales)", reportData.perf.netSales],
                 ["ต้นทุนสินค้า (COGS)", reportData.perf.cogs],
@@ -13511,7 +13672,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                         </span>
                     </div>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                     {/* GMV */}
                     <div className="relative group cursor-help z-10 hover:z-50">
                         <div className="bg-slate-900 p-6 rounded-3xl text-white shadow-lg relative overflow-hidden h-full">
@@ -13523,6 +13684,20 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-48 p-4 bg-slate-800 border border-slate-600 text-white text-[10px] rounded-2xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none">
                             <p className="font-bold border-b border-slate-600 pb-1.5 mb-1.5 text-indigo-300">สูตร: ยอดสั่งซื้อรวม</p>
                             <p className="text-slate-300 leading-relaxed text-xs">ผลรวมราคาสินค้า x จำนวนชิ้นทั้งหมด (ยังไม่หักค่าธรรมเนียมและส่วนลดใดๆ)</p>
+                        </div>
+                    </div>
+
+                    {/* NEW: LOST GMV */}
+                    <div className="relative group cursor-help z-10 hover:z-50">
+                        <div className="bg-amber-50 p-6 rounded-3xl border border-amber-100 shadow-sm flex flex-col justify-center h-full">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-1">สูญเสีย/ตีกลับ (Lost GMV)</p>
+                            <h3 className="text-3xl font-black text-amber-600">{formatCurrency(reportData.perf.lostGmv)}</h3>
+                            <p className="text-xs font-bold text-amber-600/70 mt-2">เสียค่าธรรมเนียมฟรี {formatCurrency(reportData.perf.wastedFee)} ฿</p>
+                        </div>
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 p-4 bg-slate-800 border border-slate-600 text-white text-[10px] rounded-2xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none">
+                            <p className="font-bold border-b border-slate-600 pb-1.5 mb-1.5 text-amber-400">รายละเอียดที่สูญเสีย</p>
+                            <div className="flex justify-between mb-1"><span>ยอดขายที่ถูกยกเลิก/ตีกลับ</span><span>{formatCurrency(reportData.perf.lostGmv)}</span></div>
+                            <div className="flex justify-between text-rose-300"><span>ค่าธรรมเนียมที่เสียฟรี</span><span>{formatCurrency(reportData.perf.wastedFee)}</span></div>
                         </div>
                     </div>
 
@@ -14624,13 +14799,14 @@ export default function App() {
 
       const getRunningNumDateBased = (items, prefix, dStr, field = 'invNo') => {
           const pfx = `${prefix}${dStr}-`;
-          return items.reduce((max, item) => {
+          const usedNums = new Set();
+          items.forEach(item => {
               if (item[field] && String(item[field]).startsWith(pfx)) {
                   const n = parseInt(String(item[field]).replace(pfx, ''), 10);
-                  return !isNaN(n) && n > max ? n : max;
+                  if (!isNaN(n)) usedNums.add(n);
               }
-              return max;
-          }, 0);
+          });
+          return usedNums;
       };
 
       // 1. อัปเดตรายรับ (เช็คฟอร์แมต INC-YYYYMMDD-XXXXX)
@@ -14640,8 +14816,12 @@ export default function App() {
       for (const t of missingIncomes) {
         const dStr = formatDateISO(t.date).replace(/-/g, '');
         if (incCounters[dStr] === undefined) incCounters[dStr] = getRunningNumDateBased(allIncomes, 'INC-', dStr, 'sysDocId');
-        incCounters[dStr]++;
-        await safeUpdate('transactions_income', t.id, { sysDocId: `INC-${dStr}-${String(incCounters[dStr]).padStart(5, '0')}` });
+        
+        let nextNum = 1;
+        while (incCounters[dStr].has(nextNum)) nextNum++;
+        incCounters[dStr].add(nextNum);
+        
+        await safeUpdate('transactions_income', t.id, { sysDocId: `INC-${dStr}-${String(nextNum).padStart(5, '0')}` });
       }
 
       // 2. อัปเดตรายจ่าย (แยกตามหมวดหมู่ - เช็คฟอร์แมต 3ตัวอักษร-YYYYMMDD-XXXXX)
@@ -14664,8 +14844,12 @@ export default function App() {
         if (expCounters[key] === undefined) {
             expCounters[key] = getRunningNumDateBased(allExpenses, basePfx, dStr, 'sysDocId');
         }
-        expCounters[key]++;
-        await safeUpdate('transactions_expense', t.id, { sysDocId: `${basePfx}${dStr}-${String(expCounters[key]).padStart(5, '0')}` });
+        
+        let nextNum = 1;
+        while (expCounters[key].has(nextNum)) nextNum++;
+        expCounters[key].add(nextNum);
+
+        await safeUpdate('transactions_expense', t.id, { sysDocId: `${basePfx}${dStr}-${String(nextNum).padStart(5, '0')}` });
       }
 
       // 3. อัปเดตใบกำกับภาษี (Invoice)
@@ -14675,8 +14859,12 @@ export default function App() {
       for (const i of missingInvs) {
         const dStr = formatDateISO(i.date).replace(/-/g, '');
         if (invCounters[dStr] === undefined) invCounters[dStr] = getRunningNumDateBased(allInvs, 'INV-', dStr);
-        invCounters[dStr]++;
-        await safeUpdate('invoices', i.id, { invNo: `INV-${dStr}-${String(invCounters[dStr]).padStart(5, '0')}` });
+        
+        let nextNum = 1;
+        while (invCounters[dStr].has(nextNum)) nextNum++;
+        invCounters[dStr].add(nextNum);
+
+        await safeUpdate('invoices', i.id, { invNo: `INV-${dStr}-${String(nextNum).padStart(5, '0')}` });
       }
 
       // 4. อัปเดตใบลดหนี้ (CN)
@@ -14686,8 +14874,12 @@ export default function App() {
       for (const i of missingCns) {
         const dStr = formatDateISO(i.date).replace(/-/g, '');
         if (cnCounters[dStr] === undefined) cnCounters[dStr] = getRunningNumDateBased(allCns, 'CN-', dStr);
-        cnCounters[dStr]++;
-        await safeUpdate('invoices', i.id, { invNo: `CN-${dStr}-${String(cnCounters[dStr]).padStart(5, '0')}` });
+        
+        let nextNum = 1;
+        while (cnCounters[dStr].has(nextNum)) nextNum++;
+        cnCounters[dStr].add(nextNum);
+
+        await safeUpdate('invoices', i.id, { invNo: `CN-${dStr}-${String(nextNum).padStart(5, '0')}` });
       }
 
       // 5. อัปเดตใบกำกับอย่างย่อ (ABB)
@@ -14697,8 +14889,12 @@ export default function App() {
       for (const i of missingAbbs) {
         const dStr = formatDateISO(i.date).replace(/-/g, '');
         if (abbCounters[dStr] === undefined) abbCounters[dStr] = getRunningNumDateBased(allAbbs, 'ABB-', dStr);
-        abbCounters[dStr]++;
-        await safeUpdate('invoices', i.id, { invNo: `ABB-${dStr}-${String(abbCounters[dStr]).padStart(5, '0')}` });
+        
+        let nextNum = 1;
+        while (abbCounters[dStr].has(nextNum)) nextNum++;
+        abbCounters[dStr].add(nextNum);
+
+        await safeUpdate('invoices', i.id, { invNo: `ABB-${dStr}-${String(nextNum).padStart(5, '0')}` });
       }
 
       if (opsCount > 0) {
@@ -14725,14 +14921,15 @@ export default function App() {
       const prefixMap = { credit_note: 'CN-', abb: 'ABB-', quotation: 'QUO-', receipt: 'REC-', invoice: 'INV-' };
       let counters = {};
 
-      const getRunningNum = (pfx) => {
-          return invoices.reduce((max, item) => {
+      const getRunningNumSet = (pfx) => {
+          const usedNums = new Set();
+          invoices.forEach(item => {
               if (item.invNo && String(item.invNo).startsWith(pfx)) {
                   const n = parseInt(String(item.invNo).replace(pfx, ''), 10);
-                  return !isNaN(n) && n > max ? n : max;
+                  if (!isNaN(n)) usedNums.add(n);
               }
-              return max;
-          }, 0);
+          });
+          return usedNums;
       };
 
       for (const inv of invoices) {
@@ -14761,10 +14958,14 @@ export default function App() {
             if (inv.invNo && !String(inv.invNo).startsWith(expectedPrefix)) {
               needsUpdate = true;
               if (counters[expectedPrefix] === undefined) {
-                  counters[expectedPrefix] = getRunningNum(expectedPrefix);
+                  counters[expectedPrefix] = getRunningNumSet(expectedPrefix);
               }
-              counters[expectedPrefix]++;
-              newInvNo = `${expectedPrefix}${String(counters[expectedPrefix]).padStart(5, '0')}`;
+              
+              let nextNum = 1;
+              while (counters[expectedPrefix].has(nextNum)) nextNum++;
+              counters[expectedPrefix].add(nextNum);
+              
+              newInvNo = `${expectedPrefix}${String(nextNum).padStart(5, '0')}`;
               updates.invNo = newInvNo;
               
               // เซ็ตวันที่ให้ชัวร์ว่าตรงกันด้วยเผื่อกรณีมีแค่เลขผิดแต่วันที่ถูก
