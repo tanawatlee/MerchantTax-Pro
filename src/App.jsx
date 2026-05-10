@@ -4605,30 +4605,53 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       }).sort(sortNewestFirst);
   }, [transactions, viewHistory]);
 
-  // --- 🔥 NEW: Mapped Batches (Combine Inbound + Outbound based on FIFO) 🔥 ---
+  // --- 🔥 NEW: Mapped Batches (Combine Inbound + Outbound + Returns based on FIFO) 🔥 ---
   const mappedBatches = useMemo(() => {
       if (!viewHistory) return [];
 
-      // 1. เรียง Batch จากเก่าไปใหม่ เพื่อเตรียมจำลองการตัด FIFO
-      const sortedBatches = [...viewHistory.batches].sort(sortOldestFirst).map((b, index) => ({
+      // 1. แยกล็อตรับเข้าปกติ (quantity > 0) และเรียงจากเก่าไปใหม่
+      const positiveBatches = [...viewHistory.batches].filter(b => Number(b.quantity) > 0).sort(sortOldestFirst).map((b, index) => ({
           ...b,
           lotNum: index + 1,
           consumedBy: [],
-          tempSold: 0
+          tempSold: 0,
+          tempReturned: 0 // NEW: จำนวนที่ถูกหักคืน/ลดสต็อก
       }));
 
-      // 2. เรียงรายการขายออก (Outbound) จากเก่าไปใหม่
+      // 2. ดึงล็อตที่ติดลบ (ใบลดหนี้ฝั่งซื้อ / ปรับสต็อกติดลบ)
+      const returnBatches = [...viewHistory.batches].filter(b => Number(b.quantity) < 0).sort(sortOldestFirst);
+
+      // 3. จำลองการหักคืนสต็อก (Returns) จากล็อตที่มีอยู่ (FIFO)
+      returnBatches.forEach(rtn => {
+          let neededToReturn = Math.abs(Number(rtn.quantity));
+          if (neededToReturn <= 0) return;
+
+          for (let i = 0; i < positiveBatches.length; i++) {
+              if (neededToReturn <= 0) break;
+              const batch = positiveBatches[i];
+              // ยอดที่สามารถคืนได้ คือ ยอดที่ยังไม่โดนขาย และยังไม่โดนคืน
+              const availableToReturn = Number(batch.quantity) - batch.tempSold - batch.tempReturned;
+
+              if (availableToReturn > 0) {
+                  const take = Math.min(neededToReturn, availableToReturn);
+                  batch.tempReturned += take;
+                  neededToReturn -= take;
+              }
+          }
+      });
+
+      // 4. เรียงรายการขายออก (Outbound) จากเก่าไปใหม่
       const sortedOutbounds = [...outboundHistory].sort(sortOldestFirst);
 
-      // 3. จำลองการตัด FIFO ใน Memory เพื่อจับคู่ว่าบิลไหนตัดสต็อกจาก Lot ไหน
+      // 5. จำลองการตัด FIFO ใน Memory เพื่อจับคู่ว่าบิลไหนตัดสต็อกจาก Lot ไหน
       sortedOutbounds.forEach(outbound => {
           let needed = Number(outbound.matchedQty);
           if (needed <= 0) return;
 
-          for (let i = 0; i < sortedBatches.length; i++) {
+          for (let i = 0; i < positiveBatches.length; i++) {
               if (needed <= 0) break;
-              const batch = sortedBatches[i];
-              const available = Number(batch.quantity) - batch.tempSold;
+              const batch = positiveBatches[i];
+              const available = Number(batch.quantity) - batch.tempSold - batch.tempReturned;
 
               if (available > 0) {
                   const take = Math.min(needed, available);
@@ -4642,8 +4665,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           }
           
           // ถ้ายอดขายมีมากกว่าสต็อก (ติดลบ) ยัดยอดที่เกินไปไว้ที่ Lot สุดท้าย
-          if (needed > 0 && sortedBatches.length > 0) {
-               const lastBatch = sortedBatches[sortedBatches.length - 1];
+          if (needed > 0 && positiveBatches.length > 0) {
+               const lastBatch = positiveBatches[positiveBatches.length - 1];
                lastBatch.consumedBy.push({
                    tx: outbound,
                    qtyTaken: needed,
@@ -4653,8 +4676,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           }
       });
 
-      // 4. คืนค่าโดยเรียงจาก Lot ใหม่ล่าสุดไปเก่า
-      return sortedBatches.sort(sortNewestFirst);
+      // 6. คำนวณ remaining จริงๆ ที่จะแสดงบนหน้าจอ
+      positiveBatches.forEach(b => {
+          b.displayRemaining = Number(b.quantity) - b.tempSold - b.tempReturned;
+      });
+
+      // 7. คืนค่าโดยเรียงจาก Lot ใหม่ล่าสุดไปเก่า
+      return positiveBatches.sort(sortNewestFirst);
   }, [viewHistory, outboundHistory]);
 
   const handleAiStockAnalysis = async () => {
@@ -5231,7 +5259,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             </div>
 
             <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4 text-left bg-slate-50/50 custom-scrollbar">
-                {mappedBatches.filter(b => b.quantity > 0).map((b, i) => {
+                {mappedBatches.map((b, i) => {
                     const isLowest = b.costPerUnit === Math.min(...viewHistory.batches.filter(v=>v.quantity > 0).map(v => v.costPerUnit));
                     const margin = b.sellPrice > 0 ? ((b.sellPrice - b.costPerUnit) / b.sellPrice) * 100 : 0;
                     
@@ -5268,6 +5296,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                                                 <ArrowRightLeft size={10}/> {b.adjustReason}
                                             </span>
                                         )}
+                                        {/* --- NEW: Badge แจ้งสถานะโดนหักคืนสต็อก (ใบลดหนี้) --- */}
+                                        {b.tempReturned > 0 && (
+                                            <span className="bg-pink-100 text-pink-700 px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5 border border-pink-200" title="ถูกหักสต็อกเพื่อส่งคืนซัพพลายเออร์">
+                                                <ArrowRightLeft size={10}/> คืนสินค้า(ลดหนี้) {b.tempReturned} ชิ้น
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
 
@@ -5295,8 +5329,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                                 <div className="flex items-center justify-between w-full md:w-auto md:justify-end gap-6 border-t md:border-none border-slate-100 pt-3 md:pt-0">
                                     <div className="text-right flex flex-col md:items-end">
                                         <p className="text-[9px] font-bold text-slate-400 uppercase">คงเหลือ</p>
-                                        <p className={`text-base font-black ${b.remaining === 0 ? 'text-rose-500' : 'text-slate-700'}`}>
-                                            {b.remaining} <span className="text-xs text-slate-400 font-medium">/ {b.quantity}</span>
+                                        <p className={`text-base font-black ${b.displayRemaining <= 0 ? 'text-rose-500' : 'text-slate-700'}`}>
+                                            {b.displayRemaining} <span className="text-xs text-slate-400 font-medium">/ {b.quantity}</span>
                                         </p>
                                     </div>
                                     <button onClick={() => setDeleteBatchConfirm(b)} className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-400 hover:bg-rose-500 hover:text-white rounded-xl transition-all shrink-0" title="ลบล็อตนี้">
@@ -5836,7 +5870,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
 
     stockBatches.forEach(b => { 
       const d = normalizeDate(b.date); 
-      if (d >= start && d <= end && b.quantity > 0) { 
+      if (d >= start && d <= end && b.quantity !== 0) { 
         // ค้นหาข้อมูลรายจ่ายต้นทางเพื่อดึง SYS ID และ เลขใบกำกับภาษี
         const parentExp = transactions.find(tx => tx.id === b.parentExpenseId);
         
@@ -6160,7 +6194,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       const tableHeader = ["วันที่", "เลขระบบ (SYS ID)", "เลขใบกำกับ/อ้างอิง", "Product SKU", "รายการสินค้า", "รับ-จำนวน", "รับ-ราคา/หน่วย", "รับ-มูลค่ารวม", "จ่าย-จำนวน", "จ่าย-ต้นทุนรวม", "คงเหลือ-จำนวน", "คงเหลือ-มูลค่ารวม"];
       dataRows = [...headerRows, tableHeader, ...filteredMovement.map(m => [
         formatDate(m.date), m.sysDocId || '-', m.taxInvoiceNo !== '-' ? m.taxInvoiceNo : m.refId, m.sku, m.name, 
-        m.receiveQty > 0 ? m.receiveQty : '-', m.receivePrice > 0 ? toFixedNum(m.receivePrice) : '-', m.receiveTotal > 0 ? toFixedNum(m.receiveTotal) : '-',
+        m.receiveQty !== 0 ? m.receiveQty : '-', m.receivePrice !== 0 ? toFixedNum(m.receivePrice) : '-', m.receiveTotal !== 0 ? toFixedNum(m.receiveTotal) : '-',
         m.issueQty > 0 ? m.issueQty : '-', m.issueTotal > 0 ? toFixedNum(m.issueTotal) : '-',
         m.balanceQty, toFixedNum(m.balanceTotal)
       ])];
@@ -6434,8 +6468,8 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
                       <p className="font-bold text-slate-700">{m.name}</p>
                       <p className="text-[10px] text-slate-400">SKU: {m.sku}</p>
                     </td>
-                    <td className="p-5 text-center font-bold text-emerald-600">{m.receiveQty > 0 ? m.receiveQty : '-'}</td>
-                    <td className="p-5 text-right text-emerald-600">{m.receiveTotal > 0 ? formatCurrency(m.receiveTotal) : '-'}</td>
+                    <td className="p-5 text-center font-bold text-emerald-600">{m.receiveQty !== 0 ? m.receiveQty : '-'}</td>
+                    <td className="p-5 text-right text-emerald-600">{m.receiveTotal !== 0 ? formatCurrency(m.receiveTotal) : '-'}</td>
                     <td className="p-5 text-center font-bold text-rose-600">{m.issueQty > 0 ? m.issueQty : '-'}</td>
                     <td className="p-5 text-right text-rose-600">{m.issueTotal > 0 ? formatCurrency(m.issueTotal) : '-'}</td>
                     <td className="p-5 text-center font-black text-indigo-600">{m.balanceQty}</td>
@@ -7840,7 +7874,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           
           // --- FIX: อัปเดต sysDocId ให้ตรงกับหมวดหมู่ใหม่ หากมีการเปลี่ยนหมวดหมู่ (เฉพาะรายจ่าย) ---
           if (formData.type === 'expense') {
-              const expectedPrefix = getExpensePrefix(formData.category);
+              const expectedPrefix = formData.isPurchaseCreditNote ? 'PCN-' : getExpensePrefix(formData.category);
               if (sysDocId && !sysDocId.startsWith(expectedPrefix)) {
                   sysDocId = generateDateBasedDocId(transactions.filter(t => t.type === formData.type), expectedPrefix, formData.date, 'sysDocId');
               }
@@ -7849,7 +7883,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           // โหมดสร้างใหม่ (Create): สร้าง ID ระบบ และ Document Reference ใหม่
           let prefix = '';
           if (formData.type === 'income') prefix = 'INC-';
-          else prefix = getExpensePrefix(formData.category);
+          else prefix = formData.isPurchaseCreditNote ? 'PCN-' : getExpensePrefix(formData.category);
           
           sysDocId = generateDateBasedDocId(transactions.filter(t => t.type === formData.type), prefix, formData.date, 'sysDocId');
           mainRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', coll));
@@ -7905,8 +7939,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             for (const item of formData.items) {
                 if (String(item.desc).startsWith('[ของแจก/โปรโมท]')) continue;
 
+                // 🔴 FIX: หากเป็นใบลดหนี้ ให้จำนวนที่รับเข้าคลังเป็น "ติดลบ" (ตัดออกจากคลัง)
+                const actualQty = formData.isPurchaseCreditNote ? -Math.abs(Number(item.qty)) : Number(item.qty);
+
                 const itemTotal = Number(item.buyPrice) * Number(item.qty);
-                const proportion = subTotal > 0 ? (itemTotal / subTotal) : 0;
+                const proportion = subTotal !== 0 ? (itemTotal / subTotal) : 0;
                 const itemDiscount = totalDiscounts * proportion;
                 
                 let itemAmountForCost = itemTotal - itemDiscount;
@@ -7914,13 +7951,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     itemAmountForCost = itemAmountForCost * 1.07;
                 }
                 
-                const trueCostUnit = item.qty > 0 ? itemAmountForCost / item.qty : 0;
+                // ใช้ Math.abs เพื่อให้ต้นทุนต่อหน่วยเป็นบวกเสมอ
+                const trueCostUnit = item.qty > 0 ? Math.abs(itemAmountForCost / item.qty) : 0;
 
                 const batchDocRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
                 batchWriter.set(batchDocRef, {
                     productName: String(item.desc).trim(),
                     sku: String(item.sku || '-').trim(),
-                    quantity: Number(item.qty),
+                    quantity: actualQty,
                     costPerUnit: trueCostUnit, 
                     sellPrice: Number(item.sellPrice || 0),
                     date: normalizeDate(formData.date),
@@ -8112,19 +8150,24 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       formData.items.forEach((matchItem, idx) => {
                           const existingBatch = childBatches[idx];
                           
+                          // 🔴 FIX: หากแก้ไขเป็นใบลดหนี้ ให้จำนวนปรับเป็น "ติดลบ" 
+                          const actualQty = formData.isPurchaseCreditNote ? -Math.abs(Number(matchItem.qty)) : Number(matchItem.qty);
+
                           const itemTotal = Number(matchItem.buyPrice) * Number(matchItem.qty);
-                          const proportion = subTotal > 0 ? (itemTotal / subTotal) : 0;
+                          const proportion = subTotal !== 0 ? (itemTotal / subTotal) : 0;
                           const itemDiscount = totalDiscounts * proportion;
                           let itemAmountForCost = itemTotal - itemDiscount;
                           if (formData.vatType === 'excluded') itemAmountForCost = itemAmountForCost * 1.07;
-                          const trueCostUnit = matchItem.qty > 0 ? itemAmountForCost / matchItem.qty : 0;
+                          
+                          // ใช้ Math.abs เพื่อให้ต้นทุนต่อหน่วยเป็นบวกเสมอ
+                          const trueCostUnit = matchItem.qty > 0 ? Math.abs(itemAmountForCost / matchItem.qty) : 0;
 
                           if (existingBatch) {
                               batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', existingBatch.id), {
                                   productName: matchItem.desc,
                                   sku: matchItem.sku || '-',
                                   costPerUnit: trueCostUnit,
-                                  quantity: Number(matchItem.qty), 
+                                  quantity: actualQty, 
                                   sellPrice: Number(matchItem.sellPrice || 0),
                                   date: normalizeDate(formData.date)
                               });
@@ -8135,7 +8178,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                   batchWriter.set(newBatchRef, {
                                       productName: String(matchItem.desc).trim(),
                                       sku: String(matchItem.sku || '-').trim(),
-                                      quantity: Number(matchItem.qty),
+                                      quantity: actualQty,
                                       costPerUnit: trueCostUnit, 
                                       sellPrice: Number(matchItem.sellPrice || 0),
                                       date: normalizeDate(formData.date),
@@ -9417,12 +9460,12 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             <th className="p-5 text-left">รายการ/เลขที่อ้างอิง</th>
                             <th className="p-5 text-left">คู่ค้า</th>
                             <th className="p-5 text-right text-right">ยอดรวม</th>
-                            <th className="p-5 text-center text-center">จัดการ</th>
+                            <th className="p-5 text-center text-center border-b">Action</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50 text-left">
                         {currentHistData.length > 0 ? currentHistData.map((t, idx) => (
-                        <tr key={t.id ? `${t.type}-${t.id}` : `hist-${idx}`} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : (t.isReturned || t.refundAmount > 0) ? 'bg-pink-50/40 hover:bg-pink-50' : 'hover:bg-slate-50/80'}`}>
+                        <tr key={t.id ? `${t.type}-${t.id}` : `hist-${idx}`} className={`group transition-colors text-left ${t.isCancelled ? 'bg-slate-50/50 opacity-60' : t.isPurchaseCreditNote ? 'bg-fuchsia-50/30 hover:bg-fuchsia-50/70 border-y border-fuchsia-100' : (t.isReturned || t.refundAmount > 0) ? 'bg-pink-50/40 hover:bg-pink-50' : 'hover:bg-slate-50/80'}`}>
                             {/* --- 🔥 NEW: คอลัมน์ Checkbox สำหรับเลือกทีละรายการ --- */}
                             <td className="p-4 text-center align-top">
                                 <input 
@@ -9465,11 +9508,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             <td className="p-4 align-top text-left">
                                 <div className="flex flex-col gap-2">
                                     <div className="flex items-start gap-2 flex-wrap">
-                                        <span className="text-[10px] font-mono font-black text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200 shadow-sm whitespace-nowrap">{t.sysDocId || 'NO-REF'}</span>
+                                        <span className={`text-[10px] font-mono font-black px-2 py-0.5 rounded border shadow-sm whitespace-nowrap ${t.isPurchaseCreditNote ? 'text-fuchsia-700 bg-fuchsia-100 border-fuchsia-200' : 'text-indigo-700 bg-indigo-100 border-indigo-200'}`}>
+                                            {t.sysDocId || 'NO-REF'}
+                                        </span>
                                         <p className={`font-bold text-slate-800 leading-snug ${t.isCancelled ? 'line-through text-slate-400' : ''}`}>{t.description || '-'}</p>
                                     </div>
                                     
                                     <div className="flex items-center gap-2 flex-wrap">
+                                        {t.isPurchaseCreditNote && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-fuchsia-100 text-fuchsia-700 border border-fuchsia-200 flex items-center gap-0.5"><TrendingDown size={8}/> ใบลดหนี้ฝั่งซื้อ (คืนของ)</span>}
                                         {t.isCancelled && !t.isReturned && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
                                         {!t.isCancelled && t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
                                         {!t.isCancelled && t.isAdjusted && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-blue-100 text-blue-700 border border-blue-200">มีการปรับยอด</span>}
@@ -9516,9 +9562,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
                             {/* 4. ยอดรวม */}
                             <td className="p-4 align-top text-right">
-                                <div className={`inline-flex flex-col items-end px-3 py-2 rounded-2xl text-right shadow-sm border ${t.isCancelled ? 'bg-slate-50 text-slate-400 border-slate-200' : (t.type==='income'?'bg-emerald-50 text-emerald-700 border-emerald-200':'bg-rose-50 text-rose-700 border-rose-200')}`}>
-                                    <p className="text-[9px] font-black uppercase opacity-60 leading-none mb-1 text-right">{t.type==='income'?'Gross Sales':'Expense'}</p>
-                                    <p className={`text-base font-black leading-none text-right ${t.isCancelled ? 'line-through' : ''}`}>{formatCurrency(t.grandTotal || t.total)}</p>
+                                <div className={`inline-flex flex-col items-end px-3 py-2 rounded-2xl text-right shadow-sm border ${t.isCancelled ? 'bg-slate-50 text-slate-400 border-slate-200' : t.isPurchaseCreditNote ? 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' : (t.type==='income'?'bg-emerald-50 text-emerald-700 border-emerald-200':'bg-rose-50 text-rose-700 border-rose-200')}`}>
+                                    <p className="text-[9px] font-black uppercase opacity-60 leading-none mb-1 text-right">{t.isPurchaseCreditNote ? 'ลดหนี้/รับเงินคืน' : t.type==='income'?'Gross Sales':'Expense'}</p>
+                                    <p className={`text-base font-black leading-none text-right ${t.isCancelled ? 'line-through' : ''}`}>
+                                        {t.isPurchaseCreditNote && (t.grandTotal || t.total) !== 0 ? '-' : ''}{formatCurrency(Math.abs(t.grandTotal || t.total))}
+                                    </p>
                                     
                                     {t.type === 'income' && t.actualSettledAmt !== undefined && !t.isCancelled && (
                                         <div className="mt-1.5 pt-1.5 border-t border-emerald-200/50 flex flex-col items-end gap-1 w-full min-w-[140px]">
@@ -9606,7 +9654,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               <div className="text-left">
                 <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2 text-left"><Hash className="text-indigo-600"/> รายละเอียดรายการ</h3>
                 <div className="flex items-center gap-3 mt-2 text-left flex-wrap">
-                  <span className="text-sm font-black text-indigo-700 bg-indigo-100 border border-indigo-200 px-3 py-1 rounded-lg tracking-wider">SYS ID: {viewItem.sysDocId || 'NO-REF'}</span>
+                  <span className={`text-sm font-black px-3 py-1 rounded-lg tracking-wider border ${viewItem.isPurchaseCreditNote ? 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200' : 'bg-indigo-100 text-indigo-700 border-indigo-200'}`}>SYS ID: {viewItem.sysDocId || 'NO-REF'}</span>
                   <p className="text-[10px] text-slate-400 font-mono text-left bg-slate-100 px-2 py-1 rounded-md">Ref: {viewItem.isCashBill ? 'บิลเงินสด' : (viewItem.orderId || viewItem.linkedOrderNo || viewItem.taxInvoiceNo || '-')}</p>
                   <span className={`px-2 py-1 rounded-md text-[10px] font-bold text-center ${viewItem.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{viewItem.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span>
                   <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded-md text-[10px] font-bold text-center">{viewItem.channel || 'หน้าร้าน'}</span>
@@ -9614,6 +9662,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   {(viewItem.isReturned || viewItem.refundAmount > 0) && (
                       <span className="bg-pink-100 text-pink-700 border border-pink-200 px-2 py-1 rounded-md text-[10px] font-bold text-center flex items-center gap-1">
                           <ArrowRightLeft size={12}/> {viewItem.isCancelled ? 'ลูกค้ายกเลิก/คืนสินค้า (เสียค่าธรรมเนียม)' : 'คืนสินค้า/คืนเงิน'}
+                      </span>
+                  )}
+                  {viewItem.isPurchaseCreditNote && (
+                      <span className="bg-fuchsia-100 text-fuchsia-700 border border-fuchsia-200 px-2 py-1 rounded-md text-[10px] font-bold text-center flex items-center gap-1">
+                          <TrendingDown size={12}/> ใบลดหนี้ (ส่งคืนสินค้าฝั่งซื้อ)
                       </span>
                   )}
                   
@@ -14858,17 +14911,17 @@ export default function App() {
       const allExpenses = transactions.filter(t => t.type === 'expense');
       const missingExpenses = allExpenses.filter(t => {
           if (!t.sysDocId) return true; // ไม่มีเลข
-          const expectedPrefix = getExpensePrefix(t.category);
+          const expectedPrefix = t.isPurchaseCreditNote ? 'PCN-' : getExpensePrefix(t.category);
           // เช็คว่า Prefix ปัจจุบัน ตรงกับหมวดหมู่ที่ควรจะเป็นหรือไม่ (เช่น ค่าจัดส่งควรเป็น SHP- แต่ดันเป็น EXP-)
           if (!String(t.sysDocId).startsWith(expectedPrefix)) return true;
           // เช็คฟอร์แมตพื้นฐาน
-          return !/^[A-Z]{3}-\d{8}-\d{5}$/.test(String(t.sysDocId));
+          return !/^[A-Z]{3,4}-\d{8}-\d{5}$/.test(String(t.sysDocId));
       }).sort(sortOldestFirst);
       let expCounters = {};
       
       for (const t of missingExpenses) {
         const dStr = formatDateISO(t.date).replace(/-/g, '');
-        const basePfx = getExpensePrefix(t.category);
+        const basePfx = t.isPurchaseCreditNote ? 'PCN-' : getExpensePrefix(t.category);
         const key = `${basePfx}${dStr}`;
 
         if (expCounters[key] === undefined) {
