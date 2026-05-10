@@ -5930,12 +5930,20 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   const getExpenseTaxDetails = (row) => {
     const sub = Number(row.total) || 0;
     const disc = Number(row.couponDiscount) || 0; 
-    const baseAmt = Math.max(0, sub - disc);
+    
+    // --- 🔥 NEW: รองรับการคำนวณยอดติดลบของใบลดหนี้ฝั่งซื้อ ---
+    const isNegative = sub < 0;
+    const absSub = Math.abs(sub);
+    const absDisc = Math.abs(disc);
+    const baseAmt = Math.max(0, absSub - absDisc) * (isNegative ? -1 : 1);
     
     let vat = 0, base = 0, total = 0;
     
     if (row.vatType === 'excluded') {
-        vat = row.isNonCreditableVat ? 0 : (row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : baseAmt * 0.07);
+        const manualVat = row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : null;
+        const finalManualVat = manualVat !== null ? (isNegative && manualVat > 0 ? -manualVat : manualVat) : null;
+        
+        vat = row.isNonCreditableVat ? 0 : (finalManualVat !== null ? finalManualVat : baseAmt * 0.07);
         base = baseAmt;
         total = baseAmt + vat;
     } else if (row.vatType === 'none') {
@@ -5943,7 +5951,10 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         base = baseAmt;
         total = baseAmt;
     } else { // included or legacy default
-        vat = row.isNonCreditableVat ? 0 : (row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : baseAmt * 7 / 107);
+        const manualVat = row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : null;
+        const finalManualVat = manualVat !== null ? (isNegative && manualVat > 0 ? -manualVat : manualVat) : null;
+        
+        vat = row.isNonCreditableVat ? 0 : (finalManualVat !== null ? finalManualVat : baseAmt * 7 / 107);
         base = row.isNonCreditableVat ? baseAmt : baseAmt - vat;
         total = baseAmt;
     }
@@ -6785,7 +6796,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     items: [{ desc: '', qty: 1, buyPrice: 0, sellPrice: 0, sku: '', category: '' }],
     paymentStatus: 'settled', settlementDate: formatDateISO(new Date()),
     status: 'paid', // --- FIX: เพิ่ม state status เป็นค่าเริ่มต้น ---
-    isCashBill: false, isAdjusted: false, isFromReconciliation: false, isTaxOnly: false, autoCreateShippingExpense: true
+    isCashBill: false, isAdjusted: false, isFromReconciliation: false, isTaxOnly: false, autoCreateShippingExpense: true,
+    isPurchaseCreditNote: false
   };
 
   const [formData, setFormData] = useState(defaultFormState);
@@ -6832,6 +6844,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           isAdjusted: t.isAdjusted || false,
           isFromReconciliation: t.isFromReconciliation || false,
           isTaxOnly: t.isTaxOnly || false,
+          isPurchaseCreditNote: t.isPurchaseCreditNote || false,
           status: t.status || 'paid', // --- FIX: ดึงค่า status ของรายจ่ายเดิมมาให้ครบถ้วน ---
           attachmentUrl: t.attachmentUrl || '', // --- FIX: ดึงไฟล์ที่เคยแนบไว้มาแสดง ---
           createdAt: t.createdAt // --- FIX: ดึง Timestamp เดิมมาป้องกันการอัปเดตเป็นเวลาปัจจุบัน ---
@@ -8597,9 +8610,20 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                 {/* Section 1: Header - Toggle & AI Scan */}
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-5">
                   <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit shrink-0 text-left shadow-inner">
-                    <button onClick={()=>setFormData({...formData, type:'income', category: 'รายได้จากการขายสินค้า', paymentStatus: 'settled'})} disabled={formData.id} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='income'?'bg-white text-emerald-600 shadow-sm':'text-slate-500 hover:text-slate-700'} ${formData.id ? 'opacity-50 cursor-not-allowed' : ''}`}><TrendingUp size={18}/> รายรับ</button>
+                    <button onClick={()=>setFormData({...formData, type:'income', category: 'รายได้จากการขายสินค้า', paymentStatus: 'settled', isPurchaseCreditNote: false})} disabled={formData.id} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='income'?'bg-white text-emerald-600 shadow-sm':'text-slate-500 hover:text-slate-700'} ${formData.id ? 'opacity-50 cursor-not-allowed' : ''}`}><TrendingUp size={18}/> รายรับ</button>
                     <button onClick={()=>setFormData({...formData, type:'expense', category: 'ต้นทุนสินค้า', status: 'paid'})} disabled={formData.id} className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-sm transition-all text-center ${formData.type==='expense'?'bg-white text-rose-600 shadow-sm':'text-slate-500 hover:text-slate-700'} ${formData.id ? 'opacity-50 cursor-not-allowed' : ''}`}><TrendingDown size={18}/> รายจ่าย</button>
                   </div>
+                  
+                  {/* --- 🔥 NEW: ย้ายปุ่มใบลดหนี้ฝั่งซื้อขึ้นมาไว้ด้านบนให้กดง่ายและเห็นชัดเจน --- */}
+                  {formData.type === 'expense' && (
+                      <label className={`flex flex-1 sm:flex-none items-center justify-center gap-2 cursor-pointer border px-4 py-2.5 rounded-xl transition-colors shadow-sm ${formData.isPurchaseCreditNote ? 'bg-pink-100 border-pink-300' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                         <input type="checkbox" checked={formData.isPurchaseCreditNote || false} onChange={e=>setFormData({...formData, isPurchaseCreditNote: e.target.checked})} className="w-4 h-4 rounded text-pink-600 focus:ring-pink-500 border-slate-300 cursor-pointer" />
+                         <span className={`text-sm font-black flex items-center gap-1.5 ${formData.isPurchaseCreditNote ? 'text-pink-700' : 'text-slate-600'}`}>
+                             <TrendingDown size={16}/> บันทึกส่งคืนสินค้าซัพพลายเออร์ (ใบลดหนี้)
+                         </span>
+                      </label>
+                  )}
+
                   {formData.type === 'expense' && (
                       <div className="w-full sm:w-auto">
                           <input type="file" ref={ocrInputRef} hidden accept="image/*" onChange={handleOcrUpload} />
@@ -8862,8 +8886,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             <div className="bg-slate-900 rounded-[40px] shadow-2xl overflow-hidden flex flex-col text-left">
               <div className="p-8 bg-indigo-600 text-white flex justify-between items-center text-left">
                 <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest opacity-60 text-left">{formData.type === 'income' ? 'Grand Total (ยอดสุทธิ)' : 'Net Payable (ยอดจ่ายสุทธิ)'}</p>
-                  <h3 className="text-4xl font-black text-left">{formatCurrency(financialSummary.grandTotal)}</h3>
+                  {/* --- 🔥 FIX: เปลี่ยนข้อความและสีให้ชัดเจนว่าเป็นยอดคืนเงิน ถ้าเปิดโหมดใบลดหนี้ไว้ --- */}
+                  <p className="text-[10px] font-black uppercase tracking-widest opacity-60 text-left">
+                      {formData.type === 'income' ? 'Grand Total (ยอดสุทธิ)' : (formData.isPurchaseCreditNote ? 'Refund Amount (ยอดรับเงินคืน)' : 'Net Payable (ยอดจ่ายสุทธิ)')}
+                  </p>
+                  <h3 className={`text-4xl font-black text-left ${formData.isPurchaseCreditNote ? 'text-pink-400' : ''}`}>
+                      {formData.isPurchaseCreditNote && financialSummary.grandTotal !== 0 ? '-' : ''}{formatCurrency(Math.abs(financialSummary.grandTotal))}
+                  </h3>
                 </div>
                 <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-center"><Wallet size={24}/></div>
               </div>
@@ -9004,9 +9033,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         ยกเลิกแก้ไข
                       </button>
                     )}
-                    <button onClick={handleSubmit} className={`${formData.id ? 'flex-[2] bg-orange-500 text-white hover:bg-orange-600' : 'w-full bg-white text-slate-900 hover:bg-slate-100'} py-4 rounded-2xl font-black text-lg shadow-xl transition-all flex items-center justify-center gap-3 active:scale-95 group text-center`}>
-                      <Save size={24} className={`${formData.id ? 'text-white' : 'text-indigo-600'} transition-transform group-hover:scale-110 text-center`}/> 
-                      {formData.id ? 'อัปเดตข้อมูล' : 'บันทึกรายการ'}
+                    {/* --- 🔥 FIX: เปลี่ยนสีปุ่มบันทึกให้สอดคล้องกับโหมดลดหนี้ --- */}
+                    <button onClick={handleSubmit} className={`${formData.id ? 'flex-[2] bg-orange-500 text-white hover:bg-orange-600' : formData.isPurchaseCreditNote ? 'w-full bg-pink-600 text-white hover:bg-pink-700' : 'w-full bg-white text-slate-900 hover:bg-slate-100'} py-4 rounded-2xl font-black text-lg shadow-xl transition-all flex items-center justify-center gap-3 active:scale-95 group text-center`}>
+                      <Save size={24} className={`${formData.id ? 'text-white' : formData.isPurchaseCreditNote ? 'text-white' : 'text-indigo-600'} transition-transform group-hover:scale-110 text-center`}/> 
+                      {formData.id ? 'อัปเดตข้อมูล' : formData.isPurchaseCreditNote ? 'บันทึกใบลดหนี้ (ส่งคืน)' : 'บันทึกรายการ'}
                     </button>
                   </div>
                   <p className="text-[10px] text-white/30 mt-4 text-center">ระบบจะบันทึกลงฐานข้อมูล และหักลบสต็อก FIFO อัตโนมัติ</p>
