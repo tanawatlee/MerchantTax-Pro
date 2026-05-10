@@ -14306,6 +14306,10 @@ export default function App() {
   const [restoreFile, setRestoreFile] = useState(null);
   const restoreFileRef = useRef(null);
   
+  // --- NEW: Migration Review States ---
+  const [migrationPreviewData, setMigrationPreviewData] = useState(null);
+  const [isCalculatingMigration, setIsCalculatingMigration] = useState(false);
+
   // --- NEW: Restore Progress & Error States ---
   const [restoreProgress, setRestoreProgress] = useState({ current: 0, total: 0, status: '' });
   const [restoreError, setRestoreError] = useState('');
@@ -14861,123 +14865,145 @@ export default function App() {
     }
   };
 
+  const handlePreviewMigration = () => {
+      setIsCalculatingMigration(true);
+      
+      // หน่วงเวลาเล็กน้อยเพื่อให้ UI เปลี่ยนสถานะ Loading ก่อนเริ่มคำนวณหนักๆ
+      setTimeout(() => {
+          try {
+              const previewList = [];
+              const getRunningNumDateBased = (items, prefix, dStr, field = 'invNo') => {
+                  const pfx = `${prefix}${dStr}-`;
+                  const usedNums = new Set();
+                  items.forEach(item => {
+                      if (item[field] && String(item[field]).startsWith(pfx)) {
+                          const n = parseInt(String(item[field]).replace(pfx, ''), 10);
+                          if (!isNaN(n)) usedNums.add(n);
+                      }
+                  });
+                  return usedNums;
+              };
+
+              // 1. อัปเดตรายรับ (เช็คฟอร์แมต INC-YYYYMMDD-XXXXX)
+              const allIncomes = transactions.filter(t => t.type === 'income');
+              const missingIncomes = allIncomes.filter(t => !t.sysDocId || !/^INC-\d{8}-\d{5}$/.test(String(t.sysDocId))).sort(sortOldestFirst);
+              let incCounters = {};
+              for (const t of missingIncomes) {
+                  const dStr = formatDateISO(t.date).replace(/-/g, '');
+                  if (incCounters[dStr] === undefined) incCounters[dStr] = getRunningNumDateBased(allIncomes, 'INC-', dStr, 'sysDocId');
+                  
+                  let nextNum = 1;
+                  while (incCounters[dStr].has(nextNum)) nextNum++;
+                  incCounters[dStr].add(nextNum);
+                  
+                  const newId = `INC-${dStr}-${String(nextNum).padStart(5, '0')}`;
+                  previewList.push({ coll: 'transactions_income', id: t.id, oldId: t.sysDocId || 'ไม่มีเลข', newId, type: 'รายรับ', date: t.date, desc: t.description || t.partnerName || '-' });
+              }
+
+              // 2. อัปเดตรายจ่าย (แยกตามหมวดหมู่ - เช็คฟอร์แมต 3ตัวอักษร-YYYYMMDD-XXXXX)
+              const allExpenses = transactions.filter(t => t.type === 'expense');
+              const missingExpenses = allExpenses.filter(t => {
+                  if (!t.sysDocId) return true;
+                  const expectedPrefix = t.isPurchaseCreditNote ? 'PCN-' : getExpensePrefix(t.category);
+                  if (!String(t.sysDocId).startsWith(expectedPrefix)) return true;
+                  return !/^[A-Z]{3,4}-\d{8}-\d{5}$/.test(String(t.sysDocId));
+              }).sort(sortOldestFirst);
+              let expCounters = {};
+              
+              for (const t of missingExpenses) {
+                  const dStr = formatDateISO(t.date).replace(/-/g, '');
+                  const basePfx = t.isPurchaseCreditNote ? 'PCN-' : getExpensePrefix(t.category);
+                  const key = `${basePfx}${dStr}`;
+
+                  if (expCounters[key] === undefined) {
+                      expCounters[key] = getRunningNumDateBased(allExpenses, basePfx, dStr, 'sysDocId');
+                  }
+                  
+                  let nextNum = 1;
+                  while (expCounters[key].has(nextNum)) nextNum++;
+                  expCounters[key].add(nextNum);
+
+                  const newId = `${basePfx}${dStr}-${String(nextNum).padStart(5, '0')}`;
+                  previewList.push({ coll: 'transactions_expense', id: t.id, oldId: t.sysDocId || 'ไม่มีเลข', newId, type: 'รายจ่าย', date: t.date, desc: t.description || t.partnerName || '-' });
+              }
+
+              // 3. อัปเดตใบกำกับภาษี (Invoice)
+              const allInvs = invoices.filter(i => i.docType === 'invoice' || !i.docType);
+              const missingInvs = allInvs.filter(i => !i.invNo || !/INV-\d{8}-\d{5}/.test(String(i.invNo))).sort(sortOldestFirst);
+              let invCounters = {};
+              for (const i of missingInvs) {
+                  const dStr = formatDateISO(i.date).replace(/-/g, '');
+                  if (invCounters[dStr] === undefined) invCounters[dStr] = getRunningNumDateBased(allInvs, 'INV-', dStr);
+                  
+                  let nextNum = 1;
+                  while (invCounters[dStr].has(nextNum)) nextNum++;
+                  invCounters[dStr].add(nextNum);
+
+                  const newId = `INV-${dStr}-${String(nextNum).padStart(5, '0')}`;
+                  previewList.push({ coll: 'invoices', id: i.id, oldId: i.invNo || 'ไม่มีเลข', newId, type: 'ใบกำกับภาษี', date: i.date, desc: i.customerName || '-' });
+              }
+
+              // 4. อัปเดตใบลดหนี้ (CN)
+              const allCns = invoices.filter(i => i.docType === 'credit_note');
+              const missingCns = allCns.filter(i => !i.invNo || !/CN-\d{8}-\d{5}/.test(String(i.invNo))).sort(sortOldestFirst);
+              let cnCounters = {};
+              for (const i of missingCns) {
+                  const dStr = formatDateISO(i.date).replace(/-/g, '');
+                  if (cnCounters[dStr] === undefined) cnCounters[dStr] = getRunningNumDateBased(allCns, 'CN-', dStr);
+                  
+                  let nextNum = 1;
+                  while (cnCounters[dStr].has(nextNum)) nextNum++;
+                  cnCounters[dStr].add(nextNum);
+
+                  const newId = `CN-${dStr}-${String(nextNum).padStart(5, '0')}`;
+                  previewList.push({ coll: 'invoices', id: i.id, oldId: i.invNo || 'ไม่มีเลข', newId, type: 'ใบลดหนี้', date: i.date, desc: i.customerName || '-' });
+              }
+
+              // 5. อัปเดตใบกำกับอย่างย่อ (ABB)
+              const allAbbs = invoices.filter(i => i.docType === 'abb');
+              const missingAbbs = allAbbs.filter(i => !i.invNo || !/ABB-\d{8}-\d{5}/.test(String(i.invNo))).sort(sortOldestFirst);
+              let abbCounters = {};
+              for (const i of missingAbbs) {
+                  const dStr = formatDateISO(i.date).replace(/-/g, '');
+                  if (abbCounters[dStr] === undefined) abbCounters[dStr] = getRunningNumDateBased(allAbbs, 'ABB-', dStr);
+                  
+                  let nextNum = 1;
+                  while (abbCounters[dStr].has(nextNum)) nextNum++;
+                  abbCounters[dStr].add(nextNum);
+
+                  const newId = `ABB-${dStr}-${String(nextNum).padStart(5, '0')}`;
+                  previewList.push({ coll: 'invoices', id: i.id, oldId: i.invNo || 'ไม่มีเลข', newId, type: 'อย่างย่อ (ABB)', date: i.date, desc: i.customerName || '-' });
+              }
+
+              setMigrationPreviewData(previewList);
+          } catch (error) {
+              console.error(error);
+              addToast("เกิดข้อผิดพลาดในการคำนวณข้อมูลรายการ", "error");
+          } finally {
+              setIsCalculatingMigration(false);
+          }
+      }, 100);
+  };
+
   const executeMigration = async () => {
-    setShowMigrateConfirm(false);
+    if (!migrationPreviewData) return;
     setIsMigrating(true);
     try {
-      addToast("กำลังดำเนินการรันเลขเอกสารใหม่...", "success");
+      addToast(`กำลังอัปเดตเอกสาร ${migrationPreviewData.length} รายการ...`, "success");
       let batchWriter = writeBatch(dbInstance);
       let opsCount = 0;
 
-      const safeUpdate = async (collectionName, docId, data) => {
-        const ref = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', collectionName, docId);
-        batchWriter.update(ref, data);
-        opsCount++;
-        if (opsCount >= 400) {
-          await batchWriter.commit();
-          batchWriter = writeBatch(dbInstance);
-          opsCount = 0;
-        }
-      };
+      for (const item of migrationPreviewData) {
+          const ref = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', item.coll, item.id);
+          const updateField = item.coll === 'invoices' ? { invNo: item.newId } : { sysDocId: item.newId };
+          batchWriter.update(ref, updateField);
+          opsCount++;
 
-      const getRunningNumDateBased = (items, prefix, dStr, field = 'invNo') => {
-          const pfx = `${prefix}${dStr}-`;
-          const usedNums = new Set();
-          items.forEach(item => {
-              if (item[field] && String(item[field]).startsWith(pfx)) {
-                  const n = parseInt(String(item[field]).replace(pfx, ''), 10);
-                  if (!isNaN(n)) usedNums.add(n);
-              }
-          });
-          return usedNums;
-      };
-
-      // 1. อัปเดตรายรับ (เช็คฟอร์แมต INC-YYYYMMDD-XXXXX)
-      const allIncomes = transactions.filter(t => t.type === 'income');
-      const missingIncomes = allIncomes.filter(t => !t.sysDocId || !/^INC-\d{8}-\d{5}$/.test(String(t.sysDocId))).sort(sortOldestFirst);
-      let incCounters = {};
-      for (const t of missingIncomes) {
-        const dStr = formatDateISO(t.date).replace(/-/g, '');
-        if (incCounters[dStr] === undefined) incCounters[dStr] = getRunningNumDateBased(allIncomes, 'INC-', dStr, 'sysDocId');
-        
-        let nextNum = 1;
-        while (incCounters[dStr].has(nextNum)) nextNum++;
-        incCounters[dStr].add(nextNum);
-        
-        await safeUpdate('transactions_income', t.id, { sysDocId: `INC-${dStr}-${String(nextNum).padStart(5, '0')}` });
-      }
-
-      // 2. อัปเดตรายจ่าย (แยกตามหมวดหมู่ - เช็คฟอร์แมต 3ตัวอักษร-YYYYMMDD-XXXXX)
-      const allExpenses = transactions.filter(t => t.type === 'expense');
-      const missingExpenses = allExpenses.filter(t => {
-          if (!t.sysDocId) return true; // ไม่มีเลข
-          const expectedPrefix = t.isPurchaseCreditNote ? 'PCN-' : getExpensePrefix(t.category);
-          // เช็คว่า Prefix ปัจจุบัน ตรงกับหมวดหมู่ที่ควรจะเป็นหรือไม่ (เช่น ค่าจัดส่งควรเป็น SHP- แต่ดันเป็น EXP-)
-          if (!String(t.sysDocId).startsWith(expectedPrefix)) return true;
-          // เช็คฟอร์แมตพื้นฐาน
-          return !/^[A-Z]{3,4}-\d{8}-\d{5}$/.test(String(t.sysDocId));
-      }).sort(sortOldestFirst);
-      let expCounters = {};
-      
-      for (const t of missingExpenses) {
-        const dStr = formatDateISO(t.date).replace(/-/g, '');
-        const basePfx = t.isPurchaseCreditNote ? 'PCN-' : getExpensePrefix(t.category);
-        const key = `${basePfx}${dStr}`;
-
-        if (expCounters[key] === undefined) {
-            expCounters[key] = getRunningNumDateBased(allExpenses, basePfx, dStr, 'sysDocId');
-        }
-        
-        let nextNum = 1;
-        while (expCounters[key].has(nextNum)) nextNum++;
-        expCounters[key].add(nextNum);
-
-        await safeUpdate('transactions_expense', t.id, { sysDocId: `${basePfx}${dStr}-${String(nextNum).padStart(5, '0')}` });
-      }
-
-      // 3. อัปเดตใบกำกับภาษี (Invoice)
-      const allInvs = invoices.filter(i => i.docType === 'invoice' || !i.docType);
-      const missingInvs = allInvs.filter(i => !i.invNo || !/INV-\d{8}-\d{5}/.test(String(i.invNo))).sort(sortOldestFirst);
-      let invCounters = {};
-      for (const i of missingInvs) {
-        const dStr = formatDateISO(i.date).replace(/-/g, '');
-        if (invCounters[dStr] === undefined) invCounters[dStr] = getRunningNumDateBased(allInvs, 'INV-', dStr);
-        
-        let nextNum = 1;
-        while (invCounters[dStr].has(nextNum)) nextNum++;
-        invCounters[dStr].add(nextNum);
-
-        await safeUpdate('invoices', i.id, { invNo: `INV-${dStr}-${String(nextNum).padStart(5, '0')}` });
-      }
-
-      // 4. อัปเดตใบลดหนี้ (CN)
-      const allCns = invoices.filter(i => i.docType === 'credit_note');
-      const missingCns = allCns.filter(i => !i.invNo || !/CN-\d{8}-\d{5}/.test(String(i.invNo))).sort(sortOldestFirst);
-      let cnCounters = {};
-      for (const i of missingCns) {
-        const dStr = formatDateISO(i.date).replace(/-/g, '');
-        if (cnCounters[dStr] === undefined) cnCounters[dStr] = getRunningNumDateBased(allCns, 'CN-', dStr);
-        
-        let nextNum = 1;
-        while (cnCounters[dStr].has(nextNum)) nextNum++;
-        cnCounters[dStr].add(nextNum);
-
-        await safeUpdate('invoices', i.id, { invNo: `CN-${dStr}-${String(nextNum).padStart(5, '0')}` });
-      }
-
-      // 5. อัปเดตใบกำกับอย่างย่อ (ABB)
-      const allAbbs = invoices.filter(i => i.docType === 'abb');
-      const missingAbbs = allAbbs.filter(i => !i.invNo || !/ABB-\d{8}-\d{5}/.test(String(i.invNo))).sort(sortOldestFirst);
-      let abbCounters = {};
-      for (const i of missingAbbs) {
-        const dStr = formatDateISO(i.date).replace(/-/g, '');
-        if (abbCounters[dStr] === undefined) abbCounters[dStr] = getRunningNumDateBased(allAbbs, 'ABB-', dStr);
-        
-        let nextNum = 1;
-        while (abbCounters[dStr].has(nextNum)) nextNum++;
-        abbCounters[dStr].add(nextNum);
-
-        await safeUpdate('invoices', i.id, { invNo: `ABB-${dStr}-${String(nextNum).padStart(5, '0')}` });
+          if (opsCount >= 400) {
+              await batchWriter.commit();
+              batchWriter = writeBatch(dbInstance);
+              opsCount = 0;
+          }
       }
 
       if (opsCount > 0) {
@@ -14985,6 +15011,8 @@ export default function App() {
       }
 
       addToast("อัปเดตเลขเอกสารเฉพาะรายการที่ขาดหายเรียบร้อยแล้ว!", "success");
+      setShowMigrateConfirm(false);
+      setMigrationPreviewData(null);
     } catch (error) {
       console.error(error);
       addToast("เกิดข้อผิดพลาดในการอัปเดตข้อมูล", "error");
@@ -15579,21 +15607,82 @@ export default function App() {
       {/* 4. Migration Confirm Modal */}
       {showMigrateConfirm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
-            <div className="bg-white rounded-[32px] p-8 max-w-sm w-full shadow-2xl animate-in zoom-in-95 text-center">
-                <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4 text-amber-500 text-center">
-                    <RefreshCw size={32}/>
-                </div>
-                <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">รันเลขเอกสารใหม่?</h3>
-                <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
-                    ระบบจะตรวจสอบและ <b className="text-slate-700">เติมเลขเอกสาร (SYS ID)</b> เฉพาะรายการที่ยังไม่มีเลข หรือตกหล่น<br/>
-                    โดยเรียงตามลำดับวันที่ทำรายการ
-                </p>
-                <div className="flex gap-3 text-center">
-                    <button onClick={() => setShowMigrateConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
-                    <button onClick={executeMigration} className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg flex justify-center items-center gap-2 transition-colors">
-                        เริ่มรันเลข
-                    </button>
-                </div>
+            <div className={`bg-white rounded-[32px] p-6 md:p-8 w-full shadow-2xl animate-in zoom-in-95 flex flex-col ${migrationPreviewData ? 'max-w-4xl max-h-[85vh]' : 'max-w-sm text-center'}`}>
+                
+                {!migrationPreviewData ? (
+                    <>
+                        <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4 text-amber-500 text-center">
+                            <RefreshCw size={32}/>
+                        </div>
+                        <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ตรวจสอบและรันเลขเอกสารใหม่?</h3>
+                        <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
+                            ระบบจะค้นหารายการที่ยังไม่มีเลข หรือตกหล่น<br/>
+                            เพื่อแสดงให้ตรวจสอบก่อนทำการแก้ไขจริง
+                        </p>
+                        <div className="flex gap-3 text-center">
+                            <button onClick={() => setShowMigrateConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
+                            <button onClick={handlePreviewMigration} disabled={isCalculatingMigration} className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg flex justify-center items-center gap-2 transition-colors disabled:opacity-50">
+                                {isCalculatingMigration ? <Loader className="animate-spin" size={16}/> : <Search size={16}/>} 
+                                {isCalculatingMigration ? 'กำลังค้นหา...' : 'ตรวจสอบรายการ'}
+                            </button>
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><RefreshCw className="text-amber-500"/> สรุปรายการที่จะถูกแก้ไข (Preview)</h3>
+                                <p className="text-xs text-slate-500 mt-1">พบรายการที่ต้องรันเลขใหม่ทั้งหมด <span className="font-bold text-amber-600">{migrationPreviewData.length}</span> รายการ</p>
+                            </div>
+                            <button onClick={() => { setShowMigrateConfirm(false); setMigrationPreviewData(null); }} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={20}/></button>
+                        </div>
+
+                        <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl mb-4 bg-slate-50">
+                            {migrationPreviewData.length > 0 ? (
+                                <table className="w-full text-xs text-left">
+                                    <thead className="bg-slate-100 text-slate-600 uppercase sticky top-0 border-b border-slate-200">
+                                        <tr>
+                                            <th className="p-3 pl-4 w-12">No.</th>
+                                            <th className="p-3">วันที่</th>
+                                            <th className="p-3">ประเภท</th>
+                                            <th className="p-3 text-rose-500">เลขเดิม (ที่จะถูกแก้)</th>
+                                            <th className="p-3 text-emerald-600">เลขใหม่ (ที่จะได้รับ)</th>
+                                            <th className="p-3 truncate max-w-[150px]">รายละเอียด</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {migrationPreviewData.map((item, idx) => (
+                                            <tr key={idx} className="hover:bg-white transition-colors">
+                                                <td className="p-3 pl-4 font-bold text-slate-400">{idx + 1}</td>
+                                                <td className="p-3 text-slate-600">{formatDate(item.date)}</td>
+                                                <td className="p-3 font-bold text-slate-700">{item.type}</td>
+                                                <td className="p-3 font-mono text-rose-500 line-through decoration-rose-300">{item.oldId}</td>
+                                                <td className="p-3 font-mono font-bold text-emerald-600 bg-emerald-50/50">{item.newId}</td>
+                                                <td className="p-3 truncate max-w-[150px] text-slate-500" title={item.desc}>{item.desc}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            ) : (
+                                <div className="h-full flex flex-col items-center justify-center p-10 text-slate-400">
+                                    <CheckCircle size={48} className="text-emerald-400 mb-3 opacity-50"/>
+                                    <p className="font-bold text-slate-600 text-sm">ยอดเยี่ยม! ข้อมูลสมบูรณ์</p>
+                                    <p className="text-xs mt-1">ไม่พบเอกสารตกหล่นหรือรูปแบบเลขผิดพลาด</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+                            <button onClick={() => setMigrationPreviewData(null)} className="px-6 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">กลับไปตรวจสอบใหม่</button>
+                            {migrationPreviewData.length > 0 && (
+                                <button onClick={executeMigration} disabled={isMigrating} className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg flex justify-center items-center gap-2 transition-colors disabled:opacity-50">
+                                    {isMigrating ? <Loader className="animate-spin" size={16}/> : <Save size={16}/>} 
+                                    {isMigrating ? 'กำลังอัปเดตฐานข้อมูล...' : 'ยืนยันการรันเลขทั้งหมด'}
+                                </button>
+                            )}
+                        </div>
+                    </>
+                )}
             </div>
         </div>
       )}
