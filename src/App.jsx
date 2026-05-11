@@ -1426,6 +1426,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const [deliveryFailedDetailsData, setDeliveryFailedDetailsData] = useState([]);
   const [showDeliveryFailedModal, setShowDeliveryFailedModal] = useState(false);
 
+  // --- 🔥 NEW: State สำหรับเลือกลายการที่ต้องการ บังคับนำเข้า (Force Import) และ Action ---
+  const [selectedSkippedForImport, setSelectedSkippedForImport] = useState([]);
+  const [forceImportAction, setForceImportAction] = useState('restock'); // 'restock', 'discard', 'success'
+
   // NEW: State สำหรับรายละเอียดส่วนต่างยอดเงิน
   const [discrepancyDetailsData, setDiscrepancyDetailsData] = useState([]);
   const [showDiscrepancyModal, setShowDiscrepancyModal] = useState(false);
@@ -1467,6 +1471,257 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const [transferSearch, setTransferSearch] = useState('');
   const [showTransferList, setShowTransferList] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
+
+  // --- 🔥 ย้าย Helper Functions สำหรับแยกข้อมูลออกมาไว้ระดับ Component เพื่อให้ Force Import เรียกใช้ได้ ---
+  const getRowValAbs = (row, kws) => {
+      const val = findVal(row, kws);
+      return val !== undefined && val !== null && String(val).trim() !== '' ? Math.abs(cleanNum(val)) : 0;
+  };
+
+  const getExactRowValAbs = (row, exactKeys) => {
+      const keys = Object.keys(row);
+      for (let k of exactKeys) {
+          const cleanK = String(k).replace(/\s+/g, '').toLowerCase();
+          const match = keys.find(rk => String(rk).replace(/\s+/g, '').toLowerCase() === cleanK);
+          if (match) {
+              const val = row[match];
+              if (val !== undefined && val !== null && String(val).trim() !== '') {
+                  return Math.abs(cleanNum(val));
+              }
+          }
+      }
+      return 0;
+  };
+
+  const extractFeesAndShipping = (row, mode, currentSchema) => {
+      let transFee = 0, comm = 0, serv = 0, infraRow = 0, affiliateRow = 0;
+      let shipBuyerRow = 0, shipSubsidyRow = 0, shipEstRow = 0, shipReturnRow = 0;
+
+      if (platform === 'tiktok') {
+          let totalFeeVal = getExactRowValAbs(row, ['Total Fees', 'ค่าธรรมเนียมรวม', 'รวมค่าธรรมเนียม']);
+          if (totalFeeVal === 0) {
+              let t1 = getExactRowValAbs(row, ['Transaction fee', 'Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee']);
+              let t2 = getExactRowValAbs(row, ['TikTok Shop commission fee', 'ค่าคอมมิชชันของ TikTok Shop', 'Platform Commission']);
+              let t3 = getExactRowValAbs(row, ['Affiliate Commission', 'ค่าคอมมิชชันของพันธมิตร']);
+              let t4 = getExactRowValAbs(row, ['Commerce growth fee', 'ค่าธรรมเนียม Commerce growth']);
+              totalFeeVal = t1 + t2 + t3 + t4;
+          }
+
+          transFee = totalFeeVal;
+          comm = 0;
+          affiliateRow = 0;
+          infraRow = 0;
+          serv = 0;
+
+          let sellerShip = getExactRowValAbs(row, ['Seller shipping fee', 'ค่าจัดส่งของผู้ขาย']);
+          let actualShip = getExactRowValAbs(row, ['Actual shipping fee', 'ค่าจัดส่งตามจริง']);
+          
+          shipEstRow = actualShip > 0 ? actualShip : sellerShip;
+          shipSubsidyRow = getExactRowValAbs(row, ['Platform shipping fee discount', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม']);
+          
+          shipBuyerRow = 0; 
+          shipReturnRow = 0; 
+      } else {
+          transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
+          comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']); 
+          serv = getExactRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
+          
+          const baseInfra = getExactRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
+          const shippingProg = getExactRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
+          infraRow = baseInfra + shippingProg;
+          
+          affiliateRow = getExactRowValAbs(row, ['ค่าคอมมิชชั่น Affiliate', 'Affiliate Commission']);
+          
+          shipBuyerRow = getRowValAbs(row, currentSchema.shippingFeeByBuyer);
+          shipSubsidyRow = getRowValAbs(row, currentSchema.shippingFeeSubsidy);
+          shipEstRow = getRowValAbs(row, currentSchema.estimatedShippingFee);
+          shipReturnRow = getRowValAbs(row, currentSchema.returnShippingFee);
+      }
+
+      if (mode !== 'update_settled') {
+          shipEstRow = 0;      
+          shipSubsidyRow = 0;  
+          shipReturnRow = 0;   
+      }
+
+      return { transFee, comm, serv, affiliateRow, infraRow, shipBuyerRow, shipSubsidyRow, shipEstRow, shipReturnRow };
+  };
+
+  // --- 🔥 NEW: ฟังก์ชันบังคับนำเข้ารายการที่ถูกข้าม (Force Import) พร้อม Action ---
+  const handleForceImportSkipped = (actionType) => {
+      if (selectedSkippedForImport.length === 0) return;
+      setLoading(true);
+
+      const schema = PLATFORM_SCHEMAS[platform] || PLATFORM_SCHEMAS.shopee;
+      const ordersMap = {};
+      let addedAmt = 0;
+      let forceImportCount = 0;
+
+      selectedSkippedForImport.forEach(skippedItem => {
+          const row = skippedItem.rawData;
+          if (!row) return;
+
+          const rawOrderId = findVal(row, schema.orderId);
+          const orderId = String(rawOrderId || '').replace(/^['"]|['"]$/g, '').trim();
+          if (!orderId) return;
+
+          const rawQty = findVal(row, schema.qty);
+          const qty = (rawQty !== undefined && rawQty !== '') ? Math.max(1, Math.abs(cleanNum(rawQty))) : 1;
+
+          const fees = extractFeesAndShipping(row, importMode, schema);
+          const parsedFixed = parseFloat(fixedInfraFee);
+          const infra = !isNaN(parsedFixed) ? parsedFixed : (fees.infraRow !== 0 ? fees.infraRow : 0);
+          const rowTotalFees = fees.transFee + fees.comm + fees.serv + fees.affiliateRow + infra;
+
+          const refundAmtRow = getRowValAbs(row, schema.refundAmount);
+          const orderDateVal = findVal(row, schema.orderDate) || findVal(row, schema.settleDate) || new Date();
+          let settleDateVal = null;
+          if (importMode === 'new_settled' || importMode === 'update_settled') {
+              settleDateVal = findVal(row, schema.settleDate) || findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน']) || orderDateVal;
+          }
+
+          const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'ยอดเงินที่ชำระทั้งหมด']);
+          const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? cleanNum(actualSettledAmtRaw) : undefined;
+
+          const skuInput = findVal(row, schema.sku);
+          let skuVal = String(skuInput || '-').replace(/^['"=]+|['"=]+$/g, '').trim();
+          if (skuVal.endsWith('.0')) skuVal = skuVal.slice(0, -2);
+
+          const price = getRowValAbs(row, schema.price);
+          const sellerDiscount = getRowValAbs(row, schema.sellerDiscount);
+          const shippingAddress = String(findVal(row, schema.shipping) || '');
+          const buyerName = String(findVal(row, schema.buyer) || 'ลูกค้า ' + platform);
+          const courier = String(findVal(row, schema.courier) || '-').trim();
+          const trackingNo = String(findVal(row, schema.trackingNo) || '-').trim();
+          const shopName = String(findVal(row, schema.shopName) || 'ไม่ระบุ').trim();
+
+          const lineTotal = price * qty;
+          const isForcedSuccess = actionType === 'success';
+
+          if (!ordersMap[orderId]) {
+              const baseProdName = String(findVal(row, schema.product) || 'สินค้าจาก ' + platform);
+              let descDisplay = baseProdName.substring(0, 80).trim();
+              if (isForcedSuccess) descDisplay = `[สำเร็จ] ${descDisplay}`;
+              else if (actionType === 'discard') descDisplay = `[ตีกลับ-ชำรุด] ${descDisplay}`;
+              else descDisplay = `[ตีกลับ-คืนคลัง] ${descDisplay}`;
+
+              ordersMap[orderId] = {
+                  type: 'income',
+                  date: normalizeDate(orderDateVal),
+                  orderId,
+                  total: lineTotal,
+                  couponDiscount: sellerDiscount,
+                  refundAmount: refundAmtRow,
+                  platformFee: rowTotalFees,
+                  transactionFee: fees.transFee,
+                  infrastructureFee: infra,
+                  commissionFee: fees.comm,
+                  serviceFee: fees.serv,
+                  description: descDisplay,
+                  channel: platform.toUpperCase(),
+                  category: 'รายได้จากการขายสินค้า',
+                  items: [{ desc: baseProdName.trim(), qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal }],
+                  partnerName: buyerName,
+                  shippingAddress: shippingAddress,
+                  partnerAddress: shippingAddress,
+                  courier: courier,
+                  trackingNo: trackingNo,
+                  shippingFee: fees.shipBuyerRow,
+                  shippingFeeSubsidy: fees.shipSubsidyRow,
+                  estimatedShippingFee: fees.shipEstRow,
+                  returnShippingFee: fees.shipReturnRow,
+                  ...(actualSettledAmtFromRow !== undefined ? { actualSettledAmt: actualSettledAmtFromRow } : {}),
+                  paymentStatus: importMode === 'new_pending' ? 'pending_platform' : 'settled',
+                  settlementDate: importMode === 'new_pending' ? null : (normalizeDate(settleDateVal) || normalizeDate(orderDateVal)),
+                  ...(shopName !== 'ไม่ระบุ' ? { shopName: shopName } : {}),
+                  isDeliveryFailed: !isForcedSuccess,
+                  isReturned: !isForcedSuccess,
+                  isCancelled: !isForcedSuccess,
+                  returnAction: actionType, // 'restock', 'discard', 'success'
+                  cancelledAt: !isForcedSuccess ? normalizeDate(orderDateVal) : null,
+                  isAdjusted: true 
+              };
+              forceImportCount++;
+          } else {
+              ordersMap[orderId].total += lineTotal;
+              ordersMap[orderId].couponDiscount = Math.max(ordersMap[orderId].couponDiscount || 0, sellerDiscount);
+              ordersMap[orderId].refundAmount = Math.max(ordersMap[orderId].refundAmount || 0, refundAmtRow);
+
+              ordersMap[orderId].transactionFee = Math.max(ordersMap[orderId].transactionFee || 0, fees.transFee);
+              ordersMap[orderId].commissionFee = Math.max(ordersMap[orderId].commissionFee || 0, fees.comm);
+              ordersMap[orderId].serviceFee = Math.max(ordersMap[orderId].serviceFee || 0, fees.serv);
+              ordersMap[orderId].infrastructureFee = Math.max(ordersMap[orderId].infrastructureFee || 0, infra);
+
+              ordersMap[orderId].platformFee = ordersMap[orderId].transactionFee + ordersMap[orderId].commissionFee + ordersMap[orderId].serviceFee + ordersMap[orderId].infrastructureFee;
+
+              ordersMap[orderId].shippingFee = Math.max(ordersMap[orderId].shippingFee || 0, fees.shipBuyerRow);
+              ordersMap[orderId].shippingFeeSubsidy = Math.max(ordersMap[orderId].shippingFeeSubsidy || 0, fees.shipSubsidyRow);
+              ordersMap[orderId].estimatedShippingFee = Math.max(ordersMap[orderId].estimatedShippingFee || 0, fees.shipEstRow);
+              ordersMap[orderId].returnShippingFee = Math.max(ordersMap[orderId].returnShippingFee || 0, fees.shipReturnRow);
+
+              if (actualSettledAmtFromRow !== undefined) {
+                  ordersMap[orderId].actualSettledAmt = Math.max(ordersMap[orderId].actualSettledAmt || 0, actualSettledAmtFromRow);
+              }
+
+              const baseProdNamePush = String(findVal(row, schema.product) || 'สินค้า').trim();
+              ordersMap[orderId].items.push({ desc: baseProdNamePush, qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal });
+          }
+      });
+
+      const forceImportedArr = Object.values(ordersMap);
+
+      // คำนวณ Grand Total ใหม่
+      forceImportedArr.forEach(t => {
+          const currentDiscount = t.couponDiscount || 0;
+          const currentBuyerShip = t.shippingFee || 0;
+          t.grandTotal = t.total - currentDiscount - (t.refundAmount || 0) + currentBuyerShip;
+          if (t.returnAction === 'success') {
+              addedAmt += (t.grandTotal || t.total);
+          }
+      });
+
+      // นำไปรวมกับข้อมูลนำเข้าหลัก
+      setImportedData(prev => [...prev, ...forceImportedArr].sort(sortNewestFirst));
+
+      // นำออกจากรายการที่ถูกข้าม
+      const importedOrderIds = forceImportedArr.map(i => i.orderId);
+      setSkippedDetailsData(prev => prev.filter(item => !importedOrderIds.includes(item.orderId)));
+      setDeliveryFailedDetailsData(prev => prev.filter(item => !importedOrderIds.includes(item.orderId)));
+
+      setStats(prev => ({
+          ...prev,
+          processed: prev.processed + forceImportedArr.length,
+          skipped: prev.skipped - selectedSkippedForImport.length,
+          deliveryFailed: Math.max(0, prev.deliveryFailed - selectedSkippedForImport.length),
+          totalAmount: prev.totalAmount + addedAmt
+      }));
+
+      setSelectedSkippedForImport([]);
+      setShowSkippedModal(false);
+      setShowDeliveryFailedModal(false);
+      setLoading(false);
+      
+      const msg = actionType === 'success' 
+        ? `บังคับนำเข้าเป็น 'ออเดอร์สำเร็จ' ${forceImportedArr.length} รายการ`
+        : `บันทึกตีกลับ (${actionType === 'discard' ? 'ชำรุด' : 'คืนคลัง'}) ${forceImportedArr.length} รายการแล้ว`;
+      showToast(msg, "success");
+  };
+
+  const toggleSelectSkipped = (item) => {
+      setSelectedSkippedForImport(prev => 
+          prev.some(i => i.orderId === item.orderId)
+              ? prev.filter(i => i.orderId !== item.orderId)
+              : [...prev, item]
+      );
+  };
+
+  const toggleSelectAllSkipped = (e, dataArray) => {
+      if (e.target.checked) {
+          setSelectedSkippedForImport(dataArray);
+      } else {
+          setSelectedSkippedForImport([]);
+      }
+  };
 
   // --- Grouped Inventory for Dropdown ---
   const groupedInventory = useMemo(() => {
@@ -1788,91 +2043,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         let currentSkippedDetails = []; 
         let currentDeliveryFailedDetails = []; 
 
-        const getRowValAbs = (row, kws) => {
-            const val = findVal(row, kws);
-            return val !== undefined && val !== null && String(val).trim() !== '' ? Math.abs(cleanNum(val)) : 0;
-        };
-        // --- 🔥 NEW FIX: EXACT MATCH EXTRACTOR FOR TIKTOK & SHOPEE 🔥 ---
-        // ป้องกันการดึงคอลัมน์ชื่อคล้ายกัน เช่น "Refund of Transaction fee" หรือ "ค่าคอมมิชชั่น AMS"
-        const getExactRowValAbs = (row, exactKeys) => {
-            const keys = Object.keys(row);
-            for (let k of exactKeys) {
-                // เปรียบเทียบแบบเป๊ะๆ (ตัดช่องว่างทิ้งทั้งหมด ป้องกันปัญหาเว้นวรรคไม่เท่ากันใน Excel)
-                const cleanK = String(k).replace(/\s+/g, '').toLowerCase();
-                const match = keys.find(rk => String(rk).replace(/\s+/g, '').toLowerCase() === cleanK);
-                if (match) {
-                    const val = row[match];
-                    if (val !== undefined && val !== null && String(val).trim() !== '') {
-                        return Math.abs(cleanNum(val));
-                    }
-                }
-            }
-            return 0;
-        };
-
-        // --- 🔥 NEW FIX: CENTRALIZED FEES & SHIPPING EXTRACTOR 🔥 ---
-        const extractFeesAndShipping = (row, mode) => {
-            let transFee = 0, comm = 0, serv = 0, infraRow = 0, affiliateRow = 0;
-            let shipBuyerRow = 0, shipSubsidyRow = 0, shipEstRow = 0, shipReturnRow = 0;
-
-            if (platform === 'tiktok') {
-                // 1. ดึง Total Fees แบบเหมาจบในช่องเดียว ตามไอเดียของลูกค้า (เป๊ะและชัวร์ที่สุด)
-                let totalFeeVal = getExactRowValAbs(row, ['Total Fees', 'ค่าธรรมเนียมรวม', 'รวมค่าธรรมเนียม']);
-                
-                // Fallback: ถ้าบังเอิญหาคอลัมน์ Total Fees ไม่เจอ ค่อยกลับไปรวม 4 คอลัมน์เดิม
-                if (totalFeeVal === 0) {
-                    let t1 = getExactRowValAbs(row, ['Transaction fee', 'Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee']);
-                    let t2 = getExactRowValAbs(row, ['TikTok Shop commission fee', 'ค่าคอมมิชชันของ TikTok Shop', 'Platform Commission']);
-                    let t3 = getExactRowValAbs(row, ['Affiliate Commission', 'ค่าคอมมิชชันของพันธมิตร']);
-                    let t4 = getExactRowValAbs(row, ['Commerce growth fee', 'ค่าธรรมเนียม Commerce growth']);
-                    totalFeeVal = t1 + t2 + t3 + t4;
-                }
-
-                transFee = totalFeeVal;
-                comm = 0;
-                affiliateRow = 0;
-                infraRow = 0;
-                serv = 0;
-
-                let sellerShip = getExactRowValAbs(row, ['Seller shipping fee', 'ค่าจัดส่งของผู้ขาย']);
-                let actualShip = getExactRowValAbs(row, ['Actual shipping fee', 'ค่าจัดส่งตามจริง']);
-                
-                shipEstRow = actualShip > 0 ? actualShip : sellerShip;
-                shipSubsidyRow = getExactRowValAbs(row, ['Platform shipping fee discount', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม']);
-                
-                shipBuyerRow = 0; 
-                shipReturnRow = 0; 
-            } else {
-                // สำหรับ Shopee/Lazada ดึงตามปกติโดยใช้ Exact Match แบบตัดช่องว่างทิ้ง ป้องกันการดึงคอลัมน์ชื่อคล้ายกันมาผิด
-                transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
-                comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']); 
-                serv = getExactRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
-                
-                const baseInfra = getExactRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
-                const shippingProg = getExactRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
-                infraRow = baseInfra + shippingProg;
-                
-                affiliateRow = getExactRowValAbs(row, ['ค่าคอมมิชชั่น Affiliate', 'Affiliate Commission']);
-                
-                // สำหรับค่าจัดส่ง ดึงตามปกติ (ใช้ Includes ได้เพราะไม่ค่อยมีชื่อซ้ำซ้อน)
-                shipBuyerRow = getRowValAbs(row, schema.shippingFeeByBuyer);
-                shipSubsidyRow = getRowValAbs(row, schema.shippingFeeSubsidy);
-                shipEstRow = getRowValAbs(row, schema.estimatedShippingFee);
-                shipReturnRow = getRowValAbs(row, schema.returnShippingFee);
-            }
-
-            // --- 🔥 THE ULTIMATE FIX: กฎเหล็ก! ถ้าเป็นโหมดนำเข้าใหม่ (1 หรือ 2) ให้บังคับค่าส่งเป็น 0 ทั้งหมด เพื่อรอรับยอดจริงในโหมด 3 ---
-            if (mode !== 'update_settled') {
-                shipEstRow = 0;      // ตัดค่าจัดส่งโดยประมาณทิ้ง (ไม่นำเข้าระบบ)
-                shipSubsidyRow = 0;  // ตัดเงินสนับสนุนค่าจัดส่งโดยประมาณทิ้ง
-                shipReturnRow = 0;   // ตัดค่าจัดส่งสินค้าคืนทิ้ง
-            }
-
-            return { transFee, comm, serv, affiliateRow, infraRow, shipBuyerRow, shipSubsidyRow, shipEstRow, shipReturnRow };
-        };
-
-        // --- 🔥 NEW FIX: EXCEL EXACT EXTRACTOR 🔥 ---
-        // คำนวณสรุปข้อมูลจากไฟล์ Excel ตรงๆ เพื่อให้ยอด Preview ตรงกับหน้าสรุปของ Shopee 100%
+        // --- 🔥 FIX: EXCEL EXACT EXTRACTOR 🔥 ---
         let detailedStats = {
             productPrice: 0, sellerDiscount: 0, refundAmount: 0, 
             shipBuyer: 0, shipShopee: 0, shipActual: 0, shipReturn: 0, 
@@ -2063,12 +2234,26 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                     } else {
                         if (!matchedMap[existingTrans.id]) {
                             alreadySettledCount++;
-                            currentSkippedDetails.push({ orderId: orderId, product: '-', qty: 0, reason: 'อัปเดตรับเงินไปแล้ว (ข้อมูลซ้ำ)' });
+                            currentSkippedDetails.push({ 
+                                orderId: orderId, 
+                                product: '-', 
+                                qty: 0, 
+                                statusFromFile: 'สำเร็จแล้ว',
+                                reason: 'อัปเดตรับเงินไปแล้ว (ข้อมูลซ้ำ)',
+                                rawData: row
+                            });
                         }
                     }
                 } else {
                     notFoundCount++;
-                    currentSkippedDetails.push({ orderId: orderId, product: '-', qty: 0, reason: 'ไม่พบออเดอร์ตั้งต้นในระบบ' });
+                    currentSkippedDetails.push({ 
+                        orderId: orderId, 
+                        product: '-', 
+                        qty: 0, 
+                        statusFromFile: statusStr || 'ไม่ระบุ',
+                        reason: 'ไม่พบออเดอร์ตั้งต้นในระบบ',
+                        rawData: row
+                    });
                 }
             });
             
@@ -2176,7 +2361,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                    status.includes('ตีกลับ');
           
           // --- 🔥 THE REAL FIX: โหมด 1 และ 2 บังคับใช้กฎเหล็ก 4 ช่อง ---
-          const fees = extractFeesAndShipping(row, importMode);
+          const fees = extractFeesAndShipping(row, importMode, schema);
           const transFee = fees.transFee;
           const comm = fees.comm; 
           const serv = fees.serv;
@@ -2238,15 +2423,51 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
               let reasonStr = 'ข้อมูลไม่ครบถ้วน';
               if (!isCompleted && !forceImportDueToFee) {
-                  reasonStr = 'สถานะไม่สำเร็จ / ลูกค้ายกเลิก / ยังไม่จ่ายเงิน';
-                  currentSkippedDetails.push({ orderId: rawOrderId || '-', sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
+                  reasonStr = 'ไม่อยู่ในเงื่อนไขการนำเข้าปกติ (ยกเลิก / ไม่สำเร็จ)';
+                  if (isDeliveryFailed) {
+                      currentDeliveryFailedDetails.push({ 
+                          orderId: rawOrderId || '-', 
+                          sku: skuVal, 
+                          product: String(findVal(row, schema.product) || '-'), 
+                          statusFromFile: status || 'ไม่ระบุ',
+                          reason: cancelReason || 'จัดส่งไม่สำเร็จ/ตีกลับ', 
+                          qty: qty,
+                          rawData: row
+                      });
+                  } else {
+                      currentSkippedDetails.push({ 
+                          orderId: rawOrderId || '-', 
+                          sku: skuVal, 
+                          product: String(findVal(row, schema.product) || '-'), 
+                          statusFromFile: status || 'ไม่ระบุ',
+                          reason: reasonStr, 
+                          qty: qty,
+                          rawData: row
+                      });
+                  }
                   if (orderId && !trackedCancelledOrders.has(orderId)) { cCount++; trackedCancelledOrders.add(orderId); }
               } else if (!orderDateVal) {
                   reasonStr = 'ไม่มีวันที่ทำรายการ';
-                  currentSkippedDetails.push({ orderId: rawOrderId || '-', sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
+                  currentSkippedDetails.push({ 
+                      orderId: rawOrderId || '-', 
+                      sku: skuVal, 
+                      product: String(findVal(row, schema.product) || '-'), 
+                      statusFromFile: status || 'ไม่ระบุ',
+                      reason: reasonStr, 
+                      qty: qty,
+                      rawData: row
+                  });
               } else if (!orderId) {
                   reasonStr = 'ไม่มีหมายเลขคำสั่งซื้อ';
-                  currentSkippedDetails.push({ orderId: '-', sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: reasonStr, qty: qty });
+                  currentSkippedDetails.push({ 
+                      orderId: '-', 
+                      sku: skuVal, 
+                      product: String(findVal(row, schema.product) || '-'), 
+                      statusFromFile: status || 'ไม่ระบุ',
+                      reason: reasonStr, 
+                      qty: qty,
+                      rawData: row
+                  });
               }
               return;
           }
@@ -2254,7 +2475,15 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           if (existingOrderIds.has(orderId)) { 
               duplicates++; 
               skippedQty += qty; 
-              currentSkippedDetails.push({ orderId: orderId, sku: skuVal, product: String(findVal(row, schema.product) || '-'), reason: 'มีข้อมูลในระบบแล้ว (ข้ามเพื่อป้องกันข้อมูลซ้ำ)', qty: qty });
+              currentSkippedDetails.push({ 
+                  orderId: orderId, 
+                  sku: skuVal, 
+                  product: String(findVal(row, schema.product) || '-'), 
+                  statusFromFile: status || 'สำเร็จแล้ว',
+                  reason: 'มีข้อมูลในระบบแล้ว (ข้อมูลซ้ำ)', 
+                  qty: qty,
+                  rawData: row
+              });
               return; 
           }
 
@@ -3180,28 +3409,71 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       {/* --- NEW: Preview Error Logs Section --- */}
                       {(skippedDetailsData.length > 0 || deliveryFailedDetailsData.length > 0) && (
                           <div className="mt-4 bg-white border border-rose-100 rounded-2xl overflow-hidden shadow-sm">
-                              <div className="bg-rose-50 px-4 py-3 border-b border-rose-100 flex items-center gap-2">
-                                  <AlertTriangle size={16} className="text-rose-500" />
-                                  <h4 className="font-bold text-sm text-rose-700">รายการที่ไม่สามารถนำเข้าได้ (รอตรวจสอบ)</h4>
+                              <div className="bg-rose-50 px-4 py-3 border-b border-rose-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                                  <div className="flex items-center gap-2">
+                                      <AlertTriangle size={16} className="text-rose-500" />
+                                      <h4 className="font-bold text-sm text-rose-700">รายการที่ระบบดึงเข้าไม่ได้ (รอตรวจสอบ)</h4>
+                                  </div>
+                                  <div className={`flex items-center gap-2 p-1.5 rounded-xl border w-full sm:w-auto transition-all ${selectedSkippedForImport.length > 0 ? 'bg-white/80 border-orange-200' : 'bg-white/40 border-slate-200/50'}`}>
+                                      <select 
+                                        value={forceImportAction} 
+                                        onChange={e => setForceImportAction(e.target.value)} 
+                                        disabled={selectedSkippedForImport.length === 0}
+                                        className="bg-white border border-slate-200 text-[10px] font-bold py-2 px-2 rounded-lg outline-none text-slate-700 focus:border-orange-400 flex-1 cursor-pointer disabled:opacity-50 disabled:bg-slate-50"
+                                      >
+                                          <option value="restock">📦 คืนเข้าคลัง (สภาพดี)</option>
+                                          <option value="discard">🗑️ ตัดชำรุด (สินค้าเสียหาย)</option>
+                                          <option value="success">✅ ฝืนตั้งเป็น 'สำเร็จ'</option>
+                                      </select>
+                                      <button 
+                                        onClick={() => handleForceImportSkipped(forceImportAction)} 
+                                        disabled={selectedSkippedForImport.length === 0}
+                                        className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-lg text-[10px] font-bold shadow-sm transition-all flex items-center gap-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      >
+                                          <ArrowRightLeft size={12}/> นำเข้า ({selectedSkippedForImport.length})
+                                      </button>
+                                  </div>
                               </div>
-                              <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                              <div className="max-h-80 overflow-y-auto custom-scrollbar">
                                   <table className="w-full text-xs text-left">
-                                      <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0">
+                                      <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 shadow-sm border-b border-slate-200">
                                           <tr>
-                                              <th className="p-3 pl-4">Order ID</th>
+                                              <th className="p-3 pl-4 w-10 text-center">
+                                                  <input 
+                                                      type="checkbox" 
+                                                      className="w-4 h-4 rounded text-indigo-600 border-slate-300 cursor-pointer"
+                                                      onChange={(e) => toggleSelectAllSkipped(e, [...deliveryFailedDetailsData, ...skippedDetailsData])}
+                                                      checked={selectedSkippedForImport.length > 0 && selectedSkippedForImport.length === (deliveryFailedDetailsData.length + skippedDetailsData.length)}
+                                                  />
+                                              </th>
+                                              <th className="p-3 w-32">Order ID</th>
                                               <th className="p-3">สินค้า (Product / SKU)</th>
-                                              <th className="p-3 text-center">สถานะ/เหตุผล</th>
+                                              <th className="p-3 w-32">สถานะ (จากไฟล์)</th>
+                                              <th className="p-3 w-40">เหตุผลที่ระบบข้าม</th>
                                           </tr>
                                       </thead>
                                       <tbody className="divide-y divide-slate-100">
                                           {deliveryFailedDetailsData.map((item, i) => (
-                                              <tr key={`failed-${i}`} className="hover:bg-orange-50/30">
-                                                  <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
+                                              <tr key={`failed-${i}`} className={`transition-colors ${selectedSkippedForImport.some(s => s.orderId === item.orderId) ? 'bg-indigo-50/50' : 'hover:bg-orange-50/30'}`}>
+                                                  <td className="p-3 pl-4 text-center">
+                                                      <input 
+                                                          type="checkbox" 
+                                                          className="w-4 h-4 rounded text-indigo-600 border-slate-300 cursor-pointer"
+                                                          checked={selectedSkippedForImport.some(s => s.orderId === item.orderId)}
+                                                          onChange={() => toggleSelectSkipped(item)}
+                                                      />
+                                                  </td>
+                                                  <td className="p-3 font-mono font-bold text-slate-700">{item.orderId}</td>
                                                   <td className="p-3 truncate max-w-[200px]" title={item.product}>
                                                       <span className="font-mono text-indigo-500 font-bold mr-1">[{item.sku || '-'}]</span>
                                                       {item.product}
                                                   </td>
-                                                  <td className="p-3 text-center">
+                                                  <td className="p-3">
+                                                      <span className="text-[10px] font-bold text-slate-600 border px-1.5 py-0.5 rounded bg-white">
+                                                          {item.statusFromFile}
+                                                      </span>
+                                                  </td>
+                                                  <td className="p-3">
                                                       <span className="bg-orange-100 text-orange-700 px-2 py-1 rounded-md text-[10px] font-bold">
                                                           {item.reason}
                                                       </span>
@@ -3209,13 +3481,26 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                               </tr>
                                           ))}
                                           {skippedDetailsData.map((item, i) => (
-                                              <tr key={`skipped-${i}`} className="hover:bg-amber-50/30">
-                                                  <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
+                                              <tr key={`skipped-${i}`} className={`transition-colors ${selectedSkippedForImport.some(s => s.orderId === item.orderId) ? 'bg-indigo-50/50' : 'hover:bg-amber-50/30'}`}>
+                                                  <td className="p-3 pl-4 text-center">
+                                                      <input 
+                                                          type="checkbox" 
+                                                          className="w-4 h-4 rounded text-indigo-600 border-slate-300 cursor-pointer"
+                                                          checked={selectedSkippedForImport.some(s => s.orderId === item.orderId)}
+                                                          onChange={() => toggleSelectSkipped(item)}
+                                                      />
+                                                  </td>
+                                                  <td className="p-3 font-mono font-bold text-slate-700">{item.orderId}</td>
                                                   <td className="p-3 truncate max-w-[200px]" title={item.product}>
                                                       <span className="font-mono text-indigo-500 font-bold mr-1">[{item.sku || '-'}]</span>
                                                       {item.product}
                                                   </td>
-                                                  <td className="p-3 text-center">
+                                                  <td className="p-3">
+                                                      <span className="text-[10px] font-bold text-slate-600 border px-1.5 py-0.5 rounded bg-white">
+                                                          {item.statusFromFile}
+                                                      </span>
+                                                  </td>
+                                                  <td className="p-3">
                                                       <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded-md text-[10px] font-bold">
                                                           {item.reason}
                                                       </span>
@@ -3875,37 +4160,78 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       {/* --- Modal แสดงรายการที่ถูกข้าม (Skipped Items Details) --- */}
       {showSkippedModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-            <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+            <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
                 <div className="flex justify-between items-center mb-6">
                     <div>
                         <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><AlertTriangle className="text-amber-500"/> รายละเอียดข้อมูลที่ระบบไม่ได้ดึงเข้า (ข้าม/ซ้ำ)</h3>
                         <p className="text-xs text-slate-400 mt-1">ระบบได้ทำการกรองข้อมูลขยะ หรือข้อมูลที่ซ้ำซ้อนออก เพื่อป้องกันไม่ให้สต็อกและรายรับของคุณผิดเพี้ยน</p>
                     </div>
-                    <button onClick={()=>setShowSkippedModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                    <div className="flex flex-col sm:flex-row items-end sm:items-center gap-3">
+                        <div className={`flex items-center gap-2 p-1.5 rounded-xl border transition-all ${selectedSkippedForImport.length > 0 ? 'bg-slate-50 border-orange-200' : 'bg-slate-50/50 border-slate-200/50'}`}>
+                            <select 
+                              value={forceImportAction} 
+                              onChange={e => setForceImportAction(e.target.value)} 
+                              disabled={selectedSkippedForImport.length === 0}
+                              className="bg-white border border-slate-200 text-[10px] font-bold py-2 px-2 rounded-lg outline-none text-slate-700 focus:border-orange-400 cursor-pointer disabled:opacity-50 disabled:bg-slate-50"
+                            >
+                                <option value="restock">📦 คืนเข้าคลัง (สภาพดี)</option>
+                                <option value="discard">🗑️ ตัดชำรุด (สินค้าเสียหาย)</option>
+                                <option value="success">✅ ฝืนตั้งเป็น 'สำเร็จ'</option>
+                            </select>
+                            <button 
+                                onClick={() => handleForceImportSkipped(forceImportAction)} 
+                                disabled={selectedSkippedForImport.length === 0}
+                                className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-[10px] font-bold shadow-sm transition-all flex items-center gap-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <ArrowRightLeft size={12}/> บังคับนำเข้า ({selectedSkippedForImport.length})
+                            </button>
+                        </div>
+                        <button onClick={()=>setShowSkippedModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                    </div>
                 </div>
                 <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl">
                     <table className="w-full text-xs text-left">
                         <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
                             <tr>
-                                <th className="p-4 w-10 text-center">No.</th>
-                                <th className="p-4">Order ID</th>
+                                <th className="p-4 pl-6 w-12 text-center">
+                                    <input 
+                                        type="checkbox" 
+                                        className="w-4 h-4 rounded text-indigo-600 border-slate-300 cursor-pointer"
+                                        onChange={(e) => toggleSelectAllSkipped(e, skippedDetailsData)}
+                                        checked={selectedSkippedForImport.length > 0 && skippedDetailsData.length > 0 && selectedSkippedForImport.length === skippedDetailsData.length}
+                                    />
+                                </th>
+                                <th className="p-4 w-32">Order ID</th>
                                 <th className="p-4">สินค้า (Product / SKU)</th>
-                                <th className="p-4 text-center">จำนวน (ชิ้น)</th>
-                                <th className="p-4">สาเหตุที่ระบบข้าม (Reason)</th>
+                                <th className="p-4 w-32">สถานะ (จากไฟล์)</th>
+                                <th className="p-4 w-48">เหตุผลที่ระบบข้าม (System Reason)</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {skippedDetailsData.map((item, i) => (
-                                <tr key={i} className="hover:bg-amber-50/30 transition-colors">
-                                    <td className="p-4 text-center font-bold text-slate-400">{i + 1}</td>
+                                <tr key={i} className={`transition-colors ${selectedSkippedForImport.some(s => s.orderId === item.orderId) ? 'bg-indigo-50/50' : 'hover:bg-amber-50/30'}`}>
+                                    <td className="p-4 pl-6 text-center">
+                                        <input 
+                                            type="checkbox" 
+                                            className="w-4 h-4 rounded text-indigo-600 border-slate-300 cursor-pointer"
+                                            checked={selectedSkippedForImport.some(s => s.orderId === item.orderId)}
+                                            onChange={() => toggleSelectSkipped(item)}
+                                        />
+                                    </td>
                                     <td className="p-4 font-mono font-bold text-slate-700">{item.orderId}</td>
                                     <td className="p-4 truncate max-w-[250px]" title={item.product}>
                                         <span className="font-mono text-indigo-500 font-bold mr-1">[{item.sku || '-'}]</span>
                                         {item.product}
                                     </td>
-                                    <td className="p-4 text-center font-black text-slate-800">{item.qty}</td>
-                                    <td className="p-4 text-amber-600 font-bold text-[10px]">
-                                        <span className="bg-amber-100/50 px-2 py-1 rounded-lg border border-amber-200/50">{item.reason}</span>
+                                    <td className="p-4">
+                                        <span className="text-[10px] font-bold text-slate-600 border border-slate-200 px-2 py-1 rounded bg-white whitespace-nowrap">
+                                            {item.statusFromFile}
+                                        </span>
+                                    </td>
+                                    <td className="p-4">
+                                        <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded-md text-[10px] font-bold whitespace-nowrap">
+                                            {item.reason}
+                                        </span>
                                     </td>
                                 </tr>
                             ))}
@@ -3915,8 +4241,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                         </tbody>
                     </table>
                 </div>
-                <div className="pt-4 mt-2 border-t border-slate-100 flex justify-end">
-                    <button onClick={()=>setShowSkippedModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">รับทราบและปิดหน้าต่าง</button>
+                <div className="pt-4 mt-2 border-t border-slate-100 flex justify-between items-center">
+                    <p className="text-[10px] font-bold text-amber-600">* การบังคับนำเข้า จะเปลี่ยนสถานะให้กลายเป็นออเดอร์ปกติที่ทำรายการสำเร็จ (เหมาะสำหรับออเดอร์ที่ถูกยกเลิกในระบบ แต่ได้เงินค่าสินค้าจริง)</p>
+                    <button onClick={()=>setShowSkippedModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
                 </div>
             </div>
         </div>
@@ -3925,34 +4252,78 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       {/* --- NEW: Modal แสดงรายการจัดส่งไม่สำเร็จ/ตีกลับ (Delivery Failed Details) --- */}
       {showDeliveryFailedModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-            <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+            <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
                 <div className="flex justify-between items-center mb-6">
                     <div>
                         <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><AlertTriangle className="text-orange-500"/> รายละเอียดออเดอร์ที่จัดส่งไม่สำเร็จ / ตีกลับ</h3>
                         <p className="text-xs text-slate-400 mt-1">ระบบได้ทำการกรองออเดอร์เหล่านี้ออก ไม่นำมานับเป็นยอดขายและไม่ตัดสต็อก เพื่อป้องกันบัญชีคลาดเคลื่อน</p>
                     </div>
-                    <button onClick={()=>setShowDeliveryFailedModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                    <div className="flex flex-col sm:flex-row items-end sm:items-center gap-3">
+                        <div className={`flex items-center gap-2 p-1.5 rounded-xl border transition-all ${selectedSkippedForImport.length > 0 ? 'bg-slate-50 border-orange-200' : 'bg-slate-50/50 border-slate-200/50'}`}>
+                            <select 
+                              value={forceImportAction} 
+                              onChange={e => setForceImportAction(e.target.value)} 
+                              disabled={selectedSkippedForImport.length === 0}
+                              className="bg-white border border-slate-200 text-[10px] font-bold py-2 px-2 rounded-lg outline-none text-slate-700 focus:border-orange-400 cursor-pointer disabled:opacity-50 disabled:bg-slate-50"
+                            >
+                                <option value="restock">📦 คืนเข้าคลัง (สภาพดี)</option>
+                                <option value="discard">🗑️ ตัดชำรุด (สินค้าเสียหาย)</option>
+                                <option value="success">✅ ฝืนตั้งเป็น 'สำเร็จ'</option>
+                            </select>
+                            <button 
+                                onClick={() => handleForceImportSkipped(forceImportAction)} 
+                                disabled={selectedSkippedForImport.length === 0}
+                                className="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2.5 rounded-lg text-xs font-bold shadow-sm transition-all flex items-center gap-2 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <ArrowRightLeft size={14}/> บังคับนำเข้า ({selectedSkippedForImport.length})
+                            </button>
+                        </div>
+                        <button onClick={()=>setShowDeliveryFailedModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                    </div>
                 </div>
                 <div className="flex-1 overflow-auto custom-scrollbar border border-orange-200 rounded-2xl">
                     <table className="w-full text-xs text-left">
                         <thead className="bg-orange-50 text-orange-800 uppercase sticky top-0 border-b border-orange-200 z-10">
                             <tr>
-                                <th className="p-4 w-10 text-center">No.</th>
-                                <th className="p-4">Order ID</th>
-                                <th className="p-4">สินค้า (Product)</th>
-                                <th className="p-4 text-center">จำนวน (ชิ้น)</th>
-                                <th className="p-4">สถานะ (Status)</th>
+                                <th className="p-4 pl-6 w-12 text-center">
+                                    <input 
+                                        type="checkbox" 
+                                        className="w-4 h-4 rounded text-orange-600 border-orange-300 cursor-pointer"
+                                        onChange={(e) => toggleSelectAllSkipped(e, deliveryFailedDetailsData)}
+                                        checked={selectedSkippedForImport.length > 0 && deliveryFailedDetailsData.length > 0 && selectedSkippedForImport.length === deliveryFailedDetailsData.length}
+                                    />
+                                </th>
+                                <th className="p-4 w-32">Order ID</th>
+                                <th className="p-4">สินค้า (Product / SKU)</th>
+                                <th className="p-4 w-32">สถานะ (จากไฟล์)</th>
+                                <th className="p-4 w-48">สาเหตุ (System Reason)</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-orange-100">
                             {deliveryFailedDetailsData.map((item, i) => (
-                                <tr key={i} className="hover:bg-orange-50/50 transition-colors">
-                                    <td className="p-4 text-center font-bold text-orange-400">{i + 1}</td>
+                                <tr key={i} className={`transition-colors ${selectedSkippedForImport.some(s => s.orderId === item.orderId) ? 'bg-indigo-50/50' : 'hover:bg-orange-50/50'}`}>
+                                    <td className="p-4 pl-6 text-center">
+                                        <input 
+                                            type="checkbox" 
+                                            className="w-4 h-4 rounded text-orange-600 border-orange-300 cursor-pointer"
+                                            checked={selectedSkippedForImport.some(s => s.orderId === item.orderId)}
+                                            onChange={() => toggleSelectSkipped(item)}
+                                        />
+                                    </td>
                                     <td className="p-4 font-mono font-bold text-slate-700">{item.orderId}</td>
-                                    <td className="p-4 truncate max-w-[250px]" title={item.product}>{item.product}</td>
-                                    <td className="p-4 text-center font-black text-slate-800">{item.qty}</td>
-                                    <td className="p-4 text-orange-600 font-bold text-[10px]">
-                                        <span className="bg-orange-100/50 px-2 py-1 rounded-lg border border-orange-200/50">{item.reason}</span>
+                                    <td className="p-4 truncate max-w-[250px]" title={item.product}>
+                                        <span className="font-mono text-indigo-500 font-bold mr-1">[{item.sku || '-'}]</span>
+                                        {item.product}
+                                    </td>
+                                    <td className="p-4">
+                                        <span className="text-[10px] font-bold text-slate-600 border border-slate-200 px-2 py-1 rounded bg-white whitespace-nowrap">
+                                            {item.statusFromFile}
+                                        </span>
+                                    </td>
+                                    <td className="p-4">
+                                        <span className="bg-orange-100/80 text-orange-700 px-2 py-1 rounded-md text-[10px] font-bold whitespace-nowrap">
+                                            {item.reason}
+                                        </span>
                                     </td>
                                 </tr>
                             ))}
