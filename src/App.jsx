@@ -14822,6 +14822,8 @@ export default function App() {
   
   // --- NEW: Auto-Fix TaxOnly State ---
   const [isFixingTaxOnly, setIsFixingTaxOnly] = useState(false);
+  const [showTaxOnlyPreviewModal, setShowTaxOnlyPreviewModal] = useState(false);
+  const [taxOnlyTargets, setTaxOnlyTargets] = useState([]);
 
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
@@ -15672,31 +15674,35 @@ export default function App() {
   };
 
   // --- NEW: ฟังก์ชันตั้งค่า "บันทึกเพื่อยื่นภาษีเท่านั้น" แบบกลุ่ม สำหรับบิลค่าธรรมเนียม ---
-  const handleBulkSetTaxOnlyForFees = async () => {
+  const handleBulkSetTaxOnlyForFees = () => {
       if (!user) return;
-      if (!window.confirm('ยืนยันการตั้งค่า "ยื่นภาษีเท่านั้น" ให้กับบิลค่าธรรมเนียมทั้งหมด?\n\nระบบจะค้นหาบิลรายจ่ายหมวด "ค่าธรรมเนียม Platform" ที่ยังไม่ถูกซ่อนจากแดชบอร์ด และทำการซ่อนให้แบบอัตโนมัติรวดเดียวเพื่อป้องกันยอดรายจ่ายเบิ้ล 2 รอบ')) return;
 
+      // ค้นหาบิลหมวดค่าธรรมเนียมที่มีใบกำกับภาษีแล้ว ที่ยังไม่ได้ติ๊ก isTaxOnly และไม่ถูกยกเลิก
+      const targets = transactions.filter(t => 
+          t.type === 'expense' && 
+          t.category === 'ค่าธรรมเนียม Platform' && 
+          !t.isTaxOnly && 
+          !t.isCancelled &&
+          t.taxInvoiceNo && String(t.taxInvoiceNo).trim() !== ''
+      );
+
+      if (targets.length === 0) {
+          addToast("ไม่มีใบกำกับภาษีค่าธรรมเนียมที่ต้องปรับปรุง (ข้อมูลสมบูรณ์แล้ว)", "success");
+          return;
+      }
+
+      setTaxOnlyTargets(targets);
+      setShowTaxOnlyPreviewModal(true);
+  };
+
+  const executeBulkSetTaxOnly = async () => {
       setIsFixingTaxOnly(true);
       try {
-          // หากรองบิลหมวดค่าธรรมเนียมที่ยังไม่ได้ติ๊ก isTaxOnly
-          const targets = transactions.filter(t => 
-              t.type === 'expense' && 
-              t.category === 'ค่าธรรมเนียม Platform' && 
-              !t.isTaxOnly && 
-              !t.isCancelled
-          );
-
-          if (targets.length === 0) {
-              addToast("ไม่มีบิลค่าธรรมเนียมที่ต้องปรับปรุง (ข้อมูลสมบูรณ์แล้ว)", "success");
-              setIsFixingTaxOnly(false);
-              return;
-          }
-
           let batchWriter = writeBatch(dbInstance);
           let opsCount = 0;
           let processed = 0;
 
-          for (const t of targets) {
+          for (const t of taxOnlyTargets) {
               const docRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'transactions_expense', t.id);
               batchWriter.update(docRef, { 
                   isTaxOnly: true, 
@@ -15718,7 +15724,9 @@ export default function App() {
               await batchWriter.commit();
           }
 
-          addToast(`อัปเดตบิลค่าธรรมเนียมสำเร็จ ${processed} รายการ ซ่อนจากแดชบอร์ดเรียบร้อย!`, "success");
+          addToast(`อัปเดตใบกำกับภาษีค่าธรรมเนียมสำเร็จ ${processed} รายการ ซ่อนจากแดชบอร์ดเรียบร้อย!`, "success");
+          setShowTaxOnlyPreviewModal(false);
+          setTaxOnlyTargets([]);
       } catch (error) {
           console.error("Bulk update TaxOnly Error:", error);
           addToast("เกิดข้อผิดพลาดในการอัปเดตข้อมูล", "error");
@@ -16312,6 +16320,80 @@ export default function App() {
                   <div className="flex gap-3 mt-6 text-center">
                       <button onClick={() => setShowIdDeleteTool(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
                       <button onClick={forceDeleteById} disabled={!targetIdToDelete} className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg disabled:opacity-50 transition-colors">ยืนยันลบ</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* --- NEW: Preview Modal สำหรับซ่อนบิลค่าธรรมเนียม --- */}
+      {showTaxOnlyPreviewModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+                  <div className="flex justify-between items-start mb-6 border-b border-slate-100 pb-4">
+                      <div>
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><ShieldCheck className="text-purple-600"/> ตรวจสอบใบกำกับภาษีค่าธรรมเนียมที่จะซ่อน (Preview)</h3>
+                          <p className="text-xs text-slate-500 mt-1">ระบบพบรายการใบกำกับภาษีหมวด "ค่าธรรมเนียม Platform" ที่ยังแสดงรวมอยู่ในกราฟแดชบอร์ด<br/>แนะนำให้ซ่อนจากกราฟ เพื่อไม่ให้นำไปบวกซ้ำกับยอดหักรายออเดอร์</p>
+                      </div>
+                      <button onClick={() => setShowTaxOnlyPreviewModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 mb-6 shrink-0">
+                      <div className="bg-purple-50 border border-purple-100 p-4 rounded-2xl">
+                          <p className="text-[10px] font-bold text-purple-600 uppercase mb-1">ใบกำกับภาษีที่จะอัปเดต (ซ่อนจากกราฟ)</p>
+                          <p className="text-2xl font-black text-purple-700">{taxOnlyTargets.length.toLocaleString()} <span className="text-sm font-bold text-purple-500">ใบ</span></p>
+                      </div>
+                      <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl">
+                          <p className="text-[10px] font-bold text-rose-600 uppercase mb-1">มูลค่ารวมที่จะถูกเคลียร์ออกจากกราฟ (ไม่เบิ้ลแล้ว)</p>
+                          <p className="text-2xl font-black text-rose-700">{formatCurrency(taxOnlyTargets.reduce((sum, t) => sum + (Number(t.total) || 0), 0))} <span className="text-sm font-bold text-rose-500">บาท</span></p>
+                      </div>
+                  </div>
+
+                  <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl mb-6 bg-slate-50">
+                      <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                              <tr>
+                                  <th className="p-3 pl-4">วันที่ / เลขใบกำกับภาษี</th>
+                                  <th className="p-3">อ้างอิง Order ID / รายการ</th>
+                                  <th className="p-3 text-right pr-4">ยอดค่าธรรมเนียม (฿)</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                              {taxOnlyTargets.slice(0, 50).map((t, idx) => (
+                                  <tr key={idx} className="hover:bg-white transition-colors">
+                                      <td className="p-3 pl-4">
+                                          <p className="font-bold text-slate-700">{formatDate(t.date)}</p>
+                                          <p className="text-[10px] font-mono text-purple-600 font-black mt-0.5 bg-purple-100 px-1.5 py-0.5 rounded w-fit">{t.taxInvoiceNo || '-'}</p>
+                                      </td>
+                                      <td className="p-3">
+                                          <p className="font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 w-fit mb-1">
+                                              {t.linkedOrderNo || '-'}
+                                          </p>
+                                          <p className="text-[10px] text-slate-500 truncate max-w-[200px]">{t.description}</p>
+                                      </td>
+                                      <td className="p-3 text-right pr-4 font-black text-rose-500">{formatCurrency(t.total)}</td>
+                                  </tr>
+                              ))}
+                          </tbody>
+                      </table>
+                      {taxOnlyTargets.length > 50 && (
+                          <div className="p-4 text-center text-xs font-bold text-slate-500 bg-white border-t border-slate-100">
+                              ... แสดงตัวอย่าง 50 รายการแรก จากทั้งหมด {taxOnlyTargets.length.toLocaleString()} รายการ ...
+                          </div>
+                      )}
+                  </div>
+
+                  <div className="flex gap-4 shrink-0">
+                      <button onClick={() => setShowTaxOnlyPreviewModal(false)} disabled={isFixingTaxOnly} className="flex-1 py-4 bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors rounded-2xl font-bold text-sm">
+                          ยกเลิก
+                      </button>
+                      <button 
+                          onClick={executeBulkSetTaxOnly} 
+                          disabled={isFixingTaxOnly} 
+                          className="flex-[2] py-4 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-black text-sm shadow-xl shadow-purple-200 flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                      >
+                          {isFixingTaxOnly ? <Loader className="animate-spin" size={18}/> : <ShieldCheck size={18}/>} 
+                          {isFixingTaxOnly ? 'กำลังอัปเดตระบบ...' : 'ยืนยันซ่อนบิลจากแดชบอร์ด'}
+                      </button>
                   </div>
               </div>
           </div>
