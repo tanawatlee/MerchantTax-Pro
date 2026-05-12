@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, AlertTriangle, Calendar, Info, MapPin, Building, Layers, ArrowRightLeft, Percent, ClipboardList, Briefcase,
   Camera, Sparkles, ScanText, Zap, ChevronRight, Truck, Ticket, CreditCard, FileUp, Hash, Copy, FileCheck, Box, History, AlertCircle, ShoppingCart, Truck as TruckIcon,
   RefreshCw, Plus, FileSpreadsheet, DownloadCloud, Users, Layers as LayersIcon, Filter, ArrowRight, FileJson, FileType, SaveAll,
-  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail, Key, Gift, Wand2, BookOpen, Lightbulb, Receipt, FileMinus, Cloud
+  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail, Key, Gift, Wand2, BookOpen, Lightbulb, Receipt, FileMinus, Cloud, ShieldCheck
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -1417,6 +1417,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   // State สำหรับเก็บข้อมูลและแสดง Popup รายการที่ถูกข้าม
   const [skippedDetailsData, setSkippedDetailsData] = useState([]);
   const [showSkippedModal, setShowSkippedModal] = useState(false);
+
+  // NEW: State สำหรับแสดงหน้า Preview ก่อนบันทึกจริง
+  const [showImportPreviewModal, setShowImportPreviewModal] = useState(false);
 
   // NEW: State สำหรับเก็บข้อมูลออเดอร์ที่จัดส่งไม่สำเร็จ/ตีกลับ
   const [deliveryFailedDetailsData, setDeliveryFailedDetailsData] = useState([]);
@@ -2907,6 +2910,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               await batch.commit();
           }
 
+          setShowImportPreviewModal(false); // ปิดหน้า Preview
           showToast(`กระทบยอดรับเงินสำเร็จ ${count} รายการ (สร้างบิลส่วนต่างอัตโนมัติ)`, "success");
           setImportedData([]);
           setLoading(false);
@@ -3075,6 +3079,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       if (opsCount > 0) {
           await batch.commit();
       }
+      
+      setShowImportPreviewModal(false); // ปิดหน้า Preview
       showToast(`เปิดใช้งานข้อมูล ${importedData.length} รายการ and หักสต็อกเรียบร้อย`, "success");
       setImportedData([]);
     } catch (e) { showToast("Error: " + e.message, "error"); }
@@ -3236,7 +3242,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           {isCheckingAnomaly ? <Loader className="animate-spin" size={14}/> : <ScanText size={14}/>} AI ตรวจจับค่าธรรมเนียมแพง
                       </button>
                       <button 
-                        onClick={saveToFirebase} 
+                        onClick={() => setShowImportPreviewModal(true)} 
                         disabled={loading} 
                         className={`text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50 text-center ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100'}`}
                       >
@@ -4332,24 +4338,117 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                     </td>
                                     <td className="p-4">
                                         <span className="bg-orange-100/80 text-orange-700 px-2 py-1 rounded-md text-[10px] font-bold whitespace-nowrap">
-                                            {item.reason}
-                                        </span>
+                                          {item.reason}
+                                      </span>
+                                  </td>
+                              </tr>
+                          ))}
+                          {deliveryFailedDetailsData.length === 0 && (
+                              <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ไม่พบข้อมูลออเดอร์จัดส่งไม่สำเร็จในไฟล์นี้</td></tr>
+                          )}
+                      </tbody>
+                  </table>
+              </div>
+              <div className="pt-4 mt-2 border-t border-slate-100 flex justify-between items-center">
+                  <p className="text-[10px] font-bold text-orange-600">* หากมีสินค้าเสียหายจากการตีกลับ ให้ทำรายการ "ปรับปรุง/ลดสต็อก" ที่หน้าคลังสินค้าทีหลังครับ</p>
+                  <button onClick={()=>setShowDeliveryFailedModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">รับทราบและปิดหน้าต่าง</button>
+              </div>
+          </div>
+      </div>
+      )}
+
+      {/* --- NEW: Import Preview Modal (ตรวจสอบก่อนบันทึก) --- */}
+      {showImportPreviewModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+                <div className="flex justify-between items-start mb-6">
+                    <div>
+                        <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Eye className="text-indigo-600"/> ตรวจสอบข้อมูลก่อนบันทึก (Preview)</h3>
+                        <p className="text-xs text-slate-500 mt-1">กรุณาตรวจสอบความถูกต้องของข้อมูลทั้งหมดก่อนกดปุ่มยืนยันบันทึกลงฐานข้อมูล</p>
+                    </div>
+                    <button onClick={() => setShowImportPreviewModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 shrink-0">
+                    <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl">
+                        <p className="text-[10px] font-bold text-indigo-600 uppercase mb-1">โหมดการนำเข้า</p>
+                        <p className="text-sm font-black text-indigo-800">{importMode === 'update_settled' ? 'กระทบยอดรับเงิน' : importMode === 'new_settled' ? 'รับเงินแล้ว' : 'รอเงินเข้า'}</p>
+                    </div>
+                    <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl">
+                        <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">จำนวนรายการที่จะบันทึก</p>
+                        <p className="text-xl font-black text-emerald-700">{importedData.length.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl">
+                        <p className="text-[10px] font-bold text-blue-600 uppercase mb-1">{importMode === 'update_settled' ? 'ยอดเงินโอนเข้าจริง' : 'ยอดขายรวม'}</p>
+                        <p className="text-xl font-black text-blue-700">{formatCurrency(importMode === 'update_settled' ? stats.totalActualSettled : stats.totalAmount)}</p>
+                    </div>
+                    <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl">
+                        <p className="text-[10px] font-bold text-rose-600 uppercase mb-1">ค่าธรรมเนียมรวม</p>
+                        <p className="text-xl font-black text-rose-700">{formatCurrency(stats.totalFees)}</p>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl mb-6 bg-slate-50">
+                    <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                            <tr>
+                                <th className="p-3 pl-4">วันที่ / Order ID</th>
+                                <th className="p-3">รายการสินค้า</th>
+                                <th className="p-3 text-right">ค่าธรรมเนียม</th>
+                                <th className="p-3 text-right pr-4">ยอดสุทธิ (Net)</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {/* แสดดงแค่ 50 รายการแรกเพื่อไม่ให้ Modal หน่วง */}
+                            {importedData.slice(0, 50).map((it, idx) => (
+                                <tr key={idx} className="hover:bg-white transition-colors">
+                                    <td className="p-3 pl-4">
+                                        <p className="font-bold text-slate-700">{formatDate(it.newSettlementDate || it.date)}</p>
+                                        <p className="text-[10px] font-mono text-indigo-500 mt-0.5">{it.orderId}</p>
+                                    </td>
+                                    <td className="p-3">
+                                        <div className="max-h-16 overflow-y-auto custom-scrollbar pr-2">
+                                            {(it.items || []).map((item, itemIdx) => (
+                                                <p key={itemIdx} className="text-[10px] text-slate-600 truncate max-w-[250px]" title={item.desc}>
+                                                    • {item.desc} <span className="font-bold text-slate-400">x{item.qty}</span>
+                                                </p>
+                                            ))}
+                                        </div>
+                                    </td>
+                                    <td className="p-3 text-right font-bold text-rose-500">
+                                        -{formatCurrency(it.newPlatformFee !== undefined ? it.newPlatformFee : (it.platformFee || 0))}
+                                    </td>
+                                    <td className="p-3 text-right pr-4 font-black text-slate-800">
+                                        {formatCurrency(it.actualSettledAmt !== undefined ? it.actualSettledAmt : (it.grandTotal || it.total))}
                                     </td>
                                 </tr>
                             ))}
-                            {deliveryFailedDetailsData.length === 0 && (
-                                <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ไม่พบข้อมูลออเดอร์จัดส่งไม่สำเร็จในไฟล์นี้</td></tr>
-                            )}
                         </tbody>
                     </table>
+                    {importedData.length > 50 && (
+                        <div className="p-4 text-center text-xs font-bold text-slate-500 bg-white border-t border-slate-100">
+                            ... แสดงตัวอย่าง 50 รายการแรก จากทั้งหมด {importedData.length.toLocaleString()} รายการ ...
+                        </div>
+                    )}
                 </div>
-                <div className="pt-4 mt-2 border-t border-slate-100 flex justify-between items-center">
-                    <p className="text-[10px] font-bold text-orange-600">* หากมีสินค้าเสียหายจากการตีกลับ ให้ทำรายการ "ปรับปรุง/ลดสต็อก" ที่หน้าคลังสินค้าทีหลังครับ</p>
-                    <button onClick={()=>setShowDeliveryFailedModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">รับทราบและปิดหน้าต่าง</button>
+
+                <div className="flex gap-4 shrink-0">
+                    <button onClick={() => setShowImportPreviewModal(false)} disabled={loading} className="flex-1 py-4 bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors rounded-2xl font-bold text-sm">
+                        กลับไปแก้ไข
+                    </button>
+                    <button 
+                        onClick={saveToFirebase} 
+                        disabled={loading} 
+                        className={`flex-[2] py-4 text-white rounded-2xl font-black text-sm shadow-xl flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:hover:scale-100 ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
+                    >
+                        {loading ? <Loader className="animate-spin" size={18}/> : <Save size={18}/>} 
+                        {loading ? 'กำลังบันทึกข้อมูล...' : (importMode === 'update_settled' ? 'ยืนยันบันทึกการกระทบยอด' : 'ยืนยันบันทึกข้อมูลเข้าระบบ')}
+                    </button>
                 </div>
             </div>
         </div>
       )}
+
     </div>
   );
 }
@@ -14720,6 +14819,9 @@ export default function App() {
   const [showHealerModal, setShowHealerModal] = useState(false);
   const [orphanLots, setOrphanLots] = useState([]);
   const [isHealing, setIsHealing] = useState(false);
+  
+  // --- NEW: Auto-Fix TaxOnly State ---
+  const [isFixingTaxOnly, setIsFixingTaxOnly] = useState(false);
 
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
@@ -15569,6 +15671,61 @@ export default function App() {
       setIsHealing(false);
   };
 
+  // --- NEW: ฟังก์ชันตั้งค่า "บันทึกเพื่อยื่นภาษีเท่านั้น" แบบกลุ่ม สำหรับบิลค่าธรรมเนียม ---
+  const handleBulkSetTaxOnlyForFees = async () => {
+      if (!user) return;
+      if (!window.confirm('ยืนยันการตั้งค่า "ยื่นภาษีเท่านั้น" ให้กับบิลค่าธรรมเนียมทั้งหมด?\n\nระบบจะค้นหาบิลรายจ่ายหมวด "ค่าธรรมเนียม Platform" ที่ยังไม่ถูกซ่อนจากแดชบอร์ด และทำการซ่อนให้แบบอัตโนมัติรวดเดียวเพื่อป้องกันยอดรายจ่ายเบิ้ล 2 รอบ')) return;
+
+      setIsFixingTaxOnly(true);
+      try {
+          // หากรองบิลหมวดค่าธรรมเนียมที่ยังไม่ได้ติ๊ก isTaxOnly
+          const targets = transactions.filter(t => 
+              t.type === 'expense' && 
+              t.category === 'ค่าธรรมเนียม Platform' && 
+              !t.isTaxOnly && 
+              !t.isCancelled
+          );
+
+          if (targets.length === 0) {
+              addToast("ไม่มีบิลค่าธรรมเนียมที่ต้องปรับปรุง (ข้อมูลสมบูรณ์แล้ว)", "success");
+              setIsFixingTaxOnly(false);
+              return;
+          }
+
+          let batchWriter = writeBatch(dbInstance);
+          let opsCount = 0;
+          let processed = 0;
+
+          for (const t of targets) {
+              const docRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'transactions_expense', t.id);
+              batchWriter.update(docRef, { 
+                  isTaxOnly: true, 
+                  updatedAt: serverTimestamp() 
+              });
+              
+              opsCount++;
+              processed++;
+
+              // Commit ทุกๆ 400 รายการป้องกันลิมิตของ Firestore
+              if (opsCount >= 400) {
+                  await batchWriter.commit();
+                  batchWriter = writeBatch(dbInstance);
+                  opsCount = 0;
+              }
+          }
+
+          if (opsCount > 0) {
+              await batchWriter.commit();
+          }
+
+          addToast(`อัปเดตบิลค่าธรรมเนียมสำเร็จ ${processed} รายการ ซ่อนจากแดชบอร์ดเรียบร้อย!`, "success");
+      } catch (error) {
+          console.error("Bulk update TaxOnly Error:", error);
+          addToast("เกิดข้อผิดพลาดในการอัปเดตข้อมูล", "error");
+      }
+      setIsFixingTaxOnly(false);
+  };
+
   const renderContent = () => {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} />;
@@ -15645,6 +15802,10 @@ export default function App() {
               {/* NEW: Data Healer Button */}
               <button onClick={scanForOrphans} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-teal-400 hover:bg-teal-900/30 transition-all text-left">
                 <Activity size={14} className="text-center"/> สแกนซ่อมแซมฐานข้อมูล
+              </button>
+
+              <button onClick={handleBulkSetTaxOnlyForFees} disabled={isFixingTaxOnly || isMigrating || isBackingUp || isRestoring} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-purple-400 hover:bg-purple-900/30 transition-all text-left">
+                {isFixingTaxOnly ? <Loader size={14} className="text-center animate-spin"/> : <ShieldCheck size={14} className="text-center"/>} ซ่อนบิลค่าธรรมเนียมจากกราฟ
               </button>
 
               <button onClick={syncInvoiceDates} disabled={isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-emerald-400 hover:bg-emerald-900/30 transition-all text-left">
