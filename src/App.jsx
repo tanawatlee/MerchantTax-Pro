@@ -800,10 +800,8 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 }
             } else {
                 if (matchOrderMonth) {
-                    lostGmv += itemSubtotal; // NEW: ถ้ายกเลิก/ตีกลับ ให้นำยอดขายเต็มจำนวนไปเป็น Lost GMV
-                    if (fee > 0) {
-                        perfFees += fee;
-                    }
+                    lostGmv += itemSubtotal; // ถ้ายกเลิก/ตีกลับ ให้นำยอดขายเต็มจำนวนไปเป็น Lost GMV
+                    // --- 🔥 THE FIX: ไม่ต้องบวก perfFees += fee ตรงนี้แล้ว เพราะจะมีบิล Expense แยกต่างหากสร้างมารับแทน ---
                 }
                 
                 const cancelSettleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.cancelledAt ? normalizeDate(t.cancelledAt) : orderD);
@@ -813,9 +811,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     matchCancelSettleMonth = cMonth === selectedMonth;
                 }
                 
-                if (matchCancelSettleMonth && fee > 0) {
-                    cashFees += fee; 
-                }
+                // --- 🔥 THE FIX: ไม่ต้องบวก cashFees += fee เช่นกัน ---
             }
         } else if (t.type === 'expense') {
             if (!t.isCancelled && !t.isTaxOnly) {
@@ -1473,6 +1469,48 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const [isTransferring, setIsTransferring] = useState(false);
 
   // --- 🔥 ย้าย Helper Functions สำหรับแยกข้อมูลออกมาไว้ระดับ Component เพื่อให้ Force Import เรียกใช้ได้ ---
+  const cleanNum = (val) => { 
+      if (typeof val === 'number') return val; 
+      if (!val) return 0; 
+      const parsed = parseFloat(String(val).replace(/[^0-9.-]+/g, ""));
+      return isNaN(parsed) ? 0 : parsed;
+  };
+  
+  const cleanForSearch = (str) => String(str).replace(/[^a-zA-Z0-9ก-๙]/g, '').toLowerCase();
+
+  const findVal = (row, kws) => { 
+    if (!kws) return undefined;
+    const keys = Object.keys(row);
+    const cleanKeys = keys.map(k => ({ original: k, clean: cleanForSearch(k) }));
+    
+    for (let i = 0; i < kws.length; i++) {
+        const ckw = cleanForSearch(kws[i]);
+        const matches = cleanKeys.filter(x => x.clean === ckw);
+        for (const match of matches) {
+            const val = row[match.original];
+            if (val !== undefined && val !== null && String(val).trim() !== '') return val;
+        }
+    }
+
+    for (let i = 0; i < kws.length; i++) {
+        const ckw = cleanForSearch(kws[i]);
+        const matches = cleanKeys.filter(x => {
+            const cleanKey = x.clean;
+            const isQtySearch = ckw === 'จำนวน' || ckw === 'qty' || ckw === 'quantity';
+            if (isQtySearch && (cleanKey.includes('เงิน') || cleanKey.includes('โอน') || cleanKey.includes('รวม') || cleanKey.includes('ราคา'))) return false;
+            const isPriceSearch = ckw === 'ราคา' || ckw === 'price' || ckw === 'ราคาขาย';
+            if (isPriceSearch && (cleanKey.includes('สุทธิ') || cleanKey.includes('รวม') || cleanKey.includes('ธรรมเนียม') || cleanKey.includes('ส่วนลด'))) return false;
+            return cleanKey.includes(ckw);
+        });
+        
+        for (const match of matches) {
+            const val = row[match.original];
+            if (val !== undefined && val !== null && String(val).trim() !== '') return val; 
+        }
+    }
+    return undefined; 
+  };
+
   const getRowValAbs = (row, kws) => {
       const val = findVal(row, kws);
       return val !== undefined && val !== null && String(val).trim() !== '' ? Math.abs(cleanNum(val)) : 0;
@@ -1586,6 +1624,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const skuInput = findVal(row, schema.sku);
           let skuVal = String(skuInput || '-').replace(/^['"=]+|['"=]+$/g, '').trim();
           if (skuVal.endsWith('.0')) skuVal = skuVal.slice(0, -2);
+          
+          // --- 🔥 NEW: ดึงข้อมูลสถานะและเหตุผลจากไฟล์ Excel เพื่อบันทึกเป็นหลักฐาน ---
+          const status = String(findVal(row, schema.status) || '');
+          const cancelReason = String(findVal(row, schema.cancelReason) || '');
 
           const price = getRowValAbs(row, schema.price);
           const sellerDiscount = getRowValAbs(row, schema.sellerDiscount);
@@ -1639,7 +1681,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   isCancelled: !isForcedSuccess,
                   returnAction: actionType, // 'restock', 'discard', 'success'
                   cancelledAt: !isForcedSuccess ? normalizeDate(orderDateVal) : null,
-                  isAdjusted: true 
+                  cancelReason: !isForcedSuccess ? (cancelReason || skippedItem.reason) : '', // บันทึกเหตุผล
+                  statusFromFile: status || skippedItem.statusFromFile || '', // บันทึกสถานะตั้งต้น
+                  isAdjusted: true,
+                  isNewFromForceImport: true // --- 🔥 THE FIX: ติดป้ายว่าเป็นออเดอร์ใหม่ ไม่เคยมีในฐานข้อมูล เพื่อให้โหมด 3 ไปสร้าง Record ใหม่แทน ---
               };
               forceImportCount++;
           } else {
@@ -1930,64 +1975,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         refundAmount: ['Refund Amount', 'Customer Refund', 'ยอดเงินคืนลูกค้า'],
         shopName: ['ชื่อร้านค้า', 'Shop Name', 'ร้านค้า']
     }
-  };
-
-  const cleanNum = (val) => { 
-      if (typeof val === 'number') return val; 
-      if (!val) return 0; 
-      const parsed = parseFloat(String(val).replace(/[^0-9.-]+/g, ""));
-      return isNaN(parsed) ? 0 : parsed;
-  };
-  
-  const cleanForSearch = (str) => String(str).replace(/[^a-zA-Z0-9ก-๙]/g, '').toLowerCase();
-
-  const findVal = (row, kws) => { 
-    if (!kws) return undefined;
-    const keys = Object.keys(row);
-    const cleanKeys = keys.map(k => ({ original: k, clean: cleanForSearch(k) }));
-    
-    // 1. Exact Match
-    for (let i = 0; i < kws.length; i++) {
-        const ckw = cleanForSearch(kws[i]);
-        const matches = cleanKeys.filter(x => x.clean === ckw);
-        for (const match of matches) {
-            const val = row[match.original];
-            if (val !== undefined && val !== null && String(val).trim() !== '') {
-                return val;
-            }
-        }
-    }
-
-    // 2. Includes Match
-    for (let i = 0; i < kws.length; i++) {
-        const ckw = cleanForSearch(kws[i]);
-        const matches = cleanKeys.filter(x => {
-            const cleanKey = x.clean;
-            
-            // --- FIX: แก้ไขบั๊กที่ไปบล็อกคอลัมน์ "จำนวนเงินที่โอนแล้ว" ---
-            const isQtySearch = ckw === 'จำนวน' || ckw === 'qty' || ckw === 'quantity';
-            if (isQtySearch && (cleanKey.includes('เงิน') || cleanKey.includes('โอน') || cleanKey.includes('รวม') || cleanKey.includes('ราคา'))) {
-                return false;
-            }
-            
-            const isPriceSearch = ckw === 'ราคา' || ckw === 'price' || ckw === 'ราคาขาย';
-            if (isPriceSearch && (cleanKey.includes('สุทธิ') || cleanKey.includes('รวม') || cleanKey.includes('ธรรมเนียม') || cleanKey.includes('ส่วนลด'))) {
-                return false;
-            }
-            
-            // --- 🔥 THE ULTIMATE FIX: ตัดการจับคู่ข้ามคอลัมน์เด็ดขาด ป้องกันคำว่า "จำนวนชิ้น" ไปสลับกับ "จำนวนเงินคืน" ---
-            return cleanKey.includes(ckw);
-        });
-        
-        for (const match of matches) {
-            const val = row[match.original];
-            if (val !== undefined && val !== null && String(val).trim() !== '') {
-                return val; 
-            }
-        }
-    }
-
-    return undefined; 
   };
 
   const handleFileUpload = async (e) => {
@@ -2712,126 +2699,132 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           let opsCount = 0;
 
           for (const item of importedData) {
-              const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
-              
-              const feeForCancelled = item.newPlatformFee !== undefined ? item.newPlatformFee : 0;
-              const shouldCreateFeeBill = (item.isAlreadyCancelled || item.needsReturn) && feeForCancelled > 0;
-
-              if (item.isAlreadyCancelled) {
-                  batch.update(ref, {
-                      platformFee: 0,
-                      transactionFee: 0,
-                      commissionFee: 0,
-                      serviceFee: 0,
-                      affiliateFee: 0,
-                      infrastructureFee: 0,
-                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : 0, // อัปเดตยอดรับเงินจริง (เผื่อโดนหัก)
-                      settlementDate: item.newSettlementDate || item.settlementDate || null,
-                      updatedAt: serverTimestamp()
-                  });
-                  count++;
-                  opsCount++;
-              }
-              else if (item.needsReturn) {
-                  batch.update(ref, {
-                      isCancelled: true,
-                      cancelledAt: serverTimestamp(),
-                      paymentStatus: 'refunded',
-                      cancelReason: item.reason + (item.returnAction === 'discard' ? ' [สินค้าชำรุด/ตัดทิ้ง ไม่คืนคลัง]' : ' [คืนสต็อกแล้ว]'),
-                      platformFee: 0,
-                      transactionFee: 0,
-                      commissionFee: 0,
-                      serviceFee: 0,
-                      affiliateFee: 0,
-                      infrastructureFee: 0,
-                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : 0, // อัปเดตยอดรับเงินจริง (เผื่อโดนหัก)
-                      settlementDate: item.newSettlementDate || item.settlementDate || null
-                  });
-                  opsCount++;
+              // --- 🔥 THE FIX: ถ้าเป็นออเดอร์ใหม่ที่กด Force Import เข้ามา ให้สร้าง Record ใหม่เหมือนโหมดนำเข้า 1, 2 เลย ---
+              if (item.isNewFromForceImport) {
+                  const sysDocId = getNextDateBasedSysDocId('income', 'INC-', item.date || new Date());
+                  const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
                   
-                  if (item.returnAction !== 'discard' && item.items) {
-                      for (const lineItem of item.items) {
-                          let toReturn = Number(lineItem.qty);
-                          const affectedLots = stockBatches
-                            .filter(b => matchItemToBatch(lineItem.sku, lineItem.desc, b.sku, b.productName) && Number(b.sold) > 0)
-                            .sort(sortNewestFirst);
-
-                          for (const lot of affectedLots) {
-                              if (toReturn <= 0) break;
-                              const canTakeBack = Math.min(toReturn, Number(lot.sold));
-                              batch.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) });
-                              opsCount++;
-                              toReturn -= canTakeBack;
-                          }
-                      }
-                  }
-                  count++;
-              } else {
-                  // --- กรณีกระทบยอดรับเงินปกติ (Settled) ---
-                  const updateData = {
-                      paymentStatus: 'settled',
-                      settlementDate: item.newSettlementDate,
-                      updatedAt: serverTimestamp()
-                  };
+                  const cleanTrans = { ...item };
+                  delete cleanTrans.isNewFromForceImport;
+                  const feeForCancelled = cleanTrans.platformFee || 0;
+                  const shouldCreateFeeBill = (cleanTrans.isCancelled || cleanTrans.isReturned) && feeForCancelled > 0;
                   
-                  if (item.newPlatformFee !== undefined) {
-                      updateData.platformFee = item.newPlatformFee; // เก็บไว้เป็น Reference ว่าออเดอร์นี้เสียค่าธรรมเนียมเท่าไหร่
-                      updateData.transactionFee = item.newTransactionFee;
-                      updateData.commissionFee = item.newCommissionFee;
-                      updateData.serviceFee = item.newServiceFee;
-                      updateData.affiliateFee = item.newAffiliateFee !== undefined ? item.newAffiliateFee : (item.affiliateFee || 0); 
-                      updateData.infrastructureFee = item.newInfrastructureFee;
-                      
-                      updateData.shippingFee = item.newShippingFee !== undefined ? item.newShippingFee : (item.shippingFee || 0);
-                      updateData.shippingFeeSubsidy = item.newShippingFeeSubsidy !== undefined ? item.newShippingFeeSubsidy : (item.shippingFeeSubsidy || 0);
-                      updateData.estimatedShippingFee = item.newEstimatedShippingFee !== undefined ? item.newEstimatedShippingFee : (item.estimatedShippingFee || 0);
-                      updateData.returnShippingFee = item.newReturnShippingFee !== undefined ? item.newReturnShippingFee : (item.returnShippingFee || 0);
-                      
-                      updateData.couponDiscount = item.newCouponDiscount !== undefined ? item.newCouponDiscount : (item.couponDiscount || 0);
-                      updateData.refundAmount = item.newRefundAmount !== undefined ? item.newRefundAmount : (item.refundAmount || 0);
-                      
-                      const currentDiscount = updateData.couponDiscount + updateData.refundAmount;
-                      
-                      // --- 🔥 THE FIX: ยอด Grand Total ของบิลรายรับ จะแสดงเฉพาะค่าสินค้า + ค่าส่งที่ลูกค้าจ่าย (ไม่หักค่าธรรมเนียม/ไม่หักค่าส่งจริง) ---
-                      updateData.grandTotal = (item.total || 0) - currentDiscount + updateData.shippingFee;
-                  }
-                  
-                  if (item.actualSettledAmt !== undefined) {
-                      updateData.actualSettledAmt = item.actualSettledAmt;
-                  }
-
-                  batch.update(ref, updateData);
+                  batch.set(docRef, { ...cleanTrans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
                   count++;
                   opsCount++;
 
-                  // --- 🔥 THE FIX: ตรวจสอบและสร้างบิลเฉพาะ "ส่วนต่างค่าขนส่ง" ตามที่คำนวณไว้เท่านั้น ---
-                  const actualShipCost = (updateData.estimatedShippingFee || 0) + (updateData.returnShippingFee || 0);
-                  const buyerPaidShip = (updateData.shippingFee || 0) + (updateData.shippingFeeSubsidy || 0);
-                  const shippingDiff = actualShipCost - buyerPaidShip;
-
-                  if (shippingDiff > 0.01) {
-                      // ขาดทุนค่าส่ง (Actual > Buyer)
-                      const expSysDocId = getNextDateBasedSysDocId('expense', getExpensePrefix('ค่าขนส่งพัสดุ (ส่งลูกค้า)'), item.newSettlementDate || new Date());
+                  // สร้างบิลรายจ่ายแยกสำหรับค่าธรรมเนียม
+                  if (shouldCreateFeeBill) {
+                      const expSysDocId = getNextDateBasedSysDocId('expense', getExpensePrefix('ค่าธรรมเนียม Platform'), cleanTrans.settlementDate || cleanTrans.date || new Date());
                       const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
                       batch.set(expRef, {
                           sysDocId: expSysDocId,
                           type: 'expense',
-                          category: 'ค่าขนส่งพัสดุ (ส่งลูกค้า)',
-                          description: `ส่วนต่างค่าจัดส่ง (ขาดทุน): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
-                          items: [{ desc: `ส่วนต่างค่าจัดส่ง (Actual > Buyer): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`, qty: 1, buyPrice: shippingDiff, sellPrice: 0, sku: '' }],
-                          total: shippingDiff,
-                          date: item.newSettlementDate || new Date(),
+                          category: 'ค่าธรรมเนียม Platform',
+                          description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`,
+                          items: [{ desc: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`, qty: 1, buyPrice: feeForCancelled, sellPrice: 0, sku: '' }],
+                          total: feeForCancelled,
+                          date: cleanTrans.settlementDate || cleanTrans.date || new Date(),
                           userId: user.uid,
                           createdAt: serverTimestamp(),
                           status: 'paid',
-                          partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
+                          partnerName: cleanTrans.channel ? `Platform (${cleanTrans.channel})` : 'Platform',
                           partnerBranch: '00000',
                           isFromReconciliation: true,
-                          linkedOrderId: item.id,
-                          linkedOrderNo: item.orderId || item.sysDocId || '-',
-                          orderId: item.orderId || item.sysDocId || '-',
-                          channel: item.channel || '',
-                          shopName: item.shopName || 'ไม่ระบุ'
+                          linkedOrderId: docRef.id,
+                          linkedOrderNo: cleanTrans.orderId || '-',
+                          orderId: cleanTrans.orderId || '-',
+                          channel: cleanTrans.channel || '',
+                          shopName: cleanTrans.shopName || 'ไม่ระบุ'
+                      });
+                      opsCount++;
+                  }
+
+                  const isForceCancelled = cleanTrans.isCancelled;
+                  const isDiscarded = cleanTrans.returnAction === 'discard';
+                  let totalDamagedCost = 0;
+
+                  // ตัดสต็อกหากเป็นออเดอร์สำเร็จ หรือออเดอร์ยกเลิกที่เลือก "ตัดชำรุด"
+                  if (!isForceCancelled || isDiscarded) {
+                      for (const lItem of item.items) {
+                          let needed = Number(lItem.qty);
+                          const batches = stockBatches
+                              .filter(b => matchItemToBatch(lItem.sku, lItem.desc, b.sku, b.productName))
+                              .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+
+                          for (let i = 0; i < batches.length; i++) {
+                              const b = batches[i];
+                              if (needed <= 0) break;
+                              const remaining = Number(b.quantity) - Number(b.sold || 0);
+                              
+                              let take = 0;
+                              if (i === batches.length - 1) take = needed; 
+                              else take = Math.min(needed, Math.max(0, remaining));
+                              
+                              if (take > 0) {
+                                  const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+                                  batch.update(batchRef, { sold: increment(take) });
+                                  opsCount++;
+                                  
+                                  if (isDiscarded) totalDamagedCost += take * (Number(b.costPerUnit) || 0);
+                                  needed -= take;
+                              }
+                          }
+                          
+                          if (needed > 0) {
+                              const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+                              batch.set(dummyRef, {
+                                  productName: lItem.desc, sku: lItem.sku || '-', category: 'อื่นๆ',
+                                  quantity: 0, costPerUnit: 0, sellPrice: lItem.sellPrice || lItem.price || 0,
+                                  date: item.date || new Date(), sold: needed, userId: user.uid,
+                                  createdAt: serverTimestamp(), paymentStatus: 'paid',
+                                  isAdjustment: true, adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
+                              });
+                              opsCount++;
+                          }
+                      }
+                  }
+
+                  // หากเลือก "ตัดชำรุด" สร้างบิลรายจ่ายตามต้นทุนที่เสียไป
+                  if (isForceCancelled && isDiscarded && totalDamagedCost > 0) {
+                      const expSysDocId = getNextDateBasedSysDocId('expense', getExpensePrefix('สินค้าเสียหาย/หมดอายุ'), cleanTrans.settlementDate || cleanTrans.date || new Date());
+                      const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                      batch.set(expRef, {
+                          sysDocId: expSysDocId,
+                          type: 'expense',
+                          category: 'สินค้าเสียหาย/หมดอายุ',
+                          description: `ตัดจำหน่ายสินค้าชำรุด (จากการตีกลับ): ออเดอร์ ${cleanTrans.orderId || '-'}`,
+                          items: [{ desc: `สินค้าชำรุดตีกลับ: ออเดอร์ ${cleanTrans.orderId || '-'}`, qty: 1, buyPrice: totalDamagedCost, sellPrice: 0, sku: '' }],
+                          total: totalDamagedCost,
+                          date: cleanTrans.settlementDate || cleanTrans.date || new Date(),
+                          userId: user.uid,
+                          createdAt: serverTimestamp(),
+                          status: 'paid',
+                          partnerName: 'Internal (ตัดจำหน่าย)',
+                          partnerBranch: '00000',
+                          isFromReconciliation: true,
+                          linkedOrderId: docRef.id,
+                          linkedOrderNo: cleanTrans.orderId || '-',
+                          orderId: cleanTrans.orderId || '-',
+                          channel: cleanTrans.channel || '',
+                          shopName: cleanTrans.shopName || 'ไม่ระบุ',
+                          isTaxOnly: false
+                      });
+                      opsCount++;
+                  }
+                  
+              } else {
+                  // --- ของที่มีในระบบแล้ว ทำกระบวนการกระทบยอดปกติ ---
+                  const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
+                  
+                  const feeForCancelled = item.newPlatformFee !== undefined ? item.newPlatformFee : 0;
+                  const shouldCreateFeeBill = (item.isAlreadyCancelled || item.needsReturn) && feeForCancelled > 0;
+
+                  if (item.isAlreadyCancelled) {
+                      batch.update(ref, {
+                          actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : 0, // อัปเดตยอดรับเงินจริง (เผื่อโดนหัก)
+                          settlementDate: item.newSettlementDate || item.settlementDate || null,
+                          updatedAt: serverTimestamp()
                       });
                       opsCount++;
                   } 
@@ -2929,11 +2922,22 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
         const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
         
-        // --- FIX: ตัดค่าธรรมเนียมไปสร้างบิลแยก (สำหรับโหมดนำเข้าใหม่) ---
+        // --- 🔥 THE FIX: ตัดการบังคับให้ PlatformFee ใน Income กลายเป็น 0 ออก ---
+        // ปล่อยข้อมูลรายรับให้เป็นข้อมูลดิบตามหน้าเว็บปกติ ส่วนบิล Expense ที่สร้างแยกก็สร้างไป (แดชบอร์ดจะรู้เองว่าไม่ต้องนับค่าธรรมเนียมซ้ำซ้อน)
         const cleanTrans = { ...trans };
         const feeForCancelled = cleanTrans.platformFee || 0;
         const shouldCreateFeeBill = (cleanTrans.isCancelled || cleanTrans.isReturned) && feeForCancelled > 0;
         
+        Object.keys(cleanTrans).forEach(key => {
+            if (cleanTrans[key] === undefined) {
+                delete cleanTrans[key];
+            }
+        });
+        
+        batch.set(docRef, { ...cleanTrans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
+        opsCount++;
+
+        // --- FIX: สร้างบิลรายจ่ายแยกอิสระเพื่อบันทึกค่าธรรมเนียมแพลตฟอร์ม ---
         if (shouldCreateFeeBill) {
             cleanTrans.platformFee = 0;
             cleanTrans.transactionFee = 0;
@@ -3724,6 +3728,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                   {it.isReturned ? <ArrowRightLeft size={10}/> : <AlertTriangle size={10}/>} 
                                   {it.isReturned ? 'มีสถานะคืนสินค้า/คืนเงินในไฟล์' : 'มีการหักคืนเงินบางส่วน'} 
                                   {it.refundAmount > 0 ? ` (หักยอด ${formatCurrency(it.refundAmount)} ฿)` : ''}
+                              </span>
+                          )}
+                          {/* --- 🔥 NEW: แสดงเหตุผลการยกเลิก เพื่อให้ทราบว่าถูกบันทึกไว้แล้ว --- */}
+                          {it.cancelReason && (
+                              <span className="inline-block mt-1 bg-rose-50 text-rose-600 border border-rose-100 px-1.5 py-0.5 rounded text-[9px] font-bold w-fit">
+                                  เหตุผล: {it.cancelReason}
                               </span>
                           )}
                           {it.shopName && (
@@ -9888,6 +9898,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     <div className="flex items-center gap-2 flex-wrap">
                                         {t.isPurchaseCreditNote && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-fuchsia-100 text-fuchsia-700 border border-fuchsia-200 flex items-center gap-0.5"><TrendingDown size={8}/> ใบลดหนี้ฝั่งซื้อ (คืนของ)</span>}
                                         {t.isCancelled && !t.isReturned && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
+                                        
+                                        {/* --- 🔥 NEW: แสดงเหตุผลการยกเลิกในหน้าประวัติเอกสาร --- */}
+                                        {t.cancelReason && <span className="px-1.5 py-0.5 rounded text-[8px] font-black text-rose-600 bg-rose-50 border border-rose-100 truncate max-w-[150px]">เหตุผล: {t.cancelReason}</span>}
+                                        
                                         {!t.isCancelled && t.type === 'expense' && t.status === 'unpaid' && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-amber-100 text-amber-700 border border-amber-200">ค้างชำระ</span>}
                                         {!t.isCancelled && t.isAdjusted && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-blue-100 text-blue-700 border border-blue-200">มีการปรับยอด</span>}
                                         
