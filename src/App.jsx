@@ -1458,8 +1458,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
   const [loading, setLoading] = useState(false);
   const [fixedInfraFee, setFixedInfraFee] = useState(''); 
-  const [discrepancyCategory, setDiscrepancyCategory] = useState('ค่าขนส่งพัสดุ (ส่งลูกค้า)'); // แก้ไขค่าเริ่มต้นเป็น ค่าขนส่งพัสดุ
-  const [surplusCategory, setSurplusCategory] = useState('รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)'); // แก้ไขค่าเริ่มต้นเป็นรายได้ค่าส่ง
   const [anomalyAlerts, setAnomalyAlerts] = useState([]);
   const [isCheckingAnomaly, setIsCheckingAnomaly] = useState(false);
   const fileInputRef = useRef(null);
@@ -1750,8 +1748,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       setLoading(false);
       
       const msg = actionType === 'success' 
-        ? `บังคับนำเข้าเป็น 'ออเดอร์สำเร็จ' ${forceImportedArr.length} รายการ`
-        : `บันทึกตีกลับ (${actionType === 'discard' ? 'ชำรุด' : 'คืนคลัง'}) ${forceImportedArr.length} รายการแล้ว`;
+        ? `ดึงข้อมูลเข้าตารางพรีวิวแล้ว ${forceImportedArr.length} รายการ (กรุณากด 'บันทึก' เพื่อยืนยัน)`
+        : `ตั้งสถานะตีกลับ ${forceImportedArr.length} รายการลงตารางพรีวิวแล้ว (กรุณากด 'บันทึก' เพื่อยืนยัน)`;
       showToast(msg, "success");
   };
 
@@ -2119,7 +2117,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 const isReturnedRow = statusStr.includes('คืน') || statusStr.includes('refund') || statusStr.includes('return');
                 const refundAmtRow = getRowValAbs(row, schema.refundAmount);
 
-                const fees = extractFeesAndShipping(row, importMode);
+                const fees = extractFeesAndShipping(row, importMode, schema);
                 const transFee = fees.transFee;
                 const comm = fees.comm;
                 const serv = fees.serv;
@@ -2144,6 +2142,31 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 let finalSettleDate = normalizeDate(dateStr);
 
                 if (existingTrans) {
+                    // --- 🚀 FIX: ตรวจสอบยอดค่าธรรมเนียมและยอดรายรับ ถ้ายอดตรงกันเป๊ะและรับเงินแล้ว ให้ข้าม (ไม่ต้องอัปเดตอะไร) ---
+                    const existingFee = existingTrans.platformFee || 0;
+                    const expectedExistingPayout = (existingTrans.grandTotal !== undefined ? existingTrans.grandTotal : (existingTrans.total || 0)) - existingFee;
+                    const existingSettledAmt = existingTrans.actualSettledAmt !== undefined ? existingTrans.actualSettledAmt : expectedExistingPayout;
+                    
+                    const isFeeMatched = Math.abs(rowTotalPlatformFee - existingFee) < 0.05;
+                    let isSettledMatched = true;
+                    if (actualSettledAmtFromRow !== undefined) {
+                        isSettledMatched = Math.abs(actualSettledAmtFromRow - existingSettledAmt) < 0.05;
+                    }
+
+                    if (existingTrans.paymentStatus === 'settled' && isFeeMatched && isSettledMatched) {
+                        alreadySettledCount++;
+                        currentSkippedDetails.push({ 
+                            orderId: orderId, 
+                            product: '-', 
+                            qty: 0, 
+                            statusFromFile: statusStr || 'สำเร็จแล้ว',
+                            reason: 'ยอดตรงกันแล้ว (ไม่ต้องอัปเดต)',
+                            rawData: row
+                        });
+                        return; // ข้ามการอัปเดตแถวนี้
+                    }
+                    // -------------------------------------------------------------------------
+
                     if (!existingTrans.isCancelled) {
                         if (!matchedMap[existingTrans.id]) {
                             matchedMap[existingTrans.id] = {
@@ -2257,32 +2280,33 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
             matched.forEach(m => {
                 if (!m.isAlreadyCancelled) {
-                    // --- 🔥 THE ULTIMATE FIX: เปลี่ยนการตรวจสอบเป็น "ค่าจัดส่งล้วนๆ" ตามที่ผู้ใช้สั่ง ---
-                    const actualShipCost = (m.newEstimatedShippingFee || 0) + (m.newReturnShippingFee || 0);
-                    const buyerPaidShip = (m.newShippingFee || 0) + (m.newShippingFeeSubsidy || 0);
+                    // --- 🚀 FIX: กระทบยอดโดยนำ "ยอดค่าธรรมเนียม" และ "ยอดรายรับจริง" มาเทียบตรงๆ ---
+                    // ยอดที่ควรได้ = (ยอดตั้งต้นสุทธิ) - ค่าธรรมเนียมที่อัปเดตใหม่
+                    const expectedPayout = (m.grandTotal !== undefined ? m.grandTotal : (m.total || 0)) - (m.newPlatformFee !== undefined ? m.newPlatformFee : (m.platformFee || 0));
+                    const actualPayout = m.actualSettledAmt !== undefined ? m.actualSettledAmt : expectedPayout;
                     
-                    // หาความต่างของค่าจัดส่ง: ถ้าต้นทุนจริงแพงกว่าที่เก็บได้ = ขาดทุนค่าส่ง (ดิฟเป็นบวก)
-                    const shippingDiff = actualShipCost - buyerPaidShip;
+                    // ส่วนต่าง = ยอดที่ควรได้ - ยอดโอนจริง
+                    const payoutDiff = expectedPayout - actualPayout;
                     
-                    if (shippingDiff > 0.01) {
-                        totalDiffShort += shippingDiff;
+                    if (payoutDiff > 0.05) { // เงินขาด (โอนเข้าจริงได้น้อยกว่า)
+                        totalDiffShort += payoutDiff;
                         currentDiffDetails.push({ 
                             orderId: m.orderId || m.sysDocId, 
                             originalId: m.id, 
-                            expected: buyerPaidShip, 
-                            actual: actualShipCost, 
-                            diff: shippingDiff, 
+                            expected: expectedPayout, 
+                            actual: actualPayout, 
+                            diff: payoutDiff, 
                             type: 'short',
                             category: 'ค่าขนส่งพัสดุ (ส่งลูกค้า)'
                         });
-                    } else if (shippingDiff < -0.01) {
-                        totalDiffSurplus += Math.abs(shippingDiff);
+                    } else if (payoutDiff < -0.05) { // เงินเกิน (โอนเข้าจริงได้มากกว่า)
+                        totalDiffSurplus += Math.abs(payoutDiff);
                         currentDiffDetails.push({ 
                             orderId: m.orderId || m.sysDocId, 
                             originalId: m.id, 
-                            expected: buyerPaidShip, 
-                            actual: actualShipCost, 
-                            diff: Math.abs(shippingDiff), 
+                            expected: expectedPayout, 
+                            actual: actualPayout, 
+                            diff: Math.abs(payoutDiff), 
                             type: 'surplus',
                             category: 'รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)'
                         });
@@ -2699,7 +2723,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
       if (importMode === 'update_settled') {
           let count = 0;
-          let opsCount = 0;
+          let reconcileOpsCount = 0;
 
           for (const item of importedData) {
               // --- 🔥 THE FIX: ถ้าเป็นออเดอร์ใหม่ที่กด Force Import เข้ามา ให้สร้าง Record ใหม่เหมือนโหมดนำเข้า 1, 2 เลย ---
@@ -2709,39 +2733,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   
                   const cleanTrans = { ...item };
                   delete cleanTrans.isNewFromForceImport;
-                  const feeForCancelled = cleanTrans.platformFee || 0;
-                  const shouldCreateFeeBill = (cleanTrans.isCancelled || cleanTrans.isReturned) && feeForCancelled > 0;
                   
                   batch.set(docRef, { ...cleanTrans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
                   count++;
-                  opsCount++;
-
-                  // สร้างบิลรายจ่ายแยกสำหรับค่าธรรมเนียม
-                  if (shouldCreateFeeBill) {
-                      const expSysDocId = getNextDateBasedSysDocId('expense', getExpensePrefix('ค่าธรรมเนียม Platform'), cleanTrans.settlementDate || cleanTrans.date || new Date());
-                      const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
-                      batch.set(expRef, {
-                          sysDocId: expSysDocId,
-                          type: 'expense',
-                          category: 'ค่าธรรมเนียม Platform',
-                          description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`,
-                          items: [{ desc: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`, qty: 1, buyPrice: feeForCancelled, sellPrice: 0, sku: '' }],
-                          total: feeForCancelled,
-                          date: cleanTrans.settlementDate || cleanTrans.date || new Date(),
-                          userId: user.uid,
-                          createdAt: serverTimestamp(),
-                          status: 'paid',
-                          partnerName: cleanTrans.channel ? `Platform (${cleanTrans.channel})` : 'Platform',
-                          partnerBranch: '00000',
-                          isFromReconciliation: true,
-                          linkedOrderId: docRef.id,
-                          linkedOrderNo: cleanTrans.orderId || '-',
-                          orderId: cleanTrans.orderId || '-',
-                          channel: cleanTrans.channel || '',
-                          shopName: cleanTrans.shopName || 'ไม่ระบุ'
-                      });
-                      opsCount++;
-                  }
+                  reconcileOpsCount++;
 
                   const isForceCancelled = cleanTrans.isCancelled;
                   const isDiscarded = cleanTrans.returnAction === 'discard';
@@ -2767,7 +2762,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                               if (take > 0) {
                                   const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
                                   batch.update(batchRef, { sold: increment(take) });
-                                  opsCount++;
+                                  reconcileOpsCount++;
                                   
                                   if (isDiscarded) totalDamagedCost += take * (Number(b.costPerUnit) || 0);
                                   needed -= take;
@@ -2783,7 +2778,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                   createdAt: serverTimestamp(), paymentStatus: 'paid',
                                   isAdjustment: true, adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
                               });
-                              opsCount++;
+                              reconcileOpsCount++;
                           }
                       }
                   }
@@ -2813,82 +2808,45 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           shopName: cleanTrans.shopName || 'ไม่ระบุ',
                           isTaxOnly: false
                       });
-                      opsCount++;
+                      reconcileOpsCount++;
                   }
                   
               } else {
                   // --- ของที่มีในระบบแล้ว ทำกระบวนการกระทบยอดปกติ ---
+                  // 🚨 ตามหลักบัญชีที่ถูกต้อง จะไม่ออกเอกสารรายจ่ายซ้ำซ้อน ให้อัปเดตแค่รายรับพอ
                   const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
+                  count++;
+
+                  // 1. UPDATE THE INCOME RECORD (อัปเดตยอดรับเงินให้ตรงกับที่แพลตฟอร์มโอนมาจริงๆ เสมอ)
+                  const updateData = {
+                      actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : 0,
+                      settlementDate: item.newSettlementDate || item.settlementDate || null,
+                      updatedAt: serverTimestamp()
+                  };
                   
-                  const feeForCancelled = item.newPlatformFee !== undefined ? item.newPlatformFee : 0;
-                  const shouldCreateFeeBill = (item.isAlreadyCancelled || item.needsReturn) && feeForCancelled > 0;
-
-                  if (item.isAlreadyCancelled) {
-                      batch.update(ref, {
-                          actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : 0, // อัปเดตยอดรับเงินจริง (เผื่อโดนหัก)
-                          settlementDate: item.newSettlementDate || item.settlementDate || null,
-                          updatedAt: serverTimestamp()
-                      });
-                      opsCount++;
-                  } 
-                  else if (shippingDiff < -0.01) {
-                      // กำไรค่าส่ง (Buyer > Actual)
-                      const incSysDocId = getNextDateBasedSysDocId('income', 'INC-', item.newSettlementDate || new Date());
-                      const incRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income'));
-                      batch.set(incRef, {
-                          sysDocId: incSysDocId,
-                          type: 'income',
-                          category: 'รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)',
-                          description: `ส่วนต่างค่าจัดส่ง (ได้กำไร): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
-                          items: [{ desc: `ส่วนต่างค่าจัดส่ง (Buyer > Actual): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`, qty: 1, buyPrice: 0, sellPrice: Math.abs(shippingDiff), sku: '' }],
-                          total: Math.abs(shippingDiff),
-                          date: item.newSettlementDate || new Date(),
-                          userId: user.uid,
-                          createdAt: serverTimestamp(),
-                          paymentStatus: 'settled',
-                          partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
-                          partnerBranch: '00000',
-                          isFromReconciliation: true,
-                          linkedOrderId: item.id,
-                          linkedOrderNo: item.orderId || item.sysDocId || '-',
-                          orderId: item.orderId || item.sysDocId || '-',
-                          channel: item.channel || '',
-                          shopName: item.shopName || 'ไม่ระบุ'
-                      });
-                      opsCount++;
+                  if (!item.isAlreadyCancelled) {
+                      if (item.newPlatformFee !== undefined) updateData.platformFee = item.newPlatformFee;
+                      if (item.newTransactionFee !== undefined) updateData.transactionFee = item.newTransactionFee;
+                      if (item.newCommissionFee !== undefined) updateData.commissionFee = item.newCommissionFee;
+                      if (item.newServiceFee !== undefined) updateData.serviceFee = item.newServiceFee;
+                      if (item.newInfrastructureFee !== undefined) updateData.infrastructureFee = item.newInfrastructureFee;
+                      if (item.newShippingFee !== undefined) updateData.shippingFee = item.newShippingFee;
+                      if (item.newShippingFeeSubsidy !== undefined) updateData.shippingFeeSubsidy = item.newShippingFeeSubsidy;
+                      if (item.newEstimatedShippingFee !== undefined) updateData.estimatedShippingFee = item.newEstimatedShippingFee;
+                      if (item.newReturnShippingFee !== undefined) updateData.returnShippingFee = item.newReturnShippingFee;
+                      if (item.newCouponDiscount !== undefined) updateData.couponDiscount = item.newCouponDiscount;
+                      if (item.newRefundAmount !== undefined) updateData.refundAmount = item.newRefundAmount;
                   }
+
+                  batch.update(ref, updateData);
+                  reconcileOpsCount++;
+                  // 🚨 ไม่มีการสร้างบิล Discrepancy (ส่วนต่าง) หรือ Fee (ค่าธรรมเนียม) อัตโนมัติอีกต่อไป
               }
 
-              if (shouldCreateFeeBill) {
-                  const expSysDocId = getNextDateBasedSysDocId('expense', getExpensePrefix('ค่าธรรมเนียม Platform'), item.newSettlementDate || new Date());
-                  const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
-                  batch.set(expRef, {
-                      sysDocId: expSysDocId,
-                      type: 'expense',
-                      category: 'ค่าธรรมเนียม Platform', 
-                      description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`,
-                      items: [{ desc: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${item.orderId || item.sysDocId || '-'}`, qty: 1, buyPrice: feeForCancelled, sellPrice: 0, sku: '' }],
-                      total: feeForCancelled,
-                      date: item.newSettlementDate || new Date(),
-                      userId: user.uid,
-                      createdAt: serverTimestamp(),
-                      status: 'paid',
-                      partnerName: item.channel ? `Platform (${item.channel})` : 'Platform',
-                      partnerBranch: '00000',
-                      isFromReconciliation: true,
-                      linkedOrderId: item.id,
-                      linkedOrderNo: item.orderId || item.sysDocId || '-',
-                      orderId: item.orderId || item.sysDocId || '-',
-                      channel: item.channel || '',
-                      shopName: item.shopName || 'ไม่ระบุ'
-                  });
-                  opsCount++;
-              }
-
-              if (opsCount >= 350) {
+              if (reconcileOpsCount >= 350) {
                   await batch.commit();
                   batch = writeBatch(dbInstance);
-                  opsCount = 0;
+                  reconcileOpsCount = 0;
                   await new Promise(r => setTimeout(r, 50));
               }
           }
@@ -2904,44 +2862,33 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               skippedDetails: skippedDetailsData,
               failedDetails: deliveryFailedDetailsData
           });
-          opsCount++;
+          reconcileOpsCount++;
           
-          if (opsCount > 0) {
+          if (reconcileOpsCount > 0) {
               await batch.commit();
           }
 
           setShowImportPreviewModal(false); // ปิดหน้า Preview
-          showToast(`กระทบยอดรับเงินสำเร็จ ${count} รายการ (สร้างบิลส่วนต่างอัตโนมัติ)`, "success");
+          showToast(`กระทบยอดรับเงินสำเร็จ ${count} รายการ (บันทึกทับยอดรับเงินเดิม)`, "success");
           setImportedData([]);
           setLoading(false);
           return;
       }
 
+      // --- IMPORT MODE 1 & 2 (นำเข้ารายรับใหม่) ---
       const stockSnap = [...stockBatches]; 
       const sortedForSave = [...importedData].sort(sortOldestFirst);
-      let opsCount = 0;
+      let importOpsCount = 0;
 
       for (const trans of sortedForSave) {
         const sysDocId = getNextDateBasedSysDocId('income', 'INC-', trans.date || new Date());
-
         const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
         
-        // --- 🔥 THE FIX: ตัดการบังคับให้ PlatformFee ใน Income กลายเป็น 0 ออก ---
-        // ปล่อยข้อมูลรายรับให้เป็นข้อมูลดิบตามหน้าเว็บปกติ ส่วนบิล Expense ที่สร้างแยกก็สร้างไป (แดชบอร์ดจะรู้เองว่าไม่ต้องนับค่าธรรมเนียมซ้ำซ้อน)
+        // ปล่อยข้อมูลรายรับให้เป็นข้อมูลดิบตามหน้าเว็บปกติ ส่วนบิล Expense ที่สร้างแยกก็สร้างไป
         const cleanTrans = { ...trans };
         const feeForCancelled = cleanTrans.platformFee || 0;
         const shouldCreateFeeBill = (cleanTrans.isCancelled || cleanTrans.isReturned) && feeForCancelled > 0;
         
-        Object.keys(cleanTrans).forEach(key => {
-            if (cleanTrans[key] === undefined) {
-                delete cleanTrans[key];
-            }
-        });
-        
-        batch.set(docRef, { ...cleanTrans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
-        opsCount++;
-
-        // --- FIX: สร้างบิลรายจ่ายแยกอิสระเพื่อบันทึกค่าธรรมเนียมแพลตฟอร์ม ---
         if (shouldCreateFeeBill) {
             cleanTrans.platformFee = 0;
             cleanTrans.transactionFee = 0;
@@ -2962,9 +2909,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         });
         
         batch.set(docRef, { ...cleanTrans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
-        opsCount++;
+        importOpsCount++;
 
-        // --- FIX: สร้างบิลรายจ่ายแยกอิสระ ---
+        // สร้างบิลรายจ่ายแยกอิสระ
         if (shouldCreateFeeBill) {
             const expSysDocId = getNextDateBasedSysDocId('expense', getExpensePrefix('ค่าธรรมเนียม Platform'), cleanTrans.settlementDate || cleanTrans.date || new Date());
             const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
@@ -2988,77 +2935,112 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 channel: cleanTrans.channel || '',
                 shopName: cleanTrans.shopName || 'ไม่ระบุ'
             });
-            opsCount++;
+            importOpsCount++;
         }
 
-        for (const item of trans.items) {
-            let needed = Number(item.qty);
-            const batches = stockSnap
-                .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
-                .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+        const isForceCancelled = cleanTrans.isCancelled;
+        const isDiscarded = cleanTrans.returnAction === 'discard';
+        let totalDamagedCost = 0;
 
-            for (let i = 0; i < batches.length; i++) {
-                const b = batches[i];
-                if (needed <= 0) break;
-                const remaining = Number(b.quantity) - Number(b.sold || 0);
-                
-                let take = 0;
-                // ถ้าเป็นล็อตสุดท้าย ยอมให้หักจนติดลบได้เลย
-                if (i === batches.length - 1) {
-                    take = needed; 
-                } else {
-                    take = Math.min(needed, Math.max(0, remaining));
+        if (!isForceCancelled || isDiscarded) {
+            for (const item of trans.items) {
+                let needed = Number(item.qty);
+                const batches = stockSnap
+                    .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
+                    .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+
+                for (let i = 0; i < batches.length; i++) {
+                    const b = batches[i];
+                    if (needed <= 0) break;
+                    const remaining = Number(b.quantity) - Number(b.sold || 0);
+                    
+                    let take = 0;
+                    // ถ้าเป็นล็อตสุดท้าย ยอมให้หักจนติดลบได้เลย
+                    if (i === batches.length - 1) {
+                        take = needed; 
+                    } else {
+                        take = Math.min(needed, Math.max(0, remaining));
+                    }
+                    
+                    if (take > 0) {
+                        const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+                        batch.update(batchRef, { sold: increment(take) });
+                        importOpsCount++;
+                        
+                        const snapIdx = stockSnap.findIndex(s => s.id === b.id);
+                        if (snapIdx !== -1) stockSnap[snapIdx].sold = (Number(stockSnap[snapIdx].sold) || 0) + take;
+                        
+                        if (isDiscarded) totalDamagedCost += take * (Number(b.costPerUnit) || 0);
+                        needed -= take;
+                    }
                 }
                 
-                if (take > 0) {
-                    const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
-                    batch.update(batchRef, { sold: increment(take) });
-                    opsCount++;
+                // กรณีไม่มีในคลังเลย สร้าง Dummy Batch เพื่อบันทึกยอดติดลบ
+                if (needed > 0) {
+                    const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+                    batch.set(dummyRef, {
+                        productName: item.desc,
+                        sku: item.sku || '-',
+                        category: 'อื่นๆ',
+                        quantity: 0,
+                        costPerUnit: 0, 
+                        sellPrice: item.sellPrice || item.price || 0,
+                        date: trans.date || new Date(),
+                        sold: needed,
+                        userId: user.uid,
+                        createdAt: serverTimestamp(),
+                        paymentStatus: 'paid',
+                        isAdjustment: true,
+                        adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
+                    });
+                    importOpsCount++;
                     
-                    const snapIdx = stockSnap.findIndex(s => s.id === b.id);
-                    if (snapIdx !== -1) stockSnap[snapIdx].sold = (Number(stockSnap[snapIdx].sold) || 0) + take;
-                    
-                    needed -= take;
+                    stockSnap.push({
+                        id: dummyRef.id,
+                        productName: item.desc,
+                        sku: item.sku || '-',
+                        category: 'อื่นๆ',
+                        quantity: 0,
+                        sold: needed,
+                        costPerUnit: 0,
+                        date: trans.date || new Date()
+                    });
                 }
-            }
-            
-            // กรณีไม่มีในคลังเลย สร้าง Dummy Batch เพื่อบันทึกยอดติดลบ
-            if (needed > 0) {
-                const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
-                batch.set(dummyRef, {
-                    productName: item.desc,
-                    sku: item.sku || '-',
-                    category: 'อื่นๆ',
-                    quantity: 0,
-                    costPerUnit: 0, 
-                    sellPrice: item.sellPrice || item.price || 0,
-                    date: trans.date || new Date(),
-                    sold: needed,
-                    userId: user.uid,
-                    createdAt: serverTimestamp(),
-                    paymentStatus: 'paid',
-                    isAdjustment: true,
-                    adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
-                });
-                opsCount++;
-                
-                stockSnap.push({
-                    id: dummyRef.id,
-                    productName: item.desc,
-                    sku: item.sku || '-',
-                    category: 'อื่นๆ',
-                    quantity: 0,
-                    sold: needed,
-                    costPerUnit: 0,
-                    date: trans.date || new Date()
-                });
             }
         }
 
-        if (opsCount >= 350) {
+        // หากเลือก "ตัดชำรุด" สร้างบิลรายจ่ายตามต้นทุนที่เสียไป
+        if (isForceCancelled && isDiscarded && totalDamagedCost > 0) {
+            const expSysDocId = getNextDateBasedSysDocId('expense', getExpensePrefix('สินค้าเสียหาย/หมดอายุ'), cleanTrans.settlementDate || cleanTrans.date || new Date());
+            const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+            batch.set(expRef, {
+                sysDocId: expSysDocId,
+                type: 'expense',
+                category: 'สินค้าเสียหาย/หมดอายุ',
+                description: `ตัดจำหน่ายสินค้าชำรุด (จากการตีกลับ): ออเดอร์ ${cleanTrans.orderId || '-'}`,
+                items: [{ desc: `สินค้าชำรุดตีกลับ: ออเดอร์ ${cleanTrans.orderId || '-'}`, qty: 1, buyPrice: totalDamagedCost, sellPrice: 0, sku: '' }],
+                total: totalDamagedCost,
+                date: cleanTrans.settlementDate || cleanTrans.date || new Date(),
+                userId: user.uid,
+                createdAt: serverTimestamp(),
+                status: 'paid',
+                partnerName: 'Internal (ตัดจำหน่าย)',
+                partnerBranch: '00000',
+                isFromReconciliation: true,
+                linkedOrderId: docRef.id,
+                linkedOrderNo: cleanTrans.orderId || '-',
+                orderId: cleanTrans.orderId || '-',
+                channel: cleanTrans.channel || '',
+                shopName: cleanTrans.shopName || 'ไม่ระบุ',
+                isTaxOnly: false
+            });
+            importOpsCount++;
+        }
+
+        if (importOpsCount >= 350) {
             await batch.commit();
             batch = writeBatch(dbInstance);
-            opsCount = 0;
+            importOpsCount = 0;
             await new Promise(r => setTimeout(r, 50));
         }
       }
@@ -3074,14 +3056,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           skippedDetails: skippedDetailsData,
           failedDetails: deliveryFailedDetailsData
       });
-      opsCount++;
+      importOpsCount++;
 
-      if (opsCount > 0) {
+      if (importOpsCount > 0) {
           await batch.commit();
       }
       
       setShowImportPreviewModal(false); // ปิดหน้า Preview
-      showToast(`เปิดใช้งานข้อมูล ${importedData.length} รายการ and หักสต็อกเรียบร้อย`, "success");
+      showToast(`เปิดใช้งานข้อมูล ${importedData.length} รายการ และหักสต็อกเรียบร้อย`, "success");
       setImportedData([]);
     } catch (e) { showToast("Error: " + e.message, "error"); }
     setLoading(false);
@@ -3216,24 +3198,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 <div className="flex flex-col gap-1">
                     <span className="font-bold text-slate-800 text-left">Step 2: ยืนยันเพื่อบันทึกและหักสต็อก</span>
                     {importMode === 'update_settled' && (
-                        <div className="flex flex-col gap-1 mt-1">
-                            {stats.totalDiffShort > 0 && (
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-rose-500">ลงบิลส่วนต่าง (ขาด) เป็นรายจ่ายหมวด:</span>
-                                    <select value={discrepancyCategory} onChange={e=>setDiscrepancyCategory(e.target.value)} className="bg-white border border-rose-200 rounded-md text-[10px] font-bold px-2 py-1 outline-none text-rose-700">
-                                        {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
-                                </div>
-                            )}
-                            {stats.totalDiffSurplus > 0 && (
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-emerald-600">ลงบิลส่วนต่าง (เกิน) เป็นรายรับหมวด:</span>
-                                    <select value={surplusCategory} onChange={e=>setSurplusCategory(e.target.value)} className="bg-white border border-emerald-200 rounded-md text-[10px] font-bold px-2 py-1 outline-none text-emerald-700">
-                                        {CONSTANTS.CATEGORIES.INCOME.map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
-                                </div>
-                            )}
-                        </div>
+                        <p className="text-[10px] text-amber-600 font-bold bg-amber-50 px-2 py-1 rounded w-fit border border-amber-100">
+                           <Info size={12} className="inline mr-1"/> ระบบจะทำการอัปเดตยอดรับเงินทับรายการเดิมเท่านั้น (ไม่สร้างบิลซ้ำซ้อน)
+                        </p>
                     )}
                 </div>
                 {importedData.length > 0 && (
@@ -3652,19 +3619,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               )}
 
               {/* --- NEW: Cash Flow Simulation Panel --- */}
-              {discrepancyDetailsData.length > 0 && (
+              {discrepancyDetailsData.filter(d => d.type === 'cancel_fee').length > 0 && (
                   <div className="bg-slate-800 text-white p-5 border-y border-slate-700 flex flex-col gap-3">
                       <div className="flex items-center gap-2">
                           <Activity size={18} className="text-indigo-400" />
                           <h4 className="font-bold text-sm text-white">จำลองการลงบัญชีกระแสเงินสด (Cash Flow Simulation)</h4>
                       </div>
-                      <p className="text-[10px] text-slate-400 font-medium">เมื่อกดยืนยัน ระบบจะสร้างบิลอัตโนมัติเหล่านี้ขึ้นมา เพื่อปรับสมดุลบัญชีให้ตรงกับเงินโอนเข้าจริง 100%</p>
+                      <p className="text-[10px] text-slate-400 font-medium">รายการบิลที่จะถูกสร้างอัตโนมัติตามเงื่อนไขที่คุณเลือก (เพื่อปรับสมดุลให้ตรงกับเงินโอนเข้าจริง 100%)</p>
                       
                       <div className="max-h-48 overflow-y-auto custom-scrollbar bg-slate-900 rounded-xl border border-slate-700 p-2 space-y-2">
-                          {discrepancyDetailsData.map((diff, idx) => (
+                          {discrepancyDetailsData.filter(d => d.type === 'cancel_fee').map((diff, idx) => (
                               <div key={idx} className="flex justify-between items-center bg-slate-800 p-3 rounded-lg border border-slate-700">
                                   <div className="flex items-center gap-3">
-                                      {/* --- FIX: เพิ่มการตรวจสอบแท็ก cancel_fee ให้แสดงเป็นสีแดงรายจ่ายให้ถูกต้อง --- */}
                                       <div className={`p-1.5 rounded-md ${diff.type === 'short' || diff.type === 'cancel_fee' ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
                                           {diff.type === 'short' || diff.type === 'cancel_fee' ? <TrendingDown size={14}/> : <TrendingUp size={14}/>}
                                       </div>
@@ -3678,12 +3644,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                       </div>
                                   </div>
                                   <div className="text-right">
-                                      {/* --- FIX: ใส่เครื่องหมายลบ (-) ให้ถูกต้อง --- */}
                                       <p className={`font-black text-sm ${diff.type === 'short' || diff.type === 'cancel_fee' ? 'text-rose-400' : 'text-emerald-400'}`}>
                                           {diff.type === 'short' || diff.type === 'cancel_fee' ? '-' : '+'}{formatCurrency(diff.diff)}
                                       </p>
                                       <p className="text-[9px] text-slate-500 font-bold mt-0.5">
-                                          หมวด: {diff.type === 'short' ? discrepancyCategory : diff.type === 'cancel_fee' ? 'ค่าธรรมเนียม Platform' : surplusCategory}
+                                          หมวด: {diff.category || 'ค่าธรรมเนียม Platform'}
                                       </p>
                                   </div>
                               </div>
@@ -7289,6 +7254,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [settleActualAmt, setSettleActualAmt] = useState(0); 
   const [settleDiffCategory, setSettleDiffCategory] = useState('ค่าขนส่งพัสดุ (ส่งลูกค้า)'); // แก้ไขค่าเริ่มต้นเป็น ค่าขนส่งพัสดุ
   const [settleSurplusCategory, setSettleSurplusCategory] = useState('รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'); // NEW: หมวดหมู่รายรับส่วนเกิน
+  const [autoCreateSettleDiff, setAutoCreateSettleDiff] = useState(false); // NEW: ปิดการสร้างบิลส่วนต่างอัตโนมัติเป็นค่าเริ่มต้น
   
   // --- NEW: State for showing generated ID ---
   const [generatedDocId, setGeneratedDocId] = useState(null);
@@ -7808,7 +7774,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               updatedAt: serverTimestamp()
           });
 
-          if (diff > 0.01) {
+          if (diff > 0.01 && autoCreateSettleDiff) {
               const prefix = getExpensePrefix(settleDiffCategory);
               const expSysDocId = generateDateBasedDocId(transactions.filter(tx => tx.type === 'expense'), prefix, settleDate, 'sysDocId');
               
@@ -7833,7 +7799,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   channel: settleConfirmId.channel || '',
                   shopName: settleConfirmId.shopName || 'ไม่ระบุ'
               });
-          } else if (diff < -0.01) {
+          } else if (diff < -0.01 && autoCreateSettleDiff) {
               const incSysDocId = generateDateBasedDocId(transactions.filter(tx => tx.type === 'income'), 'INC-', settleDate, 'sysDocId');
               
               const incRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income'));
@@ -10488,20 +10454,36 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                  
                  {((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt) > 0.01 && (
                      <div className="mt-3 p-3 bg-rose-50 border border-rose-100 rounded-xl animate-fadeIn">
-                         <p className="text-[10px] font-bold text-rose-600 mb-1 flex items-center gap-1"><AlertTriangle size={12}/> พบส่วนต่าง (เงินขาด) {formatCurrency((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt)} ฿</p>
-                         <label className="text-[9px] font-bold text-rose-500 uppercase">บันทึกส่วนต่างนี้เป็นรายจ่ายหมวด:</label>
-                         <select value={settleDiffCategory} onChange={e=>setSettleDiffCategory(e.target.value)} className="w-full bg-white border border-rose-200 rounded-lg p-2 text-xs font-bold mt-1 outline-none text-slate-700">
-                             {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
-                         </select>
+                         <p className="text-[10px] font-bold text-rose-600 mb-2 flex items-center gap-1"><AlertTriangle size={12}/> พบส่วนต่าง (เงินขาด) {formatCurrency((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt)} ฿</p>
+                         <label className="flex items-center gap-2 cursor-pointer w-fit mb-2">
+                             <input type="checkbox" checked={autoCreateSettleDiff} onChange={e=>setAutoCreateSettleDiff(e.target.checked)} className="w-4 h-4 text-rose-500 rounded border-slate-300 cursor-pointer"/>
+                             <span className="text-[10px] font-bold text-rose-600">สร้างบิลรายจ่ายส่วนต่างอัตโนมัติ</span>
+                         </label>
+                         {autoCreateSettleDiff && (
+                             <div className="animate-fadeIn">
+                                 <label className="text-[9px] font-bold text-rose-500 uppercase">บันทึกส่วนต่างนี้เป็นรายจ่ายหมวด:</label>
+                                 <select value={settleDiffCategory} onChange={e=>setSettleDiffCategory(e.target.value)} className="w-full bg-white border border-rose-200 rounded-lg p-2 text-xs font-bold mt-1 outline-none text-slate-700">
+                                     {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
+                                 </select>
+                             </div>
+                         )}
                      </div>
                  )}
                  {((settleConfirmId.grandTotal || settleConfirmId.total) - settleActualAmt) < -0.01 && (
                      <div className="mt-3 p-3 bg-emerald-50 border border-emerald-100 rounded-xl animate-fadeIn">
-                         <p className="text-[10px] font-bold text-emerald-600 mb-1 flex items-center gap-1"><ArrowUp size={12}/> พบส่วนต่าง (เงินเกิน) {formatCurrency(settleActualAmt - (settleConfirmId.grandTotal || settleConfirmId.total))} ฿</p>
-                         <label className="text-[9px] font-bold text-emerald-600 uppercase">บันทึกส่วนต่างนี้เป็นรายรับหมวด:</label>
-                         <select value={settleSurplusCategory} onChange={e=>setSettleSurplusCategory(e.target.value)} className="w-full bg-white border border-emerald-200 rounded-lg p-2 text-xs font-bold mt-1 outline-none text-slate-700">
-                             {CONSTANTS.CATEGORIES.INCOME.map(c => <option key={c} value={c}>{c}</option>)}
-                         </select>
+                         <p className="text-[10px] font-bold text-emerald-600 mb-2 flex items-center gap-1"><ArrowUp size={12}/> พบส่วนต่าง (เงินเกิน) {formatCurrency(settleActualAmt - (settleConfirmId.grandTotal || settleConfirmId.total))} ฿</p>
+                         <label className="flex items-center gap-2 cursor-pointer w-fit mb-2">
+                             <input type="checkbox" checked={autoCreateSettleDiff} onChange={e=>setAutoCreateSettleDiff(e.target.checked)} className="w-4 h-4 text-emerald-500 rounded border-slate-300 cursor-pointer"/>
+                             <span className="text-[10px] font-bold text-emerald-600">สร้างบิลรายรับส่วนต่างอัตโนมัติ</span>
+                         </label>
+                         {autoCreateSettleDiff && (
+                             <div className="animate-fadeIn">
+                                 <label className="text-[9px] font-bold text-emerald-600 uppercase">บันทึกส่วนต่างนี้เป็นรายรับหมวด:</label>
+                                 <select value={settleSurplusCategory} onChange={e=>setSettleSurplusCategory(e.target.value)} className="w-full bg-white border border-emerald-200 rounded-lg p-2 text-xs font-bold mt-1 outline-none text-slate-700">
+                                     {CONSTANTS.CATEGORIES.INCOME.map(c => <option key={c} value={c}>{c}</option>)}
+                                 </select>
+                             </div>
+                         )}
                      </div>
                  )}
               </div>
@@ -14825,6 +14807,11 @@ export default function App() {
   const [showTaxOnlyPreviewModal, setShowTaxOnlyPreviewModal] = useState(false);
   const [taxOnlyTargets, setTaxOnlyTargets] = useState([]);
 
+  // --- 🔥 NEW: Ghost Records Cleaner State (ล้างบิลเก่าที่ระบบเคยสร้างออโต้) ---
+  const [showGhostCleanerModal, setShowGhostCleanerModal] = useState(false);
+  const [ghostRecords, setGhostRecords] = useState([]);
+  const [isCleaningGhosts, setIsCleaningGhosts] = useState(false);
+
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
   const toggleAppMode = () => { const ids = Object.values(CONSTANTS.IDS); const nextId = ids[(ids.indexOf(currentAppId) + 1) % ids.length]; setCurrentAppId(nextId); localStorage.setItem('merchant_app_id', nextId); addToast(`ฐานข้อมูล: ${nextId}`, "success"); };
@@ -15734,6 +15721,61 @@ export default function App() {
       setIsFixingTaxOnly(false);
   };
 
+  // --- 🔥 NEW: ฟังก์ชันสแกนหาบิลเก่าที่สร้างอัตโนมัติ (Ghost Records) ---
+  const handleScanGhostRecords = () => {
+      // ค้นหาเฉพาะบิลที่มีแท็ก isFromReconciliation และอยู่ในหมวดที่เคยสร้างออโต้ (ไม่รวมสต็อกชำรุด)
+      const ghosts = transactions.filter(t => 
+          t.isFromReconciliation === true && 
+          !t.isCancelled && 
+          ['ค่าธรรมเนียม Platform', 'ค่าขนส่งพัสดุ (ส่งลูกค้า)', 'รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)', 'รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'].includes(t.category)
+      );
+
+      if (ghosts.length === 0) {
+          addToast("ยอดเยี่ยม! ไม่พบรายการบิลอัตโนมัติรุ่นเก่า ข้อมูลคุณสะอาดแล้ว", "success");
+          return;
+      }
+
+      setGhostRecords(ghosts);
+      setShowGhostCleanerModal(true);
+  };
+
+  // --- 🔥 NEW: ฟังก์ชันลบ Ghost Records ทิ้งถาวร ---
+  const executeGhostCleanup = async () => {
+      setIsCleaningGhosts(true);
+      try {
+          let batchWriter = writeBatch(dbInstance);
+          let opsCount = 0;
+          let deletedCount = 0;
+
+          for (const ghost of ghostRecords) {
+              const coll = ghost.type === 'income' ? 'transactions_income' : 'transactions_expense';
+              const docRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', coll, ghost.id);
+              
+              batchWriter.delete(docRef);
+              opsCount++;
+              deletedCount++;
+
+              if (opsCount >= 400) {
+                  await batchWriter.commit();
+                  batchWriter = writeBatch(dbInstance);
+                  opsCount = 0;
+              }
+          }
+
+          if (opsCount > 0) {
+              await batchWriter.commit();
+          }
+
+          addToast(`ล้างข้อมูลเก่าสำเร็จ ${deletedCount} รายการ ระบบพร้อมรับใบกำกับภาษีใบใหม่แล้ว!`, "success");
+          setShowGhostCleanerModal(false);
+          setGhostRecords([]);
+      } catch (error) {
+          console.error("Ghost Cleanup Error:", error);
+          addToast("เกิดข้อผิดพลาดในการล้างข้อมูล", "error");
+      }
+      setIsCleaningGhosts(false);
+  };
+
   const renderContent = () => {
     switch(activeTab) {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} />;
@@ -15814,6 +15856,11 @@ export default function App() {
 
               <button onClick={handleBulkSetTaxOnlyForFees} disabled={isFixingTaxOnly || isMigrating || isBackingUp || isRestoring} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-purple-400 hover:bg-purple-900/30 transition-all text-left">
                 {isFixingTaxOnly ? <Loader size={14} className="text-center animate-spin"/> : <ShieldCheck size={14} className="text-center"/>} ซ่อนบิลค่าธรรมเนียมจากกราฟ
+              </button>
+
+              {/* --- 🔥 NEW: ปุ่มล้างบิลเก่า --- */}
+              <button onClick={handleScanGhostRecords} disabled={isMigrating || isBackingUp || isRestoring} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-rose-400 hover:bg-rose-900/30 transition-all text-left">
+                <Trash2 size={14} className="text-center"/> 🧹 ล้างบิลส่วนต่างอัตโนมัติ (รุ่นเก่า)
               </button>
 
               <button onClick={syncInvoiceDates} disabled={isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-emerald-400 hover:bg-emerald-900/30 transition-all text-left">
@@ -16393,6 +16440,85 @@ export default function App() {
                       >
                           {isFixingTaxOnly ? <Loader className="animate-spin" size={18}/> : <ShieldCheck size={18}/>} 
                           {isFixingTaxOnly ? 'กำลังอัปเดตระบบ...' : 'ยืนยันซ่อนบิลจากแดชบอร์ด'}
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* --- 🔥 NEW: Ghost Records Cleaner Modal --- */}
+      {showGhostCleanerModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+                  <div className="flex justify-between items-start mb-6 border-b border-slate-100 pb-4">
+                      <div>
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Trash2 className="text-rose-600"/> ล้างบิลระบบสร้างอัตโนมัติ (Legacy Cleanup)</h3>
+                          <p className="text-xs text-slate-500 mt-1">
+                              ระบบพบรายการบิลที่ <b>เคยถูกสร้างอัตโนมัติ</b> จากการกระทบยอดในอดีต (เช่น ส่วนต่างค่าส่ง, ค่าธรรมเนียมออเดอร์)<br/>
+                              หากคุณมีแผนจะบันทึกใบกำกับภาษีรวมจาก Shopee ด้วยตัวเอง ควรลบรายการเหล่านี้ทิ้งเพื่อป้องกันรายจ่ายเบิ้ล 2 เท่า
+                          </p>
+                      </div>
+                      <button onClick={() => setShowGhostCleanerModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 mb-6 shrink-0">
+                      <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl">
+                          <p className="text-[10px] font-bold text-amber-600 uppercase mb-1">จำนวนบิลเก่าที่พบ</p>
+                          <p className="text-2xl font-black text-amber-700">{ghostRecords.length.toLocaleString()} <span className="text-sm font-bold text-amber-500">ใบ</span></p>
+                      </div>
+                      <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl">
+                          <p className="text-[10px] font-bold text-rose-600 uppercase mb-1">มูลค่ารวมที่จะถูกลบทิ้ง (ลดความซ้ำซ้อน)</p>
+                          <p className="text-2xl font-black text-rose-700">{formatCurrency(ghostRecords.reduce((sum, t) => sum + (Number(t.total) || Number(t.grandTotal) || 0), 0))} <span className="text-sm font-bold text-rose-500">บาท</span></p>
+                      </div>
+                  </div>
+
+                  <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl mb-6 bg-slate-50">
+                      <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                              <tr>
+                                  <th className="p-3 pl-4">วันที่ / เลขบิล</th>
+                                  <th className="p-3">หมวดหมู่ / อ้างอิง Order</th>
+                                  <th className="p-3 text-right pr-4">ยอดเงิน (฿)</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                              {ghostRecords.slice(0, 50).map((t, idx) => (
+                                  <tr key={idx} className="hover:bg-white transition-colors">
+                                      <td className="p-3 pl-4">
+                                          <p className="font-bold text-slate-700">{formatDate(t.date)}</p>
+                                          <p className="text-[10px] font-mono text-slate-500 font-bold mt-0.5 bg-slate-200 px-1.5 py-0.5 rounded w-fit">{t.sysDocId || '-'}</p>
+                                      </td>
+                                      <td className="p-3">
+                                          <p className="font-bold text-slate-600 bg-amber-100 px-2 py-0.5 rounded border border-amber-200 w-fit mb-1">
+                                              {t.category}
+                                          </p>
+                                          <p className="text-[10px] text-slate-500 truncate max-w-[250px]">Ref: {t.linkedOrderNo || t.orderId || '-'}</p>
+                                      </td>
+                                      <td className={`p-3 text-right pr-4 font-black ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                          {t.type === 'income' ? '+' : '-'}{formatCurrency(t.total || t.grandTotal)}
+                                      </td>
+                                  </tr>
+                              ))}
+                          </tbody>
+                      </table>
+                      {ghostRecords.length > 50 && (
+                          <div className="p-4 text-center text-xs font-bold text-slate-500 bg-white border-t border-slate-100">
+                              ... แสดงตัวอย่าง 50 รายการแรก จากทั้งหมด {ghostRecords.length.toLocaleString()} รายการ ...
+                          </div>
+                      )}
+                  </div>
+
+                  <div className="flex gap-4 shrink-0">
+                      <button onClick={() => setShowGhostCleanerModal(false)} disabled={isCleaningGhosts} className="flex-1 py-4 bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors rounded-2xl font-bold text-sm">
+                          ยกเลิก
+                      </button>
+                      <button 
+                          onClick={executeGhostCleanup} 
+                          disabled={isCleaningGhosts} 
+                          className="flex-[2] py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black text-sm shadow-xl shadow-rose-200 flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                      >
+                          {isCleaningGhosts ? <Loader className="animate-spin" size={18}/> : <Trash2 size={18}/>} 
+                          {isCleaningGhosts ? 'กำลังลบทิ้งถาวร...' : 'ยืนยันลบข้อมูลเก่าทิ้งถาวร'}
                       </button>
                   </div>
               </div>
