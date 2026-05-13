@@ -2821,6 +2821,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   const updateData = {
                       actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : 0,
                       settlementDate: item.newSettlementDate || item.settlementDate || null,
+                      paymentStatus: 'settled', // เพิ่มการอัปเดตสถานะเป็นรับเงินแล้ว
+                      status: 'paid', // เพิ่มอัปเดตสถานะให้สอดคล้องกัน
                       updatedAt: serverTimestamp()
                   };
                   
