@@ -1248,7 +1248,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                         <p className="text-sm font-black text-emerald-800">วิธีการคำนวณ: เกณฑ์เงินสด (Cash Basis)</p>
                         <p className="text-xs text-emerald-600/80 mt-1 leading-relaxed font-medium">
                             คำนวณเฉพาะเงินที่เข้า-ออกบัญชีจริง โดยยึดตาม <b>"วันที่เงินโอนสำเร็จ"</b> (Settlement Date) <br/>
-                            เพื่อดู <b>สภาพคล่องทางการเงิน (Cash Flow)</b> ใช้เทียบยอดกับ Statement ธนาคาร และประเมินฐานภาษีที่ต้องยื่น
+                            เพื่อดู <b>สภาพคล่องทางการเงิน (Cash Flow)</b> ใช้เทียบยอดกับ Statement ธนาคาร
                         </p>
                     </div>
                 </div>
@@ -1261,7 +1261,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 </div>
 
                 {/* NEW: แถบแสดงข้อมูลอ้างอิง (ต้นทุนสินค้าที่แฝงอยู่ในเงินที่รับเข้า) */}
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 w-full shadow-sm">
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 w-full shadow-sm mb-6">
                     <div className="flex items-start md:items-center gap-3">
                         <div className="p-2 bg-slate-200 rounded-xl text-slate-500 shrink-0"><Box size={20}/></div>
                         <div>
@@ -1272,43 +1272,6 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     <div className="text-left md:text-right w-full md:w-auto">
                         <p className="text-xl font-black text-slate-700">{formatCurrency(analytics.cash.cogs)}</p>
                         <p className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase tracking-widest">Reference Only</p>
-                    </div>
-                </div>
-
-                {/* Taxable Income Calculation Section */}
-                <div className="bg-indigo-50/80 border border-indigo-100 rounded-[32px] p-6 md:p-8 flex flex-col xl:flex-row gap-6 items-center justify-between shadow-sm w-full">
-                    <div className="flex flex-col gap-2 w-full xl:w-1/5 shrink-0">
-                        <div className="w-12 h-12 bg-white rounded-2xl text-indigo-600 shadow-sm flex items-center justify-center mb-2"><Calculator size={24}/></div>
-                        <h3 className="text-xl font-black text-indigo-900">ฐานภาษีรายได้<br/>(Taxable Income)</h3>
-                        <p className="text-[10px] text-indigo-600/70 font-medium leading-relaxed">สรุปยอดประเมินรายได้เพื่อยื่นภาษีตามหลักสรรพากร (อิงตามบิลที่รับเงินแล้ว)</p>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row items-center gap-3 w-full xl:w-4/5 flex-wrap lg:flex-nowrap">
-                        <div className="bg-white p-4 lg:p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ยอดขาย (ก่อนหักธรรมเนียม)</p>
-                            <p className="text-lg lg:text-xl font-black text-slate-800">{formatCurrency(analytics.cash.grossSales)}</p>
-                            <p className="text-[9px] text-slate-400 mt-1">ยอดขายสินค้าสุทธิ</p>
-                            <div className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center z-10 hidden sm:flex"><Plus size={12} className="text-indigo-600"/></div>
-                        </div>
-                        
-                        <div className="bg-white p-4 lg:p-5 rounded-[24px] shadow-sm border border-slate-100 flex-1 w-full relative">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ค่าจัดส่ง (ลูกค้าจ่าย)</p>
-                            <p className="text-lg lg:text-xl font-black text-slate-800">{formatCurrency(analytics.cash.shipping)}</p>
-                            <p className="text-[9px] text-slate-400 mt-1">รวมในฐานภาษีรายได้</p>
-                            <div className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-indigo-600 rounded-full flex items-center justify-center z-10 hidden sm:flex"><ArrowRight size={12} className="text-white"/></div>
-                        </div>
-                        
-                        <div className="bg-indigo-600 p-4 lg:p-5 rounded-[24px] shadow-md border border-indigo-500 flex-[1.2] w-full text-white transform sm:scale-105 origin-center z-10">
-                            <p className="text-[10px] font-bold text-indigo-200 uppercase mb-1">ยอดประเมินเสียภาษีรวม</p>
-                            <p className="text-xl lg:text-2xl font-black">{formatCurrency(analytics.cash.grossSales + analytics.cash.shipping)}</p>
-                            <p className="text-[9px] text-indigo-300 mt-1 flex items-center gap-1"><Info size={10}/> นำยอดนี้ไปคำนวณภาษี</p>
-                        </div>
-
-                        <div className="bg-rose-50 p-4 lg:p-5 rounded-[24px] shadow-sm border border-rose-100 flex-1 w-full relative ml-0 lg:ml-2">
-                            <p className="text-[10px] font-bold text-rose-400 uppercase mb-1">ค่าธรรมเนียม Platform</p>
-                            <p className="text-lg lg:text-xl font-black text-rose-600">{formatCurrency(analytics.cash.fees)}</p>
-                            <p className="text-[9px] text-rose-500 mt-1 flex items-center gap-1"><AlertTriangle size={10}/> แยกนำไปลงเป็นรายจ่ายทีหลัง</p>
-                        </div>
                     </div>
                 </div>
 
@@ -2821,8 +2784,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                   const updateData = {
                       actualSettledAmt: item.actualSettledAmt !== undefined ? item.actualSettledAmt : 0,
                       settlementDate: item.newSettlementDate || item.settlementDate || null,
-                      paymentStatus: 'settled', // เพิ่มการอัปเดตสถานะเป็นรับเงินแล้ว
-                      status: 'paid', // เพิ่มอัปเดตสถานะให้สอดคล้องกัน
                       updatedAt: serverTimestamp()
                   };
                   
@@ -7849,42 +7810,82 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       reader.onloadend = async () => {
           try {
               const base64Img = reader.result;
+              const expenseCategories = CONSTANTS.CATEGORIES.EXPENSE.join(', ');
               const prompt = `
-              อ่านข้อมูลจากภาพใบเสร็จรับเงิน/ใบกำกับภาษีนี้ แล้วสกัดข้อมูลที่เกี่ยวข้องกับรายจ่ายต่อไปนี้:
-              1. ชื่อร้านค้า/ผู้ขาย (partnerName)
-              2. เลขประจำตัวผู้เสียภาษี (taxId)
-              3. ยอดรวมสุทธิหลังรวม VAT (totalAmount) - ตัวเลข
-              4. ยอดภาษีมูลค่าเพิ่ม VAT 7% (vatAmount) - ตัวเลข (ถ้าไม่มี VAT หรือ VAT 0 ให้ใส่ 0)
-              5. วันที่ในเอกสาร (date) - แปลงเป็นรูปแบบ YYYY-MM-DD
-              6. ประเภทเอกสาร (isTaxInvoice) - ให้ประเมินว่าเป็น "ใบกำกับภาษี" (true) หรือเป็นแค่ "ใบเสร็จรับเงิน/บิลเงินสด" (false)
+              คุณคือผู้เชี่ยวชาญด้านบัญชีและระบบสกัดข้อมูล OCR ตรวจสอบรูปภาพใบเสร็จรับเงิน/ใบกำกับภาษีนี้อย่างละเอียด และสกัดข้อมูลด้วยความแม่นยำสูงสุด (High Accuracy)
+              กรุณาสกัดข้อมูลต่อไปนี้:
+              1. "partnerName": ชื่อบริษัท/ร้านค้าผู้ขาย
+              2. "taxId": เลขประจำตัวผู้เสียภาษี 13 หลัก (ถ้ามี)
+              3. "branch": รหัสสาขา 5 หลัก (เช่น 00000) หรือคำว่า "สำนักงานใหญ่" (ถ้ามีระบุ)
+              4. "taxInvoiceNo": เลขที่ใบเสร็จ หรือ เลขที่ใบกำกับภาษี (ถ้าไม่มีให้ว่างไว้)
+              5. "date": วันที่ในเอกสาร (แปลงเป็นรูปแบบ YYYY-MM-DD เสมอ)
+              6. "items": รายการสินค้า/บริการทั้งหมดในบิล (เป็น Array ของ Object { "desc": ชื่อรายการ, "qty": จำนวน, "price": ราคาต่อหน่วยรวม VAT แล้ว })
+              7. "totalAmount": ยอดรวมสุทธิ (Grand Total)
+              8. "vatAmount": ยอดภาษีมูลค่าเพิ่ม (VAT 7%) ถ้าไม่มีหรือเป็น 0 ให้ใส่ 0
+              9. "isTaxInvoice": ระบุเป็น boolean (true ถ้ามีคำว่า "ใบกำกับภาษี", false ถ้าเป็นแค่ "ใบเสร็จรับเงิน" หรือบิลเงินสดทั่วไป)
+              10. "category": เลือกหมวดหมู่รายจ่ายที่เหมาะสมที่สุด "เพียง 1 หมวดหมู่" จากตัวเลือกต่อไปนี้เท่านั้น: [${expenseCategories}] (ถ้าไม่แน่ใจให้เลือก 'ค่าใช้จ่ายทั่วไป' หรือ 'ต้นทุนสินค้า')
 
-              ตอบกลับเป็น JSON Object เท่านั้น:
-              { "partnerName": "...", "taxId": "...", "totalAmount": 0, "vatAmount": 0, "date": "YYYY-MM-DD", "isTaxInvoice": false }
+              ตอบกลับเป็น JSON Object ตามโครงสร้างคีย์ที่ระบุไว้เท่านั้น ห้ามพิมพ์ข้อความอื่นนอกเหนือจาก JSON:
               `;
               
-              showToast("AI กำลังอ่านข้อมูลจากใบเสร็จ...", "success");
+              showToast("AI กำลังสกัดข้อมูลเชิงลึกจากใบเสร็จ (High Accuracy Mode)...", "success");
               const res = await callGeminiAPI(prompt, true, base64Img);
               
               if (res) {
-                  const items = [...formData.items];
-                  items[0] = { desc: 'ค่าใช้จ่ายทั่วไป (สแกนจากเอกสาร)', qty: 1, unit: 'ครั้ง', buyPrice: res.totalAmount || 0, sellPrice: 0, sku: '', category: '' };
+                  // สร้าง items จาก AI หรือใช้ค่า Default ถ้า AI อ่านรายการย่อยไม่ออก
+                  let newItems = [];
+                  if (res.items && Array.isArray(res.items) && res.items.length > 0) {
+                      newItems = res.items.map(it => ({
+                          desc: it.desc || 'รายการสแกน',
+                          qty: Number(it.qty) || 1,
+                          unit: 'ชิ้น',
+                          buyPrice: Number(it.price) || 0,
+                          sellPrice: 0,
+                          sku: '',
+                          category: res.category || CONSTANTS.CATEGORIES.EXPENSE[0]
+                      }));
+                  } else {
+                      newItems = [{ 
+                          desc: 'ค่าใช้จ่ายตามใบเสร็จ', 
+                          qty: 1, 
+                          unit: 'ครั้ง', 
+                          buyPrice: res.totalAmount || 0, 
+                          sellPrice: 0, 
+                          sku: '', 
+                          category: res.category || CONSTANTS.CATEGORIES.EXPENSE[0] 
+                      }];
+                  }
                   
                   const isCashBillMode = res.isTaxInvoice === false;
+
+                  let parsedBranch = '00000';
+                  if (res.branch) {
+                      if (res.branch.includes('สำนักงานใหญ่') || res.branch.includes('HQ') || res.branch.includes('Head')) {
+                          parsedBranch = '00000';
+                      } else {
+                          const numMatch = res.branch.match(/\d{5}/);
+                          if (numMatch) parsedBranch = numMatch[0];
+                      }
+                  }
 
                   setFormData(prev => ({
                       ...prev,
                       partnerName: res.partnerName || prev.partnerName,
                       partnerTaxId: res.taxId || prev.partnerTaxId,
-                      items: items,
+                      partnerBranch: parsedBranch,
+                      taxInvoiceNo: res.taxInvoiceNo || prev.taxInvoiceNo,
+                      category: res.category || prev.category,
+                      items: newItems,
                       date: res.date || prev.date,
                       isCashBill: isCashBillMode,
-                      vatType: isCashBillMode ? 'none' : (res.vatAmount > 0 ? 'included' : 'none')
+                      vatType: isCashBillMode ? 'none' : (res.vatAmount > 0 ? 'included' : 'none'),
+                      manualVatAmount: res.vatAmount > 0 ? res.vatAmount : ''
                   }));
 
                   if (isCashBillMode) {
-                      showToast("AI ตรวจพบว่าเป็น 'ใบเสร็จรับเงิน' จึงตั้งค่าเป็น 'บิลเงินสด (ไม่มี VAT)' ให้อัตโนมัติ", "success");
+                      showToast("AI สกัดข้อมูลสำเร็จ! ตรวจพบว่าเป็น 'ใบเสร็จรับเงิน/บิลเงินสด'", "success");
                   } else {
-                      showToast("ดึงข้อมูลจากใบกำกับภาษีสำเร็จ ตรวจสอบความถูกต้องก่อนบันทึก", "success");
+                      showToast("AI สกัดข้อมูลจาก 'ใบกำกับภาษี' สำเร็จ! โปรดตรวจสอบรายการและ VAT", "success");
                   }
               }
           } catch (err) {
@@ -14814,6 +14815,89 @@ export default function App() {
   const [ghostRecords, setGhostRecords] = useState([]);
   const [isCleaningGhosts, setIsCleaningGhosts] = useState(false);
 
+  // --- 🔥 NEW: Bulk Update Shop/Channel States ---
+  const [showBulkUpdateModal, setShowBulkUpdateModal] = useState(false);
+  const [bulkUpdateInput, setBulkUpdateInput] = useState('');
+  const [bulkUpdateShop, setBulkUpdateShop] = useState(CONSTANTS.SHOPS[0]);
+  const [bulkUpdateChannel, setBulkUpdateChannel] = useState(CONSTANTS.CHANNELS[0]);
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [bulkUpdatePreview, setBulkUpdatePreview] = useState(null);
+
+  const handlePreviewBulkUpdate = () => {
+      const ids = bulkUpdateInput.split(/[\n,]+/).map(id => id.trim()).filter(id => id);
+      if (ids.length === 0) {
+          addToast("กรุณากรอกเลขคำสั่งซื้ออย่างน้อย 1 รายการ", "error");
+          return;
+      }
+
+      const idSet = new Set(ids.map(id => id.toLowerCase()));
+
+      const matchedIncomes = transactions.filter(t =>
+          t.type === 'income' &&
+          !t.isCancelled &&
+          (idSet.has(String(t.orderId || '').toLowerCase()) || idSet.has(String(t.sysDocId || '').toLowerCase()))
+      );
+
+      const matchedExpenses = transactions.filter(t =>
+          t.type === 'expense' &&
+          !t.isCancelled &&
+          t.linkedOrderNo &&
+          idSet.has(String(t.linkedOrderNo).toLowerCase())
+      );
+
+      setBulkUpdatePreview({
+          incomes: matchedIncomes,
+          expenses: matchedExpenses,
+          totalFound: matchedIncomes.length,
+          requestedCount: idSet.size
+      });
+  };
+
+  const executeBulkUpdate = async () => {
+      if (!bulkUpdatePreview || !user) return;
+      setIsBulkUpdating(true);
+      try {
+          let batchWriter = writeBatch(dbInstance);
+          let opsCount = 0;
+          let updatedCount = 0;
+
+          const allDocs = [...bulkUpdatePreview.incomes, ...bulkUpdatePreview.expenses];
+
+          for (const item of allDocs) {
+              const collName = item.type === 'income' ? 'transactions_income' : 'transactions_expense';
+              const docRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName, item.id);
+
+              batchWriter.update(docRef, {
+                  shopName: bulkUpdateShop,
+                  channel: bulkUpdateChannel,
+                  updatedAt: serverTimestamp()
+              });
+
+              opsCount++;
+              if (item.type === 'income') updatedCount++;
+
+              if (opsCount >= 400) {
+                  await batchWriter.commit();
+                  batchWriter = writeBatch(dbInstance);
+                  opsCount = 0;
+              }
+          }
+
+          if (opsCount > 0) {
+              await batchWriter.commit();
+          }
+
+          addToast(`อัปเดตข้อมูลสำเร็จ ${updatedCount} ออเดอร์ (รวมบิลที่เกี่ยวข้อง)`, "success");
+          setShowBulkUpdateModal(false);
+          setBulkUpdateInput('');
+          setBulkUpdatePreview(null);
+      } catch (error) {
+          console.error(error);
+          addToast(`เกิดข้อผิดพลาด: ${error.message}`, "error");
+      }
+      setIsBulkUpdating(false);
+  };
+
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
   const toggleAppMode = () => { const ids = Object.values(CONSTANTS.IDS); const nextId = ids[(ids.indexOf(currentAppId) + 1) % ids.length]; setCurrentAppId(nextId); localStorage.setItem('merchant_app_id', nextId); addToast(`ฐานข้อมูล: ${nextId}`, "success"); };
@@ -15502,63 +15586,27 @@ export default function App() {
   const syncInvoiceDates = async () => {
     setIsMigrating(true);
     try {
-      addToast("กำลังตรวจสอบและแก้ไขเลข ABB/วันที่ ให้ตรงกับออเดอร์...", "success");
+      addToast("กำลังตรวจสอบและซิงค์ Order Date ให้ตรงกับใบกำกับภาษี...", "success");
       let batchWriter = writeBatch(dbInstance);
       let opsCount = 0;
       let updateCount = 0;
-
-      const prefixMap = { credit_note: 'CN-', abb: 'ABB-', quotation: 'QUO-', receipt: 'REC-', invoice: 'INV-' };
-      let counters = {};
-
-      const getRunningNumSet = (pfx) => {
-          const usedNums = new Set();
-          invoices.forEach(item => {
-              if (item.invNo && String(item.invNo).startsWith(pfx)) {
-                  const n = parseInt(String(item.invNo).replace(pfx, ''), 10);
-                  if (!isNaN(n)) usedNums.add(n);
-              }
-          });
-          return usedNums;
-      };
 
       for (const inv of invoices) {
         if (inv.orderId) {
           const trans = transactions.find(t => t.orderId === inv.orderId && t.type === 'income');
           if (trans && trans.date) {
             const transD = normalizeDate(trans.date);
-            const invD = normalizeDate(inv.date);
-            
-            const dStr = formatDateISO(transD).replace(/-/g, '');
-            const pfx = prefixMap[inv.docType] || 'INV-';
-            const expectedPrefix = `${pfx}${dStr}-`;
+            const invOrderD = normalizeDate(inv.orderDate);
             
             let needsUpdate = false;
             let updates = {};
-            let newInvNo = inv.invNo;
 
-            // ถ้าวันที่ในใบกำกับไม่ตรงกับวันที่ทำรายการ
-            if (transD && invD && transD.getTime() !== invD.getTime()) {
+            // --- 🔥 THE FIX (COMPLIANCE): กฎหมายห้ามเปลี่ยนวันที่และรันเลขใบกำกับใหม่หากออกไปแล้ว ---
+            // เราจะทำการซิงค์เฉพาะช่อง "Order Date (วันที่สั่งซื้อ)" เพื่อให้อ้างอิงและดึงรายงานถูกเดือนเท่านั้น
+            // จะ "ไม่" ไปยุ่งกับ inv.date (วันที่ออกเอกสาร) หรือ inv.invNo (เลขที่เอกสาร) เด็ดขาด
+            
+            if (transD && (!invOrderD || transD.getTime() !== invOrderD.getTime())) {
               needsUpdate = true;
-              updates.date = transD;
-              updates.orderDate = transD;
-            }
-
-            // ตรวจสอบเลขที่เอกสารว่า Prefix ตรงกับวันที่ทำรายการไหม (แก้ปัญหาเลข ABB ขึ้นต้นด้วยวันที่ผิด)
-            if (inv.invNo && !String(inv.invNo).startsWith(expectedPrefix)) {
-              needsUpdate = true;
-              if (counters[expectedPrefix] === undefined) {
-                  counters[expectedPrefix] = getRunningNumSet(expectedPrefix);
-              }
-              
-              let nextNum = 1;
-              while (counters[expectedPrefix].has(nextNum)) nextNum++;
-              counters[expectedPrefix].add(nextNum);
-              
-              newInvNo = `${expectedPrefix}${String(nextNum).padStart(5, '0')}`;
-              updates.invNo = newInvNo;
-              
-              // เซ็ตวันที่ให้ชัวร์ว่าตรงกันด้วยเผื่อกรณีมีแค่เลขผิดแต่วันที่ถูก
-              updates.date = transD;
               updates.orderDate = transD;
             }
             
@@ -15566,14 +15614,6 @@ export default function App() {
               const invRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'invoices', inv.id);
               batchWriter.update(invRef, updates);
               opsCount++;
-              
-              // ถ้ามีการเปลี่ยนเลขที่เอกสาร ต้องไปอัปเดตใน transactions ด้วยเพื่อให้ลิงก์กลับมาถูก
-              if (updates.invNo) {
-                  const tRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'transactions_income', trans.id);
-                  batchWriter.update(tRef, { invoiceNo: newInvNo });
-                  opsCount++;
-              }
-
               updateCount++;
               
               if (opsCount >= 400) {
@@ -15591,9 +15631,9 @@ export default function App() {
       }
       
       if (updateCount > 0) {
-        addToast(`แก้เลขเอกสารและซิงค์วันที่สำเร็จ ${updateCount} รายการ`, "success");
+        addToast(`ซิงค์ข้อมูล Order Date สำเร็จ ${updateCount} รายการ`, "success");
       } else {
-        addToast("เลข ABB และวันที่ถูกต้องตรงกันกับออเดอร์อยู่แล้ว", "success");
+        addToast("ข้อมูลวันที่สั่งซื้อตรงกันกับออเดอร์อยู่แล้ว", "success");
       }
     } catch (e) {
       console.error(e);
@@ -15849,6 +15889,11 @@ export default function App() {
               <button onClick={() => setShowMigrateConfirm(true)} disabled={isMigrating} className={`w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 transition-all text-left ${isMigrating ? 'bg-amber-900/50 text-amber-500 cursor-not-allowed' : 'text-amber-400 hover:bg-amber-900/30'}`}>
                 {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} 
                 {isMigrating ? 'กำลังรันเลข...' : 'รันเลขเอกสารที่ตกหล่น'}
+              </button>
+
+              {/* --- 🔥 NEW: ปุ่มอัปเดตร้านค้าและช่องทางขาย --- */}
+              <button onClick={() => setShowBulkUpdateModal(true)} disabled={isMigrating || isBackingUp || isRestoring} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-fuchsia-400 hover:bg-fuchsia-900/30 transition-all text-left">
+                <Store size={14} className="text-center"/> อัปเดตร้านค้า/ช่องทางแบบชุด (Bulk)
               </button>
 
               {/* NEW: Data Healer Button */}
@@ -16525,6 +16570,103 @@ export default function App() {
                   </div>
               </div>
           </div>
+      )}
+
+      {/* --- 🔥 NEW: Bulk Update Modal --- */}
+      {showBulkUpdateModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-2xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+                <div className="flex justify-between items-start mb-6 border-b border-slate-100 pb-4">
+                    <div>
+                        <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Store className="text-fuchsia-600"/> อัปเดตร้านค้าและช่องทาง (Bulk Update)</h3>
+                        <p className="text-xs text-slate-500 mt-1">วางเลขคำสั่งซื้อ (Order ID) เพื่ออัปเดตข้อมูลร้านค้าและช่องทางขายพร้อมกันหลายรายการ</p>
+                    </div>
+                    <button onClick={() => {setShowBulkUpdateModal(false); setBulkUpdatePreview(null);}} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                </div>
+
+                <div className="flex-1 overflow-auto custom-scrollbar flex flex-col gap-4">
+                    {!bulkUpdatePreview ? (
+                        <>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase">ร้านค้าใหม่ที่จะตั้งค่า</label>
+                                    <select value={bulkUpdateShop} onChange={e=>setBulkUpdateShop(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer">
+                                        {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase">ช่องทางใหม่ที่จะตั้งค่า</label>
+                                    <select value={bulkUpdateChannel} onChange={e=>setBulkUpdateChannel(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer">
+                                        {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
+                                        <option value="IMPORTED">IMPORTED</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="flex-1 flex flex-col">
+                                <label className="text-xs font-bold text-slate-500 uppercase flex justify-between">
+                                    <span>วางเลข Order ID (บรรทัดละ 1 รายการ)</span>
+                                    <span className="text-indigo-500">{bulkUpdateInput.split(/[\n,]+/).filter(x=>x.trim()).length} รายการ</span>
+                                </label>
+                                <textarea
+                                    value={bulkUpdateInput}
+                                    onChange={e => setBulkUpdateInput(e.target.value)}
+                                    className="w-full flex-1 min-h-[200px] mt-1 bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-100 custom-scrollbar"
+                                    placeholder="230815ABCD1234&#10;230816EFGH5678&#10;..."
+                                />
+                            </div>
+                        </>
+                    ) : (
+                        <div className="flex flex-col gap-4">
+                            <div className="grid grid-cols-3 gap-4">
+                                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-center">
+                                    <p className="text-[10px] font-black uppercase text-slate-400 mb-1">ค้นหาทั้งหมด</p>
+                                    <p className="text-xl font-black text-slate-700">{bulkUpdatePreview.requestedCount}</p>
+                                </div>
+                                <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center">
+                                    <p className="text-[10px] font-black uppercase text-emerald-600 mb-1">พบออเดอร์ในระบบ</p>
+                                    <p className="text-xl font-black text-emerald-700">{bulkUpdatePreview.incomes.length}</p>
+                                </div>
+                                <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-2xl text-center">
+                                    <p className="text-[10px] font-black uppercase text-indigo-600 mb-1">บิลรายจ่ายพ่วง</p>
+                                    <p className="text-xl font-black text-indigo-700">{bulkUpdatePreview.expenses.length}</p>
+                                </div>
+                            </div>
+                            <div className="bg-amber-50 p-4 rounded-2xl border border-amber-200">
+                                <p className="text-sm font-bold text-amber-800 flex items-center gap-2"><Info size={16}/> ยืนยันการอัปเดตข้อมูล</p>
+                                <p className="text-xs text-amber-700 mt-1">
+                                    ระบบจะเปลี่ยนข้อมูลร้านค้าเป็น <b className="text-indigo-600">"{bulkUpdateShop}"</b> และช่องทางเป็น <b className="text-indigo-600">"{bulkUpdateChannel}"</b><br/>
+                                    สำหรับออเดอร์ที่พบทั้ง {bulkUpdatePreview.incomes.length} รายการ (รวมถึงบิลค่าธรรมเนียมที่เกี่ยวข้อง)
+                                </p>
+                            </div>
+                            {bulkUpdatePreview.requestedCount > bulkUpdatePreview.incomes.length && (
+                                <p className="text-[10px] font-bold text-rose-500 text-center">
+                                    * มี {bulkUpdatePreview.requestedCount - bulkUpdatePreview.incomes.length} รายการที่ไม่พบในระบบ (อาจพิมพ์ผิด หรือถูกลบ/ยกเลิกไปแล้ว)
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex gap-4 pt-4 border-t border-slate-100 shrink-0 mt-4">
+                    <button onClick={() => {
+                        if (bulkUpdatePreview) setBulkUpdatePreview(null);
+                        else { setShowBulkUpdateModal(false); setBulkUpdateInput(''); }
+                    }} disabled={isBulkUpdating} className="flex-1 py-3.5 bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors rounded-xl font-bold text-sm">
+                        {bulkUpdatePreview ? 'กลับไปแก้ไขเลข' : 'ยกเลิก'}
+                    </button>
+                    {!bulkUpdatePreview ? (
+                        <button onClick={handlePreviewBulkUpdate} className="flex-[2] py-3.5 bg-fuchsia-600 hover:bg-fuchsia-700 text-white rounded-xl font-black text-sm shadow-xl shadow-fuchsia-200 flex items-center justify-center gap-2 transition-all">
+                            <Search size={18}/> ตรวจสอบรายการ
+                        </button>
+                    ) : (
+                        <button onClick={executeBulkUpdate} disabled={isBulkUpdating || bulkUpdatePreview.incomes.length === 0} className="flex-[2] py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-sm shadow-xl shadow-emerald-200 flex items-center justify-center gap-2 transition-all disabled:opacity-50">
+                            {isBulkUpdating ? <Loader className="animate-spin" size={18}/> : <Save size={18}/>} 
+                            {isBulkUpdating ? 'กำลังอัปเดต...' : 'ยืนยันอัปเดตข้อมูล'}
+                        </button>
+                    )}
+                </div>
+            </div>
+        </div>
       )}
 
     </div>
