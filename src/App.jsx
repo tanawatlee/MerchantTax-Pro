@@ -6088,6 +6088,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   const [pitDeductions, setPitDeductions] = useState({ spouse: false, children: 0, parents: 0, lifeInsurance: 0, socialSecurity: 0, otherDeductions: 0 });
   const [aiTaxAdvice, setAiTaxAdvice] = useState(null);
   const [isGettingTaxAdvice, setIsGettingTaxAdvice] = useState(false);
+  const [trackingYear, setTrackingYear] = useState(new Date().getFullYear().toString());
 
   useEffect(() => { 
     try { 
@@ -6459,6 +6460,61 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     }, { base: 0, vat: 0, total: 0 });
   }, [filteredExpenses]);
 
+  const yearlyTrackingData = useMemo(() => {
+    const year = parseInt(trackingYear);
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      monthName: new Date(year, i, 1).toLocaleDateString('th-TH', { month: 'long' }),
+      salesBase: 0,
+      salesVat: 0,
+      purchaseBase: 0,
+      purchaseVat: 0,
+      netVat: 0
+    }));
+
+    invoices.forEach(inv => {
+      if (inv.status === 'cancelled') return;
+      if (inv.docType === 'quotation' || inv.docType === 'receipt') return;
+      const d = normalizeDate(inv.date);
+      if (d && d.getFullYear() === year) {
+          const m = d.getMonth();
+          const mult = inv.docType === 'credit_note' ? -1 : 1;
+          months[m].salesBase += (Number(inv.preVat) || 0) * mult;
+          months[m].salesVat += (Number(inv.vat) || 0) * mult;
+      }
+    });
+
+    transactions.forEach(t => {
+      if (t.isCancelled) return;
+      if (t.type !== 'expense') return;
+      if (t.isFromReconciliation && (!t.taxInvoiceNo || String(t.taxInvoiceNo).trim() === '')) return;
+      if (t.isNonCreditableVat === true || t.isCashBill === true || t.vatType === 'none') return;
+      
+      const d = normalizeDate(t.date);
+      if (d && d.getFullYear() === year) {
+          const m = d.getMonth();
+          const taxDetails = getExpenseTaxDetails(t);
+          months[m].purchaseBase += taxDetails.base;
+          months[m].purchaseVat += taxDetails.vat;
+      }
+    });
+
+    months.forEach(m => {
+        m.netVat = m.salesVat - m.purchaseVat;
+    });
+
+    const totals = months.reduce((acc, m) => {
+        acc.salesBase += m.salesBase;
+        acc.salesVat += m.salesVat;
+        acc.purchaseBase += m.purchaseBase;
+        acc.purchaseVat += m.purchaseVat;
+        acc.netVat += m.netVat;
+        return acc;
+    }, { salesBase: 0, salesVat: 0, purchaseBase: 0, purchaseVat: 0, netVat: 0 });
+
+    return { months, totals };
+  }, [invoices, transactions, trackingYear]);
+
   const pitAnalysis = useMemo(() => {
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -6624,6 +6680,26 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       });
       const footer = [ "รวมทั้งสิ้น", "", "", "", "", "", toFixedNum(cancelFooter.lostGmv), toFixedNum(cancelFooter.wastedFee) ];
       dataRows = [...headerRows, tableHeader, ...body, footer];
+    } else if (reportTab === 'yearly_tracking') {
+      fileName = `Yearly_Tax_Tracking_${trackingYear}.xlsx`;
+      const tableHeader = ["เดือน", "ยอดขาย (ก่อน VAT)", "ภาษีขาย (Output VAT)", "ยอดซื้อ (ก่อน VAT)", "ภาษีซื้อ (Input VAT)", "ภาษีสุทธิ (ต้องชำระ/ขอคืน)"];
+      const body = yearlyTrackingData.months.map(m => [
+          m.monthName,
+          toFixedNum(m.salesBase),
+          toFixedNum(m.salesVat),
+          toFixedNum(m.purchaseBase),
+          toFixedNum(m.purchaseVat),
+          toFixedNum(m.netVat)
+      ]);
+      const footer = [
+          "รวมทั้งปี",
+          toFixedNum(yearlyTrackingData.totals.salesBase),
+          toFixedNum(yearlyTrackingData.totals.salesVat),
+          toFixedNum(yearlyTrackingData.totals.purchaseBase),
+          toFixedNum(yearlyTrackingData.totals.purchaseVat),
+          toFixedNum(yearlyTrackingData.totals.netVat)
+      ];
+      dataRows = [...headerRows, tableHeader, ...body, footer];
     }
 
     try {
@@ -6746,6 +6822,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         <TabBtn id="inventory" label="คุมสินค้า (Stock)" icon={<Box size={18}/>} />
         <TabBtn id="cancellations" label="รายการยกเลิก/ตีกลับ" icon={<FileMinus size={18}/>} />
         <TabBtn id="pp30" label="สรุป ภ.พ.30" icon={<Calculator size={18}/>} />
+        <TabBtn id="yearly_tracking" label="Tracking ภาษี (Yearly)" icon={<BarChart2 size={18}/>} />
         <TabBtn id="pit90" label="ภ.ง.ด. 90/94 (บุคคลธรรมดา)" icon={<User size={18}/>} />
       </div>
 
@@ -7003,6 +7080,77 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
                         )}
                         <p className="text-right text-[10px] text-slate-400 mt-2 uppercase tracking-widest font-bold">Auto-calculated by MerchantTax Engine</p>
                     </div>
+                </div>
+            </div>
+          )}
+
+          {reportTab === 'yearly_tracking' && (
+            <div className="p-8 max-w-5xl mx-auto my-4 bg-white border border-slate-200 rounded-3xl text-sm shadow-sm font-sarabun text-left">
+                <div className="flex justify-between items-center mb-8 border-b border-slate-200 pb-4">
+                    <div>
+                        <h3 className="font-black text-2xl text-slate-800 tracking-tight">สรุปยอดภาษีรายเดือน (Yearly Tracking)</h3>
+                        <p className="text-slate-500 mt-2">ภาพรวมภาษีซื้อ-ขายแยกรายเดือน สำหรับปี {trackingYear}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <label className="font-bold text-slate-600">เลือกปี:</label>
+                        <select 
+                            value={trackingYear} 
+                            onChange={(e) => setTrackingYear(e.target.value)}
+                            className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 font-bold text-indigo-700 outline-none focus:ring-2 focus:ring-indigo-100"
+                        >
+                            <option value="2023">2023</option>
+                            <option value="2024">2024</option>
+                            <option value="2025">2025</option>
+                            <option value="2026">2026</option>
+                            <option value="2027">2027</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div className="overflow-x-auto custom-scrollbar">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-500">
+                            <tr>
+                                <th className="p-4 rounded-tl-2xl border-b border-slate-100">เดือน</th>
+                                <th className="p-4 text-right border-b border-slate-100 text-indigo-600">ยอดขาย (ก่อน VAT)</th>
+                                <th className="p-4 text-right border-b border-slate-100 text-indigo-600">ภาษีขาย</th>
+                                <th className="p-4 text-right border-b border-slate-100 text-rose-600">ยอดซื้อ (ก่อน VAT)</th>
+                                <th className="p-4 text-right border-b border-slate-100 text-rose-600">ภาษีซื้อ</th>
+                                <th className="p-4 text-right rounded-tr-2xl border-b border-slate-100 text-slate-800">ภาษีสุทธิ</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {yearlyTrackingData.months.map((m, i) => (
+                                <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                                    <td className="p-4 font-bold text-slate-700">{m.monthName}</td>
+                                    <td className="p-4 text-right font-medium text-slate-600">{formatCurrency(m.salesBase)}</td>
+                                    <td className="p-4 text-right font-bold text-indigo-600">{formatCurrency(m.salesVat)}</td>
+                                    <td className="p-4 text-right font-medium text-slate-600">{formatCurrency(m.purchaseBase)}</td>
+                                    <td className="p-4 text-right font-bold text-rose-600">{formatCurrency(m.purchaseVat)}</td>
+                                    <td className="p-4 text-right font-black">
+                                        <span className={m.netVat > 0 ? 'text-rose-600' : m.netVat < 0 ? 'text-emerald-600' : 'text-slate-500'}>
+                                            {m.netVat > 0 ? 'จ่ายเพิ่ม ' : m.netVat < 0 ? 'ขอคืน ' : ''}
+                                            {formatCurrency(Math.abs(m.netVat))}
+                                        </span>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                        <tfoot className="bg-slate-900 text-white font-bold">
+                            <tr>
+                                <td className="p-4 text-right uppercase tracking-widest text-xs opacity-60 rounded-bl-2xl">รวมทั้งปี</td>
+                                <td className="p-4 text-right">{formatCurrency(yearlyTrackingData.totals.salesBase)}</td>
+                                <td className="p-4 text-right text-indigo-400">{formatCurrency(yearlyTrackingData.totals.salesVat)}</td>
+                                <td className="p-4 text-right">{formatCurrency(yearlyTrackingData.totals.purchaseBase)}</td>
+                                <td className="p-4 text-right text-rose-400">{formatCurrency(yearlyTrackingData.totals.purchaseVat)}</td>
+                                <td className="p-4 text-right rounded-br-2xl">
+                                    <span className={yearlyTrackingData.totals.netVat > 0 ? 'text-rose-400' : yearlyTrackingData.totals.netVat < 0 ? 'text-emerald-400' : 'text-white'}>
+                                        {formatCurrency(Math.abs(yearlyTrackingData.totals.netVat))}
+                                    </span>
+                                </td>
+                            </tr>
+                        </tfoot>
+                    </table>
                 </div>
             </div>
           )}
