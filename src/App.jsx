@@ -7992,7 +7992,61 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               const res = await callGeminiAPI(prompt, true, base64Img);
               
               if (res) {
-                  // สร้าง items จาก AI หรือใช้ค่า Default ถ้า AI อ่านรายการย่อยไม่ออก
+                  // --- 1. Auto-Categorization (จัดหมวดหมู่อัตโนมัติ) ---
+                  let finalCategory = res.category || CONSTANTS.CATEGORIES.EXPENSE[0];
+                  
+                  // รายชื่อขนส่งยอดนิยม & คีย์เวิร์ด
+                  const shippingKeywords = ["spx", "flash", "dhl", "j&t", "jt", "kerry", "ไปรษณีย์", "post", "ขนส่ง", "ค่าส่ง", "shipping", "delivery", "courier", "พัสดุ", "ค่าจัดส่ง"];
+                  const partnerNameLower = String(res.partnerName || '').toLowerCase();
+                  
+                  // ตรวจสอบว่ามีคีย์เวิร์ดขนส่งในข้อมูล OCR หรือไม่
+                  const hasShippingKeyword = shippingKeywords.some(keyword => {
+                      const matchPartner = partnerNameLower.includes(keyword);
+                      const matchItems = res.items && Array.isArray(res.items) && res.items.some(it => String(it.desc || '').toLowerCase().includes(keyword));
+                      const matchCategory = String(res.category || '').toLowerCase().includes(keyword);
+                      return matchPartner || matchItems || matchCategory;
+                  });
+
+                  if (hasShippingKeyword) {
+                      finalCategory = "ค่าขนส่งพัสดุ (ส่งลูกค้า)";
+                  }
+
+                  // --- 2. Auto-Fetch Partner Info (ดึงข้อมูลคู่ค้าอัตโนมัติ) ---
+                  let partnerAddress = '';
+                  let partnerBranch = '00000';
+                  let partnerBranchName = '';
+                  let partnerNameFinal = res.partnerName || '';
+                  let partnerTaxIdFinal = res.taxId || '';
+
+                  let matchedPartner = null;
+                  if (res.taxId) {
+                      matchedPartner = partners.find(p => p.taxId && String(p.taxId).replace(/[^0-9]/g, '') === String(res.taxId).replace(/[^0-9]/g, ''));
+                  }
+                  if (!matchedPartner && res.partnerName) {
+                      const cleanName = res.partnerName.toLowerCase().replace(/[^a-zA-Z0-9ก-๙]/g, '');
+                      matchedPartner = partners.find(p => p.name && p.name.toLowerCase().replace(/[^a-zA-Z0-9ก-๙]/g, '').includes(cleanName));
+                  }
+
+                  if (matchedPartner) {
+                      partnerNameFinal = matchedPartner.name || partnerNameFinal;
+                      partnerTaxIdFinal = matchedPartner.taxId || partnerTaxIdFinal;
+                      partnerAddress = matchedPartner.address || '';
+                      partnerBranch = matchedPartner.branch || '00000';
+                      partnerBranchName = matchedPartner.branchName || '';
+                      showToast(`✨ ดึงประวัติคู่ค้า "${partnerNameFinal}" จากฐานข้อมูลอัตโนมัติสำเร็จ`, "success");
+                  } else {
+                      // สกัดสาขาจาก OCR ปกติในกรณีไม่พบคู่ค้าเดิม
+                      if (res.branch) {
+                          if (res.branch.includes('สำนักงานใหญ่') || res.branch.includes('HQ') || res.branch.includes('Head')) {
+                              partnerBranch = '00000';
+                          } else {
+                              const numMatch = res.branch.match(/\d{5}/);
+                              if (numMatch) partnerBranch = numMatch[0];
+                          }
+                      }
+                  }
+
+                  // สร้าง items จาก AI หรือใช้ค่า Default โดยพ่วงหมวดหมู่ที่ตรวจจับได้
                   let newItems = [];
                   if (res.items && Array.isArray(res.items) && res.items.length > 0) {
                       newItems = res.items.map(it => ({
@@ -8002,7 +8056,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           buyPrice: Number(it.price) || 0,
                           sellPrice: 0,
                           sku: '',
-                          category: res.category || CONSTANTS.CATEGORIES.EXPENSE[0]
+                          category: finalCategory
                       }));
                   } else {
                       newItems = [{ 
@@ -8012,35 +8066,31 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           buyPrice: res.totalAmount || 0, 
                           sellPrice: 0, 
                           sku: '', 
-                          category: res.category || CONSTANTS.CATEGORIES.EXPENSE[0] 
+                          category: finalCategory 
                       }];
                   }
                   
                   const isCashBillMode = res.isTaxInvoice === false;
 
-                  let parsedBranch = '00000';
-                  if (res.branch) {
-                      if (res.branch.includes('สำนักงานใหญ่') || res.branch.includes('HQ') || res.branch.includes('Head')) {
-                          parsedBranch = '00000';
-                      } else {
-                          const numMatch = res.branch.match(/\d{5}/);
-                          if (numMatch) parsedBranch = numMatch[0];
-                      }
-                  }
-
                   setFormData(prev => ({
                       ...prev,
-                      partnerName: res.partnerName || prev.partnerName,
-                      partnerTaxId: res.taxId || prev.partnerTaxId,
-                      partnerBranch: parsedBranch,
+                      partnerName: partnerNameFinal,
+                      partnerTaxId: partnerTaxIdFinal,
+                      partnerBranch: partnerBranch,
+                      partnerBranchName: partnerBranchName,
+                      partnerAddress: partnerAddress || prev.partnerAddress,
                       taxInvoiceNo: res.taxInvoiceNo || prev.taxInvoiceNo,
-                      category: res.category || prev.category,
+                      category: finalCategory,
                       items: newItems,
                       date: res.date || prev.date,
                       isCashBill: isCashBillMode,
                       vatType: isCashBillMode ? 'none' : (res.vatAmount > 0 ? 'included' : 'none'),
                       manualVatAmount: res.vatAmount > 0 ? res.vatAmount : ''
                   }));
+
+                  if (hasShippingKeyword) {
+                      showToast(`🚚 ตรวจพบสัญลักษณ์ขนส่ง: จัดกลุ่มเป็น "ค่าขนส่งพัสดุ" เรียบร้อย`, "success");
+                  }
 
                   if (isCashBillMode) {
                       showToast("AI สกัดข้อมูลสำเร็จ! ตรวจพบว่าเป็น 'ใบเสร็จรับเงิน/บิลเงินสด'", "success");
