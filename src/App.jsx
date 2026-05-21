@@ -358,10 +358,10 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
     
     if (userApiKey && userApiKey.trim() !== "") {
         const customKey = userApiKey.trim();
-        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${customKey}`;
+        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${customKey}`;
     } else {
         const apiKey = "";
-        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
     }
 
     const parts = [{ text: prompt }];
