@@ -1371,6 +1371,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const [importMode, setImportMode] = useState('new_pending'); // 'new_pending', 'new_settled', 'update_settled'
   const [importedData, setImportedData] = useState([]);
   
+  // NEW: เพิ่ม state สำหรับเลือกแท็บพรีวิวระหว่างยอดปกติ กับ ยอดตีคืน/ยกเลิก
+  const [previewSubTab, setPreviewSubTab] = useState('normal'); // 'normal', 'cancelled'
+  
   // NEW: เพิ่ม state `skippedQty` สำหรับนับจำนวนชิ้นที่ระบบช่วยกรองทิ้งให้
   const [stats, setStats] = useState({ 
       totalRows: 0, processed: 0, skipped: 0, totalAmount: 0, totalFees: 0, duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0, totalActualSettled: 0, totalDiffShort: 0, totalDiffSurplus: 0,
@@ -3213,188 +3216,200 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           </div>
                       )}
 
-                      <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5 mt-2">
-                          <PieChart size={14}/> 
-                          {importMode === 'update_settled' ? 'สรุปภาพรวมจากไฟล์ Excel (อ้างอิงตรงตามไฟล์ต้นฉบับ 100%)' : 'สรุปข้อมูลที่จะนำเข้าระบบ (Filtered Data)'}
-                      </h4>
-                      
-                      {importMode === 'update_settled' ? (
-                          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm font-sarabun">
-                              {/* Header / Info */}
-                              <div className="flex justify-between items-center p-4 bg-slate-50 border-b">
-                                  <div>
-                                      <h5 className="font-bold text-slate-800 text-sm">การจัดโครงสร้างรายได้/รายจ่าย (Excel Summary)</h5>
-                                      <p className="text-xs text-slate-500 mt-1">ยอดรวมของทุกบรรทัดในไฟล์นี้ (เทียบกับชีท 'สรุป' ของ Shopee ได้เลย)</p>
-                                  </div>
-                                  {/* Diff Alert Button - Show only in Update Mode */}
-                                  {importMode === 'update_settled' && (
-                                      (stats.totalDiffShort > 0 || stats.totalDiffSurplus > 0) ? (
-                                          <button onClick={() => setShowDiscrepancyModal(true)} className="flex items-center gap-1 text-rose-600 font-bold bg-rose-50 px-3 py-2 rounded-lg hover:bg-rose-100 transition-colors border border-rose-200 text-xs shadow-sm">
-                                              <AlertTriangle size={14}/> ตรวจพบส่วนต่างค่าขนส่ง (คลิกดู)
-                                          </button>
-                                      ) : (
-                                          <span className="flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 px-3 py-2 rounded-lg border border-emerald-200 text-xs shadow-sm">
-                                              <CheckCircle size={14}/> ค่าจัดส่งตรงกันเป๊ะ
-                                          </span>
-                                      )
-                                  )}
-                              </div>
+                      {/* --- 🔥 NEW: สลับแท็บระหว่างรายการสำเร็จ (Normal) กับ รายการยกเลิก/มีปัญหา (Problematic/Returned) เพื่อให้ไม่เบียดเสียดกัน --- */}
+                      <div className="flex border-b border-indigo-100 pb-2 mt-2 gap-2">
+                          <button 
+                            type="button"
+                            onClick={() => setPreviewSubTab('normal')} 
+                            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${previewSubTab === 'normal' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-slate-600 border hover:bg-slate-50'}`}
+                          >
+                              ✅ รายการปกติ / รออนุมัติ ({importedData.filter(x => !x.isCancelled).length} ออเดอร์)
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => setPreviewSubTab('cancelled')} 
+                            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${previewSubTab === 'cancelled' ? 'bg-rose-600 text-white shadow-sm' : 'bg-white text-slate-600 border hover:bg-slate-50'}`}
+                          >
+                              ❌ รายการยกเลิก / จัดส่งไม่สำเร็จ ({deliveryFailedDetailsData.length + skippedDetailsData.filter(x => x.reason.includes('ยกเลิก') || x.reason.includes('ไม่สำเร็จ')).length} รายการ)
+                          </button>
+                      </div>
 
-                              {/* 1. รายได้ทั้งหมด */}
-                              <div className="bg-orange-500 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center">
-                                  <span>1. รายได้ทั้งหมด (Total Income)</span>
-                                  <span className="text-base">{formatCurrency((stats.detailedSummary?.productPrice || 0) - (stats.detailedSummary?.sellerDiscount || 0) - (stats.detailedSummary?.refundAmount || 0))}</span>
-                              </div>
-                              <div className="px-4 py-3 space-y-2 text-xs">
-                                  <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">สินค้าราคาปกติ</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.productPrice)}</span></div>
-                                  <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ส่วนลดสินค้าจากผู้ขาย</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.sellerDiscount)}</span></div>
-                                  <div className="flex justify-between"><span className="text-slate-600">จำนวนเงินที่ทำการคืนให้ผู้ซื้อ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.refundAmount)}</span></div>
-                              </div>
-
-                              {/* 2. ค่าใช้จ่ายทั้งหมด */}
-                              <div className="bg-slate-400 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center border-t border-white/20">
-                                  <span>2. ค่าใช้จ่ายทั้งหมด (Total Expenses)</span>
-                                  <span className="text-base">{formatCurrency(
-                                      (stats.detailedSummary?.shipBuyer || 0) + (stats.detailedSummary?.shipShopee || 0) - (stats.detailedSummary?.shipActual || 0) - (stats.detailedSummary?.shipReturn || 0) -
-                                      (stats.detailedSummary?.feeComm || 0) - (stats.detailedSummary?.feeServ || 0) - (stats.detailedSummary?.feeInfra || 0) - (stats.detailedSummary?.feeTrans || 0)
-                                  )}</span>
-                              </div>
-                              <div className="px-4 py-3 text-xs bg-slate-50">
-                                  <p className="font-bold text-slate-700 mb-2">ค่าจัดส่ง (Shipping)</p>
-                                  <div className="space-y-2 pl-4 border-l-2 border-slate-200">
-                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ชำระโดยผู้ซื้อ</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.shipBuyer)}</span></div>
-                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งสินค้าที่ออกโดย Shopee</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.shipShopee)}</span></div>
-                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.shipActual)}</span></div>
-                                      <div className="flex justify-between"><span className="text-slate-600">ค่าจัดส่งสินค้าคืน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.shipReturn)}</span></div>
-                                  </div>
-                                  
-                                  <p className="font-bold text-slate-700 mb-2 mt-4">ค่าธรรมเนียม (Fees)</p>
-                                  <div className="space-y-2 pl-4 border-l-2 border-slate-200">
-                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าคอมมิชชั่นรวม</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeComm)}</span></div>
-                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าบริการ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeServ)}</span></div>
-                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าธรรมเนียมโครงสร้างพื้นฐานฯ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeInfra)}</span></div>
-                                      <div className="flex justify-between"><span className="text-slate-600">ค่าธุรกรรมการชำระเงิน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeTrans)}</span></div>
-                                  </div>
-                              </div>
-
-                              {/* 3. จำนวนเงินทั้งหมดที่โอนแล้ว */}
-                              <div className="bg-slate-800 text-white font-bold p-4 text-sm flex justify-between items-center">
-                                  <span>3. จำนวนเงินทั้งหมดที่โอนแล้ว (Net Transferred)</span>
-                                  <span className="text-xl font-black">{formatCurrency(stats.detailedSummary?.totalSettled)}</span>
-                              </div>
+                      {previewSubTab === 'normal' ? (
+                          <>
+                              <h4 className="font-bold text-indigo-800 text-xs flex items-center gap-1.5 mt-1">
+                                  <PieChart size={14}/> 
+                                  {importMode === 'update_settled' ? 'สรุปภาพรวมจากไฟล์ Excel (อ้างอิงตรงตามไฟล์ต้นฉบับ 100%)' : 'สรุปข้อมูลที่จะนำเข้าระบบ (Filtered Data)'}
+                              </h4>
                               
-                              {/* Extra Mini-Cards for specific discrepancy */}
-                              <div className="grid grid-cols-2 gap-px bg-slate-200">
-                                  <div onClick={() => setShowDiscrepancyModal(true)} className="bg-white p-3 cursor-pointer hover:bg-rose-50 transition-colors group">
-                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-rose-600 transition-colors">ส่วนต่างค่าจัดส่ง (หักเนื้อ/ขาดทุน)</p>
-                                      <p className="text-base font-black text-rose-500">{formatCurrency(stats.totalDiffShort)}</p>
-                                  </div>
-                                  <div onClick={() => setShowDiscrepancyModal(true)} className="bg-white p-3 cursor-pointer hover:bg-emerald-50 transition-colors group">
-                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-emerald-600 transition-colors">ส่วนต่างค่าจัดส่ง (ได้กำไร)</p>
-                                      <p className="text-base font-black text-emerald-500">{formatCurrency(stats.totalDiffSurplus)}</p>
-                                  </div>
-                              </div>
+                              {importMode === 'update_settled' ? (
+                                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm font-sarabun">
+                                      {/* Header / Info */}
+                                      <div className="flex justify-between items-center p-4 bg-slate-50 border-b">
+                                          <div>
+                                              <h5 className="font-bold text-slate-800 text-sm">การจัดโครงสร้างรายได้/รายจ่าย (Excel Summary)</h5>
+                                              <p className="text-xs text-slate-500 mt-1">ยอดรวมของทุกบรรทัดในไฟล์นี้ (เทียบกับชีท 'สรุป' ของ Shopee ได้เลย)</p>
+                                          </div>
+                                          {/* Diff Alert Button - Show only in Update Mode */}
+                                          {importMode === 'update_settled' && (
+                                              (stats.totalDiffShort > 0 || stats.totalDiffSurplus > 0) ? (
+                                                  <button onClick={() => setShowDiscrepancyModal(true)} className="flex items-center gap-1 text-rose-600 font-bold bg-rose-50 px-3 py-2 rounded-lg hover:bg-rose-100 transition-colors border border-rose-200 text-xs shadow-sm">
+                                                      <AlertTriangle size={14}/> ตรวจพบส่วนต่างค่าขนส่ง (คลิกดู)
+                                                  </button>
+                                              ) : (
+                                                  <span className="flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 px-3 py-2 rounded-lg border border-emerald-200 text-xs shadow-sm">
+                                                      <CheckCircle size={14}/> ค่าจัดส่งตรงกันเป๊ะ
+                                                  </span>
+                                              )
+                                          )}
+                                      </div>
 
-                              {/* Small summary of missing/skipped at the bottom */}
-                              {stats.skipped > 0 && (
-                                  <div className="bg-amber-50 p-3 text-xs flex justify-between items-center border-t border-amber-100">
-                                      <span className="font-bold text-amber-700 flex items-center gap-1"><Info size={14}/> มีรายการที่ถูกข้าม/ซ้ำ ({stats.skipped} แถว)</span>
-                                      <button onClick={() => setShowSkippedModal(true)} className="text-amber-600 underline font-bold">ดูรายการที่ข้าม</button>
+                                      {/* 1. รายได้ทั้งหมด */}
+                                      <div className="bg-orange-500 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center">
+                                          <span>1. รายได้ทั้งหมด (Total Income)</span>
+                                          <span className="text-base">{formatCurrency((stats.detailedSummary?.productPrice || 0) - (stats.detailedSummary?.sellerDiscount || 0) - (stats.detailedSummary?.refundAmount || 0))}</span>
+                                      </div>
+                                      <div className="px-4 py-3 space-y-2 text-xs">
+                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">สินค้าราคาปกติ</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.productPrice)}</span></div>
+                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ส่วนลดสินค้าจากผู้ขาย</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.sellerDiscount)}</span></div>
+                                          <div className="flex justify-between"><span className="text-slate-600">จำนวนเงินที่ทำการคืนให้ผู้ซื้อ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.refundAmount)}</span></div>
+                                      </div>
+
+                                      {/* 2. ค่าใช้จ่ายทั้งหมด */}
+                                      <div className="bg-slate-400 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center border-t border-white/20">
+                                          <span>2. ค่าใช้จ่ายทั้งหมด (Total Expenses)</span>
+                                          <span className="text-base">{formatCurrency(
+                                              (stats.detailedSummary?.shipBuyer || 0) + (stats.detailedSummary?.shipShopee || 0) - (stats.detailedSummary?.shipActual || 0) - (stats.detailedSummary?.shipReturn || 0) -
+                                              (stats.detailedSummary?.feeComm || 0) - (stats.detailedSummary?.feeServ || 0) - (stats.detailedSummary?.feeInfra || 0) - (stats.detailedSummary?.feeTrans || 0)
+                                          )}</span>
+                                      </div>
+                                      <div className="px-4 py-3 text-xs bg-slate-50">
+                                          <p className="font-bold text-slate-700 mb-2">ค่าจัดส่ง (Shipping)</p>
+                                          <div className="space-y-2 pl-4 border-l-2 border-slate-200">
+                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ชำระโดยผู้ซื้อ</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.shipBuyer)}</span></div>
+                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งสินค้าที่ออกโดย Shopee</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.shipShopee)}</span></div>
+                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.shipActual)}</span></div>
+                                              <div className="flex justify-between"><span className="text-slate-600">ค่าจัดส่งสินค้าคืน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.shipReturn)}</span></div>
+                                          </div>
+                                          
+                                          <p className="font-bold text-slate-700 mb-2 mt-4">ค่าธรรมเนียม (Fees)</p>
+                                          <div className="space-y-2 pl-4 border-l-2 border-slate-200">
+                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าคอมมิชชั่นรวม</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeComm)}</span></div>
+                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าบริการ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeServ)}</span></div>
+                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าธรรมเนียมโครงสร้างพื้นฐานฯ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeInfra)}</span></div>
+                                              <div className="flex justify-between"><span className="text-slate-600">ค่าธุรกรรมการชำระเงิน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeTrans)}</span></div>
+                                          </div>
+                                      </div>
+
+                                      {/* 3. จำนวนเงินทั้งหมดที่โอนแล้ว */}
+                                      <div className="bg-slate-800 text-white font-bold p-4 text-sm flex justify-between items-center">
+                                          <span>3. จำนวนเงินทั้งหมดที่โอนแล้ว (Net Transferred)</span>
+                                          <span className="text-xl font-black">{formatCurrency(stats.detailedSummary?.totalSettled)}</span>
+                                      </div>
+                                      
+                                      {/* Extra Mini-Cards for specific discrepancy */}
+                                      <div className="grid grid-cols-2 gap-px bg-slate-200">
+                                          <div onClick={() => setShowDiscrepancyModal(true)} className="bg-white p-3 cursor-pointer hover:bg-rose-50 transition-colors group">
+                                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-rose-600 transition-colors">ส่วนต่างค่าจัดส่ง (หักเนื้อ/ขาดทุน)</p>
+                                              <p className="text-base font-black text-rose-500">{formatCurrency(stats.totalDiffShort)}</p>
+                                          </div>
+                                          <div onClick={() => setShowDiscrepancyModal(true)} className="bg-white p-3 cursor-pointer hover:bg-emerald-50 transition-colors group">
+                                              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-emerald-600 transition-colors">ส่วนต่างค่าจัดส่ง (ได้กำไร)</p>
+                                              <p className="text-base font-black text-emerald-500">{formatCurrency(stats.totalDiffSurplus)}</p>
+                                          </div>
+                                      </div>
+
+                                      {/* Small summary of missing/skipped at the bottom */}
+                                      {stats.skipped > 0 && (
+                                          <div className="bg-amber-50 p-3 text-xs flex justify-between items-center border-t border-amber-100">
+                                              <span className="font-bold text-amber-700 flex items-center gap-1"><Info size={14}/> มีรายการที่ถูกข้าม/ซ้ำ ({stats.skipped} แถว)</span>
+                                              <button onClick={() => setShowSkippedModal(true)} className="text-amber-600 underline font-bold">ดูรายการที่ข้าม</button>
+                                          </div>
+                                      )}
+                                  </div>
+                              ) : (
+                                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                                      <div className="bg-white p-3 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-center">
+                                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">นำเข้าสำเร็จ</p>
+                                          <p className="text-xl font-black text-indigo-600">{stats.processed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                                      </div>
+                                      <div className="bg-white p-3 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-center">
+                                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม</p>
+                                          <p className="text-xl font-black text-emerald-600">{formatCurrency(stats.totalAmount)}</p>
+                                      </div>
+                                      
+                                      <div className="bg-blue-50 p-3 rounded-2xl border border-blue-200 shadow-sm flex flex-col justify-center">
+                                          <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-1">โอนเข้าจริง (Settled)</p>
+                                          <p className="text-xl font-black text-blue-700">{formatCurrency(stats.totalActualSettled)}</p>
+                                      </div>
+
+                                      <div className="bg-white p-3 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-center">
+                                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม</p>
+                                          <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)}</p>
+                                      </div>
+                                      
+                                      <div className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center relative">
+                                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 text-orange-600">จัดส่งไม่สำเร็จ</p>
+                                          <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
+                                      </div>
+
+                                      <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-amber-50 transition-colors group relative">
+                                          <div className="absolute top-2 right-2 text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
+                                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-amber-600 transition-colors">ข้าม / ซ้ำ</p>
+                                          <p className="text-xl font-black text-amber-500">{stats.skipped} / {stats.duplicates || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
+                                      </div>
                                   </div>
                               )}
-                          </div>
+                          </>
                       ) : (
-                          // --- FIX: ปรับรูปแบบกล่องให้มี "ยอดโอนเข้าจริง (Settled)" ตามที่ผู้ใช้ต้องการเห็น 86,395 ---
-                          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-                              <div className="bg-white p-3 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-center">
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">นำเข้าสำเร็จ</p>
-                                  <p className="text-xl font-black text-indigo-600">{stats.processed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                              </div>
-                              <div className="bg-white p-3 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-center">
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ยอดขายรวม</p>
-                                  <p className="text-xl font-black text-emerald-600">{formatCurrency(stats.totalAmount)}</p>
-                              </div>
-                              
-                              <div className="bg-blue-50 p-3 rounded-2xl border border-blue-200 shadow-sm flex flex-col justify-center">
-                                  <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-1">โอนเข้าจริง (Settled)</p>
-                                  <p className="text-xl font-black text-blue-700">{formatCurrency(stats.totalActualSettled)}</p>
-                              </div>
-
-                              <div className="bg-white p-3 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-center">
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">ค่าธรรมเนียมรวม</p>
-                                  <p className="text-xl font-black text-rose-500">{formatCurrency(stats.totalFees)}</p>
-                              </div>
-                              
-                              <div className="bg-white p-3 rounded-2xl border border-orange-200 shadow-sm flex flex-col justify-center relative">
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 text-orange-600">จัดส่งไม่สำเร็จ</p>
-                                  <p className="text-xl font-black text-orange-500">{stats.deliveryFailed} <span className="text-[10px] font-bold text-slate-400">ออเดอร์</span></p>
-                              </div>
-
-                              <div onClick={() => setShowSkippedModal(true)} className="bg-white p-3 rounded-2xl border border-amber-200 shadow-sm flex flex-col justify-center cursor-pointer hover:bg-amber-50 transition-colors group relative">
-                                  <div className="absolute top-2 right-2 text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity"><Search size={14}/></div>
-                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 group-hover:text-amber-600 transition-colors">ข้าม / ซ้ำ</p>
-                                  <p className="text-xl font-black text-amber-500">{stats.skipped} / {stats.duplicates || 0} <span className="text-[10px] font-bold text-slate-400">แถว</span></p>
-                              </div>
-                          </div>
-                      )}
-
-                      {/* Small summary of missing/skipped at the bottom */}
-                      {importMode !== 'update_settled' && stats.skipped > 0 && (
-                          <div className="bg-amber-50 p-3 text-xs flex justify-between items-center border-t border-amber-100 mt-3">
-                              <span className="font-bold text-amber-700 flex items-center gap-1"><Info size={14}/> มีรายการที่ถูกข้าม/ซ้ำ ({stats.skipped} แถว)</span>
-                              <button onClick={() => setShowSkippedModal(true)} className="text-amber-600 underline font-bold">ดูรายการที่ข้าม</button>
-                          </div>
-                      )}
-
-                      {/* --- NEW: Preview Error Logs Section --- */}
-                      {(skippedDetailsData.length > 0 || deliveryFailedDetailsData.length > 0) && (
-                          <div className="mt-4 bg-white border border-rose-100 rounded-2xl overflow-hidden shadow-sm">
-                              <div className="bg-rose-50 px-4 py-3 border-b border-rose-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                          /* --- 🔥 NEW: แสดงสเปซและข้อมูลรายการยกเลิก/ส่งไม่สำเร็จเพื่ออำนวยความสะดวก --- */
+                          <div className="mt-1 bg-white border border-rose-100 rounded-2xl overflow-hidden shadow-sm animate-fadeIn text-left">
+                              <div className="bg-rose-50/50 px-5 py-3 border-b border-rose-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                                   <div className="flex items-center gap-2">
                                       <AlertTriangle size={16} className="text-rose-500" />
-                                      <h4 className="font-bold text-sm text-rose-700">รายการที่ระบบดึงเข้าไม่ได้ (รอตรวจสอบ)</h4>
+                                      <span className="font-bold text-sm text-rose-700">รายการยกเลิก/ตีคืนในระบบ (Cancelled & Problematic Products)</span>
                                   </div>
-                                  <div className={`flex items-center gap-2 p-1.5 rounded-xl border w-full sm:w-auto transition-all ${selectedSkippedForImport.length > 0 ? 'bg-white/80 border-orange-200' : 'bg-white/40 border-slate-200/50'}`}>
+                                  <div className={`flex items-center gap-2 p-1.5 rounded-xl border w-full sm:w-auto transition-all ${selectedSkippedForImport.length > 0 ? 'bg-white border-orange-200 shadow-sm' : 'bg-white/40 border-slate-200/50'}`}>
                                       <select 
                                         value={forceImportAction} 
                                         onChange={e => setForceImportAction(e.target.value)} 
                                         disabled={selectedSkippedForImport.length === 0}
-                                        className="bg-white border border-slate-200 text-[10px] font-bold py-2 px-2 rounded-lg outline-none text-slate-700 focus:border-orange-400 flex-1 cursor-pointer disabled:opacity-50 disabled:bg-slate-50"
+                                        className="bg-white border border-slate-200 text-[10px] font-bold py-1.5 px-2 rounded-lg outline-none text-slate-700 cursor-pointer disabled:opacity-50 disabled:bg-slate-50"
                                       >
-                                          <option value="restock">📦 คืนเข้าคลัง (สภาพดี)</option>
-                                          <option value="discard">🗑️ ตัดชำรุด (สินค้าเสียหาย)</option>
-                                          <option value="success">✅ ฝืนตั้งเป็น 'สำเร็จ'</option>
+                                          <option value="restock">📦 คืนเข้าคลัง (สภาพสมบูรณ์)</option>
+                                          <option value="discard">🗑️ ตัดชำรุด (ลงบิลรายจ่ายธุรกิจ)</option>
+                                          <option value="success">✅ บังคับบันทึกสำเร็จ</option>
                                       </select>
                                       <button 
+                                        type="button"
                                         onClick={() => handleForceImportSkipped(forceImportAction)} 
                                         disabled={selectedSkippedForImport.length === 0}
-                                        className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-lg text-[10px] font-bold shadow-sm transition-all flex items-center gap-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold shadow-sm transition-all flex items-center gap-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                                       >
-                                          <ArrowRightLeft size={12}/> นำเข้า ({selectedSkippedForImport.length})
+                                          <ArrowRightLeft size={12}/> บันทึก ({selectedSkippedForImport.length})
                                       </button>
                                   </div>
                               </div>
-                              <div className="max-h-80 overflow-y-auto custom-scrollbar">
+                              <div className="max-h-80 overflow-y-auto custom-scrollbar text-left">
                                   <table className="w-full text-xs text-left">
-                                      <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 shadow-sm border-b border-slate-200">
+                                      <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 shadow-sm border-b border-slate-200 text-left">
                                           <tr>
                                               <th className="p-3 pl-4 w-10 text-center">
                                                   <input 
                                                       type="checkbox" 
                                                       className="w-4 h-4 rounded text-indigo-600 border-slate-300 cursor-pointer"
-                                                      onChange={(e) => toggleSelectAllSkipped(e, [...deliveryFailedDetailsData, ...skippedDetailsData])}
-                                                      checked={selectedSkippedForImport.length > 0 && selectedSkippedForImport.length === (deliveryFailedDetailsData.length + skippedDetailsData.length)}
+                                                      onChange={(e) => toggleSelectAllSkipped(e, [...deliveryFailedDetailsData, ...skippedDetailsData.filter(x => x.reason.includes('ยกเลิก') || x.reason.includes('ไม่สำเร็จ'))])}
+                                                      checked={selectedSkippedForImport.length > 0 && selectedSkippedForImport.length === (deliveryFailedDetailsData.length + skippedDetailsData.filter(x => x.reason.includes('ยกเลิก') || x.reason.includes('ไม่สำเร็จ')).length)}
                                                   />
                                               </th>
                                               <th className="p-3 w-32">Order ID</th>
                                               <th className="p-3">สินค้า (Product / SKU)</th>
-                                              <th className="p-3 w-32">สถานะ (จากไฟล์)</th>
-                                              <th className="p-3 w-40">เหตุผลที่ระบบข้าม</th>
+                                              <th className="p-3 w-32">จำนวน</th>
+                                              <th className="p-3 w-40">สถานะจากไฟล์ / สาเหตุ</th>
                                           </tr>
                                       </thead>
-                                      <tbody className="divide-y divide-slate-100">
+                                      <tbody className="divide-y divide-slate-100 text-left">
                                           {deliveryFailedDetailsData.map((item, i) => (
-                                              <tr key={`failed-${i}`} className={`transition-colors ${selectedSkippedForImport.some(s => s.orderId === item.orderId) ? 'bg-indigo-50/50' : 'hover:bg-orange-50/30'}`}>
+                                              <tr key={`failed-${i}`} className={`transition-colors text-left ${selectedSkippedForImport.some(s => s.orderId === item.orderId) ? 'bg-indigo-50/40' : 'hover:bg-orange-50/20'}`}>
                                                   <td className="p-3 pl-4 text-center">
                                                       <input 
                                                           type="checkbox" 
@@ -3405,23 +3420,19 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                                   </td>
                                                   <td className="p-3 font-mono font-bold text-slate-700">{item.orderId}</td>
                                                   <td className="p-3 truncate max-w-[200px]" title={item.product}>
-                                                      <span className="font-mono text-indigo-500 font-bold mr-1">[{item.sku || '-'}]</span>
+                                                      <span className="font-mono text-indigo-500 font-bold mr-1 bg-indigo-50 px-1 rounded">[{item.sku || '-'}]</span>
                                                       {item.product}
                                                   </td>
+                                                  <td className="p-3 font-black text-rose-500">{item.qty} ชิ้น</td>
                                                   <td className="p-3">
-                                                      <span className="text-[10px] font-bold text-slate-600 border px-1.5 py-0.5 rounded bg-white">
-                                                          {item.statusFromFile}
-                                                      </span>
-                                                  </td>
-                                                  <td className="p-3">
-                                                      <span className="bg-orange-100 text-orange-700 px-2 py-1 rounded-md text-[10px] font-bold">
-                                                          {item.reason}
+                                                      <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded-md text-[10px] font-bold">
+                                                          {item.reason || item.statusFromFile}
                                                       </span>
                                                   </td>
                                               </tr>
                                           ))}
-                                          {skippedDetailsData.map((item, i) => (
-                                              <tr key={`skipped-${i}`} className={`transition-colors ${selectedSkippedForImport.some(s => s.orderId === item.orderId) ? 'bg-indigo-50/50' : 'hover:bg-amber-50/30'}`}>
+                                          {skippedDetailsData.filter(x => x.reason.includes('ยกเลิก') || x.reason.includes('ไม่สำเร็จ')).map((item, i) => (
+                                              <tr key={`skipped-cancel-${i}`} className={`transition-colors text-left ${selectedSkippedForImport.some(s => s.orderId === item.orderId) ? 'bg-indigo-50/40' : 'hover:bg-amber-50/20'}`}>
                                                   <td className="p-3 pl-4 text-center">
                                                       <input 
                                                           type="checkbox" 
@@ -3432,21 +3443,20 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                                   </td>
                                                   <td className="p-3 font-mono font-bold text-slate-700">{item.orderId}</td>
                                                   <td className="p-3 truncate max-w-[200px]" title={item.product}>
-                                                      <span className="font-mono text-indigo-500 font-bold mr-1">[{item.sku || '-'}]</span>
+                                                      <span className="font-mono text-indigo-500 font-bold mr-1 bg-indigo-50 px-1 rounded">[{item.sku || '-'}]</span>
                                                       {item.product}
                                                   </td>
+                                                  <td className="p-3 font-black text-rose-500">{item.qty} ชิ้น</td>
                                                   <td className="p-3">
-                                                      <span className="text-[10px] font-bold text-slate-600 border px-1.5 py-0.5 rounded bg-white">
-                                                          {item.statusFromFile}
-                                                      </span>
-                                                  </td>
-                                                  <td className="p-3">
-                                                      <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded-md text-[10px] font-bold">
+                                                      <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-md text-[10px] font-bold">
                                                           {item.reason}
                                                       </span>
                                                   </td>
                                               </tr>
                                           ))}
+                                          {deliveryFailedDetailsData.length === 0 && skippedDetailsData.filter(x => x.reason.includes('ยกเลิก') || x.reason.includes('ไม่สำเร็จ')).length === 0 && (
+                                              <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold text-center">ไม่พบออเดอร์ยกเลิกหรือตีคืนที่มีปัญหาในไฟล์นี้</td></tr>
+                                          )}
                                       </tbody>
                                   </table>
                               </div>
@@ -11727,11 +11737,69 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       }
 
       try {
-          const dataRows = [
-              ["รายงานประวัติเอกสาร (Filtered)"],
+          // 1. Calculate Summary Stats
+          const stats = {
+              invoice: { count: 0, total: 0 },
+              abb: { count: 0, total: 0 },
+              receipt: { count: 0, total: 0 },
+              payment_voucher: { count: 0, total: 0 },
+              credit_note: { count: 0, total: 0 },
+              quotation: { count: 0, total: 0 },
+              pending_income: { count: 0, total: 0 },
+              pending_expense: { count: 0, total: 0 },
+              cancelled: { count: 0, total: 0 }
+          };
+
+          displayDocs.forEach(d => {
+              if (d.status === 'cancelled') {
+                  stats.cancelled.count++;
+                  stats.cancelled.total += Number(d.total) || 0;
+                  return; 
+              }
+
+              if (d.source === 'invoice') {
+                  const type = d.docType || 'invoice';
+                  if (stats[type]) {
+                      stats[type].count++;
+                      stats[type].total += Number(d.total) || 0;
+                  }
+              } else if (d.source === 'transaction') {
+                  if (d.type === 'income') {
+                      stats.pending_income.count++;
+                      stats.pending_income.total += Number(d.total) || 0;
+                  } else {
+                      stats.pending_expense.count++;
+                      stats.pending_expense.total += Number(d.total) || 0;
+                  }
+              }
+          });
+
+          // 2. Prepare Summary Sheet Data
+          const dateRangeStr = historyStartDate === '2000-01-01' ? 'ทั้งหมด' : `${formatDate(historyStartDate)} ถึง ${formatDate(historyEndDate)}`;
+          const summaryRows = [
+              ["สรุปข้อมูลประวัติเอกสาร"],
+              ["รอบระยะเวลา", dateRangeStr],
               ["วันที่ดึงข้อมูล", formatDate(new Date())],
               [],
-              ["วันที่สั่งซื้อ/ออกบิล", "วันที่รับเงิน (Settled)", "เลขที่เอกสาร", "Order ID", "ชื่อลูกค้า", "ประเภทเอกสาร", "สถานะเอกสาร", "สถานะการชำระ", "ยอดรวม (บาท)"]
+              ["ประเภทเอกสาร", "จำนวน (รายการ)", "มูลค่ารวม (บาท)"],
+              ["ใบกำกับภาษีเต็มรูป (INV)", stats.invoice.count, Number(stats.invoice.total).toFixed(2)],
+              ["ใบกำกับภาษีอย่างย่อ (ABB)", stats.abb.count, Number(stats.abb.total).toFixed(2)],
+              ["ใบเสร็จรับเงิน (REC)", stats.receipt.count, Number(stats.receipt.total).toFixed(2)],
+              ["ใบสำคัญจ่าย (PV)", stats.payment_voucher.count, Number(stats.payment_voucher.total).toFixed(2)],
+              ["ใบลดหนี้ (CN)", stats.credit_note.count, Number(stats.credit_note.total).toFixed(2)],
+              ["ใบเสนอราคา (QUO)", stats.quotation.count, Number(stats.quotation.total).toFixed(2)],
+              ["รอออกใบกำกับ (รายรับ)", stats.pending_income.count, Number(stats.pending_income.total).toFixed(2)],
+              ["รอออกใบสำคัญจ่าย (รายจ่าย)", stats.pending_expense.count, Number(stats.pending_expense.total).toFixed(2)],
+              ["เอกสารที่ถูกยกเลิก", stats.cancelled.count, Number(stats.cancelled.total).toFixed(2)],
+          ];
+
+          // 3. Prepare History Details Sheet Data
+          const dataRows = [
+              ["รายละเอียดประวัติเอกสาร (Filtered)"],
+              ["รอบระยะเวลา", dateRangeStr],
+              ["วันที่ดึงข้อมูล", formatDate(new Date())],
+              [],
+              ["วันที่สั่งซื้อ/ออกบิล", "วันที่รับเงิน (Settled)", "เลขที่เอกสาร", "Order ID", "ชื่อลูกค้า/คู่ค้า", "ประเภทเอกสาร", "สถานะเอกสาร", "สถานะการชำระ", "ยอดรวม (บาท)"]
           ];
 
           displayDocs.forEach(d => {
@@ -11757,10 +11825,17 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
               ]);
           });
 
-          const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
+          // 4. Generate Excel
           const wb = window.XLSX.utils.book_new();
-          window.XLSX.utils.book_append_sheet(wb, ws, "History");
-          window.XLSX.writeFile(wb, `Document_History_${formatDateISO(new Date())}.xlsx`);
+          
+          const wsSummary = window.XLSX.utils.aoa_to_sheet(summaryRows);
+          window.XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
+
+          const wsDetails = window.XLSX.utils.aoa_to_sheet(dataRows);
+          window.XLSX.utils.book_append_sheet(wb, wsDetails, "History Details");
+          
+          const fileNameMonth = historyStartDate === '2000-01-01' ? 'All' : historyStartDate.substring(0, 7);
+          window.XLSX.writeFile(wb, `Document_History_${fileNameMonth}_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
       } catch (e) {
           showToast("เกิดข้อผิดพลาดในการส่งออก Excel", "error");
       }
