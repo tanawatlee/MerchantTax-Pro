@@ -6209,9 +6209,16 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   };
 
   const filteredInvoices = useMemo(() => {
+    // --- 🔥 FIX: สร้าง Set สำหรับเช็คว่าบิลไหนถูกสร้างมาจาก "รายจ่าย" เพื่อป้องกันการปนกับภาษีขาย ---
+    const expenseInvNos = new Set(transactions.filter(t => t.type === 'expense' && t.invoiceNo).map(t => t.invoiceNo));
+    const incomeInvNos = new Set(transactions.filter(t => t.type === 'income' && t.invoiceNo).map(t => t.invoiceNo));
+
     return invoices.filter(inv => {
-      // --- FIX: กรองเฉพาะเอกสารภาษีขาย (INV, ABB, CN) เท่านั้น ไม่เอาใบเสนอราคา/ใบเสร็จมารวม ---
-      if (inv.docType === 'quotation' || inv.docType === 'receipt') return false;
+      // --- FIX: กรองเฉพาะเอกสารภาษีขาย (INV, ABB, CN) เท่านั้น ไม่เอาใบเสนอราคา/ใบเสร็จ/ใบสำคัญจ่ายมารวม ---
+      if (inv.docType === 'quotation' || inv.docType === 'receipt' || inv.docType === 'payment_voucher') return false;
+
+      // --- 🔥 FIX: กรองบิลภาษีขายที่ถูกเผลอสร้างมาจาก "รายจ่าย" (เช่น เอาค่าส่งหรือซื้อสินค้ามาออก ABB) ---
+      if (expenseInvNos.has(inv.invNo) && !incomeInvNos.has(inv.invNo)) return false;
 
       const d = normalizeDate(inv.date);
       const start = new Date(startDate);
@@ -6482,9 +6489,17 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       netVat: 0
     }));
 
+    // --- 🔥 FIX: ป้องกันบิลรายจ่ายหลุดมาเป็นภาษีขายในหน้าสรุปรายปี ---
+    const expenseInvNos = new Set(transactions.filter(t => t.type === 'expense' && t.invoiceNo).map(t => t.invoiceNo));
+    const incomeInvNos = new Set(transactions.filter(t => t.type === 'income' && t.invoiceNo).map(t => t.invoiceNo));
+
     invoices.forEach(inv => {
       if (inv.status === 'cancelled') return;
-      if (inv.docType === 'quotation' || inv.docType === 'receipt') return;
+      if (inv.docType === 'quotation' || inv.docType === 'receipt' || inv.docType === 'payment_voucher') return;
+      
+      // --- 🔥 FIX: ตัดบิลรายจ่ายออก ---
+      if (expenseInvNos.has(inv.invNo) && !incomeInvNos.has(inv.invNo)) return;
+
       const d = normalizeDate(inv.date);
       if (d && d.getFullYear() === year) {
           const m = d.getMonth();
@@ -11197,9 +11212,20 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
   const executeBulkIssue = async () => {
       setShowBulkIssueModal(false);
-      const docsToIssue = combinedDocs.filter(d => selectedDocIds.includes(d.id) && d.source === 'transaction');
+      
+      // --- 🔥 FIX: คัดกรองป้องกันการออกเอกสารผิดประเภทข้ามหมวด ---
+      const isSalesDoc = ['invoice', 'abb', 'receipt'].includes(bulkSettings.docType);
+      const isExpenseDoc = bulkSettings.docType === 'payment_voucher';
+      
+      const docsToIssue = combinedDocs.filter(d => {
+          if (!selectedDocIds.includes(d.id) || d.source !== 'transaction') return false;
+          if (isSalesDoc && d.type !== 'income') return false;
+          if (isExpenseDoc && d.type !== 'expense') return false;
+          return true;
+      });
+
       if (docsToIssue.length === 0) {
-          showToast("ไม่พบรายการ 'รอออกใบกำกับ' ในสิ่งที่เลือก", "error");
+          showToast("ไม่พบรายการที่สอดคล้อง (ใบกำกับภาษีต้องมาจากรายรับ / ใบสำคัญจ่ายต้องมาจากรายจ่าย)", "error");
           return;
       }
       
