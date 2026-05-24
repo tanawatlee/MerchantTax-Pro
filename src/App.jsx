@@ -6479,6 +6479,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
 
   const yearlyTrackingData = useMemo(() => {
     const year = parseInt(trackingYear);
+    const toFixedNum = (num) => Number(Number(num).toFixed(2));
     const months = Array.from({ length: 12 }, (_, i) => ({
       month: i + 1,
       monthName: new Date(year, i, 1).toLocaleDateString('th-TH', { month: 'long' }),
@@ -6489,23 +6490,27 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       netVat: 0
     }));
 
-    // --- 🔥 FIX: ป้องกันบิลรายจ่ายหลุดมาเป็นภาษีขายในหน้าสรุปรายปี ---
+    // --- ป้องกันบิลรายจ่ายหลุดมาเป็นภาษีขายในหน้าสรุปรายปี ---
     const expenseInvNos = new Set(transactions.filter(t => t.type === 'expense' && t.invoiceNo).map(t => t.invoiceNo));
     const incomeInvNos = new Set(transactions.filter(t => t.type === 'income' && t.invoiceNo).map(t => t.invoiceNo));
 
     invoices.forEach(inv => {
       if (inv.status === 'cancelled') return;
       if (inv.docType === 'quotation' || inv.docType === 'receipt' || inv.docType === 'payment_voucher') return;
-      
-      // --- 🔥 FIX: ตัดบิลรายจ่ายออก ---
       if (expenseInvNos.has(inv.invNo) && !incomeInvNos.has(inv.invNo)) return;
+
+      // --- 🔥 THE ULTIMATE FIX: เพิ่มตัวกรองสาขาให้ตรงกับตารางรายงานรายเดือน ---
+      const branchMatch = selectedBranch === 'all' || (inv.branch || '00000') === selectedBranch;
+      if (!branchMatch) return;
 
       const d = normalizeDate(inv.date);
       if (d && d.getFullYear() === year) {
           const m = d.getMonth();
           const mult = inv.docType === 'credit_note' ? -1 : 1;
-          months[m].salesBase += (Number(inv.preVat) || 0) * mult;
-          months[m].salesVat += (Number(inv.vat) || 0) * mult;
+          
+          // --- 🔥 THE ULTIMATE FIX: ปรับเรื่องการปัดเศษทศนิยมรายบิลให้ตรงกันเป๊ะ ---
+          months[m].salesBase += toFixedNum(Number(inv.preVat) || 0) * mult;
+          months[m].salesVat += toFixedNum(Number(inv.vat) || 0) * mult;
       }
     });
 
@@ -6515,17 +6520,28 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       if (t.isFromReconciliation && (!t.taxInvoiceNo || String(t.taxInvoiceNo).trim() === '')) return;
       if (t.isNonCreditableVat === true || t.isCashBill === true || t.vatType === 'none') return;
       
+      // --- 🔥 THE ULTIMATE FIX: เพิ่มตัวกรองสาขาสำหรับรายจ่ายฝั่งซื้อ ---
+      const branchMatch = selectedBranch === 'all' || selectedBranch === '00000';
+      if (!branchMatch) return;
+
       const d = normalizeDate(t.date);
       if (d && d.getFullYear() === year) {
           const m = d.getMonth();
           const taxDetails = getExpenseTaxDetails(t);
-          months[m].purchaseBase += taxDetails.base;
-          months[m].purchaseVat += taxDetails.vat;
+          
+          // --- 🔥 THE ULTIMATE FIX: ปรับเรื่องการปัดเศษทศนิยมรายบิลให้ตรงกันเป๊ะ ---
+          months[m].purchaseBase += toFixedNum(taxDetails.base);
+          months[m].purchaseVat += toFixedNum(taxDetails.vat);
       }
     });
 
     months.forEach(m => {
-        m.netVat = m.salesVat - m.purchaseVat;
+        // บังคับกำหนดทศนิยมสองตำแหน่งให้กับผลรวมของแต่ละเดือน เพื่อป้องกันปัญหา JS Floating-point
+        m.salesBase = toFixedNum(m.salesBase);
+        m.salesVat = toFixedNum(m.salesVat);
+        m.purchaseBase = toFixedNum(m.purchaseBase);
+        m.purchaseVat = toFixedNum(m.purchaseVat);
+        m.netVat = toFixedNum(m.salesVat - m.purchaseVat);
     });
 
     const totals = months.reduce((acc, m) => {
@@ -6537,8 +6553,15 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         return acc;
     }, { salesBase: 0, salesVat: 0, purchaseBase: 0, purchaseVat: 0, netVat: 0 });
 
+    // ปัดเศษผลรวมท้ายปีทั้งหมด
+    totals.salesBase = toFixedNum(totals.salesBase);
+    totals.salesVat = toFixedNum(totals.salesVat);
+    totals.purchaseBase = toFixedNum(totals.purchaseBase);
+    totals.purchaseVat = toFixedNum(totals.purchaseVat);
+    totals.netVat = toFixedNum(totals.netVat);
+
     return { months, totals };
-  }, [invoices, transactions, trackingYear]);
+  }, [invoices, transactions, trackingYear, selectedBranch]); // เพิ่ม selectedBranch เข้าไปใน Dependency Array
 
   const pitAnalysis = useMemo(() => {
     const start = new Date(startDate);
@@ -7375,6 +7398,15 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
 
 function RecordManager({ user, transactions, invoices, appId, stockBatches, showToast, onIssueInvoice, promotions }) {
   const [subTab, setSubTab] = useState('new');
+  // --- NEW: Document Summary States ---
+  const [docSummaryMonth, setDocSummaryMonth] = useState(() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [isExportingDocSummary, setIsExportingDocSummary] = useState(false);
+  const [docSummaryTypeFilter, setDocSummaryTypeFilter] = useState('all'); // NEW: ตัวกรองประเภทเอกสาร
+  const [showMissingDocsDetails, setShowMissingDocsDetails] = useState(false); // NEW: แสดงรายละเอียดเอกสารหาย
+
   const [viewItem, setViewItem] = useState(null);
   const [cancelConfirmId, setCancelConfirmId] = useState(null); // แก้ไขชื่อ State สำหรับยกเลิกรายการ
   const [hardDeleteConfirmId, setHardDeleteConfirmId] = useState(null); // NEW: State สำหรับลบถาวร
@@ -9172,6 +9204,166 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const viewItemVatAmt = viewItem ? (viewItem.vatType === 'excluded' ? (viewItemManualVat !== null ? viewItemManualVat : viewItemBaseAmount * 0.07) : (viewItemManualVat !== null ? viewItemManualVat : viewItemBaseAmount * 7 / 107)) : 0;
   const viewItemTrueVatBase = viewItem ? (viewItem.vatType === 'excluded' ? viewItemBaseAmount : (viewItemBaseAmount - viewItemVatAmt)) : 0;
 
+  // --- NEW: Document Summary Logic (With Filter) ---
+  const docSummaryData = useMemo(() => {
+      if (!docSummaryMonth) return [];
+      return transactions.filter(t => {
+          if (t.isCancelled) return false;
+          const d = normalizeDate(t.date);
+          if (!d) return false;
+          const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          if (mStr !== docSummaryMonth) return false;
+          
+          if (docSummaryTypeFilter !== 'all' && t.type !== docSummaryTypeFilter) return false;
+
+          return true;
+      }).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+  }, [transactions, docSummaryMonth, docSummaryTypeFilter]);
+
+  const docSummaryStats = useMemo(() => {
+      let totalIncome = 0;
+      let totalExpense = 0;
+      docSummaryData.forEach(t => {
+          const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+          if (t.type === 'income') totalIncome += amt;
+          else if (t.type === 'expense') totalExpense += amt;
+      });
+      return { totalIncome, totalExpense, net: totalIncome - totalExpense, count: docSummaryData.length };
+  }, [docSummaryData]);
+
+  // --- NEW: Performance & Category Stats for Document Summary ---
+  const docSummaryCategoryStats = useMemo(() => {
+      const incCats = {};
+      const expCats = {};
+      transactions.forEach(t => {
+          if (t.isCancelled) return;
+          const d = normalizeDate(t.date);
+          if (!d) return;
+          const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          if (mStr !== docSummaryMonth) return;
+
+          const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+          const cat = t.category || 'ทั่วไป';
+
+          if (t.type === 'income') {
+              incCats[cat] = (incCats[cat] || 0) + amt;
+          } else if (t.type === 'expense') {
+              expCats[cat] = (expCats[cat] || 0) + amt;
+          }
+      });
+
+      const sortCats = (catObj) => Object.entries(catObj).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+
+      return {
+          income: sortCats(incCats),
+          expense: sortCats(expCats)
+      };
+  }, [transactions, docSummaryMonth]);
+
+  // --- NEW: Missing Document Numbers Audit (Sequence Checking) ---
+  const monthlyMissingDocs = useMemo(() => {
+      const prefixMap = {};
+      const monthTrans = transactions.filter(t => {
+          const d = normalizeDate(t.date);
+          return d && `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === docSummaryMonth;
+      });
+
+      monthTrans.forEach(t => {
+          const num = t.sysDocId || '';
+          const match = num.match(/^([A-Za-z]+-\d{8}-)(\d+)$/);
+          if (match) {
+              const [_, prefix, seqStr] = match;
+              const seqNum = parseInt(seqStr, 10);
+              if (!prefixMap[prefix]) prefixMap[prefix] = [];
+              prefixMap[prefix].push({ seqNum, original: num, type: t.type, date: t.date });
+          }
+      });
+
+      const missing = [];
+      Object.entries(prefixMap).forEach(([prefix, items]) => {
+          if (items.length <= 1) return;
+          items.sort((a, b) => a.seqNum - b.seqNum);
+          const seqNums = items.map(i => i.seqNum);
+          const minNum = seqNums[0];
+          const maxNum = seqNums[seqNums.length - 1];
+
+          for (let s = minNum; s <= maxNum; s++) {
+              if (!seqNums.includes(s)) {
+                  missing.push({
+                      prefix,
+                      missingNo: `${prefix}${String(s).padStart(5, '0')}`,
+                      estimatedDate: items[0].date,
+                      type: items[0].type
+                  });
+              }
+          }
+      });
+      return missing;
+  }, [transactions, docSummaryMonth]);
+
+  const handleExportDocSummary = async () => {
+      setIsExportingDocSummary(true);
+      try {
+          if (!window.XLSX) {
+              const script = document.createElement('script');
+              script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+              await new Promise(res => { script.onload = res; document.body.appendChild(script); });
+          }
+
+          const dataRows = [
+              ["สรุปรายการเอกสารประจำเดือน", docSummaryMonth],
+              ["วันที่พิมพ์", formatDate(new Date())],
+              [],
+              ["วันที่", "เลขที่เอกสาร/อ้างอิง", "ประเภท", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "รายจ่าย (Out)"]
+          ];
+
+          docSummaryData.forEach(t => {
+              const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+              dataRows.push([
+                  formatDate(t.date),
+                  t.sysDocId || t.taxInvoiceNo || t.orderId || '-',
+                  t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
+                  t.category || '-',
+                  t.partnerName || '-',
+                  t.type === 'income' ? amt.toFixed(2) : '',
+                  t.type === 'expense' ? amt.toFixed(2) : ''
+              ]);
+          });
+
+          dataRows.push([]);
+          dataRows.push(["", "", "", "", "รวมรายรับ", Number(docSummaryStats.totalIncome).toFixed(2), ""]);
+          dataRows.push(["", "", "", "", "รวมรายจ่าย", "", Number(docSummaryStats.totalExpense).toFixed(2)]);
+          dataRows.push(["", "", "", "", "ยอดสุทธิ", Number(docSummaryStats.net).toFixed(2), ""]);
+
+          // --- Add Performance Category Summary ---
+          dataRows.push([]);
+          dataRows.push(["สรุปรายรับแยกตามหมวดหมู่ (Performance)"]);
+          docSummaryCategoryStats.income.forEach(c => dataRows.push([c.name, "", "", "", "", c.value.toFixed(2), ""]));
+
+          dataRows.push([]);
+          dataRows.push(["สรุปรายจ่ายแยกตามหมวดหมู่ (Performance)"]);
+          docSummaryCategoryStats.expense.forEach(c => dataRows.push([c.name, "", "", "", "", "", c.value.toFixed(2)]));
+
+          // --- Add Missing Documents Summary ---
+          if (monthlyMissingDocs.length > 0) {
+              dataRows.push([]);
+              dataRows.push(["รายการเอกสารที่คาดว่าขาดหาย (Missing Sequence)"]);
+              dataRows.push(["เลขที่เอกสาร", "ประเภท", "วันที่คาดการณ์"]);
+              monthlyMissingDocs.forEach(m => dataRows.push([m.missingNo, m.type === 'income' ? 'รายรับ' : 'รายจ่าย', formatDate(m.estimatedDate)]));
+          }
+
+          const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
+          const wb = window.XLSX.utils.book_new();
+          window.XLSX.utils.book_append_sheet(wb, ws, "Monthly Summary");
+          window.XLSX.writeFile(wb, `Document_Summary_${docSummaryMonth}.xlsx`);
+          showToast("ดาวน์โหลดรายงานสำเร็จ", "success");
+      } catch (e) {
+          console.error(e);
+          showToast("เกิดข้อผิดพลาดในการส่งออกรายงาน", "error");
+      }
+      setIsExportingDocSummary(false);
+  };
+
   return (
     <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
       
@@ -9185,6 +9377,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           <button onClick={()=>setSubTab('new')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap text-center ${subTab==='new'?'bg-white shadow-md text-indigo-600 scale-[1.02]':'text-slate-500 hover:text-slate-700'}`}>เพิ่มรายการใหม่</button>
           <button onClick={()=>setSubTab('history')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap text-center ${subTab==='history'?'bg-white shadow-md text-indigo-600 scale-[1.02]':'text-slate-500 hover:text-slate-700'}`}>ประวัติรายการ</button>
           <button onClick={()=>setSubTab('summary')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap text-center ${subTab==='summary'?'bg-white shadow-md text-indigo-600 scale-[1.02]':'text-slate-500 hover:text-slate-700'}`}>สรุปค่าใช้จ่ายเชิงลึก</button>
+          <button onClick={()=>setSubTab('doc_summary')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap text-center ${subTab==='doc_summary'?'bg-white shadow-md text-indigo-600 scale-[1.02]':'text-slate-500 hover:text-slate-700'}`}>สรุปเอกสารประจำเดือน</button>
         </div>
       </div>
 
@@ -9994,6 +10187,156 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
              </div>
           </div>
         </div>
+      ) : subTab === 'doc_summary' ? (
+        <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 animate-fadeIn h-full flex flex-col text-left">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b border-slate-100 pb-6">
+                <div className="flex items-center gap-3">
+                    <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl"><FileCheck size={24}/></div>
+                    <div>
+                        <h3 className="text-xl font-black text-slate-800">สรุปเอกสารประจำเดือน</h3>
+                        <p className="text-xs text-slate-500 mt-1">ตรวจสอบยอด Performance, แยกประเภท และหาเลขฟันหลอ</p>
+                    </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                    <div className="flex bg-slate-100 p-1 rounded-xl">
+                        <button onClick={() => setDocSummaryTypeFilter('all')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-all ${docSummaryTypeFilter === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ทั้งหมด</button>
+                        <button onClick={() => setDocSummaryTypeFilter('income')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-all ${docSummaryTypeFilter === 'income' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายรับ</button>
+                        <button onClick={() => setDocSummaryTypeFilter('expense')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-all ${docSummaryTypeFilter === 'expense' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายจ่าย</button>
+                    </div>
+                    <input type="month" value={docSummaryMonth} onChange={e=>setDocSummaryMonth(e.target.value)} className="w-full md:w-auto bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer"/>
+                    <button onClick={handleExportDocSummary} disabled={isExportingDocSummary} className="w-full md:w-auto bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm flex items-center justify-center gap-2 border border-emerald-200 disabled:opacity-50 whitespace-nowrap">
+                        {isExportingDocSummary ? <Loader size={16} className="animate-spin"/> : <FileSpreadsheet size={16}/>} Export Excel
+                    </button>
+                </div>
+            </div>
+
+            {/* --- Missing Documents Alert --- */}
+            {monthlyMissingDocs.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 flex flex-col gap-3 animate-fadeIn">
+                    <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                            <AlertTriangle size={18} className="text-amber-600" />
+                            <p className="font-bold text-sm text-amber-800">พบเลขเอกสารขาดหาย (Sequence Gap) จำนวน {monthlyMissingDocs.length} รายการ</p>
+                        </div>
+                        <button onClick={() => setShowMissingDocsDetails(!showMissingDocsDetails)} className="text-xs font-bold text-amber-700 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition-colors">
+                            {showMissingDocsDetails ? 'ซ่อนรายละเอียด' : 'ดูรายการที่หายไป'}
+                        </button>
+                    </div>
+                    {showMissingDocsDetails && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 mt-2 pt-3 border-t border-amber-100">
+                            {monthlyMissingDocs.map((m, i) => (
+                                <div key={i} className="bg-white p-2.5 rounded-xl border border-amber-100 shadow-sm flex flex-col">
+                                    <span className="font-mono font-bold text-rose-500 text-sm">{m.missingNo}</span>
+                                    <span className="text-[10px] font-bold text-slate-500 mt-1">ประเภท: {m.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6 shrink-0">
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-center">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">จำนวนเอกสาร (ตามตัวกรอง)</p>
+                    <p className="text-2xl font-black text-slate-800">{docSummaryStats.count.toLocaleString()} <span className="text-sm font-bold text-slate-500">ใบ</span></p>
+                </div>
+                <div className={`border p-4 rounded-2xl text-center transition-colors ${docSummaryTypeFilter === 'expense' ? 'bg-slate-50 border-slate-100 opacity-40' : 'bg-emerald-50 border-emerald-200'}`}>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600 mb-1">รวมรายรับ</p>
+                    <p className="text-2xl font-black text-emerald-700">{formatCurrency(docSummaryStats.totalIncome)}</p>
+                </div>
+                <div className={`border p-4 rounded-2xl text-center transition-colors ${docSummaryTypeFilter === 'income' ? 'bg-slate-50 border-slate-100 opacity-40' : 'bg-rose-50 border-rose-200'}`}>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-rose-600 mb-1">รวมรายจ่าย</p>
+                    <p className="text-2xl font-black text-rose-700">{formatCurrency(docSummaryStats.totalExpense)}</p>
+                </div>
+                <div className={`border p-4 rounded-2xl text-center transition-colors ${docSummaryTypeFilter !== 'all' ? 'bg-slate-50 border-slate-100 opacity-40' : 'bg-indigo-50 border-indigo-200'}`}>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-indigo-600 mb-1">ยอดสุทธิ (Net)</p>
+                    <p className={`text-2xl font-black ${docSummaryStats.net >= 0 ? 'text-indigo-700' : 'text-rose-600'}`}>{formatCurrency(docSummaryStats.net)}</p>
+                </div>
+            </div>
+
+            {/* --- Performance Category Breakdown --- */}
+            {docSummaryTypeFilter === 'all' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div className="bg-emerald-50/30 border border-emerald-100 p-5 rounded-2xl">
+                        <h4 className="font-bold text-emerald-800 mb-3 flex items-center gap-2"><TrendingUp size={16}/> สัดส่วนรายรับ (Performance)</h4>
+                        <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-2">
+                            {docSummaryCategoryStats.income.length > 0 ? docSummaryCategoryStats.income.map((c, i) => (
+                                <div key={i} className="flex justify-between items-center text-sm border-b border-dashed border-emerald-100 pb-1">
+                                    <span className="text-slate-600 truncate mr-2">{c.name}</span>
+                                    <span className="font-black text-emerald-700">{formatCurrency(c.value)}</span>
+                                </div>
+                            )) : <p className="text-xs text-slate-400 text-center py-4">ไม่มีข้อมูลรายรับ</p>}
+                        </div>
+                    </div>
+                    <div className="bg-rose-50/30 border border-rose-100 p-5 rounded-2xl">
+                        <h4 className="font-bold text-rose-800 mb-3 flex items-center gap-2"><TrendingDown size={16}/> สัดส่วนรายจ่าย (Performance)</h4>
+                        <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-2">
+                            {docSummaryCategoryStats.expense.length > 0 ? docSummaryCategoryStats.expense.map((c, i) => (
+                                <div key={i} className="flex justify-between items-center text-sm border-b border-dashed border-rose-100 pb-1">
+                                    <span className="text-slate-600 truncate mr-2">{c.name}</span>
+                                    <span className="font-black text-rose-700">{formatCurrency(c.value)}</span>
+                                </div>
+                            )) : <p className="text-xs text-slate-400 text-center py-4">ไม่มีข้อมูลรายจ่าย</p>}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            <div className="rounded-2xl border border-slate-100 overflow-hidden flex-1 flex flex-col">
+                <div className="overflow-auto custom-scrollbar flex-1">
+                    <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-50 text-slate-500 font-bold uppercase sticky top-0 z-10">
+                            <tr>
+                                <th className="p-4 border-b border-slate-200 w-24">วันที่</th>
+                                <th className="p-4 border-b border-slate-200">เลขที่เอกสาร/อ้างอิง</th>
+                                <th className="p-4 border-b border-slate-200">หมวดหมู่</th>
+                                <th className="p-4 border-b border-slate-200">ลูกค้า/คู่ค้า</th>
+                                <th className="p-4 border-b border-slate-200 text-right">รายรับ (In)</th>
+                                <th className="p-4 border-b border-slate-200 text-right">รายจ่าย (Out)</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {docSummaryData.map((doc, idx) => {
+                                const amt = Number(doc.grandTotal !== undefined ? doc.grandTotal : doc.total) || 0;
+                                return (
+                                <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                                    <td className="p-4 text-slate-600 whitespace-nowrap">{formatDate(doc.date)}</td>
+                                    <td className="p-4">
+                                        <p className="font-mono font-bold text-indigo-600">{doc.sysDocId || doc.taxInvoiceNo || doc.orderId || '-'}</p>
+                                        {(doc.taxInvoiceNo || doc.orderId) && (doc.sysDocId !== doc.taxInvoiceNo && doc.sysDocId !== doc.orderId) && (
+                                            <p className="text-[10px] text-slate-400 mt-0.5">Ref: {doc.taxInvoiceNo || doc.orderId}</p>
+                                        )}
+                                    </td>
+                                    <td className="p-4 text-slate-700">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${doc.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                            {doc.category || (doc.type === 'income' ? 'รายรับ' : 'รายจ่าย')}
+                                        </span>
+                                    </td>
+                                    <td className="p-4 text-slate-700 truncate max-w-[200px]" title={doc.partnerName}>{doc.partnerName || '-'}</td>
+                                    <td className="p-4 text-right font-bold text-emerald-600">{doc.type === 'income' ? formatCurrency(amt) : '-'}</td>
+                                    <td className="p-4 text-right font-bold text-rose-600">{doc.type === 'expense' ? formatCurrency(amt) : '-'}</td>
+                                </tr>
+                            )})}
+                            {docSummaryData.length === 0 && (
+                                <tr>
+                                    <td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารที่ตรงกับเงื่อนไขการค้นหาในเดือนที่เลือก</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+                {docSummaryData.length > 0 && docSummaryTypeFilter === 'all' && (
+                    <div className="bg-slate-900 text-white p-4 shrink-0 flex justify-between items-center text-sm font-bold">
+                        <span className="uppercase tracking-widest text-xs opacity-80">รวมยอดสุทธิประจำเดือน</span>
+                        <div className="flex gap-4 sm:gap-8">
+                            <span className="text-emerald-400">รับ: {formatCurrency(docSummaryStats.totalIncome)}</span>
+                            <span className="text-rose-400">จ่าย: {formatCurrency(docSummaryStats.totalExpense)}</span>
+                            <span className="text-indigo-300">สุทธิ: {formatCurrency(docSummaryStats.net)}</span>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
       ) : (
         <div className="space-y-6 text-left animate-fadeIn h-full flex flex-col">
           
@@ -10762,6 +11105,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
 function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant-tax-dev-v1", showToast, preFillData, promotions = [] }) {
   const [mode, setMode] = useState('dashboard'); 
+  const [showAuditDetails, setShowAuditDetails] = useState(false); // NEW: State สำหรับยืด/หดหน้าต่างรายละเอียดเลขฟันหลอ
   const savedSeller = useMemo(() => { try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } catch (e) { return {}; } }, []);
   const initialInvData = { docType: 'invoice', refInvNo: '', creditNoteReason: '', customerName: '', address: '', taxId: '', branch: '00000', orderId: '', orderDate: '', custSubDistrict: '', custDistrict: '', custProvince: '', custZipCode: '', items: [{ desc: '', qty: 1, unit: 'ชิ้น', price: 0 }], date: formatDateISO(new Date()), invNo: '', sellerName: savedSeller.sellerName || '', sellerAddress: savedSeller.sellerAddress || '', sellerTaxId: savedSeller.sellerTaxId || '', sellerBranchId: savedSeller.sellerBranchId || '00000', sellerBranchName: savedSeller.sellerBranchName || '', sellerPhone: savedSeller.sellerPhone || '', sellerEmail: savedSeller.sellerEmail || '', sellerSubDistrict: savedSeller.sellerSubDistrict || '', sellerDistrict: savedSeller.sellerDistrict || '', sellerProvince: savedSeller.sellerProvince || '', sellerZipCode: savedSeller.sellerZipCode || '', discount: 0, notes: '', vatType: 'excluded', logo: '', signature: '', status: 'unpaid' };
 
@@ -10798,6 +11142,86 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [showBulkIssueModal, setShowBulkIssueModal] = useState(false);
   const [bulkSettings, setBulkSettings] = useState({ docType: 'abb', vatType: 'included' });
   const [isExportingHistory, setIsExportingHistory] = useState(false);
+
+  // --- NEW: ตรวจจับเลขที่ตกหล่น / ฟันหลอ จากการออกบิลทั้งหมด ---
+  const sequenceAudit = useMemo(() => {
+    const prefixMap = {};
+    invoices.forEach(inv => {
+        const num = inv.invNo || '';
+        // ตรวจจับ Prefix หลัก เช่น INV-202605- หรือ ABB-202605- คู่กับเลข Running ย่อย
+        const match = num.match(/^([A-Z]+-\d{8}-)(\d+)$/);
+        if (match) {
+            const [_, prefix, seqStr] = match;
+            const seqNum = parseInt(seqStr, 10);
+            if (!prefixMap[prefix]) prefixMap[prefix] = [];
+            prefixMap[prefix].push({ seqNum, original: num, doc: inv });
+        }
+    });
+
+    const missingSequences = [];
+    Object.entries(prefixMap).forEach(([prefix, items]) => {
+        if (items.length <= 1) return;
+        items.sort((a, b) => a.seqNum - b.seqNum);
+        const seqNums = items.map(i => i.seqNum);
+        const minNum = seqNums[0];
+        const maxNum = seqNums[seqNums.length - 1];
+        
+        for (let s = minNum; s <= maxNum; s++) {
+            if (!seqNums.includes(s)) {
+                missingSequences.push({
+                    prefix,
+                    missingNo: `${prefix}${String(s).padStart(5, '0')}`,
+                    sequence: s,
+                    estimatedDate: items.find(i => i.seqNum > s)?.doc.date || items[0].doc.date,
+                    docType: items[0].doc.docType || 'invoice'
+                });
+            }
+        }
+    });
+    return missingSequences;
+  }, [invoices]);
+
+  // --- NEW: ฟังก์ชันส่งออกรายงานตรวจสอบเลขฟันหลอ ---
+  const handleExportAuditReportExcel = async () => {
+    if (showToast) showToast("กำลังเตรียมรายงานตรวจสอบ...", "success");
+    if (!window.XLSX) { 
+        const script = document.createElement('script'); 
+        script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"; 
+        await new Promise((resolve) => { script.onload = resolve; document.body.appendChild(script); }); 
+    }
+    
+    const dataRows = [
+        ["รายงานการตรวจสอบความต่อเนื่องของเลขที่เอกสาร (Document Sequence Audit)"],
+        ["ประจำเดือนภาษี", historyStartDate === '2000-01-01' ? 'ทั้งหมด' : historyStartDate.substring(0, 7)],
+        ["วันที่ตรวจสอบความสมบูรณ์", formatDate(new Date())],
+        ["จำนวนเลขเอกสารที่ขาดหาย (ฟันหลอ)", `${sequenceAudit.length} รายการ`],
+        [],
+        ["ลำดับ", "เลขที่เอกสารที่ตกหล่น (Missing No.)", "ประเภทบิล", "วันที่คาดว่าทำรายการ (Estimated Date)"]
+    ];
+
+    sequenceAudit.forEach((item, i) => {
+        dataRows.push([
+            i + 1,
+            item.missingNo,
+            item.docType === 'invoice' ? 'ใบกำกับภาษีเต็มรูป' :
+            item.docType === 'abb' ? 'ใบกำกับภาษีอย่างย่อ' :
+            item.docType === 'credit_note' ? 'ใบลดหนี้' :
+            item.docType === 'payment_voucher' ? 'ใบสำคัญจ่าย' :
+            item.docType === 'receipt' ? 'ใบเสร็จรับเงิน' : 'ใบเสนอราคา',
+            formatDate(item.estimatedDate)
+        ]);
+    });
+
+    try {
+        const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
+        const wb = window.XLSX.utils.book_new();
+        window.XLSX.utils.book_append_sheet(wb, ws, "Sequence Audit");
+        window.XLSX.writeFile(wb, `Document_Sequence_Audit_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
+        showToast("ส่งออกรายงานตรวจสอบสำเร็จ", "success");
+    } catch (e) {
+        showToast("เกิดข้อผิดพลาดในการส่งออกรายงาน", "error");
+    }
+  };
 
   const handleSavePartnerManual = async () => {
     if (!invData.customerName) {
@@ -10989,8 +11413,9 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       - ใบลดหนี้ (Credit Note): ${docStats.credit_note.count} ฉบับ (มูลค่า ${docStats.credit_note.total} บาท)
       - รายการขายที่ยังไม่ออกเอกสารภาษี: ${docStats.pending_transactions} รายการ
       - เอกสารที่ถูกยกเลิก (Cancelled): ${docStats.cancelled.count} ฉบับ
+      - **ตรวจพบเลขที่เอกสารฟันหลอ/ขาดหาย (Missing Sequences):** ${sequenceAudit.length} รายการ (ได้แก่: ${sequenceAudit.map(s => s.missingNo).slice(0, 5).join(', ')}${sequenceAudit.length > 5 ? '...' : ''})
 
-      กรุณาวิเคราะห์และให้คำแนะนำเพื่ออุดรอยรั่วทางภาษี การจัดการเอกสาร และความเสี่ยงทางบัญชี
+      กรุณาวิเคราะห์และให้คำแนะนำเพื่ออุดรอยรั่วทางภาษี การจัดการเอกสาร ความเสี่ยงเรื่องเลขฟันหลอ (Missing Sequence) ตามสรรพากร และความเสี่ยงทางบัญชี
       ตอบกลับมาในรูปแบบ JSON Array เท่านั้น ตามโครงสร้างนี้:
       [
         { "role": "Senior Accountant", "name": "สมศรี (บัญชีอาวุโส)", "text": "- วิเคราะห์ภาพรวมรายได้เทียบกับเอกสารที่ออก... \\n- ความเสี่ยงที่อาจเกิด..." },
@@ -11393,7 +11818,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
               if (!element) continue;
 
               const folderName = docItem.invNo;
-              const folder = zip.folder(folderName);
+              const folder = zip.folder(docItem.invNo);
 
               opt.filename = `${docItem.invNo}_Original.pdf`;
               const originalBlob = await window.html2pdf().set(opt).from(element).output('blob');
@@ -11846,7 +12271,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   d.customerName || 'ลูกค้าทั่วไป',
                   d.displayStatus || '-',
                   d.status === 'cancelled' ? 'ยกเลิก' : 'ปกติ',
-                  isPaid ? 'ชำระแล้ว' : 'ค้างชำระ',
+                  isPaid ? 'ชำเนียงแล้ว' : 'ค้างชำระ',
                   Number(d.total * (d.docType === 'credit_note' ? -1 : 1)).toFixed(2)
               ]);
           });
@@ -12305,6 +12730,69 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                 </div>
             </div>
 
+            {/* --- NEW: Sequence Auditor Card (ระบบตรวจจับเลขฟันหลอ / ตกหล่น) --- */}
+            <div className="bg-white border border-slate-100 p-6 rounded-[32px] shadow-sm flex flex-col justify-between gap-4">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 w-full">
+                    <div className="space-y-1">
+                        <h4 className="font-black text-slate-800 flex items-center gap-2">
+                            <FileCheck className="text-amber-500" size={20}/> 
+                            ระบบตรวจสอบความต่อเนื่องของเลขเอกสาร (Sequence Auditor)
+                        </h4>
+                        <p className="text-xs text-slate-400">สแกนหาเลขที่เอกสารฟันหลอ/ขาดหาย เพื่อตรวจสอบและป้องกันสรรพากรเพ่งเล็ง</p>
+                    </div>
+                    
+                    <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end shrink-0">
+                        <div className="text-left md:text-right">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">เลขที่ตกหล่น</span>
+                            <p className={`text-xl font-black ${sequenceAudit.length > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                                {sequenceAudit.length > 0 ? `${sequenceAudit.length} รายการ` : 'ข้อมูลปกติ (ไม่มีเลขฟันหลอ)'}
+                            </p>
+                        </div>
+                        
+                        <div className="flex gap-2">
+                            {sequenceAudit.length > 0 && (
+                                <>
+                                    <button onClick={() => setShowAuditDetails(!showAuditDetails)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors">
+                                        {showAuditDetails ? <EyeOff size={14}/> : <Eye size={14}/>} {showAuditDetails ? 'ซ่อน' : 'ดูตารางสแกน'}
+                                    </button>
+                                    <button onClick={handleExportAuditReportExcel} className="bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2.5 rounded-xl text-xs font-bold border border-amber-200 flex items-center gap-1.5 transition-colors">
+                                        <Download size={14}/> ส่งออกรายงานตรวจสอบ (Excel)
+                                    </button>
+                                </>
+                            )}
+                            <button onClick={() => {
+                                if (sequenceAudit.length > 0) {
+                                    showToast(`พบเลขฟันหลอ เช่น: ${sequenceAudit.map(s => s.missingNo).slice(0, 3).join(', ')}`, 'error');
+                                } else {
+                                    showToast(`ไม่พบรอยรั่วหรือเลขเอกสารฟันหลอใดๆ`, 'success');
+                                }
+                            }} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors">
+                                <Search size={14}/> ทดสอบสแกนด่วน
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                {showAuditDetails && sequenceAudit.length > 0 && (
+                    <div className="w-full mt-2 bg-slate-50 p-5 rounded-2xl border border-slate-100 max-h-60 overflow-y-auto custom-scrollbar animate-fadeIn">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">รายการเลขฟันหลอที่ตรวจพบในระบบคลาวด์</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {sequenceAudit.map((item, sIdx) => (
+                                <div key={sIdx} className="bg-white p-3 rounded-xl border border-rose-100 flex justify-between items-center text-xs shadow-sm">
+                                    <div className="space-y-0.5">
+                                        <span className="font-mono font-black text-rose-600 text-sm">{item.missingNo}</span>
+                                        <p className="text-[9px] text-slate-400 font-bold uppercase">ประเภท: {item.docType === 'invoice' ? 'Invoice (เต็ม)' : item.docType === 'abb' ? 'ABB (ย่อ)' : item.docType.toUpperCase()}</p>
+                                    </div>
+                                    <span className="text-[10px] font-bold text-slate-500 bg-slate-50 px-2.5 py-1 rounded-lg border">
+                                        คาดว่าออกเมื่อ: {formatDate(item.estimatedDate)}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+
             <div className="bg-slate-900 p-8 rounded-[40px] shadow-2xl text-white mt-4 relative overflow-hidden flex-1">
                 <FileCheck size={160} className="absolute -right-10 -bottom-10 opacity-5 text-white" />
                 <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 border-b border-white/10 pb-6 relative z-10 gap-4">
@@ -12465,7 +12953,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
             
             <div className="rounded-2xl border border-slate-100 overflow-x-auto flex-1 custom-scrollbar text-left">
                 <table className="w-full text-sm text-left whitespace-nowrap text-left">
-                    <thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider text-xs sticky top-0 z-10 text-left">
+                    <thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider text-xs sticky top-0 z-10 text-left border-b">
                         <tr>
                             <th className="p-4 w-12 text-center border-b">
                                 <input 
@@ -12475,7 +12963,12 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                     checked={selectedDocIds.length > 0 && selectedDocIds.length === displayDocs.length} 
                                 />
                             </th>
-                            <th className="p-4 text-left border-b">Date / Order Date</th><th className="p-4 text-left border-b">No. / Order ID</th><th className="p-4 text-left border-b">Customer / Payer</th><th className="p-4 text-right text-right border-b">Total</th><th className="p-4 text-center text-center border-b">Status</th><th className="p-4 text-center text-center border-b">Action</th>
+                            <th className="p-4 text-left border-b">Date / Order Date</th>
+                            <th className="p-4 text-left border-b">No. / Order ID</th>
+                            <th className="p-4 text-left border-b">Customer / Payer</th>
+                            <th className="p-4 text-right text-right border-b">Total</th>
+                            <th className="p-4 text-center text-center border-b">Status</th>
+                            <th className="p-4 text-center text-center border-b">Action</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50 text-left">
