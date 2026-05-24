@@ -5981,6 +5981,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                           <option value="สินค้าชำรุด/สูญหาย">สินค้าชำรุด/สูญหาย</option>
                           <option value="ได้ของแถมจาก Supplier">ได้ของแถมจาก Supplier</option>
                           <option value="นำไปใช้ในกิจการ/แจก">นำไปใช้ในกิจการ/แจก</option>
+                          <option value="ลูกค้ารับสินค้านี้ทดแทน">ลูกค้ารับสินค้านี้ทดแทน</option>
                           <option value="อื่นๆ">อื่นๆ</option>
                       </select>
                   </div>
@@ -9293,13 +9294,47 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       prefix,
                       missingNo: `${prefix}${String(s).padStart(5, '0')}`,
                       estimatedDate: items[0].date,
-                      type: items[0].type
+                      type: items[0].type,
+                      isMissing: true
                   });
               }
           }
       });
       return missing;
   }, [transactions, docSummaryMonth]);
+
+  const combinedDocSummaryList = useMemo(() => {
+      const list = [...docSummaryData];
+      
+      // เพิ่มรายการเลขฟันหลอ (Missing Docs) เข้าไปใน List ถ้าตรงกับ Filter
+      monthlyMissingDocs.forEach(m => {
+          if (docSummaryTypeFilter === 'all' || m.type === docSummaryTypeFilter) {
+              list.push({
+                  isMissing: true,
+                  sysDocId: m.missingNo,
+                  date: m.estimatedDate,
+                  type: m.type,
+                  category: 'เลขเอกสารขาดหาย (Void/Deleted)',
+                  partnerName: '-',
+                  total: 0,
+                  grandTotal: 0
+              });
+          }
+      });
+
+      // เรียงลำดับตามวันที่ และ เลขเอกสาร เพื่อให้แทรกอยู่ถูกจุด
+      list.sort((a, b) => {
+          const dateA = normalizeDate(a.date)?.getTime() || 0;
+          const dateB = normalizeDate(b.date)?.getTime() || 0;
+          if (dateA !== dateB) return dateA - dateB;
+          
+          const idA = a.sysDocId || '';
+          const idB = b.sysDocId || '';
+          return idA.localeCompare(idB);
+      });
+
+      return list;
+  }, [docSummaryData, monthlyMissingDocs, docSummaryTypeFilter]);
 
   const handleExportDocSummary = async () => {
       setIsExportingDocSummary(true);
@@ -9317,17 +9352,29 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               ["วันที่", "เลขที่เอกสาร/อ้างอิง", "ประเภท", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "รายจ่าย (Out)"]
           ];
 
-          docSummaryData.forEach(t => {
-              const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
-              dataRows.push([
-                  formatDate(t.date),
-                  t.sysDocId || t.taxInvoiceNo || t.orderId || '-',
-                  t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
-                  t.category || '-',
-                  t.partnerName || '-',
-                  t.type === 'income' ? amt.toFixed(2) : '',
-                  t.type === 'expense' ? amt.toFixed(2) : ''
-              ]);
+          combinedDocSummaryList.forEach(t => {
+              if (t.isMissing) {
+                  dataRows.push([
+                      formatDate(t.date) + ' (ประมาณการ)',
+                      t.sysDocId,
+                      t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
+                      t.category,
+                      '-',
+                      '',
+                      ''
+                  ]);
+              } else {
+                  const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+                  dataRows.push([
+                      formatDate(t.date),
+                      t.sysDocId || t.taxInvoiceNo || t.orderId || '-',
+                      t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
+                      t.category || '-',
+                      t.partnerName || '-',
+                      t.type === 'income' ? amt.toFixed(2) : '',
+                      t.type === 'expense' ? amt.toFixed(2) : ''
+                  ]);
+              }
           });
 
           dataRows.push([]);
@@ -10296,7 +10343,29 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
-                            {docSummaryData.map((doc, idx) => {
+                            {combinedDocSummaryList.map((doc, idx) => {
+                                if (doc.isMissing) {
+                                    return (
+                                        <tr key={`missing-${idx}`} className="bg-rose-50/50 hover:bg-rose-50 transition-colors">
+                                            <td className="p-4 text-slate-500 whitespace-nowrap">
+                                                {formatDate(doc.date)}<br/>
+                                                <span className="text-[9px] text-rose-400 font-bold">(ประมาณการ)</span>
+                                            </td>
+                                            <td className="p-4">
+                                                <p className="font-mono font-bold text-rose-500 line-through opacity-70">{doc.sysDocId}</p>
+                                            </td>
+                                            <td className="p-4">
+                                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 shadow-sm border border-rose-200">
+                                                    {doc.category}
+                                                </span>
+                                            </td>
+                                            <td className="p-4 text-slate-400">-</td>
+                                            <td className="p-4 text-right text-slate-400">-</td>
+                                            <td className="p-4 text-right text-slate-400">-</td>
+                                        </tr>
+                                    );
+                                }
+
                                 const amt = Number(doc.grandTotal !== undefined ? doc.grandTotal : doc.total) || 0;
                                 return (
                                 <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
@@ -10317,7 +10386,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     <td className="p-4 text-right font-bold text-rose-600">{doc.type === 'expense' ? formatCurrency(amt) : '-'}</td>
                                 </tr>
                             )})}
-                            {docSummaryData.length === 0 && (
+                            {combinedDocSummaryList.length === 0 && (
                                 <tr>
                                     <td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารที่ตรงกับเงื่อนไขการค้นหาในเดือนที่เลือก</td>
                                 </tr>
@@ -10325,7 +10394,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         </tbody>
                     </table>
                 </div>
-                {docSummaryData.length > 0 && docSummaryTypeFilter === 'all' && (
+                {combinedDocSummaryList.length > 0 && docSummaryTypeFilter === 'all' && (
                     <div className="bg-slate-900 text-white p-4 shrink-0 flex justify-between items-center text-sm font-bold">
                         <span className="uppercase tracking-widest text-xs opacity-80">รวมยอดสุทธิประจำเดือน</span>
                         <div className="flex gap-4 sm:gap-8">
