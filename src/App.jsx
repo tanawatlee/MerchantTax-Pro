@@ -9341,70 +9341,130 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const handleExportDocSummary = async () => {
       setIsExportingDocSummary(true);
       try {
-          if (!window.XLSX) {
+          if (!window.XLSX || !window.XLSX_JS_STYLE_LOADED) {
               const script = document.createElement('script');
-              script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-              await new Promise(res => { script.onload = res; document.body.appendChild(script); });
+              script.src = "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
+              await new Promise(res => { 
+                  script.onload = () => { window.XLSX_JS_STYLE_LOADED = true; res(); };
+                  document.body.appendChild(script); 
+              });
           }
 
-          const wb = window.XLSX.utils.book_new();
+          const XLSX = window.XLSX;
+          const wb = XLSX.utils.book_new();
+
+          // Helper function for applying styles to tabular sheets
+          const applyTableStyles = (ws, headerRowIndex, totalRowIndex) => {
+              if(!ws['!ref']) return;
+              const range = XLSX.utils.decode_range(ws['!ref']);
+              for (let R = range.s.r; R <= range.e.r; ++R) {
+                  for (let C = range.s.c; C <= range.e.c; ++C) {
+                      const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+                      if (!ws[cellRef]) continue;
+                      if (!ws[cellRef].s) ws[cellRef].s = {};
+                      
+                      ws[cellRef].s.alignment = { vertical: "center" };
+
+                      if (R === headerRowIndex) {
+                          ws[cellRef].s.fill = { fgColor: { rgb: "1E3A8A" } }; // Dark Blue
+                          ws[cellRef].s.font = { color: { rgb: "FFFFFF" }, bold: true };
+                          ws[cellRef].s.alignment.horizontal = "center";
+                      } else if (R === totalRowIndex) {
+                          ws[cellRef].s.fill = { fgColor: { rgb: "FEE2E2" } }; // Light Red BG
+                          ws[cellRef].s.font = { color: { rgb: "DC2626" }, bold: true }; // Red Bold Text
+                          if (ws[cellRef].t === 'n' && C > 0) ws[cellRef].z = '#,##0.00';
+                      } else {
+                          if (ws[cellRef].t === 'n' && C > 0) ws[cellRef].z = '#,##0.00';
+                      }
+                  }
+              }
+          };
 
           // ==========================================
           // SHEET 1: SUMMARY DASHBOARD
           // ==========================================
           const summaryRows = [
-              ["📊 สรุปภาพรวมเอกสารประจำเดือน (Monthly Document Summary)"],
+              ["สรุปภาพรวมเอกสารประจำเดือน (Monthly Document Summary)"],
               ["ประจำเดือน (Month):", docSummaryMonth],
               ["วันที่ส่งออก (Export Date):", formatDate(new Date())],
               [],
-              ["💰 สรุปยอดเงิน (Financial Summary)"],
+              ["สรุปยอดเงิน (Financial Summary)"],
               ["รวมรายรับ (Total Income):", Number(docSummaryStats.totalIncome)],
               ["รวมรายจ่าย (Total Expense):", Number(docSummaryStats.totalExpense)],
               ["ยอดสุทธิ (Net Balance):", Number(docSummaryStats.net)],
               ["จำนวนเอกสารทั้งหมด:", docSummaryStats.count, "รายการ"],
               [],
-              ["📈 สัดส่วนรายรับแยกตามหมวดหมู่ (Income by Category)"]
+              ["สัดส่วนรายรับแยกตามหมวดหมู่ (Income by Category)"]
           ];
           
           docSummaryCategoryStats.income.forEach(c => {
-              summaryRows.push(["   " + c.name, Number(c.value)]);
+              summaryRows.push(["   - " + c.name, Number(c.value)]);
           });
 
           summaryRows.push([]);
-          summaryRows.push(["📉 สัดส่วนรายจ่ายแยกตามหมวดหมู่ (Expense by Category)"]);
+          summaryRows.push(["สัดส่วนรายจ่ายแยกตามหมวดหมู่ (Expense by Category)"]);
           docSummaryCategoryStats.expense.forEach(c => {
-              summaryRows.push(["   " + c.name, Number(c.value)]);
+              summaryRows.push(["   - " + c.name, Number(c.value)]);
           });
 
+          let missingHeaderRowIdx = -1;
           if (monthlyMissingDocs.length > 0) {
               summaryRows.push([]);
-              summaryRows.push(["⚠️ รายการเลขเอกสารตกหล่น (Missing Sequence Alert)", "", "จำนวน " + monthlyMissingDocs.length + " รายการ"]);
+              summaryRows.push(["รายการเลขเอกสารตกหล่น (Missing Sequence Alert)", "", "จำนวน " + monthlyMissingDocs.length + " รายการ"]);
+              missingHeaderRowIdx = summaryRows.length;
               summaryRows.push(["เลขที่เอกสาร", "ประเภท", "วันที่คาดการณ์"]);
               monthlyMissingDocs.forEach(m => {
                   summaryRows.push([m.missingNo, m.type === 'income' ? 'รายรับ' : 'รายจ่าย', formatDate(m.estimatedDate)]);
               });
           } else {
               summaryRows.push([]);
-              summaryRows.push(["✅ การตรวจสอบเลขเอกสาร (Sequence Audit)"]);
+              summaryRows.push(["การตรวจสอบเลขเอกสาร (Sequence Audit)"]);
               summaryRows.push(["สถานะ:", "ข้อมูลสมบูรณ์ ไม่พบเลขเอกสารขาดหาย"]);
           }
 
-          const wsSummary = window.XLSX.utils.aoa_to_sheet(summaryRows);
-          // ปรับขนาดความกว้างของคอลัมน์ให้ดูสวยงาม
+          const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
           wsSummary['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 20 }];
-          window.XLSX.utils.book_append_sheet(wb, wsSummary, "Summary Dashboard");
+          
+          // Apply basic styles for Summary Sheet
+          if(wsSummary['!ref']) {
+              const sRange = XLSX.utils.decode_range(wsSummary['!ref']);
+              for (let R = sRange.s.r; R <= sRange.e.r; ++R) {
+                  for (let C = sRange.s.c; C <= sRange.e.c; ++C) {
+                      const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+                      if (wsSummary[cellRef]) {
+                          if (!wsSummary[cellRef].s) wsSummary[cellRef].s = {};
+                          if (wsSummary[cellRef].t === 'n') wsSummary[cellRef].z = '#,##0.00';
+                          if (C === 0 && typeof wsSummary[cellRef].v === 'string') {
+                              // เน้นตัวหนาสีน้ำเงิน สำหรับหัวข้อ
+                              if (['สรุปภาพรวม', 'สรุปยอด', 'สัดส่วน', 'รายการเลข', 'การตรวจ'].some(kw => wsSummary[cellRef].v.includes(kw))) {
+                                  wsSummary[cellRef].s.font = { bold: true, color: { rgb: "1E3A8A" } };
+                                  if (R===0) wsSummary[cellRef].s.font.sz = 14;
+                              }
+                          }
+                          // สไตล์ตาราง Missing Sequence
+                          if (R === missingHeaderRowIdx) {
+                              wsSummary[cellRef].s = { fill: { fgColor: { rgb: "1E3A8A" } }, font: { color: { rgb: "FFFFFF" }, bold: true } };
+                          }
+                      }
+                  }
+              }
+          }
+          XLSX.utils.book_append_sheet(wb, wsSummary, "1. Summary Dashboard");
 
           // ==========================================
           // SHEET 2: DOCUMENT LIST
           // ==========================================
           const dataRows = [
-              ["📑 รายการเอกสารทั้งหมด (Document Transactions)"],
+              ["รายการเอกสารทั้งหมด (All Document Transactions)"],
               ["ประจำเดือน:", docSummaryMonth],
               [],
               ["ลำดับ", "วันที่", "เลขที่เอกสาร/อ้างอิง", "ประเภท", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "รายจ่าย (Out)", "หมายเหตุ"]
           ];
 
           let index = 1;
+          let sumListIn = 0;
+          let sumListOut = 0;
+
           combinedDocSummaryList.forEach(t => {
               if (t.isMissing) {
                   dataRows.push([
@@ -9420,6 +9480,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   ]);
               } else {
                   const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+                  if (!t.isCancelled) {
+                      if (t.type === 'income') sumListIn += amt;
+                      if (t.type === 'expense') sumListOut += amt;
+                  }
                   dataRows.push([
                       index++,
                       formatDate(t.date),
@@ -9434,20 +9498,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               }
           });
 
-          const wsData = window.XLSX.utils.aoa_to_sheet(dataRows);
-          // ปรับความกว้างแต่ละคอลัมน์ให้ข้อมูลไม่ซ้อนทับกัน
-          wsData['!cols'] = [
-              { wch: 8 },  // ลำดับ
-              { wch: 15 }, // วันที่
-              { wch: 25 }, // เลขที่เอกสาร
-              { wch: 12 }, // ประเภท
-              { wch: 30 }, // หมวดหมู่
-              { wch: 35 }, // ลูกค้า/คู่ค้า
-              { wch: 15 }, // รายรับ
-              { wch: 15 }, // รายจ่าย
-              { wch: 20 }  // หมายเหตุ
-          ];
-          window.XLSX.utils.book_append_sheet(wb, wsData, "Document List");
+          const dataTotalRowIdx = dataRows.length;
+          dataRows.push(["", "", "", "", "", "รวมยอดสุทธิ (Grand Total)", sumListIn, sumListOut, ""]);
+
+          const wsData = XLSX.utils.aoa_to_sheet(dataRows);
+          wsData['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 15 }, { wch: 30 }, { wch: 35 }, { wch: 15 }, { wch: 15 }, { wch: 25 }];
+          applyTableStyles(wsData, 3, dataTotalRowIdx);
+          XLSX.utils.book_append_sheet(wb, wsData, "2. Document List");
 
           // ==========================================
           // SHEET 3: INCOME (เอกสาร รายรับ)
@@ -9455,13 +9512,15 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           const incomeDocs = combinedDocSummaryList.filter(t => t.type === 'income' && !t.isMissing);
           if (incomeDocs.length > 0) {
               const incomeRows = [
-                  ["📥 รายการเอกสารรายรับ (Income Documents)"],
+                  ["รายการเอกสารรายรับ (Income Documents)"],
                   ["ประจำเดือน:", docSummaryMonth],
                   [],
                   ["ลำดับ", "วันที่", "เลขที่เอกสาร/อ้างอิง", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "หมายเหตุ"]
               ];
+              let sumIncomeSheet = 0;
               incomeDocs.forEach((t, i) => {
                   const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+                  if (!t.isCancelled) sumIncomeSheet += amt;
                   incomeRows.push([
                       i + 1,
                       formatDate(t.date),
@@ -9472,9 +9531,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       t.isCancelled ? 'ยกเลิกแล้ว' : 'ปกติ'
                   ]);
               });
-              const wsIncome = window.XLSX.utils.aoa_to_sheet(incomeRows);
+
+              const incTotalRowIdx = incomeRows.length;
+              incomeRows.push(["", "", "", "", "รวมรายรับสุทธิ", sumIncomeSheet, ""]);
+
+              const wsIncome = XLSX.utils.aoa_to_sheet(incomeRows);
               wsIncome['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 30 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
-              window.XLSX.utils.book_append_sheet(wb, wsIncome, "รายรับ");
+              applyTableStyles(wsIncome, 3, incTotalRowIdx);
+              XLSX.utils.book_append_sheet(wb, wsIncome, "3. รายรับ (Income)");
           }
 
           // ==========================================
@@ -9483,24 +9547,23 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           const expenseDocs = combinedDocSummaryList.filter(t => t.type === 'expense' && !t.isMissing);
           const expenseCategories = [...new Set(expenseDocs.map(t => t.category || 'อื่นๆ'))];
 
-          // ฟังก์ชันสำหรับป้องกันชื่อ Sheet ยาวเกิน 31 ตัวอักษร หรือมีอักขระต้องห้ามตามกฎของ Excel
-          const sanitizeSheetName = (name) => {
-              return name.replace(/[\\/*?:\[\]]/g, '_').substring(0, 31);
-          };
+          const sanitizeSheetName = (name) => name.replace(/[\\/*?:\[\]]/g, '_').substring(0, 27);
 
-          expenseCategories.forEach(category => {
+          expenseCategories.forEach((category, cIdx) => {
               const docsInCat = expenseDocs.filter(t => (t.category || 'อื่นๆ') === category);
               if (docsInCat.length === 0) return;
 
               const catRows = [
-                  [`📤 รายการเอกสารรายจ่าย หมวด: ${category}`],
+                  [`รายการเอกสารรายจ่าย หมวด: ${category}`],
                   ["ประจำเดือน:", docSummaryMonth],
                   [],
                   ["ลำดับ", "วันที่", "เลขที่เอกสาร/อ้างอิง", "ลูกค้า/คู่ค้า", "รายจ่าย (Out)", "หมายเหตุ"]
               ];
 
+              let sumExpenseSheet = 0;
               docsInCat.forEach((t, i) => {
                   const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+                  if (!t.isCancelled) sumExpenseSheet += amt;
                   catRows.push([
                       i + 1,
                       formatDate(t.date),
@@ -9511,23 +9574,25 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   ]);
               });
 
-              const wsCat = window.XLSX.utils.aoa_to_sheet(catRows);
+              const expTotalRowIdx = catRows.length;
+              catRows.push(["", "", "", "รวมรายจ่ายสุทธิ", sumExpenseSheet, ""]);
+
+              const wsCat = XLSX.utils.aoa_to_sheet(catRows);
               wsCat['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
+              applyTableStyles(wsCat, 3, expTotalRowIdx);
               
-              let sheetName = sanitizeSheetName(`รายจ่าย_${category}`);
-              
-              // ป้องกันกรณีชื่อ Sheet ซ้ำกันเมื่อถูกตัดให้สั้นลง
+              let sheetName = sanitizeSheetName(category);
+              let finalSheetName = `${4 + cIdx}. ${sheetName}`;
               let counter = 1;
-              let finalSheetName = sheetName;
               while(wb.SheetNames.includes(finalSheetName)) {
-                  finalSheetName = sanitizeSheetName(`รายจ่าย_${category}`).substring(0, 28) + `_${counter}`;
+                  finalSheetName = `${4 + cIdx}. ${sheetName}`.substring(0, 28) + `_${counter}`;
                   counter++;
               }
 
-              window.XLSX.utils.book_append_sheet(wb, wsCat, finalSheetName);
+              XLSX.utils.book_append_sheet(wb, wsCat, finalSheetName);
           });
 
-          window.XLSX.writeFile(wb, `Monthly_Doc_Summary_${docSummaryMonth.replace('-', '')}.xlsx`);
+          XLSX.writeFile(wb, `Monthly_Doc_Summary_${docSummaryMonth.replace('-', '')}.xlsx`);
           if (showToast) showToast("ดาวน์โหลดรายงานสำเร็จ", "success");
       } catch (e) {
           console.error(e);
