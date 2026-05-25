@@ -34,7 +34,7 @@ const CONSTANTS = {
   SHOPS: ['eats and use', 'bubee bubee', 'ไม่ระบุ'],
   CATEGORIES: {
     INCOME: ['รายได้จากการขายสินค้า', 'รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)', 'รายได้จากการให้บริการ', 'รายได้ค่านายหน้า/ตัวแทน', 'รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'],
-    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าแพ็คกิ้ง/บรรจุภัณฑ์', 'อุปกรณ์/เครื่องใช้สำนักงาน', 'ค่าน้ำมัน (ซื้อของเข้าร้าน)', 'ค่าขนส่งพัสดุ (ส่งลูกค้า)', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า'],
+    EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าแพ็คกิ้ง/บรรจุภัณฑ์', 'อุปกรณ์/เครื่องใช้สำนักงาน', 'ค่าน้ำมัน (ซื้อของเข้าร้าน)', 'ค่าขนส่งพัสดุ (ส่งลูกค้า)', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าคอมมิชชั่น', 'ค่าคอมมิชชั่น Affiliate', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า'],
     STOCK: ['อาหาร and เครื่องดื่ม', 'ของใช้ส่วนตัว', 'ผลิตภัณฑ์ในครัวเรือน', 'ผลิตภัณฑ์ดูแลผ้า', 'แม่ and เด็ก', 'สุขภาพ and ความงาม', 'สัตว์เลี้ยง', 'ขนม and ของว่าง', 'เครื่องปรุง/วัตถุดิบ', 'บรรจุภัณฑ์/อุปกรณ์แพ็ค', 'อื่นๆ']
   },
   CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
@@ -266,6 +266,8 @@ const getExpensePrefix = (category) => {
         case 'ค่าโฆษณา (ในประเทศ)': return 'ADS-';
         case 'ค่าโฆษณา (ภ.พ.36)': return 'ADX-';
         case 'ค่าธรรมเนียม Platform': return 'FEE-';
+        case 'ค่าคอมมิชชั่น': return 'COM-';
+        case 'ค่าคอมมิชชั่น Affiliate': return 'AFF-';
         case 'ค่าเช่า': return 'RNT-';
         case 'เงินเดือน': return 'SAL-';
         case 'ภาษี/เบี้ยปรับ': return 'TAX-';
@@ -9345,68 +9347,191 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               await new Promise(res => { script.onload = res; document.body.appendChild(script); });
           }
 
-          const dataRows = [
-              ["สรุปรายการเอกสารประจำเดือน", docSummaryMonth],
-              ["วันที่พิมพ์", formatDate(new Date())],
+          const wb = window.XLSX.utils.book_new();
+
+          // ==========================================
+          // SHEET 1: SUMMARY DASHBOARD
+          // ==========================================
+          const summaryRows = [
+              ["📊 สรุปภาพรวมเอกสารประจำเดือน (Monthly Document Summary)"],
+              ["ประจำเดือน (Month):", docSummaryMonth],
+              ["วันที่ส่งออก (Export Date):", formatDate(new Date())],
               [],
-              ["วันที่", "เลขที่เอกสาร/อ้างอิง", "ประเภท", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "รายจ่าย (Out)"]
+              ["💰 สรุปยอดเงิน (Financial Summary)"],
+              ["รวมรายรับ (Total Income):", Number(docSummaryStats.totalIncome)],
+              ["รวมรายจ่าย (Total Expense):", Number(docSummaryStats.totalExpense)],
+              ["ยอดสุทธิ (Net Balance):", Number(docSummaryStats.net)],
+              ["จำนวนเอกสารทั้งหมด:", docSummaryStats.count, "รายการ"],
+              [],
+              ["📈 สัดส่วนรายรับแยกตามหมวดหมู่ (Income by Category)"]
+          ];
+          
+          docSummaryCategoryStats.income.forEach(c => {
+              summaryRows.push(["   " + c.name, Number(c.value)]);
+          });
+
+          summaryRows.push([]);
+          summaryRows.push(["📉 สัดส่วนรายจ่ายแยกตามหมวดหมู่ (Expense by Category)"]);
+          docSummaryCategoryStats.expense.forEach(c => {
+              summaryRows.push(["   " + c.name, Number(c.value)]);
+          });
+
+          if (monthlyMissingDocs.length > 0) {
+              summaryRows.push([]);
+              summaryRows.push(["⚠️ รายการเลขเอกสารตกหล่น (Missing Sequence Alert)", "", "จำนวน " + monthlyMissingDocs.length + " รายการ"]);
+              summaryRows.push(["เลขที่เอกสาร", "ประเภท", "วันที่คาดการณ์"]);
+              monthlyMissingDocs.forEach(m => {
+                  summaryRows.push([m.missingNo, m.type === 'income' ? 'รายรับ' : 'รายจ่าย', formatDate(m.estimatedDate)]);
+              });
+          } else {
+              summaryRows.push([]);
+              summaryRows.push(["✅ การตรวจสอบเลขเอกสาร (Sequence Audit)"]);
+              summaryRows.push(["สถานะ:", "ข้อมูลสมบูรณ์ ไม่พบเลขเอกสารขาดหาย"]);
+          }
+
+          const wsSummary = window.XLSX.utils.aoa_to_sheet(summaryRows);
+          // ปรับขนาดความกว้างของคอลัมน์ให้ดูสวยงาม
+          wsSummary['!cols'] = [{ wch: 45 }, { wch: 20 }, { wch: 20 }];
+          window.XLSX.utils.book_append_sheet(wb, wsSummary, "Summary Dashboard");
+
+          // ==========================================
+          // SHEET 2: DOCUMENT LIST
+          // ==========================================
+          const dataRows = [
+              ["📑 รายการเอกสารทั้งหมด (Document Transactions)"],
+              ["ประจำเดือน:", docSummaryMonth],
+              [],
+              ["ลำดับ", "วันที่", "เลขที่เอกสาร/อ้างอิง", "ประเภท", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "รายจ่าย (Out)", "หมายเหตุ"]
           ];
 
+          let index = 1;
           combinedDocSummaryList.forEach(t => {
               if (t.isMissing) {
                   dataRows.push([
-                      formatDate(t.date) + ' (ประมาณการ)',
+                      index++,
+                      formatDate(t.date) + ' (Est.)',
                       t.sysDocId,
                       t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
                       t.category,
                       '-',
-                      '',
-                      ''
+                      null,
+                      null,
+                      'เอกสารตกหล่น (Missing)'
                   ]);
               } else {
                   const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
                   dataRows.push([
+                      index++,
                       formatDate(t.date),
                       t.sysDocId || t.taxInvoiceNo || t.orderId || '-',
                       t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
                       t.category || '-',
                       t.partnerName || '-',
-                      t.type === 'income' ? amt.toFixed(2) : '',
-                      t.type === 'expense' ? amt.toFixed(2) : ''
+                      t.type === 'income' ? amt : null,
+                      t.type === 'expense' ? amt : null,
+                      t.isCancelled ? 'ยกเลิกแล้ว' : 'ปกติ'
                   ]);
               }
           });
 
-          dataRows.push([]);
-          dataRows.push(["", "", "", "", "รวมรายรับ", Number(docSummaryStats.totalIncome).toFixed(2), ""]);
-          dataRows.push(["", "", "", "", "รวมรายจ่าย", "", Number(docSummaryStats.totalExpense).toFixed(2)]);
-          dataRows.push(["", "", "", "", "ยอดสุทธิ", Number(docSummaryStats.net).toFixed(2), ""]);
+          const wsData = window.XLSX.utils.aoa_to_sheet(dataRows);
+          // ปรับความกว้างแต่ละคอลัมน์ให้ข้อมูลไม่ซ้อนทับกัน
+          wsData['!cols'] = [
+              { wch: 8 },  // ลำดับ
+              { wch: 15 }, // วันที่
+              { wch: 25 }, // เลขที่เอกสาร
+              { wch: 12 }, // ประเภท
+              { wch: 30 }, // หมวดหมู่
+              { wch: 35 }, // ลูกค้า/คู่ค้า
+              { wch: 15 }, // รายรับ
+              { wch: 15 }, // รายจ่าย
+              { wch: 20 }  // หมายเหตุ
+          ];
+          window.XLSX.utils.book_append_sheet(wb, wsData, "Document List");
 
-          // --- Add Performance Category Summary ---
-          dataRows.push([]);
-          dataRows.push(["สรุปรายรับแยกตามหมวดหมู่ (Performance)"]);
-          docSummaryCategoryStats.income.forEach(c => dataRows.push([c.name, "", "", "", "", c.value.toFixed(2), ""]));
-
-          dataRows.push([]);
-          dataRows.push(["สรุปรายจ่ายแยกตามหมวดหมู่ (Performance)"]);
-          docSummaryCategoryStats.expense.forEach(c => dataRows.push([c.name, "", "", "", "", "", c.value.toFixed(2)]));
-
-          // --- Add Missing Documents Summary ---
-          if (monthlyMissingDocs.length > 0) {
-              dataRows.push([]);
-              dataRows.push(["รายการเอกสารที่คาดว่าขาดหาย (Missing Sequence)"]);
-              dataRows.push(["เลขที่เอกสาร", "ประเภท", "วันที่คาดการณ์"]);
-              monthlyMissingDocs.forEach(m => dataRows.push([m.missingNo, m.type === 'income' ? 'รายรับ' : 'รายจ่าย', formatDate(m.estimatedDate)]));
+          // ==========================================
+          // SHEET 3: INCOME (เอกสาร รายรับ)
+          // ==========================================
+          const incomeDocs = combinedDocSummaryList.filter(t => t.type === 'income' && !t.isMissing);
+          if (incomeDocs.length > 0) {
+              const incomeRows = [
+                  ["📥 รายการเอกสารรายรับ (Income Documents)"],
+                  ["ประจำเดือน:", docSummaryMonth],
+                  [],
+                  ["ลำดับ", "วันที่", "เลขที่เอกสาร/อ้างอิง", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "หมายเหตุ"]
+              ];
+              incomeDocs.forEach((t, i) => {
+                  const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+                  incomeRows.push([
+                      i + 1,
+                      formatDate(t.date),
+                      t.sysDocId || t.taxInvoiceNo || t.orderId || '-',
+                      t.category || '-',
+                      t.partnerName || '-',
+                      amt,
+                      t.isCancelled ? 'ยกเลิกแล้ว' : 'ปกติ'
+                  ]);
+              });
+              const wsIncome = window.XLSX.utils.aoa_to_sheet(incomeRows);
+              wsIncome['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 30 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
+              window.XLSX.utils.book_append_sheet(wb, wsIncome, "รายรับ");
           }
 
-          const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
-          const wb = window.XLSX.utils.book_new();
-          window.XLSX.utils.book_append_sheet(wb, ws, "Monthly Summary");
-          window.XLSX.writeFile(wb, `Document_Summary_${docSummaryMonth}.xlsx`);
-          showToast("ดาวน์โหลดรายงานสำเร็จ", "success");
+          // ==========================================
+          // SHEET 4+: EXPENSES BY CATEGORY (รายจ่ายแยกหมวดหมู่)
+          // ==========================================
+          const expenseDocs = combinedDocSummaryList.filter(t => t.type === 'expense' && !t.isMissing);
+          const expenseCategories = [...new Set(expenseDocs.map(t => t.category || 'อื่นๆ'))];
+
+          // ฟังก์ชันสำหรับป้องกันชื่อ Sheet ยาวเกิน 31 ตัวอักษร หรือมีอักขระต้องห้ามตามกฎของ Excel
+          const sanitizeSheetName = (name) => {
+              return name.replace(/[\\/*?:\[\]]/g, '_').substring(0, 31);
+          };
+
+          expenseCategories.forEach(category => {
+              const docsInCat = expenseDocs.filter(t => (t.category || 'อื่นๆ') === category);
+              if (docsInCat.length === 0) return;
+
+              const catRows = [
+                  [`📤 รายการเอกสารรายจ่าย หมวด: ${category}`],
+                  ["ประจำเดือน:", docSummaryMonth],
+                  [],
+                  ["ลำดับ", "วันที่", "เลขที่เอกสาร/อ้างอิง", "ลูกค้า/คู่ค้า", "รายจ่าย (Out)", "หมายเหตุ"]
+              ];
+
+              docsInCat.forEach((t, i) => {
+                  const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+                  catRows.push([
+                      i + 1,
+                      formatDate(t.date),
+                      t.sysDocId || t.taxInvoiceNo || t.orderId || '-',
+                      t.partnerName || '-',
+                      amt,
+                      t.isCancelled ? 'ยกเลิกแล้ว' : 'ปกติ'
+                  ]);
+              });
+
+              const wsCat = window.XLSX.utils.aoa_to_sheet(catRows);
+              wsCat['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
+              
+              let sheetName = sanitizeSheetName(`รายจ่าย_${category}`);
+              
+              // ป้องกันกรณีชื่อ Sheet ซ้ำกันเมื่อถูกตัดให้สั้นลง
+              let counter = 1;
+              let finalSheetName = sheetName;
+              while(wb.SheetNames.includes(finalSheetName)) {
+                  finalSheetName = sanitizeSheetName(`รายจ่าย_${category}`).substring(0, 28) + `_${counter}`;
+                  counter++;
+              }
+
+              window.XLSX.utils.book_append_sheet(wb, wsCat, finalSheetName);
+          });
+
+          window.XLSX.writeFile(wb, `Monthly_Doc_Summary_${docSummaryMonth.replace('-', '')}.xlsx`);
+          if (showToast) showToast("ดาวน์โหลดรายงานสำเร็จ", "success");
       } catch (e) {
           console.error(e);
-          showToast("เกิดข้อผิดพลาดในการส่งออกรายงาน", "error");
+          if (showToast) showToast("เกิดข้อผิดพลาดในการส่งออกรายงาน", "error");
       }
       setIsExportingDocSummary(false);
   };
