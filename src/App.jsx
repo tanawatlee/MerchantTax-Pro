@@ -5067,17 +5067,21 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       sortedOutbounds.forEach(outbound => {
           let needed = Number(outbound.matchedQty);
           if (needed <= 0) return;
+          
+          const txDate = normalizeDate(outbound.date)?.getTime() || 0;
 
           for (let i = 0; i < positiveBatches.length; i++) {
               if (needed <= 0) break;
               const batch = positiveBatches[i];
               const available = Number(batch.quantity) - batch.tempSold - batch.tempReturned;
+              const bDate = normalizeDate(batch.date)?.getTime() || 0;
 
               if (available > 0) {
                   const take = Math.min(needed, available);
                   batch.consumedBy.push({
                       tx: outbound,
-                      qtyTaken: take
+                      qtyTaken: take,
+                      isFutureBorrow: bDate > txDate // 🔥 NEW: ตรวจจับการยืมสต็อกล่วงหน้า
                   });
                   batch.tempSold += take;
                   needed -= take;
@@ -5776,8 +5780,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                                                 <div className="flex items-start sm:items-center gap-3">
                                                     <span className="text-slate-400 font-mono text-[10px] sm:text-xs shrink-0 bg-slate-50 px-2 py-1 rounded-md">{formatDate(consume.tx.date)}</span>
                                                     <div className="flex flex-col">
-                                                        <span className="font-bold text-slate-700 text-xs sm:text-sm">
+                                                        <span className="font-bold text-slate-700 text-xs sm:text-sm flex items-center gap-2 flex-wrap">
                                                             {consume.tx.orderId ? `Order: ${consume.tx.orderId}` : `Ref: ${consume.tx.sysDocId || consume.tx.id}`}
+                                                            {consume.isFutureBorrow && <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded text-[8px] font-black uppercase border border-amber-200" title="ออเดอร์นี้เกิดก่อนวันที่รับของเข้า ล็อตนี้จึงถูกดึงไปตัดล่วงหน้า">ยืมสต็อกล่วงหน้า</span>}
                                                         </span>
                                                         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                                             <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 rounded">{consume.tx.channel || 'หน้าร้าน'}</span>
