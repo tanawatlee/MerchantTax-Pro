@@ -488,19 +488,28 @@ function ToastContainer({ toasts, removeToast }) {
   );
 }
 
-function StatCard({ title, value, color, icon, subtitle }) {
+function StatCard({ title, value, color, icon, subtitle, trend }) {
   const styles = { emerald: { bg: "bg-emerald-50", text: "text-emerald-600" }, rose: { bg: "bg-rose-50", text: "text-rose-600" }, indigo: { bg: "bg-indigo-50", text: "text-indigo-600" }, amber: { bg: "bg-amber-50", text: "text-amber-600" } };
   const currentStyle = styles[color] || styles.indigo;
   return (
-    <div className="rounded-3xl p-6 transition-all duration-300 border border-slate-100 bg-white hover:shadow-lg w-full text-left">
-      <div className="flex justify-between items-start mb-4">
-         <div className="text-left">
-            <p className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1 text-left">{title}</p>
-            <h3 className={"text-2xl font-bold tracking-tight " + currentStyle.text + " text-left"}>{formatCurrency(value)}</h3>
-         </div>
-         <div className={"p-3 rounded-2xl " + currentStyle.bg + " " + currentStyle.text}>{icon}</div>
+    <div className="rounded-3xl p-6 transition-all duration-300 border border-slate-100 bg-white hover:shadow-lg w-full text-left flex flex-col justify-between">
+      <div>
+          <div className="flex justify-between items-start mb-4">
+             <div className="text-left">
+                <p className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1 text-left">{title}</p>
+                <h3 className={"text-2xl font-bold tracking-tight " + currentStyle.text + " text-left"}>{formatCurrency(value)}</h3>
+             </div>
+             <div className={"p-3 rounded-2xl " + currentStyle.bg + " " + currentStyle.text}>{icon}</div>
+          </div>
       </div>
-      <p className="text-slate-400 text-xs text-left">{subtitle}</p>
+      <div className="flex items-center gap-2 mt-1">
+          {trend && (
+             <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-md flex items-center gap-0.5 border ${trend.isPositive ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-rose-50 text-rose-600 border-rose-200'}`}>
+                {trend.isPositive ? <TrendingUp size={10}/> : <TrendingDown size={10}/>} {trend.value}%
+             </span>
+          )}
+          <p className="text-slate-400 text-[11px] text-left leading-none">{subtitle}</p>
+      </div>
     </div>
   );
 }
@@ -739,52 +748,66 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
   }, [dashTab, selectedChannel, selectedShop, selectedMonth]);
 
   const analytics = useMemo(() => {
-    let perfSales = 0;
-    let perfCogs = 0;
-    let perfFees = 0;
-    let perfExp = 0;
-    let perfBuyerShipping = 0; 
-    let lostGmv = 0; // NEW: ตัวแปรเก็บยอดสูญเสีย/ตีกลับ
+    let perfSales = 0; let perfCogs = 0; let perfFees = 0; let perfExp = 0; let perfBuyerShipping = 0; let lostGmv = 0; 
+    let perfShippingBalance = 0;
+    let cashSettled = 0; let cashPending = 0; let cashExp = 0; let cashShipping = 0; let cashFees = 0; let cashCogs = 0; let cashGrossSales = 0; 
 
-    let cashSettled = 0;
-    let cashPending = 0;
-    let cashExp = 0;
-    let cashShipping = 0;
-    let cashFees = 0;
-    let cashCogs = 0; 
-    let cashGrossSales = 0; 
+    // --- ตัวแปรสำหรับคำนวณเดือนก่อนหน้า (Previous Month) ---
+    let prevPerfSales = 0; let prevPerfCogs = 0; let prevPerfFees = 0; let prevPerfExp = 0; let prevLostGmv = 0;
+    let prevPerfShippingBalance = 0;
+    let prevCashSettled = 0; let prevCashPending = 0; let prevCashExp = 0;
+
+    let prevMonth = null;
+    if (selectedMonth !== 'all') {
+        const [y, m] = selectedMonth.split('-');
+        const d = new Date(y, m - 1 - 1, 1); // ย้อนหลัง 1 เดือน
+        prevMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
 
     transactions.forEach(t => {
-        if (t.isFromReconciliation && t.category !== 'ค่าธรรมเนียม Platform') return; 
-        
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
         if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
 
         const orderD = normalizeDate(t.date);
-        const settleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.paymentStatus === 'settled' || t.status === 'paid' ? orderD : null);
+        let settleD = null;
+        if (t.type === 'income' && t.paymentStatus === 'settled') {
+            settleD = t.settlementDate ? normalizeDate(t.settlementDate) : orderD;
+        } else if (t.type === 'expense' && t.status === 'paid') {
+            settleD = t.date ? normalizeDate(t.date) : null;
+        }
 
         let matchOrderMonth = true;
         let matchSettleMonth = true;
+        let matchPrevOrderMonth = false;
+        let matchPrevSettleMonth = false;
 
         if (selectedMonth !== 'all') {
             const oMonth = orderD ? `${orderD.getFullYear()}-${String(orderD.getMonth() + 1).padStart(2, '0')}` : '';
             matchOrderMonth = oMonth === selectedMonth;
+            matchPrevOrderMonth = oMonth === prevMonth;
 
             const sMonth = settleD ? `${settleD.getFullYear()}-${String(settleD.getMonth() + 1).padStart(2, '0')}` : '';
             matchSettleMonth = sMonth === selectedMonth;
+            matchPrevSettleMonth = sMonth === prevMonth;
         }
 
-        if (t.type === 'income') {
+        if (t.type === 'income' && !t.isTaxOnly) {
             const fee = Number(t.platformFee) || 0;
-            const ship = Number(t.shippingFee) || 0;
+            const shipBuyer = Number(t.shippingFee) || 0;
+            const shipSubsidy = Number(t.shippingFeeSubsidy) || 0;
+            const shipActual = Number(t.estimatedShippingFee) || 0;
+            const shipReturn = Number(t.returnShippingFee) || 0;
+            const shipBal = (shipBuyer + shipSubsidy) - (shipActual + shipReturn);
+
             const itemSubtotal = (t.items || []).reduce((itemSum, item) => itemSum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
             const discount = Number(t.couponDiscount || 0) + Number(t.refundAmount || 0) + Number(t.cashCoupon || 0);
             
-            if (!t.isCancelled && !t.isDeliveryFailed) {
-                const trueNetSales = itemSubtotal - discount + ship;
+            if (!t.isCancelled && !t.isDeliveryFailed && !t.isFromReconciliation) {
+                const trueNetSales = itemSubtotal - discount; 
                 const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total);
                 
                 const cogs = (t.items || []).reduce((itemSum, item) => {
+                    if (item.desc && (item.desc.includes('ส่วนต่างยอดรับเงิน') || item.desc.includes('ค่าจัดส่ง'))) return itemSum;
                     const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
                     return itemSum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
                 }, 0);
@@ -793,56 +816,59 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     perfSales += trueNetSales; 
                     perfFees += fee;
                     perfCogs += cogs;
-                    perfBuyerShipping += ship;
-                    lostGmv += Number(t.refundAmount || 0); // NEW: บวกยอดคืนเงินบางส่วนเข้าเป็นยอดสูญเสีย
+                    perfBuyerShipping += shipBuyer;
+                    perfShippingBalance += shipBal; 
+                    lostGmv += Number(t.refundAmount || 0);
+                } else if (matchPrevOrderMonth) {
+                    prevPerfSales += trueNetSales;
+                    prevPerfFees += fee;
+                    prevPerfCogs += cogs;
+                    prevPerfShippingBalance += shipBal; 
+                    prevLostGmv += Number(t.refundAmount || 0);
                 }
 
                 if (matchSettleMonth && (t.paymentStatus === 'settled' || t.status === 'paid')) {
                     cashSettled += settledAmt;
-                    cashShipping += ship;
+                    cashShipping += shipBuyer;
                     cashFees += fee;
                     cashCogs += cogs; 
                     cashGrossSales += Math.max(0, itemSubtotal - Number(t.refundAmount || 0)); 
+                } else if (matchPrevSettleMonth && (t.paymentStatus === 'settled' || t.status === 'paid')) {
+                    prevCashSettled += settledAmt;
                 }
-            } else {
-                if (matchOrderMonth) {
-                    lostGmv += itemSubtotal; // ถ้ายกเลิก/ตีกลับ ให้นำยอดขายเต็มจำนวนไปเป็น Lost GMV
-                    // --- 🔥 THE FIX: ไม่ต้องบวก perfFees += fee ตรงนี้แล้ว เพราะจะมีบิล Expense แยกต่างหากสร้างมารับแทน ---
-                }
-                
-                const cancelSettleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.cancelledAt ? normalizeDate(t.cancelledAt) : orderD);
-                let matchCancelSettleMonth = true;
-                if (selectedMonth !== 'all') {
-                    const cMonth = cancelSettleD ? `${cancelSettleD.getFullYear()}-${String(cancelSettleD.getMonth() + 1).padStart(2, '0')}` : '';
-                    matchCancelSettleMonth = cMonth === selectedMonth;
-                }
-                
-                // --- 🔥 THE FIX: ไม่ต้องบวก cashFees += fee เช่นกัน ---
+            } else if ((t.isCancelled || t.isDeliveryFailed) && !t.isFromReconciliation) {
+                if (matchOrderMonth) lostGmv += itemSubtotal; 
+                else if (matchPrevOrderMonth) prevLostGmv += itemSubtotal;
             }
-        } else if (t.type === 'expense') {
-            if (!t.isCancelled && !t.isTaxOnly) {
-                const amt = Number(t.total) || 0;
-                const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
-                
-                // --- 🔥 THE ULTIMATE FIX: เช็คว่าบิลค่าธรรมเนียมนี้ ผูกกับออเดอร์รายรับที่ยังอยู่ไหม เพื่อกันการนับซ้ำซ้อน ---
-                const isLinkedToValidIncome = t.linkedOrderNo && transactions.some(inc => 
-                    inc.type === 'income' && !inc.isCancelled && 
-                    (inc.orderId === t.linkedOrderNo || inc.sysDocId === t.linkedOrderNo)
-                );
+        } else if (t.type === 'expense' && !t.isCancelled && !t.isTaxOnly) {
+            const amt = Number(t.total) || 0;
+            const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
+            const isLinkedToValidIncome = t.linkedOrderNo && transactions.some(inc => 
+                inc.type === 'income' && !inc.isCancelled && 
+                (inc.orderId === t.linkedOrderNo || inc.sysDocId === t.linkedOrderNo)
+            );
 
-                if (matchOrderMonth) {
-                    if (t.category === 'ค่าธรรมเนียม Platform') {
-                        if (!isLinkedToValidIncome) perfFees += amt;
-                    } else if (!isCogsBill && !t.isFromReconciliation) {
-                        perfExp += amt;
-                    }
+            if (t.category === 'ค่าธรรมเนียม Platform') {
+                if (!isLinkedToValidIncome && t.isFromReconciliation) {
+                    if (matchOrderMonth) perfFees += amt;
+                    else if (matchPrevOrderMonth) prevPerfFees += amt;
                 }
-                if (matchSettleMonth && t.status === 'paid') {
-                    if (t.category === 'ค่าธรรมเนียม Platform') {
-                        if (!isLinkedToValidIncome) cashFees += amt;
-                    } else if (!t.isFromReconciliation) {
-                        cashExp += amt;
-                    }
+            } else if (!isCogsBill && !t.isFromReconciliation) {
+                if (matchOrderMonth) perfExp += amt;
+                else if (matchPrevOrderMonth) prevPerfExp += amt;
+            }
+
+            if (matchSettleMonth && t.status === 'paid') {
+                if (t.category === 'ค่าธรรมเนียม Platform') {
+                    // Ignore platform fees in cash out
+                } else if (!t.isFromReconciliation) {
+                    cashExp += amt;
+                }
+            } else if (matchPrevSettleMonth && t.status === 'paid') {
+                if (t.category === 'ค่าธรรมเนียม Platform') {
+                    // Ignore
+                } else if (!t.isFromReconciliation) {
+                    prevCashExp += amt;
                 }
             }
         }
@@ -853,18 +879,52 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
          if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
          if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
          
+         const orderD = normalizeDate(t.date);
+         let matchPrevOrderMonth = false;
+         if (prevMonth) {
+            const oMonth = orderD ? `${orderD.getFullYear()}-${String(orderD.getMonth() + 1).padStart(2, '0')}` : '';
+            matchPrevOrderMonth = oMonth === prevMonth;
+         }
+
          if (t.type === 'income' && t.paymentStatus === 'pending_platform') {
              cashPending += (t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total));
+         } else if (matchPrevOrderMonth && t.type === 'income' && t.paymentStatus === 'pending_platform') {
+             prevCashPending += (t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total));
          }
     });
     
-    const supplierDebt = stockBatches
-        .filter(b => b.paymentStatus === 'credit')
-        .reduce((sum, b) => sum + (Number(b.quantity) * Number(b.costPerUnit)), 0);
+    const supplierDebt = stockBatches.filter(b => b.paymentStatus === 'credit').reduce((sum, b) => sum + (Number(b.quantity) * Number(b.costPerUnit)), 0);
+
+    const getTrend = (current, prev, invertLogic = false) => {
+        if (selectedMonth === 'all') return null;
+        if (prev === 0) {
+            if (current === 0) return { value: 0, isPositive: true };
+            return { value: 100, isPositive: !invertLogic }; 
+        }
+        const diff = current - prev;
+        const pct = (diff / Math.abs(prev)) * 100;
+        // ถ้าระบุ invertLogic=true ยอดเพิ่มขึ้นจะกลายเป็นเรื่องแย่ (isPositive=false สีแดง)
+        const isPos = invertLogic ? diff <= 0 : diff >= 0; 
+        return { value: Math.abs(pct).toFixed(1), isPositive: isPos };
+    };
+
+    // 🔥 คำนวณกำไรสุทธิใหม่ให้ตรงกับหน้า Monthly Report: ยอดขาย - ทุน - (ค่าธรรมเนียม + รายจ่ายอื่นๆ - ส่วนต่างค่าจัดส่ง)
+    const currentNetProfit = perfSales - perfCogs - (perfFees + perfExp - perfShippingBalance);
+    const prevNetProfit = prevPerfSales - prevPerfCogs - (prevPerfFees + prevPerfExp - prevPerfShippingBalance);
 
     return { 
-        perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: perfSales - perfCogs - perfFees - perfExp, buyerShipping: perfBuyerShipping, netSales: perfSales - perfBuyerShipping, lostGmv },
-        cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt, cogs: cashCogs, grossSales: cashGrossSales }
+        perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: currentNetProfit, buyerShipping: perfBuyerShipping, netSales: perfSales, lostGmv },
+        cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt, cogs: cashCogs, grossSales: cashGrossSales },
+        trends: {
+            perfSales: getTrend(perfSales, prevPerfSales),
+            perfExp: getTrend(perfFees + perfExp - perfShippingBalance, prevPerfFees + prevPerfExp - prevPerfShippingBalance, true), // รวมเป็น Operation Expense
+            lostGmv: getTrend(lostGmv, prevLostGmv, true),
+            perfNet: getTrend(currentNetProfit, prevNetProfit),
+            cashSettled: getTrend(cashSettled, prevCashSettled),
+            cashPending: getTrend(cashPending, prevCashPending, true),
+            cashExp: getTrend(cashExp, prevCashExp, true),
+            cashNet: getTrend(cashSettled - cashExp, prevCashSettled - prevCashExp)
+        }
     };
   }, [transactions, stockBatches, selectedChannel, selectedShop, selectedMonth]);
 
@@ -874,92 +934,96 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
         const d = new Date();
         d.setMonth(d.getMonth() - i);
         const key = d.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' });
-        mData[key] = { name: key, perfSales: 0, perfExp: 0, perfNet: 0, cashIn: 0, cashOut: 0, cashNet: 0 };
+        mData[key] = { 
+            name: key, 
+            perfSales: 0, perfCogs: 0, perfFees: 0, perfExp: 0, perfShippingBalance: 0,
+            cashIn: 0, cashOut: 0, 
+            perfExpTotal: 0, perfNet: 0, cashNet: 0 
+        };
     }
     
     transactions.forEach(t => {
-        if (t.isFromReconciliation && t.category !== 'ค่าธรรมเนียม Platform') return; 
         if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
         if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
         
         const orderD = normalizeDate(t.date);
-        const settleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.paymentStatus === 'settled' || t.status === 'paid' ? orderD : null);
+        let settleD = null;
+        if (t.type === 'income' && t.paymentStatus === 'settled') {
+            settleD = t.settlementDate ? normalizeDate(t.settlementDate) : orderD;
+        } else if (t.type === 'expense' && t.status === 'paid') {
+            settleD = t.date ? normalizeDate(t.date) : null;
+        }
 
         const oKey = orderD ? orderD.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' }) : null;
         const sKey = settleD ? settleD.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' }) : null;
 
-        if (t.type === 'income') {
+        if (t.type === 'income' && !t.isTaxOnly) {
             const fee = Number(t.platformFee) || 0;
-            const ship = Number(t.shippingFee) || 0;
+            const shipBuyer = Number(t.shippingFee) || 0;
+            const shipSubsidy = Number(t.shippingFeeSubsidy) || 0;
+            const shipActual = Number(t.estimatedShippingFee) || 0;
+            const shipReturn = Number(t.returnShippingFee) || 0;
+            const shipBal = (shipBuyer + shipSubsidy) - (shipActual + shipReturn);
+
             const itemSubtotal = (t.items || []).reduce((sum, item) => sum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
             const discount = Number(t.couponDiscount || 0) + Number(t.refundAmount || 0) + Number(t.cashCoupon || 0);
             
-            if (!t.isCancelled) {
-                const trueNetSales = itemSubtotal - discount + ship; 
+            if (!t.isCancelled && !t.isDeliveryFailed && !t.isFromReconciliation) {
+                const trueNetSales = itemSubtotal - discount; 
                 const settledAmt = t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total);
                 
                 const cogs = (t.items || []).reduce((sum, item) => {
+                    if (item.desc && (item.desc.includes('ส่วนต่างยอดรับเงิน') || item.desc.includes('ค่าจัดส่ง'))) return sum;
                     const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
                     return sum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
                 }, 0);
 
                 if (oKey && mData[oKey]) {
                     mData[oKey].perfSales += trueNetSales;
-                    mData[oKey].perfExp += fee; 
-                    mData[oKey].perfNet += (trueNetSales - cogs - fee);
+                    mData[oKey].perfCogs += cogs;
+                    mData[oKey].perfFees += fee;
+                    mData[oKey].perfShippingBalance += shipBal;
                 }
                 
                 if (sKey && mData[sKey] && (t.paymentStatus === 'settled' || t.status === 'paid')) {
                     mData[sKey].cashIn += settledAmt;
                 }
-            } else {
-                if (fee > 0) {
-                    if (oKey && mData[oKey]) {
-                        mData[oKey].perfExp += fee;
-                        mData[oKey].perfNet -= fee;
+            }
+        } else if (t.type === 'expense' && !t.isCancelled && !t.isTaxOnly) {
+            const amt = Number(t.total) || 0;
+            const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
+
+            const isLinkedToValidIncome = t.linkedOrderNo && transactions.some(inc => 
+                inc.type === 'income' && !inc.isCancelled && 
+                (inc.orderId === t.linkedOrderNo || inc.sysDocId === t.linkedOrderNo)
+            );
+
+            if (oKey && mData[oKey]) {
+                if (t.category === 'ค่าธรรมเนียม Platform') {
+                    if (!isLinkedToValidIncome && t.isFromReconciliation) {
+                        mData[oKey].perfFees += amt;
                     }
-                    const cancelSettleD = t.settlementDate ? normalizeDate(t.settlementDate) : (t.cancelledAt ? normalizeDate(t.cancelledAt) : orderD);
-                    const cKey = cancelSettleD ? cancelSettleD.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' }) : null;
-                    if (cKey && mData[cKey]) {
-                        mData[cKey].cashOut += fee;
-                    }
+                } else if (!isCogsBill && !t.isFromReconciliation) {
+                    mData[oKey].perfExp += amt;
                 }
             }
-        } else if (t.type === 'expense') {
-            if (!t.isCancelled && !t.isTaxOnly) {
-                const amt = Number(t.total) || 0;
-                const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
 
-                // --- 🔥 THE ULTIMATE FIX: เช็คความเชื่อมโยงก่อนจับยัดลงกราฟ ---
-                const isLinkedToValidIncome = t.linkedOrderNo && transactions.some(inc => 
-                    inc.type === 'income' && !inc.isCancelled && 
-                    (inc.orderId === t.linkedOrderNo || inc.sysDocId === t.linkedOrderNo)
-                );
-
-                if (oKey && mData[oKey] && !isCogsBill && !t.isFromReconciliation) {
-                    if (t.category === 'ค่าธรรมเนียม Platform') {
-                        if (!isLinkedToValidIncome) {
-                            mData[oKey].perfExp += amt;
-                            mData[oKey].perfNet -= amt;
-                        }
-                    } else {
-                        mData[oKey].perfExp += amt;
-                        mData[oKey].perfNet -= amt;
-                    }
-                }
-                if (sKey && mData[sKey] && t.status === 'paid' && !t.isFromReconciliation) {
-                    if (t.category === 'ค่าธรรมเนียม Platform') {
-                         if (!isLinkedToValidIncome) mData[sKey].cashOut += amt;
-                    } else {
-                         mData[sKey].cashOut += amt;
-                    }
+            if (sKey && mData[sKey] && t.status === 'paid') {
+                if (t.category === 'ค่าธรรมเนียม Platform') {
+                     // ignore
+                } else if (!t.isFromReconciliation) {
+                     mData[sKey].cashOut += amt;
                 }
             }
         }
     });
 
-    Object.values(mData).forEach(m => { m.cashNet = m.cashIn - m.cashOut; });
-    const maxPerf = Math.max(...Object.values(mData).map(m => Math.max(m.perfSales, m.perfExp, 1)));
+    Object.values(mData).forEach(m => { 
+        m.perfExpTotal = m.perfFees + m.perfExp - m.perfShippingBalance;
+        m.perfNet = m.perfSales - m.perfCogs - m.perfExpTotal;
+        m.cashNet = m.cashIn - m.cashOut; 
+    });
+    const maxPerf = Math.max(...Object.values(mData).map(m => Math.max(m.perfSales, m.perfExpTotal, 1)));
     const maxCash = Math.max(...Object.values(mData).map(m => Math.max(m.cashIn, m.cashOut, 1)));
 
     return { data: Object.values(mData), maxPerf, maxCash };
@@ -1130,10 +1194,10 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
-                    <StatCard title="ยอดขายรวม (Sales)" value={analytics.perf.sales} color="indigo" icon={<TrendingUp />} subtitle="รายรับรวมตามวันที่ลูกค้าสั่งซื้อ" />
-                    <StatCard title="รายจ่าย (Expense)" value={analytics.perf.expense} color="rose" icon={<TrendingDown />} subtitle="ค่าใช้จ่ายตามวันที่เกิดรายการ" />
-                    <StatCard title="สูญเสีย/ตีกลับ (Lost GMV)" value={analytics.perf.lostGmv} color="amber" icon={<AlertTriangle />} subtitle="ยอดขายที่ถูกยกเลิก/คืนเงิน" />
-                    <StatCard title="กำไรสุทธิ (Net Profit)" value={analytics.perf.netProfit} color="emerald" icon={<ProfitIcon />} subtitle="หักต้นทุนและค่าธรรมเนียมแพลตฟอร์ม" />
+                    <StatCard title="ยอดขายรวม (Sales)" value={analytics.perf.sales} color="indigo" icon={<TrendingUp />} subtitle="รายรับรวมตามวันที่ลูกค้าสั่งซื้อ" trend={analytics.trends.perfSales} />
+                    <StatCard title="รายจ่าย (Expense)" value={analytics.perf.expense} color="rose" icon={<TrendingDown />} subtitle="ค่าใช้จ่ายตามวันที่เกิดรายการ" trend={analytics.trends.perfExp} />
+                    <StatCard title="สูญเสีย/ตีกลับ (Lost GMV)" value={analytics.perf.lostGmv} color="amber" icon={<AlertTriangle />} subtitle="ยอดขายที่ถูกยกเลิก/คืนเงิน" trend={analytics.trends.lostGmv} />
+                    <StatCard title="กำไรสุทธิ (Net Profit)" value={analytics.perf.netProfit} color="emerald" icon={<ProfitIcon />} subtitle="หักต้นทุนและค่าธรรมเนียมแพลตฟอร์ม" trend={analytics.trends.perfNet} />
                 </div>
 
                 {/* --- 🔥 NEW: แถบกระทบยอดภาษีขาย (Tax Base Reconciliation) --- */}
@@ -1176,8 +1240,8 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                                              <div className="w-1/3 bg-indigo-500 rounded-t-md relative group-hover:bg-indigo-400 transition-colors cursor-pointer" style={{ height: `${(m.perfSales / monthlyStats.maxPerf) * 100}%`, minHeight: '4px' }}>
                                                  <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity bg-indigo-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.perfSales)}</span>
                                              </div>
-                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.perfExp / monthlyStats.maxPerf) * 100}%`, minHeight: '4px' }}>
-                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.perfExp)}</span>
+                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.perfExpTotal / monthlyStats.maxPerf) * 100}%`, minHeight: '4px' }}>
+                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.perfExpTotal)}</span>
                                              </div>
                                         </div>
                                         <span className="text-[10px] font-bold text-slate-500">{m.name}</span>
@@ -1230,7 +1294,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                                     <tr key={i} className="hover:bg-indigo-50/30 transition-colors group">
                                         <td className="p-4 font-bold text-slate-700">{m.name}</td>
                                         <td className="p-4 text-right font-black text-indigo-600">{formatCurrency(m.perfSales)}</td>
-                                        <td className="p-4 text-right font-bold text-rose-500">{formatCurrency(m.perfExp)}</td>
+                                        <td className="p-4 text-right font-bold text-rose-500">{formatCurrency(m.perfExpTotal)}</td>
                                         <td className="p-4 text-right font-black">
                                             <span className={m.perfNet >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
                                                 {m.perfNet > 0 ? '+' : ''}{formatCurrency(m.perfNet)}
@@ -1260,10 +1324,10 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 w-full">
-                    <StatCard title="เงินเข้าแล้ว (Settled)" value={analytics.cash.settled} color="emerald" icon={<Wallet />} subtitle="โอนเข้าบัญชีเรียบร้อยแล้ว" />
-                    <StatCard title="รอเงินโอน (Pending)" value={analytics.cash.pending} color="amber" icon={<Clock />} subtitle="ยอดค้างรับรวมจาก Platform" />
-                    <StatCard title="จ่ายออกแล้ว (Cash Out)" value={analytics.cash.expense} color="rose" icon={<TrendingDown />} subtitle="รายจ่ายที่ชำระเงินแล้ว" />
-                    <StatCard title="กระแสเงินสดสุทธิ (Net Cash)" value={analytics.cash.netCash} color="indigo" icon={<ProfitIcon />} subtitle="เงินเข้า หัก เงินออก" />
+                    <StatCard title="เงินเข้าแล้ว (Settled)" value={analytics.cash.settled} color="emerald" icon={<Wallet />} subtitle="โอนเข้าบัญชีเรียบร้อยแล้ว" trend={analytics.trends.cashSettled} />
+                    <StatCard title="รอเงินโอน (Pending)" value={analytics.cash.pending} color="amber" icon={<Clock />} subtitle="ยอดค้างรับรวมจาก Platform" trend={analytics.trends.cashPending} />
+                    <StatCard title="จ่ายออกแล้ว (Cash Out)" value={analytics.cash.expense} color="rose" icon={<TrendingDown />} subtitle="รายจ่ายที่ชำระเงินแล้ว" trend={analytics.trends.cashExp} />
+                    <StatCard title="กระแสเงินสดสุทธิ (Net Cash)" value={analytics.cash.netCash} color="indigo" icon={<ProfitIcon />} subtitle="เงินเข้า หัก เงินออก" trend={analytics.trends.cashNet} />
                 </div>
 
                 {/* NEW: แถบแสดงข้อมูลอ้างอิง (ต้นทุนสินค้าที่แฝงอยู่ในเงินที่รับเข้า) */}
@@ -4418,6 +4482,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   // --- NEW: Date Range Filter สำหรับดูยอดรับเข้า ---
   const [stockStartDate, setStockStartDate] = useState('');
   const [stockEndDate, setStockEndDate] = useState('');
+  const [stockSortType, setStockSortType] = useState('qty_desc'); // NEW: ตัวกรองการเรียงลำดับ Aging Stock
 
   const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
   const [targetProductEdit, setTargetProductEdit] = useState(null);
@@ -5023,6 +5088,22 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   };
 
   const inventory = useMemo(() => {
+    // --- NEW: หาประวัติการขายล่าสุดของแต่ละ SKU ---
+    const lastSoldMap = {};
+    transactions.forEach(t => {
+       if (t.type !== 'income' || t.isCancelled || t.isFromReconciliation) return;
+       const tDate = normalizeDate(t.date);
+       if (!tDate) return;
+       (t.items || []).forEach(item => {
+           const nameKey = String(item.desc || '').replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').trim();
+           const skuKey = (item.sku && item.sku !== '-') ? item.sku : '';
+           const groupKey = skuKey ? `${skuKey}::${nameKey}` : nameKey;
+           if (!lastSoldMap[groupKey] || tDate > lastSoldMap[groupKey]) {
+               lastSoldMap[groupKey] = tDate;
+           }
+       });
+    });
+
     const map = {};
     
     // ตั้งค่าวัดช่วงเวลา
@@ -5048,7 +5129,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               periodInbound: 0,
               batches: [], 
               category: batch.category || 'ทั่วไป',
-              isGiveaway: false
+              isGiveaway: false,
+              lastSoldDate: lastSoldMap[groupKey] || null, // NEW: เพิ่มข้อมูลวันที่ขายล่าสุด
+              daysSinceLastSold: lastSoldMap[groupKey] ? Math.floor((new Date() - lastSoldMap[groupKey]) / (1000 * 60 * 60 * 24)) : Infinity // NEW
           }; 
       }
       
@@ -5073,13 +5156,23 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       map[groupKey].batches.push({ ...batch, remaining });
     });
 
-    return Object.values(map)
+    const result = Object.values(map)
       .filter(item => 
           item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
           item.sku.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-      .sort((a,b) => b.totalQty - a.totalQty);
-  }, [stockBatches, searchTerm, stockStartDate, stockEndDate]);
+      );
+
+    // NEW: การเรียงลำดับตามตัวเลือก (Aging vs Qty)
+    if (stockSortType === 'aging') {
+        return result.sort((a, b) => {
+            if (a.totalQty <= 0 && b.totalQty > 0) return 1;
+            if (a.totalQty > 0 && b.totalQty <= 0) return -1;
+            return b.daysSinceLastSold - a.daysSinceLastSold;
+        });
+    }
+    
+    return result.sort((a,b) => b.totalQty - a.totalQty);
+  }, [stockBatches, searchTerm, stockStartDate, stockEndDate, transactions, stockSortType]);
 
   // NEW: ตัวกรองสำหรับหน้าต่างเลือกสินค้าเดิม
   const filteredPickerStock = useMemo(() => {
@@ -5467,6 +5560,16 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
             <input className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 outline-none text-slate-800 shadow-sm" placeholder="ค้นชื่อสินค้า หรือ SKU..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
           </div>
+          
+          {/* --- NEW: Dropdown เรียงลำดับ Aging Stock --- */}
+          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shrink-0 shadow-sm">
+              <Filter size={14} className="text-slate-400 shrink-0"/>
+              <select value={stockSortType} onChange={e=>setStockSortType(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-indigo-700 cursor-pointer focus:ring-0 p-0">
+                  <option value="qty_desc">เรียงตาม คงเหลือ (มากไปน้อย)</option>
+                  <option value="aging">เรียงตาม สินค้าค้างสต็อก (นิ่งนานสุด)</option>
+              </select>
+          </div>
+
           <button onClick={handleRecalculateStock} disabled={isProcessing} className="bg-amber-50 border border-amber-200 text-amber-600 hover:bg-amber-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all text-center shadow-sm" title="ดึงข้อมูลประวัติการขายมาคำนวณยอดคงเหลือใหม่">
             {isProcessing ? <Loader className="animate-spin" size={18}/> : <RefreshCw size={18}/>} ซิงค์ข้อมูลสต็อก
           </button>
@@ -5528,7 +5631,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                     <th className="p-5 text-right">Sell Price</th>
                     <th className="p-5 text-center">Margin (%)</th>
                     <th className="p-5 text-right whitespace-nowrap text-blue-600 bg-blue-50/30">รับเข้าช่วงนี้ (In)</th>
-                    <th className="p-5 text-right whitespace-nowrap">ขายแล้ว (Sold)</th>
+                    <th className="p-5 text-right whitespace-nowrap">ขายแล้ว / ขายล่าสุด</th>
                     <th className="p-5 text-right whitespace-nowrap">คงเหลือ (Qty)</th>
                     <th className="p-5 text-center">Action</th>
                 </tr>
@@ -5567,7 +5670,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                                     {item.periodInbound > 0 ? `+${item.periodInbound.toLocaleString()}` : '-'}
                                 </span>
                             </td>
-                            <td className="p-5 text-right font-bold text-emerald-600">{item.totalSold.toLocaleString()}</td>
+                            <td className="p-5 text-right">
+                                <p className="font-bold text-emerald-600">{item.totalSold.toLocaleString()}</p>
+                                {/* --- NEW: แสดงวันที่ขายได้ล่าสุด และแจ้งเตือนถ้านิ่งเกิน 90 วัน --- */}
+                                <p className={`text-[9px] font-bold mt-0.5 inline-flex w-fit px-1.5 py-0.5 rounded ${item.totalQty > 0 && item.daysSinceLastSold > 90 ? 'text-rose-600 bg-rose-100' : 'text-slate-400'}`} title={item.daysSinceLastSold !== Infinity ? `ขายไปเมื่อ ${item.daysSinceLastSold} วันที่แล้ว` : 'ไม่เคยขายได้เลย'}>
+                                    {item.lastSoldDate ? `ล่าสุด: ${formatDate(item.lastSoldDate)}` : 'ยังไม่เคยขาย'}
+                                </p>
+                            </td>
                             <td className="p-5 text-right text-right">
                                 <span className={`font-black ${item.totalQty < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{item.totalQty.toLocaleString()}</span>
                                 {item.totalQty < 0 && <span className="ml-2 text-[8px] bg-rose-100 text-rose-700 px-2 py-0.5 rounded uppercase font-black shadow-sm">ติดลบ</span>}
