@@ -171,7 +171,9 @@ const sortNewestFirst = (a, b) => {
 
   const createdA = a.createdAt?.seconds || 0;
   const createdB = b.createdAt?.seconds || 0;
-  return createdB - createdA;
+  if (createdA !== createdB) return createdB - createdA;
+  
+  return String(b.id || '').localeCompare(String(a.id || ''));
 };
 
 const sortOldestFirst = (a, b) => {
@@ -182,7 +184,9 @@ const sortOldestFirst = (a, b) => {
 
   const createdA = a.createdAt?.seconds || 0;
   const createdB = b.createdAt?.seconds || 0;
-  return createdA - createdB;
+  if (createdA !== createdB) return createdA - createdB;
+  
+  return String(a.id || '').localeCompare(String(b.id || ''));
 };
 
 const generateNextDocId = (items, prefix, field) => {
@@ -2716,7 +2720,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           let needed = Number(lItem.qty);
                           const batches = stockBatches
                               .filter(b => matchItemToBatch(lItem.sku, lItem.desc, b.sku, b.productName))
-                              .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+                              .sort(sortOldestFirst);
 
                           for (let i = 0; i < batches.length; i++) {
                               const b = batches[i];
@@ -2915,7 +2919,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 let needed = Number(item.qty);
                 const batches = stockSnap
                     .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
-                    .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+                    .sort(sortOldestFirst);
 
                 for (let i = 0; i < batches.length; i++) {
                     const b = batches[i];
@@ -4403,6 +4407,10 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [aiInsights, setAiInsights] = useState(null);
   const [isAnalyzingStock, setIsAnalyzingStock] = useState(false);
   
+  // --- NEW: Stock Sync Preview States ---
+  const [showSyncPreviewModal, setShowSyncPreviewModal] = useState(false);
+  const [syncPreviewData, setSyncPreviewData] = useState(null);
+
   // --- NEW: Stock Audit States ---
   const [showStockAuditModal, setShowStockAuditModal] = useState(false);
   const [auditResults, setAuditResults] = useState([]);
@@ -4513,21 +4521,21 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
               // 2. เพิ่มสต็อกไปให้ตัวปลายทาง (สร้างล็อตใหม่ด้วยต้นทุนเฉลี่ยที่ดึงมา)
               const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
-              batchWriter.set(newBatchRef, {
-                  productName: targetItem.name,
-                  sku: targetItem.sku,
-                  category: targetItem.category || 'อื่นๆ',
-                  quantity: qty,
-                  costPerUnit: avgCostTransferred, 
-                  sellPrice: targetItem.sellPrice || 0,
-                  date: new Date(),
-                  sold: 0,
-                  userId: user.uid,
-                  createdAt: serverTimestamp(),
-                  paymentStatus: 'paid',
-                  isAdjustment: true,
-                  adjustReason: `โอนย้ายมาจาก: ${adjustStockItem.name}`
-              });
+          batchWriter.set(newBatchRef, {
+              productName: adjustStockItem.name,
+              sku: adjustStockItem.sku,
+              category: adjustStockItem.category || 'อื่นๆ',
+              quantity: qty,
+              costPerUnit: 0, 
+              sellPrice: adjustStockItem.sellPrice || 0,
+              date: new Date(),
+              sold: 0,
+              userId: user.uid,
+              createdAt: serverTimestamp(),
+              paymentStatus: 'paid',
+              isAdjustment: true,
+              adjustReason: adjustData.reason
+          });
 
           } else if (adjustData.type === 'add') {
               // --- โหมดเพิ่มสต็อกปกติ ---
@@ -4551,7 +4559,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               // --- โหมดลดสต็อกปกติ ---
               let needed = qty;
               let totalCostLost = 0; // --- 🔥 FIX: เพิ่มตัวแปรคำนวณต้นทุนที่สูญเสีย ---
-              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort(sortOldestFirst);
 
               for (const b of availableBatches) {
                   if (needed <= 0) break;
@@ -4612,17 +4620,20 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       setIsProcessing(false);
   };
 
+  // --- 🔥 NEW: ฟังก์ชันจำลองการซิงค์สต็อก (Preview Mode) ---
   const handleRecalculateStock = async () => {
-    if (!window.confirm('ยืนยันการดึงข้อมูลประวัติการขายทั้งหมดมาคำนวณตัดสต็อก (FIFO) ใหม่?')) return;
     setIsProcessing(true);
     try {
-      // รีเซ็ตยอดขายของทุกล็อตให้เป็น 0 บนหน่วยความจำก่อน
-      let localBatches = stockBatches.map(b => ({ ...b, sold: 0 }));
+      showToast('กำลังจำลองการประมวลผล FIFO...', 'success');
+      // 1. จำลองข้อมูลล็อตทั้งหมด โดยรีเซ็ต sold เป็น 0 เพื่อคำนวณใหม่
+      let localBatches = stockBatches.map(b => ({ ...b, simulatedSold: 0, originalSold: Number(b.sold || 0) }));
       
-      // ดึงประวัติรายรับทั้งหมด เฉพาะรายการที่ "ไม่ถูกยกเลิก (!t.isCancelled)" และเรียงจากเก่าไปใหม่
+      // 2. ดึงประวัติรายรับทั้งหมด เฉพาะรายการที่ "ไม่ถูกยกเลิก (!t.isCancelled)" และเรียงจากเก่าไปใหม่
       const incomeTrans = transactions.filter(t => t.type === 'income' && !t.isCancelled).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
 
-      // คำนวณหักลบ FIFO ใหม่ทั้งหมด
+      const newDummies = [];
+
+      // 3. จำลองการตัดสต็อก (Simulation)
       incomeTrans.forEach(trans => {
         (trans.items || []).forEach(item => {
           let needed = Number(item.qty);
@@ -4630,12 +4641,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           
           const targetBatches = localBatches
             .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
-            .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+            .sort(sortOldestFirst);
 
           for (let i = 0; i < targetBatches.length; i++) {
             if (needed <= 0) break;
             const b = targetBatches[i];
-            const remaining = Number(b.quantity) - Number(b.sold);
+            const remaining = Number(b.quantity) - b.simulatedSold;
             
             let take = 0;
             // ล็อตสุดท้ายอนุญาตให้ตัดจนติดลบ
@@ -4646,17 +4657,14 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             }
             
             if (take > 0) {
-              b.sold += take;
+              b.simulatedSold += take;
               needed -= take;
             }
           }
           
           // ถ้าไม่มีล็อตเหลือเลย ให้สร้าง Dummy จำลองเพื่อไม่ให้ข้อมูลหายระหว่าง Recalculate
           if (needed > 0) {
-              const dummyId = `dummy_${Date.now()}_${Math.random()}`;
-              localBatches.push({
-                  id: dummyId,
-                  isNewDummy: true,
+              newDummies.push({
                   productName: item.desc,
                   sku: item.sku || '-',
                   category: 'อื่นๆ',
@@ -4664,49 +4672,122 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   costPerUnit: 0,
                   sellPrice: item.sellPrice || item.price || 0,
                   date: trans.date,
-                  sold: needed,
-                  userId: user.uid,
-                  createdAt: new Date(),
-                  paymentStatus: 'paid',
-                  isAdjustment: true,
-                  adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
+                  sold: needed, // ยอดที่จำลองว่าขาย
+                  originalSold: 0 // ไม่มีในของเดิม
               });
           }
         });
       });
 
-      // บันทึกยอดที่คำนวณใหม่ลง Firestore
-      let opsCount = 0;
-      let currentBatch = writeBatch(dbInstance);
-      for (const lb of localBatches) {
-        if (lb.isNewDummy) {
-            const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
-            const dataToSave = {...lb};
-            delete dataToSave.id;
-            delete dataToSave.isNewDummy;
-            currentBatch.set(dummyRef, dataToSave);
-        } else {
-            const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lb.id);
-            currentBatch.update(docRef, { sold: lb.sold });
-        }
-        
-        opsCount++;
-        // ป้องกันการ commit เกินขีดจำกัดของ Firebase Batch (500 ops)
-        if (opsCount >= 400) {
-          await currentBatch.commit();
-          currentBatch = writeBatch(dbInstance);
-          opsCount = 0;
-        }
-      }
-      if (opsCount > 0) {
-        await currentBatch.commit();
-      }
-      showToast('ซิงค์และดึงข้อมูลคำนวณสต็อกใหม่เรียบร้อยแล้ว', 'success');
+      // 4. สรุปผลส่วนต่าง (Diff Calculation) เทียบกับสต็อกปัจจุบัน
+      const diffMap = {};
+      const getMapKey = (sku, name) => `${sku || '-'}::${name}`;
+
+      // รวมยอดเดิมจากฐานข้อมูล
+      stockBatches.forEach(b => {
+          const key = getMapKey(b.sku, b.productName);
+          if (!diffMap[key]) diffMap[key] = { sku: b.sku || '-', name: b.productName, oldQty: 0, newQty: 0, batchesToUpdate: [], newDummiesToCreate: [] };
+          diffMap[key].oldQty += (Number(b.quantity) - Number(b.sold || 0));
+      });
+
+      // รวมยอดใหม่ที่จำลองขึ้น
+      localBatches.forEach(b => {
+          const key = getMapKey(b.sku, b.productName);
+          if (!diffMap[key]) diffMap[key] = { sku: b.sku || '-', name: b.productName, oldQty: 0, newQty: 0, batchesToUpdate: [], newDummiesToCreate: [] };
+          diffMap[key].newQty += (Number(b.quantity) - b.simulatedSold);
+
+          // เช็คว่าล็อตนี้มีการเปลี่ยนแปลงไหม ถ้ามีให้เตรียม Update
+          if (b.simulatedSold !== b.originalSold) {
+              diffMap[key].batchesToUpdate.push({ id: b.id, newSold: b.simulatedSold });
+          }
+      });
+
+      // รวมยอดจาก Dummy ที่ถูกสร้างขึ้นใหม่
+      newDummies.forEach(d => {
+          const key = getMapKey(d.sku, d.productName);
+          if (!diffMap[key]) diffMap[key] = { sku: d.sku || '-', name: d.productName, oldQty: 0, newQty: 0, batchesToUpdate: [], newDummiesToCreate: [] };
+          diffMap[key].newQty -= d.sold; // dummy quantity คือ 0 ดังนั้น ลบยอด sold เลย
+          diffMap[key].newDummiesToCreate.push(d);
+      });
+
+      // กรองเอาเฉพาะรายการที่มีการเปลี่ยนแปลง (Diff !== 0 หรือ มีการอัปเดตระดับล็อต)
+      const previewData = Object.values(diffMap)
+          .map(item => ({ ...item, diff: item.newQty - item.oldQty }))
+          .filter(item => item.diff !== 0 || item.batchesToUpdate.length > 0 || item.newDummiesToCreate.length > 0)
+          .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)); // เรียงลำดับตัวที่ดิฟเยอะสุดขึ้นก่อน
+
+      setSyncPreviewData(previewData);
+      setShowSyncPreviewModal(true);
+
     } catch (e) {
       console.error(e);
-      showToast('เกิดข้อผิดพลาดในการคำนวณสต็อก', 'error');
+      showToast('เกิดข้อผิดพลาดในการจำลองการคำนวณ', 'error');
     }
     setIsProcessing(false);
+  };
+
+  // --- 🔥 NEW: ฟังก์ชันยืนยันการเขียนข้อมูลลงฐานข้อมูลจริง ---
+  const executeSyncStock = async () => {
+      if (!syncPreviewData || !user) return;
+      setIsProcessing(true);
+      try {
+          let batch = writeBatch(dbInstance);
+          let opsCount = 0;
+
+          for (const item of syncPreviewData) {
+              // 1. อัปเดตล็อตเดิมที่มีการเปลี่ยนแปลงยอด sold
+              for (const b of item.batchesToUpdate) {
+                  const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+                  batch.update(docRef, { sold: b.newSold });
+                  opsCount++;
+
+                  if (opsCount >= 400) {
+                      await batch.commit();
+                      batch = writeBatch(dbInstance);
+                      opsCount = 0;
+                  }
+              }
+
+              // 2. สร้างล็อต Dummy ใหม่ (กรณีของหมดแต่มีบิลขาย)
+              for (const d of item.newDummiesToCreate) {
+                  const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+                  batch.set(dummyRef, {
+                      productName: d.productName,
+                      sku: d.sku,
+                      category: d.category,
+                      quantity: d.quantity,
+                      costPerUnit: d.costPerUnit,
+                      sellPrice: d.sellPrice,
+                      date: normalizeDate(d.date) || new Date(),
+                      sold: d.sold,
+                      userId: user.uid,
+                      createdAt: serverTimestamp(),
+                      paymentStatus: 'paid',
+                      isAdjustment: true,
+                      adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
+                  });
+                  opsCount++;
+
+                  if (opsCount >= 400) {
+                      await batch.commit();
+                      batch = writeBatch(dbInstance);
+                      opsCount = 0;
+                  }
+              }
+          }
+
+          if (opsCount > 0) {
+              await batch.commit();
+          }
+
+          showToast('ซิงค์และบันทึกยอดสต็อกใหม่สำเร็จ!', 'success');
+          setShowSyncPreviewModal(false);
+          setSyncPreviewData(null);
+      } catch (e) {
+          console.error(e);
+          showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูล', 'error');
+      }
+      setIsProcessing(false);
   };
 
   const handleStockImport = (e) => {
@@ -6028,13 +6109,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                     <th className="p-4 text-right">ส่วนต่าง (Diff)</th>
                     {/* --- FIX: เพิ่มคอลัมน์ Action --- */}
                     <th className="p-4 text-center">จัดการ</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {auditResults.length > 0 ? auditResults.map((item, i) => (
-                    <tr key={i} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="p-4">
-                        <div className="flex flex-col gap-1">
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {auditResults.length > 0 ? auditResults.map((item, i) => (
+                  <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="p-4">
+                      <div className="flex flex-col gap-1">
                           <span className="font-bold text-slate-700">{formatDate(item.date)}</span>
                           <span className="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded w-fit shadow-sm">{item.sysDocId}</span>
                           {item.taxInvoiceNo !== '-' && <span className="text-[9px] text-slate-400 font-bold">Ref: {item.taxInvoiceNo}</span>}
@@ -6085,6 +6166,70 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* --- NEW: Sync Preview Modal --- */}
+      {showSyncPreviewModal && syncPreviewData && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+                  <div className="flex justify-between items-start mb-6 border-b border-slate-100 pb-4">
+                      <div>
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><RefreshCw className="text-amber-500"/> ตรวจสอบยอดซิงค์สต็อก (Preview)</h3>
+                          <p className="text-xs text-slate-500 mt-1">ระบบจำลองการประมวลผล FIFO ใหม่ทั้งหมด นี่คือรายการสินค้าที่จะได้รับผลกระทบหากกดยืนยัน</p>
+                      </div>
+                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null);}} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
+                  </div>
+
+                  <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl bg-slate-50">
+                      {syncPreviewData.length > 0 ? (
+                          <table className="w-full text-xs text-left">
+                              <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                                  <tr>
+                                      <th className="p-3 pl-4">ชื่อสินค้า (Product)</th>
+                                      <th className="p-3 text-center">ยอดคงเหลือ (เดิม)</th>
+                                      <th className="p-3 text-center">ยอดคงเหลือ (คำนวณใหม่)</th>
+                                      <th className="p-3 text-right pr-6">ส่วนต่าง (Diff)</th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200 bg-white">
+                                  {syncPreviewData.map((item, idx) => (
+                                      <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                          <td className="p-3 pl-4">
+                                              <p className="font-bold text-slate-800">{item.name}</p>
+                                              <p className="text-[10px] text-slate-400 font-mono mt-0.5">SKU: {item.sku}</p>
+                                          </td>
+                                          <td className="p-3 text-center font-bold text-slate-500">{item.oldQty}</td>
+                                          <td className="p-3 text-center font-black text-slate-800">{item.newQty}</td>
+                                          <td className="p-3 text-right pr-6">
+                                              <span className={`px-2 py-1 rounded font-black text-[10px] ${item.diff > 0 ? 'bg-emerald-100 text-emerald-700' : item.diff < 0 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                  {item.diff > 0 ? '+' : ''}{item.diff !== 0 ? item.diff : 'เปลี่ยนแปลงระดับล็อต'}
+                                              </span>
+                                          </td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                      ) : (
+                          <div className="flex flex-col items-center justify-center h-full p-10 text-slate-400">
+                              <CheckCircle size={48} className="text-emerald-400 mb-3 opacity-50"/>
+                              <p className="font-bold text-slate-600 text-sm">ยอดเยี่ยม! ข้อมูลสมบูรณ์</p>
+                              <p className="text-xs mt-1">ระบบจำลองการทำงานแล้วพบว่า ยอดสต็อกปัจจุบันตรงกับประวัติการขาย 100% ไม่จำเป็นต้องซิงค์</p>
+                          </div>
+                      )}
+                  </div>
+
+                  <div className="pt-6 mt-4 border-t border-slate-100 flex justify-end gap-3 text-center">
+                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null);}} disabled={isProcessing} className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">
+                          {syncPreviewData.length > 0 ? 'ยกเลิก' : 'ปิดหน้าต่าง'}
+                      </button>
+                      {syncPreviewData.length > 0 && (
+                          <button onClick={executeSyncStock} disabled={isProcessing} className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg shadow-amber-200 transition-colors flex items-center gap-2 disabled:opacity-50">
+                              {isProcessing ? <Loader size={16} className="animate-spin"/> : <RefreshCw size={16}/>} ยืนยันการซิงค์ข้อมูลลงระบบ
+                          </button>
+                      )}
+                  </div>
+              </div>
+          </div>
       )}
     </div>
   );
@@ -8700,7 +8845,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   let needed = Number(item.qty);
                   const lots = stockSnap
                     .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
-                    .sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+                    .sort(sortOldestFirst);
 
                   for (let i = 0; i < lots.length; i++) {
                       const lot = lots[i];
@@ -8830,7 +8975,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       if (diff > 0) {
                           // ต้องตัดสต็อกเพิ่ม
                           let needed = diff;
-                          const lots = stockSnap.filter(b => matchItemToBatch(targetSku, targetDesc, b.sku, b.productName)).sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+                          const lots = stockSnap.filter(b => matchItemToBatch(targetSku, targetDesc, b.sku, b.productName)).sort(sortOldestFirst);
                           for (let i = 0; i < lots.length; i++) {
                               const lot = lots[i];
                               if (needed <= 0) break;
@@ -9824,36 +9969,39 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       <div className="flex items-center min-h-[32px]">
                           <label className="text-xs font-bold text-indigo-500 uppercase tracking-wide flex items-center gap-1 text-left"><Hash size={14}/> {formData.type === 'expense' ? 'อ้างอิง Order ID (ถ้ามี)' : 'Order ID'}</label>
                       </div>
-                      <input placeholder={formData.type === 'expense' ? "เชื่อมกับออเดอร์รายรับ..." : "ระบุเลขที่คำสั่งซื้อ..."} value={formData.orderId} onChange={e=>setFormData({...formData, orderId: e.target.value})} className="w-full bg-white p-3 rounded-xl border border-slate-200 text-sm font-bold text-indigo-700 outline-none focus:ring-2 focus:ring-indigo-100 transition-all shadow-sm text-left"/>
+                      <input placeholder={formData.type === 'expense' ? "เชื่อมกับออเดอร์รายรับ..." : "ระบุเลขที่คำสั่งซื้อ..."} value={formData.orderId} onChange={e=>setFormData({...formData, orderId: e.target.value})} className="w-full h-[46px] bg-white px-4 rounded-xl border border-slate-200 text-sm font-bold text-indigo-700 outline-none focus:ring-2 focus:ring-indigo-100 transition-all shadow-sm text-left"/>
                   </div>
                   
                   {formData.type === 'expense' ? (
                       <>
-                          <div className="space-y-1.5 text-left md:col-span-1 lg:col-span-1">
-                              <div className="flex justify-between items-center min-h-[32px] text-left">
-                                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 text-left"><FileText size={14}/> เลขที่ใบกำกับภาษี</label>
-                                  <label className="flex items-center gap-1.5 cursor-pointer bg-white px-2 py-1 rounded-lg shadow-sm border border-slate-200 hover:bg-rose-50 transition-colors">
-                                      <input type="checkbox" checked={formData.isCashBill} onChange={e => {
-                                          const checked = e.target.checked;
-                                          setFormData(prev => ({
-                                              ...prev, 
-                                              isCashBill: checked, 
-                                              taxInvoiceNo: checked ? '' : prev.taxInvoiceNo,
-                                              vatType: checked ? 'none' : prev.vatType
-                                          }));
-                                      }} className="w-3.5 h-3.5 rounded text-rose-500 focus:ring-rose-500 border-slate-300 cursor-pointer" />
-                                      <span className="text-[10px] font-black text-rose-600 uppercase">ไม่มี VAT</span>
-                                  </label>
+                          {/* --- 🔥 NEW: แยกประเภทเอกสารรายจ่ายอย่างชัดเจน --- */}
+                          <div className="space-y-1.5 text-left md:col-span-2 lg:col-span-2">
+                              <div className="flex items-center min-h-[32px] text-left">
+                                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 text-left"><FileText size={14}/> ประเภทเอกสารรายจ่าย / เลขที่อ้างอิง</label>
                               </div>
-                              <input disabled={formData.isCashBill} placeholder={formData.isCashBill ? "ไม่ต้องระบุ (บิลเงินสด)" : "ระบุเลขที่ใบกำกับภาษี..."} value={formData.taxInvoiceNo} onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} className={`w-full p-3 rounded-xl border text-sm font-bold outline-none transition-all shadow-sm text-left ${formData.isCashBill ? 'bg-slate-100 border-slate-200 text-slate-400' : 'bg-white border-slate-200 text-slate-700 focus:ring-2 focus:ring-indigo-100'}`}/>
+                              <div className="flex flex-col xl:flex-row gap-2">
+                                  <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200 shrink-0 h-[46px]">
+                                      <button type="button" onClick={() => setFormData({...formData, expenseDocType: 'tax_invoice', isCashBill: false})} className={`px-4 text-xs font-bold rounded-lg transition-all h-full ${formData.expenseDocType === 'tax_invoice' || !formData.expenseDocType ? 'bg-indigo-50 text-indigo-700 shadow-sm border border-indigo-100' : 'text-slate-500 hover:text-slate-700'}`}>ใบกำกับภาษี</button>
+                                      <button type="button" onClick={() => setFormData({...formData, expenseDocType: 'receipt', isCashBill: true, vatType: 'none'})} className={`px-4 text-xs font-bold rounded-lg transition-all h-full ${formData.expenseDocType === 'receipt' ? 'bg-teal-50 text-teal-700 shadow-sm border border-teal-100' : 'text-slate-500 hover:text-slate-700'}`}>ใบเสร็จ/บิลเงินสด</button>
+                                      <button type="button" onClick={() => setFormData({...formData, expenseDocType: 'no_bill', isCashBill: true, vatType: 'none', taxInvoiceNo: ''})} className={`px-4 text-xs font-bold rounded-lg transition-all h-full ${formData.expenseDocType === 'no_bill' ? 'bg-rose-50 text-rose-700 shadow-sm border border-rose-100' : 'text-slate-500 hover:text-slate-700'}`}>ไม่มีบิล</button>
+                                  </div>
+                                  
+                                  {formData.expenseDocType !== 'no_bill' && (
+                                      <input 
+                                          placeholder={formData.expenseDocType === 'receipt' ? "ระบุเลขที่บิล/ใบเสร็จ..." : "ระบุเลขที่ใบกำกับภาษี..."} 
+                                          value={formData.taxInvoiceNo} 
+                                          onChange={e=>setFormData({...formData, taxInvoiceNo: e.target.value})} 
+                                          className="w-full h-[46px] bg-white px-4 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100 transition-all shadow-sm text-left flex-1"
+                                      />
+                                  )}
+                              </div>
                           </div>
 
-                          {/* --- FIX: เพิ่มช่องให้ปรับแก้สถานะการจ่ายเงิน (Paid/Unpaid) ได้ในหมวดรายจ่าย --- */}
                           <div className="space-y-1.5 text-left md:col-span-1 lg:col-span-1">
                               <div className="flex items-center min-h-[32px] text-left">
                                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 text-left"><Wallet size={14}/> สถานะการจ่ายเงิน</label>
                               </div>
-                              <select value={formData.status || 'paid'} onChange={e=>setFormData({...formData, status: e.target.value})} className={`w-full p-3 rounded-xl border text-sm font-bold outline-none focus:ring-2 transition-all shadow-sm cursor-pointer text-left ${formData.status === 'unpaid' ? 'bg-amber-50 border-amber-200 text-amber-700 focus:ring-amber-200' : 'bg-emerald-50 border-emerald-200 text-emerald-700 focus:ring-emerald-200'}`}>
+                              <select value={formData.status || 'paid'} onChange={e=>setFormData({...formData, status: e.target.value})} className={`w-full h-[46px] px-4 rounded-xl border text-sm font-bold outline-none focus:ring-2 transition-all shadow-sm cursor-pointer text-left ${formData.status === 'unpaid' ? 'bg-amber-50 border-amber-200 text-amber-700 focus:ring-amber-200' : 'bg-emerald-50 border-emerald-200 text-emerald-700 focus:ring-emerald-200'}`}>
                                   <option value="paid">✅ จ่ายเงินแล้ว</option>
                                   <option value="unpaid">⏳ ค้างชำระ (เครดิต)</option>
                               </select>
@@ -12066,8 +12214,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           const zip = new window.JSZip();
           const opt = {
               margin: 0,
-              image: { type: 'jpeg', quality: 0.98 },
-              html2canvas: { scale: 2, useCORS: true, allowTaint: true, letterRendering: true },
+              image: { type: 'jpeg', quality: 0.92 }, // ปรับ Quality เป็น 0.92 ช่วยให้เข้ารหัสภาพเร็วขึ้น
+              html2canvas: { scale: 1.5, useCORS: true, allowTaint: true, letterRendering: true }, // ลด scale เหลือ 1.5 ลดเวลาวาด Canvas ลงครึ่งนึง (คุณภาพยังชัดเจนสำหรับ A4)
               jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
           };
 
@@ -12076,7 +12224,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
               setBulkStatus({ current: i + 1, total: docsToDownload.length, message: `กำลังประมวลผล PDF ของ ${docItem.invNo}...` });
               
               setCurrentBulkPrintDoc(docItem);
-              await new Promise(res => setTimeout(res, 600)); 
+              await new Promise(res => setTimeout(res, 50)); // ลดเวลาหน่วงรอ React Render จาก 600ms เป็น 50ms
 
               const element = document.getElementById('bulk-invoice-preview-area');
               if (!element) continue;
@@ -12377,7 +12525,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           if (historyFilter !== 'all') {
               if (historyFilter === 'pending' && doc.source !== 'transaction') return false;
               if (historyFilter === 'cancelled' && doc.status !== 'cancelled') return false;
-              if (historyFilter === 'invoice' && !(doc.source === 'invoice' && doc.docType !== 'credit_note' && doc.docType !== 'quotation' && doc.docType !== 'receipt' && doc.docType !== 'payment_voucher' && doc.status !== 'cancelled')) return false;
+              if (historyFilter === 'invoice' && !(doc.source === 'invoice' && (!doc.docType || doc.docType === 'invoice') && doc.status !== 'cancelled')) return false;
+              if (historyFilter === 'abb' && !(doc.source === 'invoice' && doc.docType === 'abb' && doc.status !== 'cancelled')) return false;
               if (historyFilter === 'credit_note' && !(doc.source === 'invoice' && doc.docType === 'credit_note' && doc.status !== 'cancelled')) return false;
               if (historyFilter === 'quotation' && !(doc.source === 'invoice' && doc.docType === 'quotation' && doc.status !== 'cancelled')) return false;
               if (historyFilter === 'receipt' && !(doc.source === 'invoice' && doc.docType === 'receipt' && doc.status !== 'cancelled')) return false;
@@ -13125,7 +13274,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                     <div className="flex bg-slate-100 p-1 rounded-xl overflow-x-auto shrink-0">
                         <button onClick={() => setHistoryFilter('all')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ทั้งหมด</button>
                         <button onClick={() => setHistoryFilter('pending')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'pending' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รอออกเอกสาร</button>
-                        <button onClick={() => setHistoryFilter('invoice')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'invoice' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ใบกำกับ/ABB</button>
+                        <button onClick={() => setHistoryFilter('invoice')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'invoice' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ใบกำกับ (INV)</button>
+                        <button onClick={() => setHistoryFilter('abb')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'abb' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>อย่างย่อ (ABB)</button>
                         <button onClick={() => setHistoryFilter('receipt')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'receipt' ? 'bg-white text-teal-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ใบเสร็จ</button>
                         <button onClick={() => setHistoryFilter('payment_voucher')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'payment_voucher' ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ใบสำคัญจ่าย</button>
                         <button onClick={() => setHistoryFilter('quotation')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'quotation' ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ใบเสนอราคา</button>
