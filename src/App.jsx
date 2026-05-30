@@ -1573,12 +1573,12 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       let shipBuyerRow = 0, shipSubsidyRow = 0, shipEstRow = 0, shipReturnRow = 0;
 
       if (platform === 'tiktok') {
-          let totalFeeVal = getExactRowValAbs(row, ['Total Fees', 'ค่าธรรมเนียมรวม', 'รวมค่าธรรมเนียม']);
+          let totalFeeVal = getExactRowValAbs(row, ['Total Fees', 'ค่าธรรมเนียมรวม', 'รวมค่าธรรมเนียม', 'ค่าธรรมเนียมแพลตฟอร์มรวม', 'Total Platform Fee']);
           if (totalFeeVal === 0) {
-              let t1 = getExactRowValAbs(row, ['Transaction fee', 'Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee']);
-              let t2 = getExactRowValAbs(row, ['TikTok Shop commission fee', 'ค่าคอมมิชชันของ TikTok Shop', 'Platform Commission']);
-              let t3 = getExactRowValAbs(row, ['Affiliate Commission', 'ค่าคอมมิชชันของพันธมิตร']);
-              let t4 = getExactRowValAbs(row, ['Commerce growth fee', 'ค่าธรรมเนียม Commerce growth']);
+              let t1 = getExactRowValAbs(row, ['Transaction fee', 'Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน']);
+              let t2 = getExactRowValAbs(row, ['TikTok Shop commission fee', 'ค่าคอมมิชชันของ TikTok Shop', 'Platform Commission', 'ค่าคอมมิชชันแพลตฟอร์ม', 'Commission Fee']);
+              let t3 = getExactRowValAbs(row, ['Affiliate Commission', 'ค่าคอมมิชชันของพันธมิตร', 'ค่าคอมมิชชั่นพันธมิตร', 'Affiliate fee']);
+              let t4 = getExactRowValAbs(row, ['Commerce growth fee', 'ค่าธรรมเนียม Commerce growth', 'ค่าธรรมเนียมการเติบโต', 'Growth fee']);
               totalFeeVal = t1 + t2 + t3 + t4;
           }
 
@@ -1588,11 +1588,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           infraRow = 0;
           serv = 0;
 
-          let sellerShip = getExactRowValAbs(row, ['Seller shipping fee', 'ค่าจัดส่งของผู้ขาย']);
-          let actualShip = getExactRowValAbs(row, ['Actual shipping fee', 'ค่าจัดส่งตามจริง']);
+          let sellerShip = getExactRowValAbs(row, ['Seller shipping fee', 'ค่าจัดส่งของผู้ขาย', 'Shipping fee borne by seller', 'ค่าจัดส่งที่ผู้ขายรับภาระ']);
+          let actualShip = getExactRowValAbs(row, ['Actual shipping fee', 'ค่าจัดส่งตามจริง', 'Actual Shipping', 'ค่าจัดส่งจริง']);
           
           shipEstRow = actualShip > 0 ? actualShip : sellerShip;
-          shipSubsidyRow = getExactRowValAbs(row, ['Platform shipping fee discount', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม']);
+          shipSubsidyRow = getExactRowValAbs(row, ['Platform shipping fee discount', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม', 'Platform Shipping Subsidy', 'เงินอุดหนุนค่าจัดส่ง']);
           
           shipBuyerRow = 0; 
           shipReturnRow = 0; 
@@ -1989,27 +1989,27 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
     },
     tiktok: {
         orderId: ['Order ID', 'หมายเลขคำสั่งซื้อ', 'Order number'],
-        status: ['Order Status', 'สถานะ', 'สถานะคำสั่งซื้อ'],
+        status: ['Order Status', 'สถานะ', 'สถานะคำสั่งซื้อ', 'Status'],
         cancelReason: ['เหตุผลการยกเลิก', 'Cancel Reason'],
         orderDate: ['Order Creation Time', 'Created Time', 'เวลาที่สร้างคำสั่งซื้อ', 'เวลาที่สร้าง'],
         settleDate: ['Payment Time', 'วันที่ชำระเงิน', 'เวลาชำระเงิน', 'Settlement Time'],
         price: ['Product Price', 'ราคาขาย', 'Unit Price', 'ราคาปกติ'],
         qty: ['Quantity', 'จำนวน', 'Qty'],
-        sellerDiscount: ['Seller Discount', 'ส่วนลดจากผู้ขาย'],
-        transFee: ['Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee'],
-        commFee: ['Platform Commission', 'ค่าคอมมิชชั่น', 'Commission'],
-        servFee: ['Service Fee', 'ค่าธรรมเนียมบริการ', 'Affiliate Commission'],
+        sellerDiscount: ['Seller Discount', 'ส่วนลดจากผู้ขาย', 'ส่วนลดร้านค้า', 'Merchant Discount'],
+        transFee: ['Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน', 'Fee'],
+        commFee: ['Platform Commission', 'ค่าคอมมิชชั่น', 'Commission', 'TikTok Shop commission fee', 'ค่าคอมมิชชันของ TikTok Shop'],
+        servFee: ['Service Fee', 'ค่าธรรมเนียมบริการ', 'Affiliate Commission', 'ค่าคอมมิชชันของพันธมิตร'],
         shipping: ['Shipping Address', 'ที่อยู่จัดส่ง', 'Detail Address'],
         buyer: ['Buyer Name', 'ชื่อผู้ซื้อ', 'Customer Name'],
         product: ['Product Name', 'ชื่อสินค้า'],
         sku: ['เลข SKU', 'Seller SKU', 'Seller SKU ID', 'Product SKU', 'SKU', 'รหัสสินค้าในร้าน', 'Option SKU', 'รหัสสินค้า'],
         courier: ['Shipping Provider', 'ผู้จัดส่ง', 'Delivery Option'],
         trackingNo: ['Tracking ID', 'หมายเลขติดตามพัสดุ', 'Tracking Number'],
-        shippingFeeByBuyer: ['Customer Shipping Fee', 'ค่าจัดส่งที่ลูกค้าชำระ', 'Shipping Fee Paid by Customer'],
-        shippingFeeSubsidy: ['Platform Shipping Subsidy', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม', 'Shipping Discount'],
-        estimatedShippingFee: ['Estimated Shipping Fee', 'ค่าจัดส่งโดยประมาณ', 'Shipping fee borne by seller', 'ค่าจัดส่งที่เรียกเก็บจากผู้ขาย'],
+        shippingFeeByBuyer: ['Customer Shipping Fee', 'ค่าจัดส่งที่ลูกค้าชำระ', 'Shipping Fee Paid by Customer', 'ค่าจัดส่ง(ผู้ซื้อ)'],
+        shippingFeeSubsidy: ['Platform Shipping Subsidy', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม', 'Shipping Discount', 'ส่วนลดค่าจัดส่ง (Platform)', 'Platform shipping fee discount', 'เงินอุดหนุนค่าจัดส่ง'],
+        estimatedShippingFee: ['Estimated Shipping Fee', 'ค่าจัดส่งโดยประมาณ', 'Shipping fee borne by seller', 'ค่าจัดส่งที่เรียกเก็บจากผู้ขาย', 'Seller shipping fee', 'ค่าจัดส่งของผู้ขาย', 'Actual shipping fee', 'ค่าจัดส่งตามจริง'],
         returnShippingFee: ['Return Shipping Fee', 'ค่าจัดส่งสินค้าคืน'],
-        refundAmount: ['Refund Amount', 'Customer Refund', 'ยอดเงินคืนลูกค้า'],
+        refundAmount: ['Refund Amount', 'Customer Refund', 'ยอดเงินคืนลูกค้า', 'ยอดคืนเงิน', 'Refund'],
         shopName: ['ชื่อร้านค้า', 'Shop Name', 'ร้านค้า']
     }
   };
@@ -11077,7 +11077,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                                 <AlertTriangle size={8}/> รอระบุเลขใบกำกับ
                                             </span>
                                         )}
-                                        {(t.isReturned || t.refundAmount > 0) && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-pink-100 text-pink-700 border border-pink-200 flex items-center gap-0.5"><ArrowRightLeft size={8}/> {t.isCancelled ? 'ยกเลิก/คืนสินค้า' : 'คืนสินค้า/เงิน'}</span>}
+                                        
+                                        {/* --- 🔥 FIX: ปรับแก้ Badge การคืนเงินให้แสดง Partial Refund ชัดเจนขึ้น --- */}
+                                        {(t.isReturned || t.refundAmount > 0) && (
+                                            <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-pink-100 text-pink-700 border border-pink-200 flex items-center gap-0.5">
+                                                {t.isReturned ? <ArrowRightLeft size={8}/> : <AlertTriangle size={8}/>} 
+                                                {t.isReturned ? (t.isCancelled ? 'ยกเลิก/คืนสินค้า' : 'คืนสินค้า/เงิน') : 'มีการคืนเงินบางส่วน'}
+                                                {t.refundAmount > 0 && !t.isReturned ? ` (${formatCurrency(t.refundAmount)} ฿)` : ''}
+                                            </span>
+                                        )}
+
                                         {!t.isCancelled && t.isTaxOnly && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-purple-100 text-purple-700 border border-purple-200">ยื่นภาษีเท่านั้น</span>}
                                     </div>
 
@@ -12309,62 +12318,112 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
       setIsBulkProcessing(true);
       
-      if (!window.html2pdf || !window.JSZip) {
-        setBulkStatus({ current: 0, total: 0, message: 'กำลังโหลดไลบรารีช่วยดาวน์โหลด...' });
+      // โหลดเอนจินโดยตรง (ตัด html2pdf ที่ทำงานซ้ำซ้อนทิ้ง)
+      if (!window.html2canvas || !window.jspdf || !window.JSZip) {
+        setBulkStatus({ current: 0, total: 0, message: 'กำลังโหลดเอนจินดาวน์โหลดความเร็วสูง...' });
         const loadScript = (src) => new Promise(res => {
           const s = document.createElement('script');
           s.src = src; s.onload = res; document.body.appendChild(s);
         });
-        await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js");
+        await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+        await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
         await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js");
       }
 
       try {
-          const zip = new window.JSZip();
-          const opt = {
-              margin: 0,
-              image: { type: 'jpeg', quality: 0.92 }, // ปรับ Quality เป็น 0.92 ช่วยให้เข้ารหัสภาพเร็วขึ้น
-              html2canvas: { scale: 1.5, useCORS: true, allowTaint: true, letterRendering: true }, // ลด scale เหลือ 1.5 ลดเวลาวาด Canvas ลงครึ่งนึง (คุณภาพยังชัดเจนสำหรับ A4)
-              jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-          };
+          // 🔥 NEW: ระบบแบ่งโหลดอัตโนมัติ (Auto-Chunking) ทีละ 50 ออเดอร์
+          const CHUNK_SIZE = 50; 
+          const totalChunks = Math.ceil(docsToDownload.length / CHUNK_SIZE);
+          const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
 
-          for (let i = 0; i < docsToDownload.length; i++) {
-              const docItem = docsToDownload[i];
-              setBulkStatus({ current: i + 1, total: docsToDownload.length, message: `กำลังประมวลผล PDF ของ ${docItem.invNo}...` });
+          for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+              const zip = new window.JSZip();
+              const startIdx = chunkIndex * CHUNK_SIZE;
+              const endIdx = Math.min(startIdx + CHUNK_SIZE, docsToDownload.length);
+              const currentChunkDocs = docsToDownload.slice(startIdx, endIdx);
+
+              for (let i = 0; i < currentChunkDocs.length; i++) {
+                  const docItem = currentChunkDocs[i];
+                  const globalIndex = startIdx + i + 1;
+                  
+                  setBulkStatus({ 
+                      current: globalIndex, 
+                      total: docsToDownload.length, 
+                      message: `[ชุดที่ ${chunkIndex + 1}/${totalChunks}] กำลังสร้าง PDF: ${docItem.invNo}...` 
+                  });
+                  
+                  setCurrentBulkPrintDoc(docItem);
+                  
+                  // รอให้ React วาดข้อมูลลงบนหน้าจอ
+                  await new Promise(res => setTimeout(res, 50));
+
+                  const element = document.getElementById('bulk-invoice-preview-area');
+                  if (!element) continue;
+
+                  // ปิดแสงเงาชั่วคราวเพื่อลดภาระ CPU
+                  const originalBoxShadow = element.style.boxShadow;
+                  element.style.boxShadow = 'none';
+
+                  const generatePdfBlob = async (badgeText) => {
+                      const badge = element.querySelector('.status-badge-bulk');
+                      const oldText = badge ? badge.innerText : '';
+                      if (badge) badge.innerText = badgeText;
+
+                      const canvas = await window.html2canvas(element, {
+                          scale: 1.2, 
+                          useCORS: true,
+                          logging: false,
+                          imageTimeout: 300, 
+                          backgroundColor: "#ffffff"
+                      });
+
+                      if (badge) badge.innerText = oldText;
+
+                      const imgData = canvas.toDataURL('image/jpeg', 0.85); 
+                      const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+                      const pdfWidth = pdf.internal.pageSize.getWidth();
+                      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+                      
+                      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+                      return pdf.output('blob');
+                  };
+
+                  const folder = zip.folder(docItem.invNo);
+
+                  const originalBlob = await generatePdfBlob("ต้นฉบับ (Original)");
+                  folder.file(`${docItem.invNo}_Original.pdf`, originalBlob);
+
+                  const copyBlob = await generatePdfBlob("สำเนา (Copy)");
+                  folder.file(`${docItem.invNo}_Copy.pdf`, copyBlob);
+
+                  element.style.boxShadow = originalBoxShadow;
+                  
+                  // ล้างความจำเพื่อป้องกันเบราว์เซอร์หน่วง
+                  await new Promise(res => setTimeout(res, 10));
+              }
+
+              setBulkStatus({ 
+                  current: endIdx, 
+                  total: docsToDownload.length, 
+                  message: `กำลังบันทึกไฟล์ ZIP ชุดที่ ${chunkIndex + 1}...` 
+              });
               
-              setCurrentBulkPrintDoc(docItem);
-              await new Promise(res => setTimeout(res, 50)); // ลดเวลาหน่วงรอ React Render จาก 600ms เป็น 50ms
-
-              const element = document.getElementById('bulk-invoice-preview-area');
-              if (!element) continue;
-
-              const folderName = docItem.invNo;
-              const folder = zip.folder(docItem.invNo);
-
-              opt.filename = `${docItem.invNo}_Original.pdf`;
-              const originalBlob = await window.html2pdf().set(opt).from(element).output('blob');
-              folder.file(`${docItem.invNo}_Original.pdf`, originalBlob);
-
-              const badge = element.querySelector('.status-badge-bulk');
-              const oldText = badge.innerText;
-              badge.innerText = "สำเนา (Copy)";
+              const content = await zip.generateAsync({ type: "blob", compression: "STORE" });
+              const link = document.createElement('a');
+              link.href = URL.createObjectURL(content);
               
-              opt.filename = `${docItem.invNo}_Copy.pdf`;
-              const copyBlob = await window.html2pdf().set(opt).from(element).output('blob');
-              folder.file(`${docItem.invNo}_Copy.pdf`, copyBlob);
+              // ตั้งชื่อไฟล์ระบุ Part ชัดเจน เช่น Bulk_Documents_Part1_...
+              const partSuffix = totalChunks > 1 ? `_Part${chunkIndex + 1}` : '';
+              link.download = `Bulk_Documents${partSuffix}_${timestampStr}.zip`;
+              link.click();
 
-              badge.innerText = oldText; 
+              // พักหายใจ 1.5 วินาทีให้ Garbage Collector ของ Chrome ล้าง RAM ก่อนลุยชุดต่อไป
+              if (chunkIndex < totalChunks - 1) {
+                  await new Promise(res => setTimeout(res, 1500));
+              }
           }
 
-          setBulkStatus({ current: docsToDownload.length, total: docsToDownload.length, message: 'กำลังบีบอัดไฟล์ ZIP...' });
-          const content = await zip.generateAsync({ type: "blob" });
-          const link = document.createElement('a');
-          link.href = URL.createObjectURL(content);
-          const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
-          link.download = `Bulk_Documents_${timestampStr}.zip`;
-          link.click();
-
-          showToast(`ดาวน์โหลด ${docsToDownload.length} เอกสารสำเร็จ`, "success");
+          showToast(`ดาวน์โหลดสำเร็จทั้งหมด ${totalChunks} ไฟล์ ZIP`, "success");
           setSelectedDocIds([]);
       } catch(e) {
           console.error(e);
