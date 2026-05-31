@@ -841,6 +841,8 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 else if (matchPrevOrderMonth) prevLostGmv += itemSubtotal;
             }
         } else if (t.type === 'expense' && !t.isCancelled && !t.isTaxOnly) {
+            if (t.category === 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') return; // 🔥 ป้องกันไม่ให้รายจ่ายส่วนตัวดึงกำไรธุรกิจตก
+            
             const amt = Number(t.total) || 0;
             const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
             const isLinkedToValidIncome = t.linkedOrderNo && transactions.some(inc => 
@@ -990,6 +992,8 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                 }
             }
         } else if (t.type === 'expense' && !t.isCancelled && !t.isTaxOnly) {
+            if (t.category === 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') return; // 🔥 ป้องกันไม่ให้รายจ่ายส่วนตัวดึงกำไรธุรกิจตก
+            
             const amt = Number(t.total) || 0;
             const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
 
@@ -7692,9 +7696,135 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   // --- NEW: Smart Edit Confirm State ---
   const [confirmSmartEditMatch, setConfirmSmartEditMatch] = useState(null);
 
+  // --- NEW: Statement States & Logic ---
+  const [statementMonth, setStatementMonth] = useState(() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  const statementData = useMemo(() => {
+      if (!statementMonth) return null;
+      const [y, m] = statementMonth.split('-');
+      const startOfMonth = new Date(y, m - 1, 1);
+      const endOfMonth = new Date(y, m, 0, 23, 59, 59, 999);
+
+      let beginningBalance = 0;
+      const currentMonthRecords = [];
+
+      transactions.forEach(t => {
+          if (t.isCancelled || t.isTaxOnly) return; 
+          
+          // สำหรับสมุดบัญชี จะข้ามรายการที่มี isFromReconciliation = true เพื่อไม่ให้ค่าธรรมเนียม/ส่วนต่างที่ระบบสร้างมาหักซ้ำซ้อนกับยอด net (actualSettledAmt) ที่รับมาแล้ว
+          if (t.isFromReconciliation && t.category !== 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') return;
+
+          let cashDate = null;
+          let isCashIn = false;
+          let isCashOut = false;
+          let amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+
+          if (t.type === 'income' && t.paymentStatus === 'settled') {
+              cashDate = normalizeDate(t.settlementDate || t.date);
+              isCashIn = true;
+              if (t.actualSettledAmt !== undefined) {
+                  amt = Number(t.actualSettledAmt);
+              }
+          } else if (t.type === 'expense' && t.status === 'paid') {
+              cashDate = normalizeDate(t.date);
+              isCashOut = true;
+          }
+
+          if (!cashDate) return;
+
+          if (cashDate < startOfMonth) {
+              if (isCashIn) beginningBalance += amt;
+              if (isCashOut) beginningBalance -= amt;
+          } else if (cashDate >= startOfMonth && cashDate <= endOfMonth) {
+              currentMonthRecords.push({
+                  ...t,
+                  cashDate,
+                  cashIn: isCashIn ? amt : 0,
+                  cashOut: isCashOut ? amt : 0
+              });
+          }
+      });
+
+      currentMonthRecords.sort((a, b) => a.cashDate - b.cashDate);
+
+      let runningBalance = beginningBalance;
+      const recordsWithBalance = currentMonthRecords.map(r => {
+          runningBalance += r.cashIn;
+          runningBalance -= r.cashOut;
+          return { ...r, runningBalance };
+      });
+
+      return {
+          beginningBalance,
+          endingBalance: runningBalance,
+          records: recordsWithBalance
+      };
+  }, [transactions, statementMonth]);
+
   // --- NEW: PDF Password States ---
   const [newPdfPassword, setNewPdfPassword] = useState('');
   const [historyPdfPassword, setHistoryPdfPassword] = useState('');
+
+  // --- 🔥 NEW: Personal Expense States & Function ---
+  const [showPersonalExpenseModal, setShowPersonalExpenseModal] = useState(false);
+  const [personalExpenseForm, setPersonalExpenseForm] = useState({ date: formatDateISO(new Date()), description: '', amount: '' });
+  const [isSavingPersonal, setIsSavingPersonal] = useState(false);
+
+  const handleSavePersonalExpense = async (e) => {
+      e.preventDefault();
+      if (!user) return;
+      if (!personalExpenseForm.description || !personalExpenseForm.amount) {
+          showToast("กรุณากรอกข้อมูลให้ครบถ้วน", "error");
+          return;
+      }
+      setIsSavingPersonal(true);
+      try {
+          const amount = Number(personalExpenseForm.amount);
+          const sysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), 'EXP-', personalExpenseForm.date, 'sysDocId');
+
+          const newRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+          await setDoc(newRef, {
+              sysDocId: sysDocId,
+              type: 'expense',
+              category: 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ',
+              description: personalExpenseForm.description,
+              items: [{
+                  desc: personalExpenseForm.description,
+                  qty: 1,
+                  unit: 'ครั้ง',
+                  buyPrice: amount,
+                  sellPrice: 0,
+                  sku: '',
+                  category: 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ'
+              }],
+              total: amount,
+              grandTotal: amount,
+              platformFee: 0,
+              date: normalizeDate(personalExpenseForm.date),
+              userId: user.uid,
+              createdAt: serverTimestamp(),
+              status: 'paid', // เงินออกจริง ถือว่าจ่ายแล้ว
+              partnerName: 'ส่วนตัว (เจ้าของกิจการ)',
+              partnerBranch: '00000',
+              isFromReconciliation: false,
+              isCashBill: true, // เป็นบิลเงินสด ไม่มี VAT
+              vatType: 'none',
+              channel: 'หน้าร้าน',
+              shopName: CONSTANTS.SHOPS[0]
+          });
+
+          showToast("บันทึกถอนเงิน/รายจ่ายส่วนตัวสำเร็จ", "success");
+          setShowPersonalExpenseModal(false);
+          setPersonalExpenseForm({ date: formatDateISO(new Date()), description: '', amount: '' });
+      } catch (err) {
+          console.error(err);
+          showToast("เกิดข้อผิดพลาดในการบันทึก", "error");
+      }
+      setIsSavingPersonal(false);
+  };
    
   const defaultFormState = { 
     id: null, // NEW: เพิ่ม id เพื่อระบุว่าเป็นโหมด Edit
@@ -9872,6 +10002,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         <div className="flex bg-slate-100 p-1 rounded-2xl w-fit text-left overflow-x-auto max-w-full">
           <button onClick={()=>setSubTab('new')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap text-center ${subTab==='new'?'bg-white shadow-md text-indigo-600 scale-[1.02]':'text-slate-500 hover:text-slate-700'}`}>เพิ่มรายการใหม่</button>
           <button onClick={()=>setSubTab('history')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap text-center ${subTab==='history'?'bg-white shadow-md text-indigo-600 scale-[1.02]':'text-slate-500 hover:text-slate-700'}`}>ประวัติรายการ</button>
+          <button onClick={()=>setSubTab('statement')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap text-center ${subTab==='statement'?'bg-white shadow-md text-indigo-600 scale-[1.02]':'text-slate-500 hover:text-slate-700'}`}>สมุดบัญชี (Statement)</button>
           <button onClick={()=>setSubTab('summary')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap text-center ${subTab==='summary'?'bg-white shadow-md text-indigo-600 scale-[1.02]':'text-slate-500 hover:text-slate-700'}`}>สรุปค่าใช้จ่ายเชิงลึก</button>
           <button onClick={()=>setSubTab('doc_summary')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap text-center ${subTab==='doc_summary'?'bg-white shadow-md text-indigo-600 scale-[1.02]':'text-slate-500 hover:text-slate-700'}`}>สรุปเอกสารประจำเดือน</button>
         </div>
@@ -10856,6 +10987,91 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         </div>
                     </div>
                 )}
+            </div>
+        </div>
+      ) : subTab === 'statement' ? (
+        <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 animate-fadeIn h-full flex flex-col text-left">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b border-slate-100 pb-6">
+                <div className="flex items-center gap-3">
+                    <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl"><Landmark size={24}/></div>
+                    <div>
+                        <h3 className="text-xl font-black text-slate-800">สมุดบัญชีกระแสเงินสด (Bank Statement)</h3>
+                        <p className="text-xs text-slate-500 mt-1">ติดตามเงินเข้า-ออกจริง และรายจ่ายส่วนตัว (ยอดคงเหลือแบบ Running Balance)</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-3 w-full md:w-auto">
+                    {/* --- 🔥 NEW: ปุ่ม Quick Add ถอนใช้ส่วนตัว --- */}
+                    <button onClick={() => setShowPersonalExpenseModal(true)} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors border border-rose-100 shrink-0">
+                        <PlusCircle size={16}/> บันทึกถอนเงิน/ส่วนตัว
+                    </button>
+                    <input type="month" value={statementMonth} onChange={e=>setStatementMonth(e.target.value)} className="w-full md:w-auto bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer"/>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 shrink-0">
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">ยอดยกมา (Beginning Balance)</p>
+                    <p className="text-2xl font-black text-slate-700">{formatCurrency(statementData?.beginningBalance || 0)}</p>
+                </div>
+                <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-2xl">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-indigo-600 mb-1">ความเคลื่อนไหว (Movement)</p>
+                    <div className="flex items-center gap-4 mt-1">
+                        <p className="text-sm font-black text-emerald-600 flex items-center gap-1" title="เงินเข้า"><ArrowUp size={14}/> {formatCurrency(statementData?.records.reduce((s, r)=>s+r.cashIn, 0))}</p>
+                        <p className="text-sm font-black text-rose-500 flex items-center gap-1" title="เงินออก"><ArrowDown size={14}/> {formatCurrency(statementData?.records.reduce((s, r)=>s+r.cashOut, 0))}</p>
+                    </div>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700 mb-1">ยอดยกไป (Ending Balance)</p>
+                    <p className="text-2xl font-black text-emerald-700">{formatCurrency(statementData?.endingBalance || 0)}</p>
+                </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-100 overflow-hidden flex-1 flex flex-col">
+                <div className="overflow-auto custom-scrollbar flex-1">
+                    <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-50 text-slate-500 font-bold uppercase sticky top-0 z-10">
+                            <tr>
+                                <th className="p-4 border-b border-slate-200 w-24">วันที่ (Date)</th>
+                                <th className="p-4 border-b border-slate-200">รายการ (Description)</th>
+                                <th className="p-4 border-b border-slate-200 text-right">เงินเข้า (In)</th>
+                                <th className="p-4 border-b border-slate-200 text-right">เงินออก (Out)</th>
+                                <th className="p-4 border-b border-slate-200 text-right bg-slate-100">คงเหลือ (Balance)</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            <tr className="bg-slate-50/50">
+                                <td className="p-4 text-slate-500 font-bold text-center" colSpan="2">ยอดยกมา (Beginning Balance)</td>
+                                <td className="p-4 border-r border-slate-100"></td>
+                                <td className="p-4 border-r border-slate-100"></td>
+                                <td className="p-4 text-right font-black text-slate-700 bg-slate-50/80">{formatCurrency(statementData?.beginningBalance || 0)}</td>
+                            </tr>
+                            
+                            {statementData?.records.map((r, idx) => (
+                                <tr key={idx} className="hover:bg-indigo-50/30 transition-colors">
+                                    <td className="p-4 text-slate-600 whitespace-nowrap">{formatDate(r.cashDate)}</td>
+                                    <td className="p-4 border-r border-slate-100">
+                                        <p className="font-bold text-slate-700">{r.description || r.partnerName}</p>
+                                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                            <span className="text-[9px] font-mono text-indigo-500 bg-indigo-50 px-1.5 rounded">{r.sysDocId || r.orderId || '-'}</span>
+                                            {r.category === 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ' && (
+                                                <span className="text-[9px] font-bold text-rose-500 bg-rose-50 border border-rose-100 px-1.5 rounded">รายจ่ายส่วนตัว</span>
+                                            )}
+                                        </div>
+                                    </td>
+                                    <td className="p-4 text-right font-black text-emerald-600 border-r border-slate-100">{r.cashIn > 0 ? formatCurrency(r.cashIn) : '-'}</td>
+                                    <td className="p-4 text-right font-bold text-rose-500 border-r border-slate-100">{r.cashOut > 0 ? formatCurrency(r.cashOut) : '-'}</td>
+                                    <td className="p-4 text-right font-black text-slate-800 bg-slate-50/30">{formatCurrency(r.runningBalance)}</td>
+                                </tr>
+                            ))}
+                            
+                            {(!statementData?.records || statementData.records.length === 0) && (
+                                <tr>
+                                    <td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ไม่มีความเคลื่อนไหวของกระแสเงินสดในเดือนที่เลือก</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
       ) : (
