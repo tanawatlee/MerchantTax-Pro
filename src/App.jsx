@@ -11845,6 +11845,45 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               </div>
           </div>
       )}
+
+      {/* --- 🔥 NEW: Modal บันทึกถอนเงิน/รายจ่ายส่วนตัว (Quick Add) --- */}
+      {showPersonalExpenseModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+                  <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Wallet className="text-rose-500"/> ถอนใช้ส่วนตัว / นอกกิจการ</h3>
+                      <button onClick={() => setShowPersonalExpenseModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors"><X size={20}/></button>
+                  </div>
+                  <form onSubmit={handleSavePersonalExpense} className="space-y-4">
+                      <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100 mb-4 flex items-start gap-3">
+                          <AlertTriangle size={18} className="text-rose-500 shrink-0 mt-0.5"/>
+                          <p className="text-[10px] font-bold text-rose-700 leading-relaxed">
+                              รายการนี้จะถูกบันทึกเพื่อดูความเคลื่อนไหวของกระแสเงินสดเท่านั้น จะ<b className="underline">ไม่ถูกนำไปหักกำไรในแดชบอร์ด</b> และไม่ปรากฏในรายงานภาษี
+                          </p>
+                      </div>
+                      <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase">วันที่ทำรายการ</label>
+                          <input type="date" value={personalExpenseForm.date} onChange={e=>setPersonalExpenseForm({...personalExpenseForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-rose-200" required />
+                      </div>
+                      <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase">รายละเอียด (ทำอะไร/ซื้ออะไร)</label>
+                          <input type="text" value={personalExpenseForm.description} onChange={e=>setPersonalExpenseForm({...personalExpenseForm, description: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-rose-200" placeholder="เช่น ค่าผ่อนรถ, ค่าเทอม, ถอนเงินสด..." required />
+                      </div>
+                      <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase">จำนวนเงิน (บาท)</label>
+                          <input type="number" step="0.01" min="0" value={personalExpenseForm.amount} onChange={e=>setPersonalExpenseForm({...personalExpenseForm, amount: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-2xl font-black mt-1 outline-none focus:ring-2 focus:ring-rose-200 text-rose-600 placeholder-rose-200" placeholder="0.00" required />
+                      </div>
+                      <div className="flex gap-3 pt-4 mt-2 border-t border-slate-100 text-center">
+                          <button type="button" onClick={() => setShowPersonalExpenseModal(false)} className="flex-1 py-3.5 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
+                          <button type="submit" disabled={isSavingPersonal} className="flex-[2] py-3.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-black shadow-lg shadow-rose-200 flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
+                              {isSavingPersonal ? <Loader className="animate-spin" size={18}/> : <Save size={18}/>} 
+                              {isSavingPersonal ? 'กำลังบันทึก...' : 'บันทึกรายจ่าย'}
+                          </button>
+                      </div>
+                  </form>
+              </div>
+          </div>
+      )}
     </div>
   );
 }
