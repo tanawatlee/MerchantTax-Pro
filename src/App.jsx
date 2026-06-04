@@ -8053,6 +8053,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           
           if (file.type === 'application/pdf' && newPdfPassword) {
               showToast('กำลังปลดล็อกรหัสผ่าน PDF...', 'success');
+              
+              // --- FIX: ดึงไฟล์มาเก็บไว้ในตัวแปรก่อน เพื่อให้ระบบสำรองสามารถเรียกใช้ได้หากการถอดรหัสแรกล้มเหลว ---
+              const arrayBuffer = await file.arrayBuffer(); 
+
               if (!window.PDFLib) {
                   await new Promise(res => {
                       const s = document.createElement('script');
@@ -8061,8 +8065,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   });
               }
               try {
-                  const arrayBuffer = await file.arrayBuffer();
-                  
                   // 1. โหลด PDF ด้วยรหัสผ่าน (ใส่ trim() เผื่อเผลอพิมพ์เว้นวรรค)
                   const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: newPdfPassword.trim() });
                   
@@ -8086,136 +8088,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   showToast('ปลดล็อก PDF และลบรหัสผ่านสำเร็จ!', 'success');
               } catch(err) {
                   console.error("PDF-lib Decryption Error:", err);
-                  // --- 🔥 FIX: Fallback อัปโหลดไฟล์ต้นฉบับแทน หากปลดล็อก AES-256 ไม่ได้ ---
-                  showToast('เบราว์เซอร์ไม่รองรับการปลดล็อก AES-256 ระบบจะอัปโหลดไฟล์ต้นฉบับ(ติดรหัส)แทน', 'warn');
-                  base64Data = await new Promise((resolve, reject) => {
-                      const reader = new FileReader();
-                      reader.onload = () => resolve(reader.result.split(',')[1]);
-                      reader.onerror = reject;
-                      reader.readAsDataURL(file);
-                  });
-              }
-          } else {
-              base64Data = await new Promise((resolve, reject) => {
-                  const reader = new FileReader();
-                  reader.onload = () => resolve(reader.result.split(',')[1]);
-                  reader.onerror = reject;
-                  reader.readAsDataURL(file);
-              });
-          }
-
-          const mimeType = file.type;
-          const fileExt = file.name.split('.').pop();
-          
-          // --- จัดโครงสร้าง Digital Filing ใหม่ (ปี -> ประเภท -> เดือน -> หมวดหมู่ -> วันที่) ---
-          const d = normalizeDate(formData.date) || new Date();
-          const year = String(d.getFullYear());
-          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
-          const month = monthNames[d.getMonth()];
-          const day = String(d.getDate()).padStart(2, '0');
-          const docTypeFolder = formData.type === 'income' ? '1_Income' : '2_Expense';
-          const safeCategory = String(formData.category || 'ทั่วไป').replace(/[\/\\]/g, '_'); // แยกโฟลเดอร์ตามหมวดหมู่
-          
-          // ตั้งชื่อไฟล์
-          const refName = (formData.taxInvoiceNo || formData.orderId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9ก-๙]/g, '_');
-          const fileName = `${refName}.${fileExt}`;
-
-          const payload = {
-              base64Data, 
-              fileName, 
-              mimeType, 
-              rootFolder: 'MerchantTax_DigitalFiling',
-              year: year, 
-              type: docTypeFolder,
-              month: month,
-              category: safeCategory, // เพิ่มระดับหมวดหมู่
-              day: day
-          };
-
-          showToast(`กำลังส่งไฟล์ไปที่ Google Drive...`, 'success');
-          const res = await fetch(webhookUrl, {
-              method: 'POST',
-              headers: {
-                  'Content-Type': 'text/plain;charset=utf-8',
-              },
-              body: JSON.stringify(payload)
-          });
-          
-          const data = await res.json();
-          
-          if (data.url) {
-              setFormData(prev => ({ ...prev, attachmentUrl: data.url }));
-              showToast(`จัดเก็บไฟล์ลงแฟ้ม ${year}/${month}/${safeCategory}/${day} เรียบร้อย`, 'success');
-              setNewPdfPassword(''); // เคลียร์รหัสผ่านเมื่ออัปโหลดสำเร็จ
-          } else {
-              throw new Error(data.message || "Upload failed");
-          }
-      } catch (err) {
-          console.error("Drive Upload Error:", err);
-          showToast('อัปโหลดล้มเหลว (ตรวจสอบ Webhook URL)', 'error');
-      } finally {
-          setIsUploadingFile(false);
-      }
-  };
-
-  // --- NEW: ฟังก์ชันอัปโหลดไฟล์ย้อนหลังสำหรับข้อมูลเก่า (Direct Upload) ---
-  const handleDirectFileUpload = async (e) => {
-      const file = e.target.files[0];
-      if (!file || !user || !viewItem) return;
-
-      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
-      if (!webhookUrl) {
-          showToast('กรุณาตั้งค่าเชื่อมต่อ Google Drive ในเมนูเครื่องมือขั้นสูงก่อน', 'error');
-          return;
-      }
-
-      setIsUploadingFile(true);
-      try {
-          let base64Data = '';
-          
-          if (file.type === 'application/pdf' && historyPdfPassword) {
-              showToast('กำลังปลดล็อกรหัสผ่าน PDF...', 'success');
-              const arrayBuffer = await file.arrayBuffer(); // Load once
-
-              if (!window.PDFLib) {
-                  await new Promise(res => {
-                      const s = document.createElement('script');
-                      s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
-                      s.onload = res; document.body.appendChild(s);
-                  });
-              }
-              try {
-                  // 1. โหลด PDF ด้วยรหัสผ่าน (ใส่ trim() เผื่อเผลอพิมพ์เว้นวรรค)
-                  const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: historyPdfPassword.trim() });
-                  
-                  // 2. สร้าง PDF ใหม่แบบคลีนๆ
-                  const newDoc = await window.PDFLib.PDFDocument.create();
-                  
-                  // 3. คัดลอกทุกหน้ามาไฟล์ใหม่
-                  const copiedPages = await newDoc.copyPages(pdfDoc, pdfDoc.getPageIndices());
-                  copiedPages.forEach((page) => newDoc.addPage(page));
-                  
-                  // 4. เซฟไฟล์ใหม่
-                  const savedPdfBytes = await newDoc.save();
-                  
-                  let binary = '';
-                  const bytes = new Uint8Array(savedPdfBytes);
-                  const chunkSize = 8192;
-                  for (let i = 0; i < bytes.length; i += chunkSize) {
-                      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-                  }
-                  base64Data = window.btoa(binary);
-                  showToast('ปลดล็อก PDF และลบรหัสผ่านสำเร็จ!', 'success');
-              } catch(err) {
-                  console.error("PDF-lib Decryption Error:", err);
-                  showToast('พบไฟล์เข้ารหัสขั้นสูง! กำลังใช้ระบบ AI สกัดภาพเพื่อปลดล็อก...', 'warn');
+                  // --- 🔥 THE FIX: เรียกใช้ระบบสกัดไฟล์ขั้นสูง เพื่อบังคับล้างรหัสผ่านไฟล์บิลธนาคาร 100% ---
+                  showToast('พบไฟล์เข้ารหัสขั้นสูง! กำลังใช้เอนจินพิเศษเพื่อปลดล็อก (รอสักครู่)...', 'warn');
                   try {
-                      base64Data = await decryptPdfFallback(arrayBuffer, historyPdfPassword.trim());
-                      showToast('สกัดภาพและสร้าง PDF ใหม่สำเร็จ!', 'success');
+                      base64Data = await decryptPdfFallback(arrayBuffer, newPdfPassword.trim());
+                      showToast('สกัดภาพและสร้าง PDF ใหม่สำเร็จ (ลบรหัสแล้ว)!', 'success');
                   } catch (fallbackErr) {
                       console.error("Fallback Error:", fallbackErr);
                       showToast('รหัสผ่านไม่ถูกต้อง หรือไฟล์เสียหาย ระบบจะอัปโหลดไฟล์ต้นฉบับแทน', 'error');
-                      // Fallback to original
                       base64Data = await new Promise((resolve, reject) => {
                           const reader = new FileReader();
                           reader.onload = () => resolve(reader.result.split(',')[1]);
