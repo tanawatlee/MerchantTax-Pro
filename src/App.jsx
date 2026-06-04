@@ -8024,6 +8024,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [histPage, setHistPage] = useState(1);
   const [showDiscrepancyOnly, setShowDiscrepancyOnly] = useState(false); // NEW: กรองเฉพาะยอดที่หายไป
   const [histPaymentStatus, setHistPaymentStatus] = useState('all'); // NEW: Payment status filter
+  const [histAttachmentStatus, setHistAttachmentStatus] = useState('all'); // --- 🔥 NEW: ตัวกรองสถานะการแนบไฟล์ ---
   const histItemsPerPage = 20;
   
   // --- 🔥 NEW: State สำหรับระบบ ลบถาวรแบบกลุ่ม (Bulk Hard Delete) ของหน้าบันทึกขาย ---
@@ -9292,15 +9293,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   }, [transactions, invoices]);
 
   const filteredHistory = useMemo(() => {
+    const searchLower = searchTerm.trim().toLowerCase(); // --- 🔥 FIX: ตัดช่องว่างหน้าหลัง ป้องกันการเว้นวรรคตอนก๊อปปี้ ---
+
     return baseHistory.filter(t => {
         // ซ่อนเอกสารประเภท DMG (ตัดชำรุด/สินค้าเสียหาย) จากหน้าประวัติรายการ
-        if (t.sysDocId && String(t.sysDocId).startsWith('DMG')) return false;
+        if (t.category === 'สินค้าเสียหาย/หมดอายุ' || (t.sysDocId && String(t.sysDocId).toUpperCase().includes('DMG'))) return false;
 
-        // 1. Text Search
-        const matchSearch = (t.partnerName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            (t.orderId || t.linkedOrderNo || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            (t.taxInvoiceNo || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            (t.description || '').toLowerCase().includes(searchTerm.toLowerCase());
+        // 1. Text Search (รวมการค้นหาด้วย sysDocId)
+        const matchSearch = searchLower === '' ||
+                            (t.partnerName || '').toLowerCase().includes(searchLower) || 
+                            (t.orderId || t.linkedOrderNo || '').toLowerCase().includes(searchLower) || 
+                            (t.taxInvoiceNo || t.invoiceNo || '').toLowerCase().includes(searchLower) || 
+                            (t.sysDocId || '').toLowerCase().includes(searchLower) || // --- 🔥 FIX: ค้นหาด้วยเลขระบบ COG-, EXP-, INC- ได้แล้ว ---
+                            (t.description || '').toLowerCase().includes(searchLower);
         if (!matchSearch) return false;
 
         // 2. Type Filter
@@ -9339,12 +9344,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             if (histPaymentStatus === 'unpaid' && isPaid) return false;
         }
 
+        // --- 🔥 NEW: 6. Attachment Status Filter ---
+        if (histAttachmentStatus !== 'all') {
+            const hasAttachment = !!(t.attachmentUrl && t.attachmentUrl.trim() !== '');
+            if (histAttachmentStatus === 'attached' && !hasAttachment) return false;
+            if (histAttachmentStatus === 'missing' && hasAttachment) return false;
+        }
+
         return true;
     }).sort(sortNewestFirst);
-  }, [baseHistory, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histChannel, histShop]);
+  }, [baseHistory, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histAttachmentStatus, histChannel, histShop]);
 
   // Reset page when filters change
-  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histChannel, histShop]);
+  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histAttachmentStatus, histChannel, histShop]);
 
   // History Quick Stats
   const histStats = useMemo(() => {
@@ -11130,6 +11142,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         <option value="unpaid">ค้างชำระ</option>
                     </select>
                  </div>
+
+                 {/* --- 🔥 NEW: Attachment Status Filter --- */}
+                 <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
+                    <Cloud size={14} className="text-slate-400 shrink-0"/>
+                    <select value={histAttachmentStatus} onChange={e=>setHistAttachmentStatus(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:ring-0 p-0">
+                        <option value="all">สถานะไฟล์แนบ (ทั้งหมด)</option>
+                        <option value="missing">❌ ยังไม่แนบไฟล์</option>
+                        <option value="attached">✅ แนบไฟล์แล้ว</option>
+                    </select>
+                 </div>
              </div>
           </div>
 
@@ -11268,6 +11290,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                         )}
 
                                         {!t.isCancelled && t.isTaxOnly && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-purple-100 text-purple-700 border border-purple-200">ยื่นภาษีเท่านั้น</span>}
+                                        
+                                        {/* --- 🔥 NEW: แสดงป้ายเมื่อมีการแนบเอกสาร (Digital Filing) --- */}
+                                        {t.attachmentUrl && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-blue-100 text-blue-700 border border-blue-200 flex items-center gap-0.5" title="มีไฟล์เอกสารแนบในระบบ"><Cloud size={8}/> มีไฟล์แนบ</span>}
                                     </div>
 
                                     <div className="flex flex-col gap-1 mt-1 text-left bg-slate-50 p-2 rounded-xl border border-slate-100 w-fit pr-6">
@@ -12871,7 +12896,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
             (inv.docType === 'abb' ? 'ใบกำกับอย่างย่อ' : 
             (inv.docType === 'quotation' ? 'ใบเสนอราคา' : 
             (inv.docType === 'receipt' ? 'ใบเสร็จรับเงิน' : 'ใบกำกับเต็มรูป'))))), 
-          searchStr: (inv.invNo || '') + (inv.customerName || '') + (inv.orderId || '') 
+          searchStr: (inv.invNo || '') + (inv.customerName || '') + (inv.orderId || '') + (inv.refInvNo || '')
       }));
       
       // FIX: กรอง Transactions (รายรับ/รายจ่าย) ที่มีเลขใบกำกับภาษี หรือถูกออกบิลไปแล้ว ไม่ให้นำมาแสดงซ้ำซ้อนเป็น "รอออกเอกสาร"
@@ -12882,7 +12907,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           !(t.taxInvoiceNo && String(t.taxInvoiceNo).trim() !== '') && 
           !(t.invoiceNo && String(t.invoiceNo).trim() !== '') && 
           !t.isInvoiced &&
-          !(t.sysDocId && String(t.sysDocId).startsWith('DMG')) // --- 🔥 NEW: ซ่อนเอกสารประเภท DMG ออกจากหน้ารอออกเอกสาร ---
+          t.category !== 'สินค้าเสียหาย/หมดอายุ' && // --- 🔥 FIX: กรอง DMG ด้วย Category เพื่อความชัวร์ 100% ---
+          !(String(t.sysDocId || '').toUpperCase().includes('DMG')) // --- 🔥 FIX: ครอบคลุม DMG ทุกรูปแบบ ---
       ).map(t => ({ 
           ...t, 
           invNo: t.sysDocId || t.orderId || '-', 
@@ -12890,10 +12916,13 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           total: t.total, 
           displayStatus: t.type === 'income' ? 'รอออกใบกำกับ' : 'รอออกใบสำคัญจ่าย', 
           source: 'transaction', 
-          searchStr: (t.sysDocId || '') + (t.orderId || '') + (t.partnerName || '') 
+          searchStr: (t.sysDocId || '') + (t.orderId || '') + (t.partnerName || '') + (t.linkedOrderNo || '')
       }));
       
-      return [...normalizedInvoices, ...pendingTransactions].filter(d => { const searchInput = invoiceSearch.toLowerCase(); return d.searchStr.toLowerCase().includes(searchInput); }).sort(sortNewestFirst); 
+      return [...normalizedInvoices, ...pendingTransactions].filter(d => { 
+          const searchInput = invoiceSearch.trim().toLowerCase(); // --- 🔥 FIX: Trim ป้องกันการเว้นวรรค ---
+          return searchInput === '' || d.searchStr.toLowerCase().includes(searchInput); 
+      }).sort(sortNewestFirst); 
   }, [invoices, transactions, invoiceSearch]);
 
   const displayDocs = useMemo(() => {
@@ -16289,6 +16318,75 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                         <div className="pt-6 mt-4 border-t border-slate-100 flex justify-between items-center">
                             <p className="text-[10px] font-bold text-slate-400">*สามารถซิงค์ยอดผ่านปุ่ม Auto-Fix เพื่อปรับปรุงบัญชีให้สมบูรณ์แบบได้ทันที</p>
                             <button onClick={() => setAuditResults(null)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* --- 🔥 NEW: Missing Attachments Audit Modal --- */}
+            {showMissingAttachmentModal && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+                    <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+                        <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
+                            <div>
+                                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Cloud className="text-blue-600"/> รายการที่รอแนบไฟล์ (Digital Filing Audit)</h3>
+                                <p className="text-xs text-slate-500 mt-1">ประจำเดือน {docSummaryMonth} (พบ <b className="text-rose-500">{missingAttachmentsList.length}</b> รายการที่ยังไม่ได้อัปโหลดรูปสลิปหรือบิล)</p>
+                            </div>
+                            <button onClick={() => setShowMissingAttachmentModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                        </div>
+
+                        <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl bg-slate-50">
+                            <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                                    <tr>
+                                        <th className="p-3 pl-4">วันที่ / อ้างอิง</th>
+                                        <th className="p-3">หมวดหมู่</th>
+                                        <th className="p-3">รายละเอียด / คู่ค้า</th>
+                                        <th className="p-3 text-right">ยอดเงิน (฿)</th>
+                                        <th className="p-3 text-center pr-4">จัดการ</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {missingAttachmentsList.map((item, idx) => (
+                                        <tr key={idx} className="hover:bg-white transition-colors">
+                                            <td className="p-3 pl-4">
+                                                <p className="font-bold text-slate-700">{formatDate(item.date)}</p>
+                                                <p className="text-[10px] font-mono font-bold text-indigo-500 mt-0.5 bg-indigo-50 px-1.5 py-0.5 rounded w-fit">{item.sysDocId || item.orderId || '-'}</p>
+                                            </td>
+                                            <td className="p-3">
+                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                                    {item.category || (item.type === 'income' ? 'รายรับ' : 'รายจ่าย')}
+                                                </span>
+                                            </td>
+                                            <td className="p-3">
+                                                <p className="font-bold text-slate-700 truncate max-w-[200px]">{item.partnerName || 'คู่ค้าทั่วไป'}</p>
+                                                <p className="text-[10px] text-slate-500 truncate max-w-[250px]">{item.description}</p>
+                                            </td>
+                                            <td className="p-3 text-right font-black text-slate-800">
+                                                {formatCurrency(item.grandTotal || item.total)}
+                                            </td>
+                                            <td className="p-3 text-center pr-4">
+                                                <button 
+                                                    onClick={() => {
+                                                        setViewItem(item); // เปิดหน้าต่างดูรายละเอียดเพื่อให้อัปโหลดไฟล์ได้
+                                                        setShowMissingAttachmentModal(false);
+                                                    }}
+                                                    className="bg-blue-50 hover:bg-blue-600 text-blue-600 hover:text-white px-3 py-1.5 rounded-lg text-[10px] font-bold transition-colors shadow-sm flex items-center gap-1 mx-auto"
+                                                >
+                                                    <FileUp size={12}/> แนบไฟล์เลย
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {missingAttachmentsList.length === 0 && (
+                                        <tr><td colSpan="5" className="p-10 text-center text-emerald-600 font-bold">ข้อมูลครบถ้วน! แนบเอกสารครบทุกรายการแล้วในเดือนนี้</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div className="pt-6 mt-4 border-t border-slate-100 flex justify-end gap-3">
+                            <button onClick={() => setShowMissingAttachmentModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors shadow-md">ปิดหน้าต่าง</button>
                         </div>
                     </div>
                 </div>
