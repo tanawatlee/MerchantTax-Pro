@@ -8050,11 +8050,12 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       setIsUploadingFile(true);
       try {
           let base64Data = '';
+          // --- 🔥 FIX: เลือกใช้รหัสผ่านให้ถูกกล่อง (หน้าเพิ่มใหม่ vs หน้าประวัติ) ---
+          const pdfPass = viewItem ? historyPdfPassword : newPdfPassword;
           
-          if (file.type === 'application/pdf' && newPdfPassword) {
+          if (file.type === 'application/pdf' && pdfPass) {
               showToast('กำลังปลดล็อกรหัสผ่าน PDF...', 'success');
               
-              // --- FIX: ดึงไฟล์มาเก็บไว้ในตัวแปรก่อน เพื่อให้ระบบสำรองสามารถเรียกใช้ได้หากการถอดรหัสแรกล้มเหลว ---
               const arrayBuffer = await file.arrayBuffer(); 
 
               if (!window.PDFLib) {
@@ -8065,17 +8066,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   });
               }
               try {
-                  // 1. โหลด PDF ด้วยรหัสผ่าน (ใส่ trim() เผื่อเผลอพิมพ์เว้นวรรค)
-                  const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: newPdfPassword.trim() });
-                  
-                  // 2. สร้าง PDF ใหม่แบบคลีนๆ เพื่อเลี่ยงข้อจำกัดการห้ามเซฟไฟล์เข้ารหัส
+                  const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: pdfPass.trim() });
                   const newDoc = await window.PDFLib.PDFDocument.create();
-                  
-                  // 3. คัดลอกทุกหน้าจากไฟล์ที่ปลดล็อกแล้ว มาใส่ในไฟล์ใหม่
                   const copiedPages = await newDoc.copyPages(pdfDoc, pdfDoc.getPageIndices());
                   copiedPages.forEach((page) => newDoc.addPage(page));
-                  
-                  // 4. เซฟไฟล์ใหม่ (ตอนนี้ไฟล์ไม่มีรหัสผ่านแล้ว)
                   const savedPdfBytes = await newDoc.save();
                   
                   let binary = '';
@@ -8087,14 +8081,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   base64Data = window.btoa(binary);
                   showToast('ปลดล็อก PDF และลบรหัสผ่านสำเร็จ!', 'success');
               } catch(err) {
-                  console.error("PDF-lib Decryption Error:", err);
-                  // --- 🔥 THE FIX: เรียกใช้ระบบสกัดไฟล์ขั้นสูง เพื่อบังคับล้างรหัสผ่านไฟล์บิลธนาคาร 100% ---
+                  console.warn("PDF-lib Decryption Fallback Triggered");
                   showToast('พบไฟล์เข้ารหัสขั้นสูง! กำลังใช้เอนจินพิเศษเพื่อปลดล็อก (รอสักครู่)...', 'warn');
                   try {
-                      base64Data = await decryptPdfFallback(arrayBuffer, newPdfPassword.trim());
+                      base64Data = await decryptPdfFallback(arrayBuffer, pdfPass.trim());
                       showToast('สกัดภาพและสร้าง PDF ใหม่สำเร็จ (ลบรหัสแล้ว)!', 'success');
                   } catch (fallbackErr) {
-                      console.error("Fallback Error:", fallbackErr);
+                      console.warn("Fallback Error Occurred");
                       showToast('รหัสผ่านไม่ถูกต้อง หรือไฟล์เสียหาย ระบบจะอัปโหลดไฟล์ต้นฉบับแทน', 'error');
                       base64Data = await new Promise((resolve, reject) => {
                           const reader = new FileReader();
@@ -8116,16 +8109,18 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           const mimeType = file.type;
           const fileExt = file.name.split('.').pop();
           
-          // --- จัดโครงสร้าง Digital Filing ใหม่ (อัปโหลดไฟล์ย้อนหลัง) ---
-          const d = normalizeDate(viewItem.date) || new Date();
+          // --- 🔥 FIX: จัดการข้อมูลให้อ้างอิงตามหน้าที่ใช้งานอยู่ (ป้องกันแอปค้าง) ---
+          const activeData = viewItem || formData;
+          
+          const d = normalizeDate(activeData.date) || new Date();
           const year = String(d.getFullYear());
           const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
           const month = monthNames[d.getMonth()];
           const day = String(d.getDate()).padStart(2, '0');
-          const docTypeFolder = viewItem.type === 'income' ? '1_Income' : '2_Expense';
-          const safeCategory = String(viewItem.category || 'ทั่วไป').replace(/[\/\\]/g, '_'); // แยกโฟลเดอร์ตามหมวดหมู่
+          const docTypeFolder = activeData.type === 'income' ? '1_Income' : '2_Expense';
+          const safeCategory = String(activeData.category || 'ทั่วไป').replace(/[\/\\]/g, '_'); 
           
-          const refName = (viewItem.taxInvoiceNo || viewItem.orderId || viewItem.sysDocId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9ก-๙]/g, '_');
+          const refName = (activeData.taxInvoiceNo || activeData.orderId || activeData.sysDocId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9ก-๙]/g, '_');
           const fileName = `${refName}_${Date.now()}.${fileExt}`;
 
           const payload = { 
@@ -8136,37 +8131,55 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               year: year, 
               type: docTypeFolder,
               month: month,
-              category: safeCategory, // เพิ่มระดับหมวดหมู่
+              category: safeCategory,
               day: day
           };
 
           showToast(`กำลังส่งไฟล์ไปที่ Google Drive...`, 'success');
-          const res = await fetch(webhookUrl, {
+          
+          const fetchUrl = webhookUrl.trim();
+          if (!fetchUrl.startsWith('https://script.google.com/')) {
+              throw new Error("Invalid Webhook URL");
+          }
+
+          const res = await fetch(fetchUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'text/plain;charset=utf-8' },
               body: JSON.stringify(payload)
           });
           
+          if (!res.ok) {
+              throw new Error(`HTTP error! status: ${res.status}`);
+          }
+
           const data = await res.json();
           
           if (data.url) {
-              // อัปเดตลงฐานข้อมูลโดยตรง
-              const coll = viewItem.type === 'income' ? 'transactions_income' : 'transactions_expense';
-              const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, viewItem.id);
-              await updateDoc(docRef, { attachmentUrl: data.url, updatedAt: serverTimestamp() });
-              
-              // อัปเดตหน้าจอทันที
-              setViewItem(prev => ({ ...prev, attachmentUrl: data.url }));
-              showToast(`แนบไฟล์ย้อนหลังลงแฟ้ม ${year}/${month}/${safeCategory}/${day} เรียบร้อยแล้ว`, 'success');
-              setHistoryPdfPassword(''); // เคลียร์รหัสผ่าน
+              if (viewItem) {
+                  const coll = viewItem.type === 'income' ? 'transactions_income' : 'transactions_expense';
+                  const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, viewItem.id);
+                  await updateDoc(docRef, { attachmentUrl: data.url, updatedAt: serverTimestamp() });
+                  setViewItem(prev => ({ ...prev, attachmentUrl: data.url }));
+                  showToast(`แนบไฟล์ย้อนหลังลงแฟ้ม ${year}/${month}/${safeCategory}/${day} เรียบร้อยแล้ว`, 'success');
+              } else {
+                  setFormData(prev => ({ ...prev, attachmentUrl: data.url }));
+                  showToast(`อัปโหลดสำเร็จ! ไฟล์เชื่อมกับรายการใหม่แล้ว`, 'success');
+              }
+              setHistoryPdfPassword('');
+              setNewPdfPassword('');
           } else {
               throw new Error(data.message || "Upload failed");
           }
       } catch (err) {
-          console.error("Drive Upload Error:", err);
-          showToast('อัปโหลดล้มเหลว (ตรวจสอบ Webhook URL)', 'error');
+          console.warn("Drive Upload Error:", err.message);
+          if (err.message && (err.message.includes('Failed to fetch') || err.message.includes('NetworkError'))) {
+              showToast('อัปโหลดล้มเหลว: โปรดตรวจสอบลิงก์ Webhook และสิทธิ์การเข้าถึง (ต้องเป็น Anyone)', 'error');
+          } else {
+              showToast('อัปโหลดล้มเหลว (เกิดข้อผิดพลาดในการส่งข้อมูล)', 'error');
+          }
       } finally {
           setIsUploadingFile(false);
+          e.target.value = ''; // เคลียร์ไฟล์เก่า
       }
   };
 
@@ -11482,7 +11495,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                         <span className="text-[10px] font-bold text-slate-600">คลิกอัปโหลดบิลย้อนหลัง</span>
                                     </>
                                 )}
-                                <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleDirectFileUpload} disabled={isUploadingFile} />
+                                {/* --- 🔥 FIX: เชื่อมต่อฟังก์ชันอัปโหลดให้ถูกต้อง --- */}
+                                <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFile} disabled={isUploadingFile} />
                             </label>
                             <div className="relative">
                                 <Lock size={12} className="absolute left-3 top-2.5 text-slate-400" />
