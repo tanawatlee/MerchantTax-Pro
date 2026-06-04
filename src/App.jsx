@@ -4475,6 +4475,10 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [aiInsights, setAiInsights] = useState(null);
   const [isAnalyzingStock, setIsAnalyzingStock] = useState(false);
   
+  // --- 🔥 NEW: Pagination State สำหรับคลังสินค้า ---
+  const [stockPage, setStockPage] = useState(1);
+  const stockItemsPerPage = 20;
+
   // --- NEW: Stock Sync Preview States ---
   const [showSyncPreviewModal, setShowSyncPreviewModal] = useState(false);
   const [syncPreviewData, setSyncPreviewData] = useState(null);
@@ -5178,6 +5182,15 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     return result.sort((a,b) => b.totalQty - a.totalQty);
   }, [stockBatches, searchTerm, stockStartDate, stockEndDate, transactions, stockSortType]);
 
+  // --- 🔥 NEW: Pagination Data สำหรับคลังสินค้า ---
+  const stockTotalPages = Math.max(1, Math.ceil(inventory.length / stockItemsPerPage));
+  const currentStockData = useMemo(() => {
+      return inventory.slice((stockPage - 1) * stockItemsPerPage, stockPage * stockItemsPerPage);
+  }, [inventory, stockPage]);
+
+  // Reset page when filters change
+  useEffect(() => { setStockPage(1); }, [searchTerm, stockStartDate, stockEndDate, stockSortType]);
+
   // NEW: ตัวกรองสำหรับหน้าต่างเลือกสินค้าเดิม
   const filteredPickerStock = useMemo(() => {
       if (!stockPickerSearch) return inventory;
@@ -5641,7 +5654,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-left">
-                {inventory.map((item, idx) => {
+                {currentStockData.map((item, idx) => {
                     const avgCost = item.totalQty > 0 ? item.totalValue / item.totalQty : 0;
                     const currentSellPrice = item.batches[item.batches.length - 1]?.sellPrice || 0;
                     const margin = currentSellPrice > 0 ? ((currentSellPrice - avgCost) / currentSellPrice) * 100 : 0;
@@ -5699,6 +5712,56 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               </tbody>
             </table>
           </div>
+          
+          {/* --- 🔥 NEW: Pagination UI (Smart Buttons 1, 2, 3...) --- */}
+          {stockTotalPages > 1 && (
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between shrink-0">
+                  <p className="text-xs font-bold text-slate-500 hidden sm:block">
+                      แสดงรายการ {((stockPage - 1) * stockItemsPerPage) + 1} - {Math.min(stockPage * stockItemsPerPage, inventory.length)} จากทั้งหมด {inventory.length} รายการ
+                  </p>
+                  <div className="flex items-center gap-1.5 w-full sm:w-auto justify-center sm:justify-end">
+                      <button onClick={() => setStockPage(p => Math.max(1, p - 1))} disabled={stockPage === 1} className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold disabled:opacity-50 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-colors shadow-sm">
+                          ย้อนกลับ
+                      </button>
+                      
+                      {(() => {
+                          const pages = [];
+                          if (stockTotalPages <= 5) {
+                              for (let i = 1; i <= stockTotalPages; i++) pages.push(i);
+                          } else {
+                              if (stockPage <= 3) {
+                                  pages.push(1, 2, 3, 4, '...', stockTotalPages);
+                              } else if (stockPage >= stockTotalPages - 2) {
+                                  pages.push(1, '...', stockTotalPages - 3, stockTotalPages - 2, stockTotalPages - 1, stockTotalPages);
+                              } else {
+                                  pages.push(1, '...', stockPage - 1, stockPage, stockPage + 1, '...', stockTotalPages);
+                              }
+                          }
+
+                          return pages.map((p, pIdx) => (
+                              <button
+                                  key={pIdx}
+                                  onClick={() => p !== '...' && setStockPage(p)}
+                                  disabled={p === '...'}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                                      p === stockPage
+                                          ? 'bg-indigo-600 text-white border-indigo-600 scale-105'
+                                          : p === '...'
+                                          ? 'bg-transparent text-slate-400 cursor-default shadow-none border-transparent'
+                                          : 'bg-white border border-slate-200 text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200'
+                                  }`}
+                              >
+                                  {p}
+                              </button>
+                          ));
+                      })()}
+
+                      <button onClick={() => setStockPage(p => Math.min(stockTotalPages, p + 1))} disabled={stockPage === stockTotalPages} className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold disabled:opacity-50 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-colors shadow-sm">
+                          ถัดไป
+                      </button>
+                  </div>
+              </div>
+          )}
         </div>
         <div className="space-y-6 text-left">
             <div className="bg-slate-900 p-8 rounded-[40px] shadow-xl text-white relative overflow-hidden text-left">
@@ -9327,12 +9390,20 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     }
   };
 
-  const filteredHistory = useMemo(() => {
+  // --- 🔥 BLAZING FAST FIX 3: แยกการประกอบร่างข้อมูลฐาน ออกจากการเสิร์ช ---
+  const baseHistory = useMemo(() => {
     const docStatusMap = {};
     invoices.forEach(inv => { if (inv.orderId) { if (!docStatusMap[inv.orderId]) docStatusMap[inv.orderId] = []; docStatusMap[inv.orderId].push({ type: inv.docType, no: inv.invNo }); } });
     
-    return transactions.filter(t => {
-        // 1. Text Search (รองรับการหา linkedOrderNo)
+    return transactions.map(t => ({ ...t, issuedDocs: docStatusMap[t.orderId] || [] }));
+  }, [transactions, invoices]);
+
+  const filteredHistory = useMemo(() => {
+    return baseHistory.filter(t => {
+        // ซ่อนเอกสารประเภท DMG (ตัดชำรุด/สินค้าเสียหาย) จากหน้าประวัติรายการ
+        if (t.sysDocId && String(t.sysDocId).startsWith('DMG')) return false;
+
+        // 1. Text Search
         const matchSearch = (t.partnerName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                             (t.orderId || t.linkedOrderNo || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                             (t.taxInvoiceNo || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -9357,11 +9428,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             if (d > end) return false;
         }
         
-        // 3.5. Channel & Shop Filter (NEW)
+        // 3.5. Channel & Shop Filter
         if (histChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== histChannel.toUpperCase()) return false;
         if (histShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(histShop).toLowerCase()) return false;
 
-        // 4. Discrepancy Filter (กรองเฉพาะรายการที่เงินหาย/ส่วนต่าง)
+        // 4. Discrepancy Filter
         if (showDiscrepancyOnly) {
             const isDiffIncome = t.type === 'income' && t.actualSettledAmt !== undefined && Math.abs((t.grandTotal || t.total) - t.actualSettledAmt) > 0.01;
             const isDiffExpense = t.type === 'expense' && t.isFromReconciliation;
@@ -9376,8 +9447,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         }
 
         return true;
-    }).map(t => ({ ...t, issuedDocs: docStatusMap[t.orderId] || [] })).sort(sortNewestFirst);
-  }, [transactions, invoices, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histChannel, histShop]);
+    }).sort(sortNewestFirst);
+  }, [baseHistory, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histChannel, histShop]);
 
   // Reset page when filters change
   useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histChannel, histShop]);
@@ -12916,7 +12987,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           !issuedDocsMap[t.sysDocId] &&
           !(t.taxInvoiceNo && String(t.taxInvoiceNo).trim() !== '') && 
           !(t.invoiceNo && String(t.invoiceNo).trim() !== '') && 
-          !t.isInvoiced
+          !t.isInvoiced &&
+          !(t.sysDocId && String(t.sysDocId).startsWith('DMG')) // --- 🔥 NEW: ซ่อนเอกสารประเภท DMG ออกจากหน้ารอออกเอกสาร ---
       ).map(t => ({ 
           ...t, 
           invNo: t.sysDocId || t.orderId || '-', 
@@ -16557,22 +16629,40 @@ export default function App() {
     return () => unsubscribe(); 
   }, []);
    
+  // --- 🔥 CRITICAL FIX: Data Fetching Strategy (Performance Optimization) 🔥 ---
   useEffect(() => {
     if (!user || !currentAppId) return;
     
-    // --- 🔴 THE ULTIMATE FIX 1: ปิดระบบ Live Sync ชั่วคราวขณะกู้คืนข้อมูล ---
-    // ป้องกันเบราว์เซอร์สูบ RAM และเน็ตหลุดจากการพยายามโหลดข้อมูลนับหมื่นรายการแบบ Real-time พร้อมๆ กัน
+    // ปิดระบบ Live Sync ชั่วคราวขณะกู้คืนข้อมูล
     if (isRestoring || isMigrating || isBackingUp) return; 
 
     setLoading(true);
     const path = (coll) => collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', coll);
     const errorFn = (e) => { console.error("Firestore error:", e); addToast("Sync Error", "error"); };
-    const unsubInc = onSnapshot(query(path('transactions_income')), (s) => setTransactions(prev => [...prev.filter(t=>t.type!=='income'), ...s.docs.map(d=>({id:d.id, ...d.data(), type:'income', date: normalizeDate(d.data().date)}))]), errorFn);
-    const unsubExp = onSnapshot(query(path('transactions_expense')), (s) => setTransactions(prev => [...prev.filter(t=>t.type!=='expense'), ...s.docs.map(d=>({id:d.id, ...d.data(), type:'expense', date: normalizeDate(d.data().date)}))]), errorFn);
-    const unsubInv = onSnapshot(query(path('invoices')), (s) => { setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))); setLoading(false); }, errorFn);
+    
+    // 1. กำหนดขอบเขตข้อมูล (Data Horizon) - ดึงตั้งแต่วันที่ 1 ม.ค. ของปีที่แล้ว เพื่อลดภาระ RAM และป้องกันแอปค้าง
+    const currentYear = new Date().getFullYear();
+    const dataHorizonDate = new Date(currentYear - 1, 0, 1);
+
+    // 2. จำกัดขอบเขตของ Log ประวัติการนำเข้า - ดึงแค่ 6 เดือนย้อนหลัง
+    const logCutoffDate = new Date();
+    logCutoffDate.setMonth(logCutoffDate.getMonth() - 6);
+
+    // ดึง Transaction ฝั่งรับ และ จ่าย เฉพาะในช่วง Horizon
+    const unsubInc = onSnapshot(query(path('transactions_income'), where('date', '>=', dataHorizonDate)), (s) => setTransactions(prev => [...prev.filter(t=>t.type!=='income'), ...s.docs.map(d=>({id:d.id, ...d.data(), type:'income', date: normalizeDate(d.data().date)}))]), errorFn);
+    const unsubExp = onSnapshot(query(path('transactions_expense'), where('date', '>=', dataHorizonDate)), (s) => setTransactions(prev => [...prev.filter(t=>t.type!=='expense'), ...s.docs.map(d=>({id:d.id, ...d.data(), type:'expense', date: normalizeDate(d.data().date)}))]), errorFn);
+    
+    // ดึง Invoices เฉพาะในช่วง Horizon
+    const unsubInv = onSnapshot(query(path('invoices'), where('date', '>=', dataHorizonDate)), (s) => { setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))); setLoading(false); }, errorFn);
+    
+    // 🚨 ข้อยกเว้นสำคัญ: สต็อกสินค้า (inventory_batches) ต้องดึงมา "ทั้งหมด" ห้ามตัดเวลาทิ้งเด็ดขาด เพราะสินค้าเก่าอาจยังขายไม่หมด
     const unsubStock = onSnapshot(query(path('inventory_batches')), (s) => setStockBatches(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
+    
+    // คู่ค้าและโปรโมชั่น (ข้อมูลน้อย ดึงทั้งหมดได้)
     const unsubPromo = onSnapshot(query(path('promotions')), (s) => setPromotions(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
-    const unsubLogs = onSnapshot(query(path('import_logs')), (s) => setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)}))), errorFn);
+    
+    // Import Logs ดึงแค่ 6 เดือนล่าสุด
+    const unsubLogs = onSnapshot(query(path('import_logs'), where('date', '>=', logCutoffDate)), (s) => setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)}))), errorFn);
     
     return () => { unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubPromo(); unsubLogs(); };
   }, [user, currentAppId, isRestoring, isMigrating, isBackingUp]);
@@ -17492,7 +17582,7 @@ export default function App() {
             <NavButton active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard');}} icon={<PieChart size={18} />} label="แดชบอร์ด" />
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Analytics</p>
             <NavButton active={activeTab === 'monthly_report'} onClick={()=>{setActiveTab('monthly_report');}} icon={<BarChart2 size={18} />} label="สรุปยอดรายเดือน (Performance)" />
-            <NavButton active={activeTab === 'reports'} onClick={()=>{setActiveTab('reports');}} icon={<ClipboardList size={18} />} label="รายงานภาษี and บัญชี" />
+            <NavButton active={activeTab === 'reports'} onClick={()=>{setActiveTab('reports');}} icon={<ClipboardList size={18} />} label="รายงานภาษี และ บัญชี" />
             
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Operations</p>
             <NavButton active={activeTab === 'records'} onClick={()=>{setActiveTab('records');}} icon={<Store size={18} />} label="บันทึกขาย/หน้าร้าน" />
@@ -17578,9 +17668,13 @@ export default function App() {
                 <h2 className="font-bold text-slate-800 text-sm uppercase tracking-widest text-left">{activeTab.replace('_', ' ')}</h2>
             </div>
             <div className="flex items-center gap-3">
+                {/* --- 🔥 NEW: ป้ายแจ้งเตือนโหมดประหยัด RAM --- */}
+                <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg border border-emerald-200 text-[10px] font-bold shadow-sm" title={`เพื่อความเร็ว ระบบแสดงข้อมูลเฉพาะตั้งแต่ 1 ม.ค. ${new Date().getFullYear() - 1} ถึงปัจจุบัน`}>
+                    <Zap size={12}/> Speed Optimized
+                </div>
+
                 {loading && <div className="text-[10px] font-black text-indigo-600 flex items-center gap-2 bg-indigo-50 px-4 py-1.5 rounded-full border border-indigo-100 animate-pulse text-left"><Loader size={12} className="animate-spin text-center"/> SYNCING</div>}
                 
-                {/* --- NEW: ปุ่มบังคับล้างแคชและดึงข้อมูลใหม่จาก Firebase --- */}
                 <button onClick={() => window.location.reload()} className="text-[10px] font-bold text-slate-500 hover:text-indigo-600 flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm hover:shadow-md hover:border-indigo-200 transition-all">
                     <RefreshCw size={12}/> รีเฟรชซิงค์ข้อมูล
                 </button>
