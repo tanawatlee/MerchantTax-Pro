@@ -8024,7 +8024,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [histPage, setHistPage] = useState(1);
   const [showDiscrepancyOnly, setShowDiscrepancyOnly] = useState(false); // NEW: กรองเฉพาะยอดที่หายไป
   const [histPaymentStatus, setHistPaymentStatus] = useState('all'); // NEW: Payment status filter
-  const [histAttachmentStatus, setHistAttachmentStatus] = useState('all'); // --- 🔥 NEW: ตัวกรองสถานะการแนบไฟล์ ---
   const histItemsPerPage = 20;
   
   // --- 🔥 NEW: State สำหรับระบบ ลบถาวรแบบกลุ่ม (Bulk Hard Delete) ของหน้าบันทึกขาย ---
@@ -9344,19 +9343,12 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
             if (histPaymentStatus === 'unpaid' && isPaid) return false;
         }
 
-        // --- 🔥 NEW: 6. Attachment Status Filter ---
-        if (histAttachmentStatus !== 'all') {
-            const hasAttachment = !!(t.attachmentUrl && t.attachmentUrl.trim() !== '');
-            if (histAttachmentStatus === 'attached' && !hasAttachment) return false;
-            if (histAttachmentStatus === 'missing' && hasAttachment) return false;
-        }
-
         return true;
     }).sort(sortNewestFirst);
-  }, [baseHistory, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histAttachmentStatus, histChannel, histShop]);
+  }, [baseHistory, searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histChannel, histShop]);
 
   // Reset page when filters change
-  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histAttachmentStatus, histChannel, histShop]);
+  useEffect(() => { setHistPage(1); }, [searchTerm, histType, histStartDate, histEndDate, showDiscrepancyOnly, histPaymentStatus, histChannel, histShop]);
 
   // History Quick Stats
   const histStats = useMemo(() => {
@@ -9668,6 +9660,38 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           }
       });
       return missing;
+  }, [transactions, docSummaryMonth]);
+
+  // --- 🔥 NEW: คำนวณรายการที่ขาดไฟล์แนบ และ ที่แนบครบแล้ว ประจำเดือน ---
+  const missingAttachmentsList = useMemo(() => {
+      if (!docSummaryMonth) return [];
+      return transactions.filter(t => {
+          if (t.isCancelled) return false;
+          // ข้ามบิลที่ระบบสร้างอัตโนมัติ (เช่น ค่าธรรมเนียม, ส่วนต่าง) เพราะไม่มีสลิปให้แนบอยู่แล้ว
+          if (t.isFromReconciliation) return false; 
+          
+          const d = normalizeDate(t.date);
+          if (!d) return false;
+          const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          if (mStr !== docSummaryMonth) return false;
+          
+          if (t.attachmentUrl && t.attachmentUrl.trim() !== '') return false;
+
+          return true;
+      }).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+  }, [transactions, docSummaryMonth]);
+
+  const attachedCountInMonth = useMemo(() => {
+      if (!docSummaryMonth) return 0;
+      return transactions.filter(t => {
+          if (t.isCancelled || t.isFromReconciliation) return false;
+          const d = normalizeDate(t.date);
+          if (!d) return false;
+          const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          if (mStr !== docSummaryMonth) return false;
+          
+          return t.attachmentUrl && t.attachmentUrl.trim() !== '';
+      }).length;
   }, [transactions, docSummaryMonth]);
 
   const combinedDocSummaryList = useMemo(() => {
@@ -11140,16 +11164,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         <option value="all">ทุกสถานะชำระเงิน</option>
                         <option value="paid">ชำระแล้ว</option>
                         <option value="unpaid">ค้างชำระ</option>
-                    </select>
-                 </div>
-
-                 {/* --- 🔥 NEW: Attachment Status Filter --- */}
-                 <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
-                    <Cloud size={14} className="text-slate-400 shrink-0"/>
-                    <select value={histAttachmentStatus} onChange={e=>setHistAttachmentStatus(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:ring-0 p-0">
-                        <option value="all">สถานะไฟล์แนบ (ทั้งหมด)</option>
-                        <option value="missing">❌ ยังไม่แนบไฟล์</option>
-                        <option value="attached">✅ แนบไฟล์แล้ว</option>
                     </select>
                  </div>
              </div>
@@ -16323,75 +16337,6 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                 </div>
             )}
 
-            {/* --- 🔥 NEW: Missing Attachments Audit Modal --- */}
-            {showMissingAttachmentModal && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-                    <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
-                        <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
-                            <div>
-                                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Cloud className="text-blue-600"/> รายการที่รอแนบไฟล์ (Digital Filing Audit)</h3>
-                                <p className="text-xs text-slate-500 mt-1">ประจำเดือน {docSummaryMonth} (พบ <b className="text-rose-500">{missingAttachmentsList.length}</b> รายการที่ยังไม่ได้อัปโหลดรูปสลิปหรือบิล)</p>
-                            </div>
-                            <button onClick={() => setShowMissingAttachmentModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
-                        </div>
-
-                        <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl bg-slate-50">
-                            <table className="w-full text-xs text-left">
-                                <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
-                                    <tr>
-                                        <th className="p-3 pl-4">วันที่ / อ้างอิง</th>
-                                        <th className="p-3">หมวดหมู่</th>
-                                        <th className="p-3">รายละเอียด / คู่ค้า</th>
-                                        <th className="p-3 text-right">ยอดเงิน (฿)</th>
-                                        <th className="p-3 text-center pr-4">จัดการ</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    {missingAttachmentsList.map((item, idx) => (
-                                        <tr key={idx} className="hover:bg-white transition-colors">
-                                            <td className="p-3 pl-4">
-                                                <p className="font-bold text-slate-700">{formatDate(item.date)}</p>
-                                                <p className="text-[10px] font-mono font-bold text-indigo-500 mt-0.5 bg-indigo-50 px-1.5 py-0.5 rounded w-fit">{item.sysDocId || item.orderId || '-'}</p>
-                                            </td>
-                                            <td className="p-3">
-                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                                                    {item.category || (item.type === 'income' ? 'รายรับ' : 'รายจ่าย')}
-                                                </span>
-                                            </td>
-                                            <td className="p-3">
-                                                <p className="font-bold text-slate-700 truncate max-w-[200px]">{item.partnerName || 'คู่ค้าทั่วไป'}</p>
-                                                <p className="text-[10px] text-slate-500 truncate max-w-[250px]">{item.description}</p>
-                                            </td>
-                                            <td className="p-3 text-right font-black text-slate-800">
-                                                {formatCurrency(item.grandTotal || item.total)}
-                                            </td>
-                                            <td className="p-3 text-center pr-4">
-                                                <button 
-                                                    onClick={() => {
-                                                        setViewItem(item); // เปิดหน้าต่างดูรายละเอียดเพื่อให้อัปโหลดไฟล์ได้
-                                                        setShowMissingAttachmentModal(false);
-                                                    }}
-                                                    className="bg-blue-50 hover:bg-blue-600 text-blue-600 hover:text-white px-3 py-1.5 rounded-lg text-[10px] font-bold transition-colors shadow-sm flex items-center gap-1 mx-auto"
-                                                >
-                                                    <FileUp size={12}/> แนบไฟล์เลย
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                    {missingAttachmentsList.length === 0 && (
-                                        <tr><td colSpan="5" className="p-10 text-center text-emerald-600 font-bold">ข้อมูลครบถ้วน! แนบเอกสารครบทุกรายการแล้วในเดือนนี้</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div className="pt-6 mt-4 border-t border-slate-100 flex justify-end gap-3">
-                            <button onClick={() => setShowMissingAttachmentModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors shadow-md">ปิดหน้าต่าง</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             {/* --- NEW: Shipping Details Modal --- */}
             {showShippingDetailsModal && (
                 <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
@@ -16444,6 +16389,547 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                     </div>
                 </div>
             )}
+        </div>
+    );
+}
+
+// --- 🔥 NEW: เครื่องมือตั้งราคาอัจฉริยะ (AI Smart Pricing Module) ---
+function PricingCalculator({ stockBatches, showToast }) {
+    const [cost, setCost] = useState('');
+    const [desiredProfit, setDesiredProfit] = useState('');
+    const [competitorPrice, setCompetitorPrice] = useState(''); // NEW: ราคาคู่แข่ง
+    const [platformFeePct, setPlatformFeePct] = useState(15); 
+    const [marketingBufferPct, setMarketingBufferPct] = useState(5); 
+    const [selectedItemKey, setSelectedItemKey] = useState('');
+    
+    // NEW: State สำหรับ Simulator
+    const [simulatedPrice, setSimulatedPrice] = useState(''); 
+    const [includeVat, setIncludeVat] = useState(false); // --- 🔥 NEW: State สำหรับเปิด/ปิดการคิด VAT ---
+
+    const [aiSuggestion, setAiSuggestion] = useState(null);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+    // --- 🔥 NEW: Pricing History Database (Local State for MVP) ---
+    const [pricingHistory, setPricingHistory] = useState(() => {
+        try {
+            return JSON.parse(localStorage.getItem('merchant_pricing_history') || '[]');
+        } catch (e) {
+            return [];
+        }
+    });
+
+    // Save to LocalStorage whenever history changes
+    useEffect(() => {
+        localStorage.setItem('merchant_pricing_history', JSON.stringify(pricingHistory));
+    }, [pricingHistory]);
+
+    const uniqueItems = useMemo(() => {
+        const map = {};
+        stockBatches.forEach(b => {
+            const key = b.sku && b.sku !== '-' ? b.sku : b.productName;
+            if (!map[key]) map[key] = { name: b.productName, sku: b.sku, cost: b.costPerUnit || 0, sellPrice: b.sellPrice || 0 };
+        });
+        return Object.values(map);
+    }, [stockBatches]);
+
+    const handleSelectItem = (e) => {
+        const val = e.target.value;
+        setSelectedItemKey(val);
+        if (val) {
+            const item = uniqueItems.find(i => (i.sku === val || i.name === val));
+            if (item && item.cost > 0) {
+                setCost(item.cost);
+                setSimulatedPrice(item.sellPrice || ''); // ดึงราคาขายเดิมมาจำลอง
+            }
+        } else {
+            setCost('');
+            setSimulatedPrice('');
+        }
+    };
+
+    // สมการ 1: Reverse Calculation (หาจากกำไรที่อยากได้)
+    const calculations = useMemo(() => {
+        const c = Number(cost) || 0;
+        const p = Number(desiredProfit) || 0;
+        const feePct = (Number(platformFeePct) || 0) / 100;
+        const mktPct = (Number(marketingBufferPct) || 0) / 100;
+
+        const totalDeductionPct = feePct + mktPct;
+        
+        let recommendedPrice = 0;
+        if (1 - totalDeductionPct > 0) {
+            recommendedPrice = (c + p) / (1 - totalDeductionPct);
+        }
+
+        const feeAmount = recommendedPrice * feePct;
+        const mktAmount = recommendedPrice * mktPct;
+
+        return { recommendedPrice, feeAmount, mktAmount, totalDeductionPct: totalDeductionPct * 100 };
+    }, [cost, desiredProfit, platformFeePct, marketingBufferPct]);
+
+    // --- 🔥 FIX: เพิ่มกรณี 0% สำหรับขายหน้าร้าน/ช่องทางปกติ และการหัก VAT ---
+    const simulator = useMemo(() => {
+        const p = Number(simulatedPrice) || 0;
+        const c = Number(cost) || 0;
+        const mkt = p * ((Number(marketingBufferPct) || 0) / 100);
+
+        const scenarios = [
+            { name: 'ไม่หักค่าธรรมเนียม 0%', feePct: 0 },   // <-- เพิ่ม 0% สำหรับช่องทางปกติ
+            { name: 'กรณีค่าธรรมเนียม 25%', feePct: 25 },
+            { name: 'กรณีค่าธรรมเนียม 27%', feePct: 27 },
+            { name: 'กรณีค่าธรรมเนียม 30%', feePct: 30 } 
+        ];
+
+        return scenarios.map(scenario => {
+            const feeAmt = p * (scenario.feePct / 100);
+            
+            // 🔥 คำนวณ VAT 7% จากส่วนต่างกำไร (ราคาขาย - ต้นทุน)
+            let vatAmt = 0;
+            if (includeVat && p > c) {
+                vatAmt = (p - c) * 7 / 107;
+            }
+
+            const netProfit = p - c - feeAmt - mkt - vatAmt;
+            const marginPct = p > 0 ? (netProfit / p) * 100 : 0;
+            return { ...scenario, feeAmt, netProfit, marginPct, mkt, vatAmt };
+        });
+    }, [simulatedPrice, cost, marketingBufferPct, includeVat]);
+
+    const handleAiAnalysis = async () => {
+        if (calculations.recommendedPrice <= 0 || !cost || (!desiredProfit && !simulatedPrice)) {
+            showToast("กรุณากรอกต้นทุน และ กำไร/ราคาขายที่ต้องการ ให้ครบถ้วนก่อน", "error");
+            return;
+        }
+        setIsAnalyzing(true);
+        try {
+            const basePrice = simulatedPrice ? Number(simulatedPrice) : calculations.recommendedPrice;
+            const compText = competitorPrice ? `- ราคาคู่แข่งในตลาดเฉลี่ย: ${competitorPrice} บาท` : '- ไม่มีข้อมูลราคาคู่แข่ง';
+            
+            const prompt = `
+            คุณคือผู้เชี่ยวชาญด้านกลยุทธ์การตั้งราคา (Pricing Strategy & Consumer Psychology)
+            ข้อมูลสินค้าและต้นทุน:
+            - ต้นทุนสินค้า: ${cost} บาท
+            - ราคาที่คำนวณเบื้องต้น: ${basePrice.toFixed(2)} บาท
+            ${compText}
+
+            กรุณาให้คำแนะนำ:
+            1. "Charm Price" (ราคาจิตวิทยา) ที่เหมาะสมลงท้ายด้วย 9, 5 หรือ 0 (และควรมี Margin เพียงพอ)
+            2. เหตุผลเชิงจิตวิทยา (สั้นๆ กระชับ)
+            3. "Bundle Price" (ราคาขายส่ง/จัดเซ็ต) เช่น ซื้อ 2 ชิ้น หรือ 3 ชิ้น ควรตั้งราคาเท่าไหร่ให้ลูกค้ารู้สึกคุ้ม แต่เรายังได้กำไร
+            4. "Value Proposition" ถ้าเราขายแพงกว่าคู่แข่ง เราควรชูจุดขายอะไร? (สั้นๆ)
+
+            ตอบกลับเป็น JSON format เท่านั้น ห้ามมีข้อความอื่น:
+            {
+                "charmPrice": 299,
+                "reason": "เลข 9 ทำให้ลูกค้ารู้สึกว่ายังไม่ถึง 300...",
+                "bundleIdea": "ซื้อ 2 ชิ้น 550 บาท (ลด X บาท) ช่วยเพิ่ม AOV...",
+                "valueProp": "เน้นการรับประกัน หรือ แพ็คเกจที่ดูพรีเมียมกว่าคู่แข่ง..."
+            }
+            `;
+            const res = await callGeminiAPI(prompt, true);
+            if (res && res.charmPrice) {
+                setAiSuggestion(res);
+                setSimulatedPrice(res.charmPrice); // อัปเดตราคาใน Simulator เป็นราคาที่ AI แนะนำอัตโนมัติ
+                showToast("AI วิเคราะห์ราคาเสร็จสิ้น!", "success");
+            }
+        } catch (e) {
+            console.error(e);
+            showToast("AI ขัดข้อง หรือ API Key ไม่ถูกต้อง กรุณาลองใหม่", "error");
+        }
+        setIsAnalyzing(false);
+    };
+
+    // --- 🔥 NEW: ฟังก์ชันบันทึกข้อมูลกลยุทธ์ราคา (Save Strategy) ---
+    const handleSaveStrategy = () => {
+        if (!cost || !simulatedPrice) {
+            showToast("กรุณาระบุต้นทุนและราคาขายก่อนบันทึก", "error");
+            return;
+        }
+
+        const itemName = selectedItemKey ? uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey)?.name : 'สินค้าทั่วไป (ไม่ระบุชื่อ)';
+        const itemSku = selectedItemKey ? uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey)?.sku : '-';
+
+        const newEntry = {
+            id: Date.now().toString(),
+            date: formatDateISO(new Date()),
+            name: itemName,
+            sku: itemSku,
+            cost: Number(cost),
+            sellPrice: Number(simulatedPrice),
+            competitorPrice: competitorPrice ? Number(competitorPrice) : null,
+            targetProfit: Number(desiredProfit) || 0,
+            aiCharmPrice: aiSuggestion?.charmPrice || null,
+            bundleIdea: aiSuggestion?.bundleIdea || '-',
+            valueProp: aiSuggestion?.valueProp || '-',
+            simulations: simulator.map(s => ({
+                feePct: s.feePct,
+                netProfit: s.netProfit,
+                marginPct: s.marginPct
+            }))
+        };
+
+        setPricingHistory(prev => [newEntry, ...prev]);
+        showToast("บันทึกกลยุทธ์ราคาสำเร็จ", "success");
+    };
+
+    const handleDeleteHistory = (id) => {
+        setPricingHistory(prev => prev.filter(h => h.id !== id));
+        showToast("ลบประวัติสำเร็จ", "success");
+    };
+
+    // --- 🔥 NEW: ฟังก์ชันส่งออก Excel (Export Strategy) ---
+    const handleExportPricingExcel = async () => {
+        if (pricingHistory.length === 0) {
+            showToast("ไม่มีข้อมูลสำหรับส่งออก", "error");
+            return;
+        }
+        
+        showToast("กำลังเตรียมไฟล์ Excel...", "success");
+        if (!window.XLSX) {
+            const script = document.createElement('script');
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+            await new Promise(res => { script.onload = res; document.body.appendChild(script); });
+        }
+
+        try {
+            const dataRows = [
+                ["รายงานฐานข้อมูลกลยุทธ์ราคา (Pricing Strategy Database)"],
+                ["วันที่ดึงข้อมูล", formatDate(new Date())],
+                [],
+                ["วันที่วิเคราะห์", "SKU", "ชื่อสินค้า", "ต้นทุน (Cost)", "ราคาตลาด (Competitor)", "ราคาที่ตั้ง (Sell Price)", "กำไรสุทธิ 0% (หน้าร้าน)", "กำไรสุทธิ 25%", "กำไรสุทธิ 27%", "กำไรสุทธิ 30%", "ไอเดียจัดเซ็ต (Bundle)", "จุดขายสู้คู่แข่ง (Value Prop)"]
+            ];
+
+            pricingHistory.forEach(h => {
+                const getSim = (pct) => {
+                    const sim = h.simulations?.find(s => s.feePct === pct);
+                    return sim ? Number(sim.netProfit).toFixed(2) : '-';
+                };
+
+                dataRows.push([
+                    formatDate(h.date),
+                    h.sku,
+                    h.name,
+                    Number(h.cost).toFixed(2),
+                    h.competitorPrice ? Number(h.competitorPrice).toFixed(2) : '-',
+                    Number(h.sellPrice).toFixed(2),
+                    getSim(0),
+                    getSim(25),
+                    getSim(27),
+                    getSim(30),
+                    h.bundleIdea,
+                    h.valueProp
+                ]);
+            });
+
+            const wb = window.XLSX.utils.book_new();
+            const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
+            window.XLSX.utils.book_append_sheet(wb, ws, "Pricing Strategy");
+            window.XLSX.writeFile(wb, `Pricing_Strategy_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
+            
+            showToast("ดาวน์โหลดไฟล์ Excel สำเร็จ", "success");
+        } catch (e) {
+            console.error(e);
+            showToast("เกิดข้อผิดพลาดในการส่งออก Excel", "error");
+        }
+    };
+
+    return (
+        <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full h-full pb-20">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 border-b pb-4 gap-4">
+                <div className="space-y-1">
+                    <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><Calculator className="text-indigo-600"/> AI Smart Pricing & Strategy</h2>
+                    <p className="text-sm text-slate-400 font-medium">ศูนย์บัญชาการกลยุทธ์ราคา: คำนวณกำไรย้อนหลัง และจำลองกำไรสุทธิแยกตามแพลตฟอร์ม</p>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+                
+                {/* --- Left Column: Inputs --- */}
+                <div className="xl:col-span-4 flex flex-col gap-6">
+                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm space-y-5">
+                        <h3 className="text-base font-black text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2"><Box size={16} className="text-indigo-500"/> ข้อมูลสินค้า & ต้นทุน</h3>
+                        
+                        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                            <label className="text-xs font-bold text-slate-500 uppercase">ดึงข้อมูลจากคลังสินค้า (Optional)</label>
+                            <select value={selectedItemKey} onChange={handleSelectItem} className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer">
+                                <option value="">-- ระบุต้นทุนเอง (Manual) --</option>
+                                {uniqueItems.map((item, idx) => (
+                                    <option key={idx} value={item.sku !== '-' ? item.sku : item.name}>
+                                        {item.name} (ต้นทุน: {formatCurrency(item.cost)} ฿)
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase">ต้นทุนสินค้า (Cost)</label>
+                                <input type="number" value={cost} onChange={e=>setCost(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-base font-black mt-1 outline-none focus:ring-2 focus:ring-indigo-200 text-slate-800" placeholder="0.00" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-amber-500 uppercase">ราคาคู่แข่ง (Competitor)</label>
+                                <input type="number" value={competitorPrice} onChange={e=>setCompetitorPrice(e.target.value)} className="w-full bg-amber-50 border border-amber-200 rounded-xl p-3 text-base font-black mt-1 outline-none focus:ring-2 focus:ring-amber-200 text-amber-700" placeholder="ไม่บังคับ" />
+                            </div>
+                        </div>
+
+                        <div className="pt-3 border-t border-slate-100">
+                            <label className="text-xs font-bold text-slate-700 uppercase mb-2 flex items-center gap-2"><Percent size={14} className="text-rose-500"/> ภาระค่าใช้จ่ายแฝง (%)</label>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-[9px] font-bold text-slate-400 uppercase">Platform Fee (เฉลี่ย)</label>
+                                    <input type="number" value={platformFeePct} onChange={e=>setPlatformFeePct(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold mt-1 outline-none focus:border-indigo-400 text-slate-700" placeholder="15" />
+                                </div>
+                                <div>
+                                    <label className="text-[9px] font-bold text-slate-400 uppercase">เผื่อส่วนลด/Ads Buffer</label>
+                                    <input type="number" value={marketingBufferPct} onChange={e=>setMarketingBufferPct(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold mt-1 outline-none focus:border-indigo-400 text-slate-700" placeholder="5" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* เครื่องมือที่ 1: หาจากกำไร */}
+                    <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-6 rounded-[32px] shadow-lg text-white relative overflow-hidden">
+                        <TrendingUp size={80} className="absolute -right-4 -bottom-4 opacity-10" />
+                        <h3 className="text-sm font-black text-indigo-200 mb-4 flex items-center gap-2 relative z-10">โหมดที่ 1: หาจากกำไรที่อยากได้</h3>
+                        <div className="relative z-10">
+                            <label className="text-[10px] font-bold text-white uppercase opacity-80">กำไรสุทธิที่ต้องการ/ชิ้น (Net Profit)</label>
+                            <div className="flex items-center gap-3 mt-1">
+                                <input type="number" value={desiredProfit} onChange={e=>setDesiredProfit(e.target.value)} className="w-full bg-white/20 border border-white/30 rounded-xl p-3 text-2xl font-black outline-none focus:border-white text-white placeholder-white/40" placeholder="0.00" />
+                                <span className="font-bold text-lg text-indigo-300">฿</span>
+                            </div>
+                        </div>
+                        <div className="mt-5 pt-4 border-t border-white/20 relative z-10">
+                            <p className="text-[10px] uppercase font-bold text-indigo-200">คุณต้องตั้งราคาขายอย่างน้อย</p>
+                            <p className="text-3xl font-black mt-1">{formatCurrency(calculations.recommendedPrice)} <span className="text-base font-bold">฿</span></p>
+                            <button onClick={() => setSimulatedPrice(calculations.recommendedPrice.toFixed(0))} className="mt-3 w-full bg-white/20 hover:bg-white/30 py-2 rounded-xl text-xs font-bold transition-colors">
+                                นำราคานี้ไปจำลอง (Simulate)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                {/* --- Right Column: Simulators & AI --- */}
+                <div className="xl:col-span-8 flex flex-col gap-6">
+                    
+                    {/* เครื่องมือที่ 2: Multi-Platform Simulator */}
+                    <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm">
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 border-b border-slate-100 pb-4">
+                            <div>
+                                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Layers size={20} className="text-emerald-500"/> โหมดที่ 2: จำลองกำไรตามโครงสร้างค่าธรรมเนียม</h3>
+                                <p className="text-xs text-slate-400 mt-1">ใส่ราคาขายสุทธิ เพื่อดูว่าเมื่อโดนหักแล้ว จะเหลือกำไรเข้ากระเป๋าจริงๆ กี่บาท</p>
+                            </div>
+                            <div className="flex flex-col md:items-end gap-3 w-full md:w-auto">
+                                <div className="flex items-center gap-3 bg-emerald-50 p-2 rounded-2xl border border-emerald-100 w-full md:w-auto">
+                                    <span className="text-xs font-bold text-emerald-700 whitespace-nowrap pl-2">ราคาขาย (Price):</span>
+                                    <input type="number" value={simulatedPrice} onChange={e=>setSimulatedPrice(e.target.value)} className="w-full md:w-32 bg-white border-none rounded-xl p-2 text-lg font-black text-emerald-700 outline-none focus:ring-2 focus:ring-emerald-300 shadow-sm text-center" placeholder="0" />
+                                </div>
+                                {/* --- 🔥 NEW: ปุ่ม Toggle หัก VAT 7% --- */}
+                                <label className="flex items-center gap-2 cursor-pointer w-fit group">
+                                    <input type="checkbox" checked={includeVat} onChange={e=>setIncludeVat(e.target.checked)} className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer" />
+                                    <span className="text-[10px] font-bold text-slate-500 group-hover:text-indigo-600 transition-colors">
+                                        กัน VAT 7% นำส่งสรรพากร (คิดจากส่วนต่าง)
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+
+                        {/* --- 🔥 FIX: ขยาย Grid เป็น 4 ช่อง เพื่อให้เรียงสวยงาม --- */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            {simulator.map((plat, idx) => {
+                                const is0 = plat.feePct === 0;
+                                const is25 = plat.feePct === 25;
+                                const is27 = plat.feePct === 27;
+                                
+                                const bgClass = is0 ? 'bg-emerald-50 border-emerald-200' : is25 ? 'bg-indigo-50 border-indigo-200' : is27 ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200';
+                                const titleClass = is0 ? 'text-emerald-600' : is25 ? 'text-indigo-600' : is27 ? 'text-amber-600' : 'text-rose-600';
+                                const feeTextClass = is0 ? 'text-emerald-500' : is25 ? 'text-indigo-500' : is27 ? 'text-amber-500' : 'text-rose-500';
+                                const badgeClass = plat.netProfit > 0 
+                                    ? (is0 ? 'bg-emerald-100 text-emerald-700' : is25 ? 'bg-indigo-100 text-indigo-700' : is27 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700')
+                                    : 'bg-slate-200 text-slate-500';
+
+                                return (
+                                    <div key={idx} className={`p-4 rounded-2xl border flex flex-col justify-between ${bgClass}`}>
+                                        <div>
+                                            <p className={`text-[10px] font-black uppercase tracking-widest ${titleClass}`}>{plat.name}</p>
+                                            <div className="flex justify-between items-center mt-3 mb-1.5">
+                                                <span className="text-[10px] font-bold text-slate-500">โดนหัก ({plat.feePct}%):</span>
+                                                <span className={`text-xs font-bold ${feeTextClass}`}>-{formatCurrency(plat.feeAmt)}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center mb-1.5">
+                                                <span className="text-[10px] font-bold text-slate-500">เผื่อทำโปร/Ads:</span>
+                                                <span className="text-xs font-bold text-slate-400">-{formatCurrency(plat.mkt)}</span>
+                                            </div>
+                                            {/* --- 🔥 NEW: โชว์ยอดหัก VAT เมื่อเปิด Toggle --- */}
+                                            {includeVat && (
+                                                <div className="flex justify-between items-center mb-1.5 animate-fadeIn">
+                                                    <span className="text-[10px] font-bold text-rose-500">กัน VAT 7% ส่งหลวง:</span>
+                                                    <span className="text-xs font-black text-rose-500">-{formatCurrency(plat.vatAmt)}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="pt-3 border-t border-slate-200/60 mt-2">
+                                            <p className={`text-[9px] font-bold uppercase mb-0.5 ${titleClass}`}>กำไรสุทธิ (Net Profit)</p>
+                                            <div className="flex items-end justify-between">
+                                                <p className="text-2xl font-black text-slate-800">{formatCurrency(plat.netProfit)}</p>
+                                            </div>
+                                            <div className="mt-1">
+                                                <span className={`px-2 py-0.5 rounded text-[10px] font-black w-fit inline-block ${badgeClass}`}>
+                                                    Margin {plat.marginPct.toFixed(1)}%
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* เครื่องมือที่ 3: AI Pricing Strategy */}
+                    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-6 md:p-8 rounded-[32px] border border-indigo-100 shadow-sm relative flex-1 flex flex-col justify-center min-h-[250px]">
+                        <Wand2 size={80} className="absolute right-4 top-4 text-indigo-200 opacity-40 pointer-events-none" />
+                        <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                            <div>
+                                <h4 className="font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="text-amber-500"/> AI Strategy Insight (วิเคราะห์จิตวิทยาราคา)</h4>
+                                <p className="text-xs text-indigo-600/70 mt-1">ให้ AI ช่วยเกลาตัวเลข แนะนำโปรโมชั่นแบบจัดเซ็ต และหาจุดขายเพื่อสู้กับคู่แข่ง</p>
+                            </div>
+                            <div className="flex gap-2 w-full md:w-auto">
+                                {!aiSuggestion && (
+                                    <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
+                                        {isAnalyzing ? <Loader className="animate-spin" size={16}/> : <Activity size={16}/>} 
+                                        {isAnalyzing ? 'กำลังวิเคราะห์...' : 'ให้ AI แนะนำกลยุทธ์'}
+                                    </button>
+                                )}
+                                {/* --- 🔥 NEW: Save Strategy Button --- */}
+                                {simulatedPrice && cost && (
+                                    <button onClick={handleSaveStrategy} className="flex-1 md:flex-none bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2 shrink-0">
+                                        <Save size={16}/> บันทึกกลยุทธ์
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        
+                        {aiSuggestion ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fadeIn relative z-10 flex-1">
+                                <div className="space-y-4 flex flex-col">
+                                    <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm flex justify-between items-center">
+                                        <div>
+                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">ราคาจิตวิทยา (Charm Price)</p>
+                                            <p className="text-3xl font-black text-indigo-600 mt-1">{formatCurrency(aiSuggestion.charmPrice)} <span className="text-base">฿</span></p>
+                                        </div>
+                                        <div className="p-3 bg-indigo-50 text-indigo-500 rounded-xl"><Tag size={24}/></div>
+                                    </div>
+                                    <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm flex-1">
+                                        <p className="text-[10px] font-black uppercase text-indigo-500 mb-2 flex items-center gap-1"><Info size={12}/> ทำไมต้องราคานี้?</p>
+                                        <p className="text-sm font-medium text-slate-700 leading-relaxed">{aiSuggestion.reason}</p>
+                                    </div>
+                                </div>
+                                <div className="space-y-4 flex flex-col">
+                                    <div className="bg-amber-50 p-5 rounded-2xl border border-amber-100 shadow-sm flex-1">
+                                        <p className="text-[10px] font-black uppercase text-amber-600 mb-2 flex items-center gap-1"><LayersIcon size={12}/> กลยุทธ์ขายส่ง / จัดเซ็ต (Bundle Idea)</p>
+                                        <p className="text-sm font-medium text-amber-900 leading-relaxed">{aiSuggestion.bundleIdea}</p>
+                                    </div>
+                                    <div className="bg-rose-50 p-5 rounded-2xl border border-rose-100 shadow-sm flex-1">
+                                        <p className="text-[10px] font-black uppercase text-rose-600 mb-2 flex items-center gap-1"><TrendingUp size={12}/> จุดขายสู้คู่แข่ง (Value Proposition)</p>
+                                        <p className="text-sm font-medium text-rose-900 leading-relaxed">{aiSuggestion.valueProp}</p>
+                                    </div>
+                                </div>
+                                <div className="col-span-full pt-2 flex justify-end">
+                                    <button onClick={() => setAiSuggestion(null)} className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors flex items-center gap-1">
+                                        <RefreshCw size={12}/> คำนวณใหม่ (Regenerate)
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex-1 border-2 border-dashed border-indigo-200 rounded-2xl flex flex-col items-center justify-center text-indigo-300 py-10 relative z-10 bg-white/50">
+                                <Sparkles size={40} className="mb-2 opacity-50"/>
+                                <p className="font-bold text-sm">พร้อมให้ AI ช่วยวางกลยุทธ์แล้ว</p>
+                                <p className="text-xs opacity-70">ระบุต้นทุน กำไร หรือใส่ราคาคู่แข่ง แล้วกดปุ่มด้านบนได้เลย</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {/* --- 🔥 NEW: Pricing History Database Table --- */}
+            <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm mt-6">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 border-b border-slate-100 pb-4 gap-4">
+                    <div>
+                        <h3 className="font-black text-slate-800 text-lg flex items-center gap-2"><Database className="text-indigo-500"/> คลังข้อมูลกลยุทธ์ราคา (Pricing Strategy Database)</h3>
+                        <p className="text-xs text-slate-400 mt-1">ประวัติการคำนวณและไอเดียการตั้งราคาที่บันทึกไว้ เพื่อเปรียบเทียบและนำไปใช้งานจริง</p>
+                    </div>
+                    <button onClick={handleExportPricingExcel} className="bg-emerald-50 text-emerald-600 px-4 py-2.5 rounded-xl text-xs font-bold border border-emerald-200 flex items-center gap-2 hover:bg-emerald-100 transition-colors shadow-sm shrink-0 whitespace-nowrap">
+                        <FileSpreadsheet size={16}/> ส่งออกเป็น Excel (Export)
+                    </button>
+                </div>
+                
+                <div className="overflow-x-auto custom-scrollbar">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-500 sticky top-0">
+                            <tr>
+                                <th className="p-4 rounded-tl-xl border-b border-slate-100">วันที่ / สินค้า</th>
+                                <th className="p-4 text-right border-b border-slate-100">ต้นทุน (Cost)</th>
+                                <th className="p-4 text-right border-b border-slate-100">ราคาที่ตั้ง (Sell)</th>
+                                <th className="p-4 text-right border-b border-slate-100 bg-emerald-50/50 text-emerald-600" title="ขายหน้าร้าน (ช่องทางปกติ)">Net 0%</th>
+                                <th className="p-4 text-right border-b border-slate-100 bg-indigo-50/50 text-indigo-600" title="ขายบน Platform หัก 25%">Net 25%</th>
+                                <th className="p-4 text-right border-b border-slate-100 bg-rose-50/50 text-rose-600" title="ขายบน Platform หัก 30%">Net 30%</th>
+                                <th className="p-4 border-b border-slate-100 w-48">AI Strategy Idea</th>
+                                <th className="p-4 text-center rounded-tr-xl border-b border-slate-100">จัดการ</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {pricingHistory.map((item) => (
+                                <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
+                                    <td className="p-4">
+                                        <p className="text-[10px] text-slate-400 font-bold mb-1">{formatDate(item.date)}</p>
+                                        <p className="font-bold text-slate-700 line-clamp-1">{item.name}</p>
+                                        <p className="text-[10px] font-mono text-indigo-500 mt-0.5">SKU: {item.sku}</p>
+                                    </td>
+                                    <td className="p-4 text-right font-bold text-slate-500">{formatCurrency(item.cost)}</td>
+                                    <td className="p-4 text-right">
+                                        <span className="font-black text-slate-800 text-lg">{formatCurrency(item.sellPrice)}</span>
+                                        {item.competitorPrice && (
+                                            <p className="text-[9px] text-amber-500 font-bold mt-1">คู่แข่ง: {formatCurrency(item.competitorPrice)}</p>
+                                        )}
+                                    </td>
+                                    
+                                    {/* Simulated Profits */}
+                                    <td className="p-4 text-right font-black text-emerald-600 bg-emerald-50/20">
+                                        {formatCurrency(item.simulations?.find(s => s.feePct === 0)?.netProfit)}
+                                    </td>
+                                    <td className="p-4 text-right font-black text-indigo-600 bg-indigo-50/20">
+                                        {formatCurrency(item.simulations?.find(s => s.feePct === 25)?.netProfit)}
+                                    </td>
+                                    <td className="p-4 text-right font-black text-rose-600 bg-rose-50/20">
+                                        {formatCurrency(item.simulations?.find(s => s.feePct === 30)?.netProfit)}
+                                    </td>
+
+                                    <td className="p-4">
+                                        <p className="text-[10px] text-slate-600 line-clamp-2" title={item.bundleIdea}>
+                                            <LayersIcon size={10} className="inline mr-1 text-amber-500"/>{item.bundleIdea}
+                                        </p>
+                                        <p className="text-[10px] text-slate-600 line-clamp-2 mt-1" title={item.valueProp}>
+                                            <TrendingUp size={10} className="inline mr-1 text-rose-500"/>{item.valueProp}
+                                        </p>
+                                    </td>
+                                    <td className="p-4 text-center">
+                                        <button onClick={() => handleDeleteHistory(item.id)} className="p-2 text-rose-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100">
+                                            <Trash2 size={16}/>
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                            {pricingHistory.length === 0 && (
+                                <tr>
+                                    <td colSpan="8" className="p-10 text-center text-slate-400 font-bold">
+                                        ยังไม่มีประวัติการบันทึกกลยุทธ์ราคา<br/>
+                                        <span className="text-xs font-normal mt-1 block">กดปุ่ม "บันทึกกลยุทธ์" ด้านบน เพื่อจัดเก็บข้อมูลลงตาราง</span>
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     );
 }
@@ -17551,6 +18037,10 @@ export default function App() {
       case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} transactions={transactions} appId={currentAppId} showToast={addToast} preFillData={preFillInvoice} promotions={promotions} />;
       case 'reports': return <TaxReports transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} user={user} />;
       case 'promotions': return <PromotionManager appId={currentAppId} promotions={promotions} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} />;
+      
+      {/* --- 🔥 NEW: Router สำหรับเครื่องมือตั้งราคา --- */}
+      case 'pricing': return <PricingCalculator stockBatches={stockBatches} showToast={addToast} />;
+      
       case 'guide': return <TaxGuide />;
       default: return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
     }
@@ -17579,6 +18069,10 @@ export default function App() {
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Operations</p>
             <NavButton active={activeTab === 'records'} onClick={()=>{setActiveTab('records');}} icon={<Store size={18} />} label="บันทึกขาย/หน้าร้าน" />
             <NavButton active={activeTab === 'promotions'} onClick={()=>{setActiveTab('promotions');}} icon={<Gift size={18} />} label="ปรึกษาโปรโมชั่น (AI)" />
+            
+            {/* --- 🔥 NEW: ปุ่มเข้าสู่หน้าเครื่องมือตั้งราคา --- */}
+            <NavButton active={activeTab === 'pricing'} onClick={()=>{setActiveTab('pricing');}} icon={<Calculator size={18} />} label="เครื่องมือตั้งราคา (AI)" />
+            
             <NavButton active={activeTab === 'import'} onClick={()=>{setActiveTab('import');}} icon={<FileUp size={18} />} label="Bulk Import" />
             <NavButton active={activeTab === 'stock'} onClick={()=>{setActiveTab('stock');}} icon={<Box size={18} />} label="คลังสินค้า FIFO" />
             <NavButton active={activeTab === 'invoice'} onClick={()=>{setActiveTab('invoice'); setPreFillInvoice(null);}} icon={<Printer size={18} />} label="ใบกำกับภาษี Pro" />
