@@ -8650,7 +8650,33 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       const reader = new FileReader();
       reader.onloadend = async () => {
           try {
-              const base64Img = reader.result;
+              // --- 🔥 FIX: เพิ่มระบบบีบอัดและย่อขนาดภาพ (Image Compression) ก่อนส่งให้ AI ---
+              // ช่วยแก้ปัญหา Payload Too Large (รูปใหญ่เกิน) ที่ทำให้สแกนไม่ติด 90%
+              const img = new Image();
+              img.src = reader.result;
+              await new Promise(resolve => img.onload = resolve);
+
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+              const MAX_DIMENSION = 1600; // ขนาดที่พอดีสำหรับการอ่าน OCR โดยไม่กินแบนด์วิธ
+              let width = img.width;
+              let height = img.height;
+
+              if (width > height && width > MAX_DIMENSION) {
+                  height *= MAX_DIMENSION / width;
+                  width = MAX_DIMENSION;
+              } else if (height > MAX_DIMENSION) {
+                  width *= MAX_DIMENSION / height;
+                  height = MAX_DIMENSION;
+              }
+              canvas.width = width;
+              canvas.height = height;
+              
+              // วาดภาพลง Canvas และดึงข้อมูลกลับมาเป็น JPEG เพื่อลดขนาดไฟล์
+              ctx.drawImage(img, 0, 0, width, height);
+              const compressedBase64 = canvas.toDataURL('image/jpeg', 0.85); // คุณภาพ 85% ลดขนาดลงได้กว่า 70%
+
+              const base64Img = compressedBase64;
               const expenseCategories = CONSTANTS.CATEGORIES.EXPENSE.join(', ');
               const prompt = `
               คุณคือผู้เชี่ยวชาญด้านบัญชีและระบบสกัดข้อมูล OCR ขั้นสูง (High Accuracy) ตรวจสอบรูปภาพใบเสร็จรับเงิน/ใบกำกับภาษีของไทย (เช่น Shopee, Lazada, ใบเสร็จทั่วไป)
