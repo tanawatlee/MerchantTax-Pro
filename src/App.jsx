@@ -8796,7 +8796,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               }
           } catch (err) {
               console.error(err);
-              showToast("ไม่สามารถสแกนใบเสร็จได้ กรุณากรอกข้อมูลเอง (หรือตรวจสอบ API Key)", "error");
+              // --- 🔥 FIX: จับ Error ระดับเจาะจง เพื่อให้รู้ว่าพลาดที่อะไรบน Vercel ---
+              if (err.message === "API_KEY_MISSING") {
+                  showToast("กรุณาตั้งค่า API Key ก่อนใช้งาน (เมนูซ้ายล่าง 'เครื่องมือขั้นสูง' > 'ตั้งค่า AI API Key')", "error");
+              } else if (err.message === "INVALID_API_KEY") {
+                  showToast("API Key ไม่ถูกต้อง หรือถูกจำกัดสิทธิ์ (Restrictions) ไว้ กรุณาตรวจสอบ", "error");
+              } else {
+                  showToast("ไม่สามารถสแกนใบเสร็จได้ กรุณากรอกข้อมูลเอง หรือลองใหม่อีกครั้ง", "error");
+              }
           }
           setIsOcrProcessing(false);
           if (ocrInputRef.current) ocrInputRef.current.value = '';
