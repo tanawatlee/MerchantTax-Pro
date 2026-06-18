@@ -358,43 +358,44 @@ const calculatePromotions = (currentItems, allPromotions) => {
     return { totalDiscount, newFreeItems, appliedNames: [...new Set(appliedNames)] };
 };
 
-// --- 🔥 UPGRADED: AI Core Engine (Gemini 3.5 Flash) ---
+// --- 🔥 UPGRADED: AI Core Engine (Official Google API Standard) ---
 const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
-    const userApiKey = localStorage.getItem('gemini_api_key');
+    // 1. ล็อก API Key ตามข้อกำหนดสภาพแวดล้อม (Runtime Environment จะแทรกคีย์ให้ความปลอดภัยสูงสุด)
+    const apiKey = ""; 
     
-    if (!userApiKey || userApiKey.trim() === "") {
-        throw new Error("API_KEY_MISSING");
-    }
+    // 2. ใช้ Model ล่าสุดตามมาตรฐาน
+    const modelName = "gemini-2.5-flash-preview-09-2025"; 
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-    // --- 🔥 FIX: ใช้โมเดลล่าสุดของปี 2026 (Gemini 3.5 Flash) แทนโมเดล 1.5 ที่ถูกปิดตัวไปแล้ว ---
-    const modelName = "gemini-3.5-flash"; 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${userApiKey.trim()}`;
-
-    const parts = [{ text: prompt }];
+    // 3. โครงสร้าง Request Payload ตรงตามมาตรฐาน Official SDK ของ Google
+    const parts = [];
+    if (prompt) parts.push({ text: prompt });
     
-    // โหลดรูปภาพและระบุ MimeType อัตโนมัติ
+    // แนบรูปภาพถ้ามี
     if (imageBase64) {
         const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
         const mimeType = imageBase64.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
-        parts.push({ inlineData: { mimeType, data: base64Data } });
+        parts.push({ inlineData: { mimeType: mimeType, data: base64Data } });
     }
     
     const payload = { 
-        contents: [{ role: "user", parts }],
+        contents: [{ role: "user", parts: parts }],
         generationConfig: {
-            temperature: 0.3, // ปรับค่า 0.3 ให้ AI เน้นความแม่นยำของตัวเลข ลดการเดาสุ่ม
-            topK: 40,
-            topP: 0.95
+            temperature: 0.1, // ตั้งค่าอุณหภูมิให้ต่ำ เพื่อให้ AI ตอบแบบตรงไปตรงมาและแม่นยำที่สุด
+            topP: 0.95,
+            topK: 40
         }
     };
     
-    // บังคับให้ AI ส่งข้อมูลกลับมาเป็น JSON ตามโครงสร้างเป๊ะๆ
+    // บังคับ Response ให้คืนค่าเป็น JSON สมบูรณ์แบบ
     if (isJson) {
         payload.generationConfig.responseMimeType = "application/json";
     }
     
-    let delay = 1000;
-    for (let i = 0; i < 5; i++) {
+    // 4. ระบบ Exponential Backoff (1s, 2s, 4s, 8s, 16s) ตาม Official Docs ของ Google
+    const delays = [1000, 2000, 4000, 8000, 16000];
+    
+    for (let i = 0; i < delays.length; i++) {
         try {
             const res = await fetch(url, { 
                 method: 'POST', 
@@ -402,40 +403,42 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
                 body: JSON.stringify(payload) 
             });
             
-            // อ่านข้อความ Error จากฝั่ง Google โดยตรงเพื่อนำมาแสดงผล
             if (!res.ok) {
                 const errorData = await res.json().catch(() => ({}));
-                throw new Error(`[API Error ${res.status}] ${errorData?.error?.message || res.statusText}`);
+                throw new Error(errorData.error?.message || `API Error ${res.status}`);
             }
             
             const data = await res.json();
-            let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            let textResult = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
             
             if (isJson) {
-                // ล้างอักขระขยะที่ AI อาจพ่นแถมมา เพื่อป้องกัน JSON.parse พัง
-                text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-                return JSON.parse(text);
+                try {
+                    // 1. ลอง Parse ข้อมูลตรงๆ ก่อน (เพราะ responseMimeType ปกติจะส่ง JSON ที่ถูกต้องมาให้)
+                    return JSON.parse(textResult);
+                } catch (parseError) {
+                    // 2. ถ้า Parse พัง ค่อยเข้าสู่กระบวนการทำความสะอาด (Self-Healing)
+                    let cleanText = textResult.replace(/```json/gi, '').replace(/```/g, '').trim();
+                    
+                    const jsonMatch = cleanText.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+                    if (jsonMatch) {
+                        try {
+                            return JSON.parse(jsonMatch[0]);
+                        } catch (e2) {
+                            // ท่าไม้ตายสุดท้าย กรณีมี \n แทรกอยู่ใน Value ของ JSON จริงๆ
+                            let bruteForceClean = jsonMatch[0].replace(/\n/g, "\\n").replace(/\r/g, "");
+                            return JSON.parse(bruteForceClean);
+                        }
+                    }
+                    throw new Error("รูปแบบข้อมูล AI ไม่ถูกต้อง");
+                }
             }
-            return text;
+            return textResult;
         } catch (e) {
-            console.warn(`[Gemini AI] Attempt ${i + 1} Failed:`, e.message);
-            
-            if (e.message.includes('API_KEY_MISSING')) {
-                throw new Error("กรุณาตั้งค่า API Key ของคุณในเมนู 'เครื่องมือขั้นสูง' ก่อนใช้งาน AI");
+            console.warn(`[Gemini API] Attempt ${i + 1} Failed:`, e.message);
+            if (i === delays.length - 1) {
+                throw new Error(`ระบบ AI ขัดข้องชั่วคราว: ${e.message} กรุณาลองใหม่อีกครั้ง`);
             }
-            if (e.message.includes('[API Error 400]')) {
-                throw new Error(`ส่งข้อมูลไม่สำเร็จ (HTTP 400) กรุณาตรวจสอบรูปภาพหรือข้อมูล: ${e.message}`);
-            }
-            if (e.message.includes('[API Error 403]')) {
-                throw new Error(`API Key ไม่ถูกต้อง หรือไม่มีสิทธิ์การใช้งาน (HTTP 403)`);
-            }
-            if (e.message.includes('[API Error 404]')) {
-                throw new Error(`ไม่พบโมเดล AI ในระบบ (HTTP 404): ${e.message}`);
-            }
-            
-            if (i === 4) throw e;
-            await new Promise(r => setTimeout(r, delay));
-            delay *= 2; 
+            await new Promise(r => setTimeout(r, delays[i]));
         }
     }
 };
@@ -12914,8 +12917,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   const generatePdfBlob = async (badgeText) => {
                       const badge = element.querySelector('.status-badge-bulk');
                       const oldText = badge ? badge.innerText : '';
-                      // เปลี่ยนข้อความบน Badge เฉพาะเมื่อมีการส่ง badgeText เข้ามา (ถ้า ABB จะไม่เปลี่ยน)
-                      if (badge && badgeText) badge.innerText = badgeText;
+                      if (badge) badge.innerText = badgeText;
 
                       const canvas = await window.html2canvas(element, {
                           scale: 1.2, 
@@ -12925,7 +12927,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                           backgroundColor: "#ffffff"
                       });
 
-                      if (badge && badgeText) badge.innerText = oldText;
+                      if (badge) badge.innerText = oldText;
 
                       const imgData = canvas.toDataURL('image/jpeg', 0.85); 
                       const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
@@ -12938,17 +12940,11 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
                   const folder = zip.folder(docItem.invNo);
 
-                  // --- 🔥 FIX: แยกลอจิก ABB ออกจากการออกสำเนาแบบกลุ่ม ---
-                  if (docItem.docType === 'abb') {
-                      const originalBlob = await generatePdfBlob(""); // ไม่ต้องปั๊มตรา Original/Copy
-                      folder.file(`${docItem.invNo}.pdf`, originalBlob);
-                  } else {
-                      const originalBlob = await generatePdfBlob("ต้นฉบับ (Original)");
-                      folder.file(`${docItem.invNo}_Original.pdf`, originalBlob);
+                  const originalBlob = await generatePdfBlob("ต้นฉบับ (Original)");
+                  folder.file(`${docItem.invNo}_Original.pdf`, originalBlob);
 
-                      const copyBlob = await generatePdfBlob("สำเนา (Copy)");
-                      folder.file(`${docItem.invNo}_Copy.pdf`, copyBlob);
-                  }
+                  const copyBlob = await generatePdfBlob("สำเนา (Copy)");
+                  folder.file(`${docItem.invNo}_Copy.pdf`, copyBlob);
 
                   element.style.boxShadow = originalBoxShadow;
                   
@@ -13543,19 +13539,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
       };
 
-      showToast("กำลังสร้างไฟล์ PDF...", "success");
+      showToast("กำลังสร้างไฟล์ Original...", "success");
       const originalBlob = await window.html2pdf().set(opt).from(element).output('blob');
-
-      // --- 🔥 FIX: ถ้าเป็น ABB ให้ดาวน์โหลดเป็น PDF ไฟล์เดียวตรงๆ เลย ไม่ต้องจับยัดลง ZIP ---
-      if (invData.docType === 'abb') {
-          const link = document.createElement('a');
-          link.href = URL.createObjectURL(originalBlob);
-          link.download = `${invData.invNo}.pdf`;
-          link.click();
-          showToast("ดาวน์โหลด PDF อย่างย่อเรียบร้อยแล้ว", "success");
-          return;
-      }
-
       zip.file(`${invData.invNo}_Original.pdf`, originalBlob);
 
       const badge = element.querySelector('.status-badge');
