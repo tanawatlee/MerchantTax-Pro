@@ -358,87 +358,45 @@ const calculatePromotions = (currentItems, allPromotions) => {
     return { totalDiscount, newFreeItems, appliedNames: [...new Set(appliedNames)] };
 };
 
-// --- 🔥 UPGRADED: AI Core Engine (Official Google API Standard) ---
 const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
-    // 1. ล็อก API Key ตามข้อกำหนดสภาพแวดล้อม (Runtime Environment จะแทรกคีย์ให้ความปลอดภัยสูงสุด)
-    const apiKey = ""; 
+    const userApiKey = localStorage.getItem('gemini_api_key');
+    let url = "";
     
-    // 2. ใช้ Model ล่าสุดตามมาตรฐาน
-    const modelName = "gemini-2.5-flash-preview-09-2025"; 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    if (userApiKey && userApiKey.trim() !== "") {
+        const customKey = userApiKey.trim();
+        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${customKey}`;
+    } else {
+        const apiKey = "";
+        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+    }
 
-    // 3. โครงสร้าง Request Payload ตรงตามมาตรฐาน Official SDK ของ Google
-    const parts = [];
-    if (prompt) parts.push({ text: prompt });
+    const parts = [{ text: prompt }];
     
-    // แนบรูปภาพถ้ามี
     if (imageBase64) {
         const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
         const mimeType = imageBase64.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
-        parts.push({ inlineData: { mimeType: mimeType, data: base64Data } });
+        parts.push({ inlineData: { mimeType, data: base64Data } });
     }
     
-    const payload = { 
-        contents: [{ role: "user", parts: parts }],
-        generationConfig: {
-            temperature: 0.1, // ตั้งค่าอุณหภูมิให้ต่ำ เพื่อให้ AI ตอบแบบตรงไปตรงมาและแม่นยำที่สุด
-            topP: 0.95,
-            topK: 40
-        }
-    };
+    const payload = { contents: [{ role: "user", parts }] };
+    if (isJson) payload.generationConfig = { responseMimeType: "application/json" };
     
-    // บังคับ Response ให้คืนค่าเป็น JSON สมบูรณ์แบบ
-    if (isJson) {
-        payload.generationConfig.responseMimeType = "application/json";
-    }
-    
-    // 4. ระบบ Exponential Backoff (1s, 2s, 4s, 8s, 16s) ตาม Official Docs ของ Google
-    const delays = [1000, 2000, 4000, 8000, 16000];
-    
-    for (let i = 0; i < delays.length; i++) {
+    let delay = 1000;
+    for (let i = 0; i < 5; i++) {
         try {
-            const res = await fetch(url, { 
-                method: 'POST', 
-                headers: {'Content-Type': 'application/json'}, 
-                body: JSON.stringify(payload) 
-            });
-            
-            if (!res.ok) {
-                const errorData = await res.json().catch(() => ({}));
-                throw new Error(errorData.error?.message || `API Error ${res.status}`);
-            }
-            
+            const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+            if (!res.ok) throw new Error(`API Error: ${res.status}`);
             const data = await res.json();
-            let textResult = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            
+            let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
             if (isJson) {
-                try {
-                    // 1. ลอง Parse ข้อมูลตรงๆ ก่อน (เพราะ responseMimeType ปกติจะส่ง JSON ที่ถูกต้องมาให้)
-                    return JSON.parse(textResult);
-                } catch (parseError) {
-                    // 2. ถ้า Parse พัง ค่อยเข้าสู่กระบวนการทำความสะอาด (Self-Healing)
-                    let cleanText = textResult.replace(/```json/gi, '').replace(/```/g, '').trim();
-                    
-                    const jsonMatch = cleanText.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-                    if (jsonMatch) {
-                        try {
-                            return JSON.parse(jsonMatch[0]);
-                        } catch (e2) {
-                            // ท่าไม้ตายสุดท้าย กรณีมี \n แทรกอยู่ใน Value ของ JSON จริงๆ
-                            let bruteForceClean = jsonMatch[0].replace(/\n/g, "\\n").replace(/\r/g, "");
-                            return JSON.parse(bruteForceClean);
-                        }
-                    }
-                    throw new Error("รูปแบบข้อมูล AI ไม่ถูกต้อง");
-                }
+                text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+                return JSON.parse(text);
             }
-            return textResult;
+            return text;
         } catch (e) {
-            console.warn(`[Gemini API] Attempt ${i + 1} Failed:`, e.message);
-            if (i === delays.length - 1) {
-                throw new Error(`ระบบ AI ขัดข้องชั่วคราว: ${e.message} กรุณาลองใหม่อีกครั้ง`);
-            }
-            await new Promise(r => setTimeout(r, delays[i]));
+            if (i === 4) throw e;
+            await new Promise(r => setTimeout(r, delay));
+            delay *= 2;
         }
     }
 };
@@ -654,7 +612,6 @@ function LoginScreen({ authInstance, addToast }) {
 
 // --- Component: Knowledge Base (Guide) ---
 function TaxGuide() {
-    const [guideTab, setGuideTab] = useState('manual'); // NEW: 'manual', 'tips'
     const iconProps = { size: 28 };
     
     const colors = {
@@ -680,45 +637,6 @@ function TaxGuide() {
         orange: "text-orange-600",
         pink: "text-pink-600"
     };
-
-    const manuals = [
-        {
-            title: "1. การจัดการ 'สินค้าตีกลับ / ชำรุด'",
-            icon: <Package {...iconProps}/>,
-            color: "rose",
-            content: "หากลูกค้าตีคืนของ และพบว่าพังเสียหาย:\n\n1. ไปที่หน้า 'ประวัติเอกสาร' ค้นหาบิลนั้น แล้วกด 'ลดหนี้' (CN) เพื่อดึงสต็อกกลับคลัง\n2. ไปที่ 'คลังสินค้า FIFO' ค้นหาสินค้า กด '⇄ ปรับปรุงสต็อก'\n3. เลือกแท็บ '- ลบ' ระบุจำนวนชิ้นที่พัง\n4. เลือกเหตุผล 'สินค้าชำรุด/สูญหาย'\n5. ⚠️ อัปโหลดรูปซากสินค้า แล้วกดบันทึก\n\n(ระบบจะดึงต้นทุนไปหักเป็นค่าใช้จ่ายบริษัทให้อัตโนมัติ ปลอดภัยจากสรรพากร 100%)"
-        },
-        {
-            title: "2. การนำเข้าบิลจาก Shopee/Lazada",
-            icon: <FileSpreadsheet {...iconProps}/>,
-            color: "emerald",
-            content: "1. ไปที่เมนู 'Bulk Import'\n2. เลือกแพลตฟอร์มและ โหมดที่ต้องการ (โหมดที่ 3 แนะนำสำหรับกระทบยอดสิ้นเดือน)\n3. อัปโหลดไฟล์ Excel จากระบบ Seller Centre\n4. ตรวจสอบความถูกต้อง (ระบบจะสกัดค่าธรรมเนียมและค่าจัดส่งให้ครบทุกบรรทัด)\n5. กดยืนยันบันทึก ระบบจะหักสต็อกและจัดทำบัญชีให้ทันที"
-        },
-        {
-            title: "3. การใช้ AI ช่วยตั้งราคา (Smart Pricing)",
-            icon: <Calculator {...iconProps}/>,
-            color: "indigo",
-            content: "เครื่องมือช่วยคำนวณกำไรสุทธิ ป้องกันการขาดทุนค่าธรรมเนียม:\n\n1. ไปที่เมนู 'เครื่องมือตั้งราคา (AI)'\n2. ดึงสินค้าจากคลัง (ระบบจะโชว์สถิติย้อนหลัง 30 วันให้ด้วย)\n3. กรอก 'กำไรที่ต้องการ' เพื่อหาราคาจุดคุ้มทุน\n4. ใส่ราคาขายในช่อง Simulator เพื่อดูว่าโดนหัก 25-30% แล้วจะเหลือกำไรกี่บาท (เปิดสวิตช์ VAT 7% ได้)\n5. กดปุ่ม 'ให้ AI แนะนำกลยุทธ์' เพื่อรับแคปชั่นและราคา 3 ระดับ"
-        },
-        {
-            title: "4. การบันทึกถอนเงิน/ใช้ส่วนตัว",
-            icon: <Wallet {...iconProps}/>,
-            color: "amber",
-            content: "เงินของบริษัท กับ เงินส่วนตัว ต้องแยกกันให้ชัดเจน:\n\n1. ไปที่เมนู 'บันทึกขาย/หน้าร้าน' > เลือกแท็บ 'สมุดบัญชี (Statement)'\n2. กดปุ่ม 'บันทึกถอนเงิน/ส่วนตัว' ด้านบน\n3. ใส่จำนวนเงินและรายละเอียด (เช่น ค่าผ่อนรถส่วนตัว)\n\n(ระบบจะแสดงยอดเงินออกในสมุดบัญชี แต่จะไม่นำยอดนี้ไปหักลบในแดชบอร์ดกำไรสุทธิของร้านค้า)"
-        },
-        {
-            title: "5. การโหลดเอกสาร 200+ ใบ (Bulk Download)",
-            icon: <DownloadCloud {...iconProps}/>,
-            color: "blue",
-            content: "1. ไปที่เมนู 'บันทึกขาย/หน้าร้าน' > เลือกแท็บ 'ประวัติรายการ'\n2. ใช้ตัวกรองเลือกเดือนที่ต้องการ\n3. กดติ๊กเลือกถูกที่หัวตาราง (เพื่อเลือกทั้งหมด)\n4. กดปุ่ม 'โหลด PDF (Bulk Download)'\n5. ระบบจะใช้เทคนิค Auto-Chunking แตกไฟล์ออกเป็น ZIP ทีละ 50 ไฟล์ เพื่อป้องกันเบราว์เซอร์ค้าง สามารถโหลด 1,000 ใบได้รวดเดียว!"
-        },
-        {
-            title: "6. การตรวจสอบเลขบิลฟันหลอ (Audit)",
-            icon: <Search {...iconProps}/>,
-            color: "teal",
-            content: "สรรพากรเพ่งเล็งเรื่องลำดับเลขเอกสารที่สุด ควรตรวจสอบทุกสิ้นเดือน:\n\n1. ไปที่เมนู 'บันทึกขาย/หน้าร้าน' > เลือกแท็บ 'สรุปเอกสารประจำเดือน'\n2. ดูที่กล่องคำเตือนสีส้ม 'เลขเอกสารฟันหลอ'\n3. ระบบจะสแกนหาเลขที่ขาดหายไป (เช่น ข้ามจาก 001 ไป 003) พร้อมบอกวันที่และประเภทของเอกสารที่หายไป เพื่อให้คุณกู้คืนหรือชี้แจงได้ทันท่วงที"
-        }
-    ];
 
     const tips = [
         {
@@ -771,57 +689,45 @@ function TaxGuide() {
         }
     ];
 
-    const currentDisplay = guideTab === 'manual' ? manuals : tips;
-
     return (
         <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full h-full pb-20">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 border-b pb-4 gap-4">
                 <div className="space-y-1">
-                    <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><BookOpen className="text-indigo-600"/> คู่มือ & เคล็ดลับบัญชี</h2>
-                    <p className="text-sm text-slate-400 font-medium">ศูนย์รวมความรู้และการใช้งานระบบ MerchantTax ให้เกิดประสิทธิภาพสูงสุด</p>
-                </div>
-                <div className="flex bg-slate-100 p-1.5 rounded-2xl w-full md:w-auto shadow-inner border border-slate-200/50">
-                    <button onClick={() => setGuideTab('manual')} className={`flex-1 md:flex-none px-6 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap ${guideTab === 'manual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                        <Settings size={16}/> วิธีการใช้งานระบบ (Manual)
-                    </button>
-                    <button onClick={() => setGuideTab('tips')} className={`flex-1 md:flex-none px-6 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all whitespace-nowrap ${guideTab === 'tips' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                        <Lightbulb size={16}/> เคล็ดลับภาษี (Tax Tips)
-                    </button>
+                    <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><BookOpen className="text-indigo-600"/> คู่มือ & เคล็ดลับภาษี</h2>
+                    <p className="text-sm text-slate-400 font-medium">รวมข้อควรระวังและวิธีลงบัญชีที่ถูกต้อง (ตามมาตรฐานกรมสรรพากร)</p>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                {currentDisplay.map((item, idx) => (
-                    <div key={idx} className={`bg-white rounded-3xl p-6 border shadow-sm hover:shadow-lg transition-all relative overflow-hidden group border-slate-100 hover:border-${item.color}-200`}>
-                        <div className={`absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-10 transition-opacity ${textColors[item.color]}`}>
-                            {React.cloneElement(item.icon, { size: 120 })}
+                {tips.map((tip, idx) => (
+                    <div key={idx} className={`bg-white rounded-3xl p-6 border shadow-sm hover:shadow-lg transition-all relative overflow-hidden group border-slate-100 hover:border-${tip.color}-200`}>
+                        <div className={`absolute -right-4 -top-4 opacity-[0.03] group-hover:opacity-10 transition-opacity ${textColors[tip.color]}`}>
+                            {React.cloneElement(tip.icon, { size: 120 })}
                         </div>
-                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-5 border shadow-sm ${colors[item.color]}`}>
-                            {item.icon}
+                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-5 border shadow-sm ${colors[tip.color]}`}>
+                            {tip.icon}
                         </div>
-                        <h3 className="text-lg font-black text-slate-800 mb-3 leading-tight">{item.title}</h3>
+                        <h3 className="text-lg font-black text-slate-800 mb-3 leading-tight">{tip.title}</h3>
                         <div className="text-sm text-slate-600 whitespace-pre-line leading-relaxed">
-                            {item.content}
+                            {tip.content}
                         </div>
                     </div>
                 ))}
             </div>
 
-            {guideTab === 'tips' && (
-                <div className="mt-8 bg-gradient-to-r from-indigo-50 to-blue-50 p-6 md:p-8 rounded-[32px] border border-indigo-100 flex flex-col md:flex-row items-center gap-6 shadow-sm animate-fadeIn">
-                    <div className="p-4 bg-white rounded-full text-amber-500 shadow-md shrink-0">
-                        <Lightbulb size={40}/>
-                    </div>
-                    <div>
-                        <h4 className="text-lg font-black text-indigo-900 mb-2">ทำไมระบบบัญชีที่ดีถึงสำคัญ?</h4>
-                        <p className="text-sm text-indigo-800/80 leading-relaxed font-medium">
-                            การจัดการสต็อกและการลงรายการรายรับ-รายจ่ายที่ถูกต้องตั้งแต่ต้น จะช่วยป้องกันการถูกประเมินภาษีและเบี้ยปรับย้อนหลังจามกรมสรรพากร 
-                            และที่สำคัญที่สุดคือ ทำให้เราเห็น <b>"กำไรสุทธิ (Net Profit)"</b> ที่แท้จริงของธุรกิจ 
-                            <br/>ระบบ MerchantTax ถูกออกแบบมาเพื่อเป็นเครื่องมือกั้นข้อผิดพลาดเหล่านี้ และช่วยให้ผู้ประกอบการทำงานได้ง่ายและปลอดภัยที่สุดครับ
-                        </p>
-                    </div>
+            <div className="mt-8 bg-gradient-to-r from-indigo-50 to-blue-50 p-6 md:p-8 rounded-[32px] border border-indigo-100 flex flex-col md:flex-row items-center gap-6 shadow-sm">
+                <div className="p-4 bg-white rounded-full text-amber-500 shadow-md shrink-0">
+                    <Lightbulb size={40}/>
                 </div>
-            )}
+                <div>
+                    <h4 className="text-lg font-black text-indigo-900 mb-2">ทำไมระบบบัญชีที่ดีถึงสำคัญ?</h4>
+                    <p className="text-sm text-indigo-800/80 leading-relaxed font-medium">
+                        การจัดการสต็อกและการลงรายการรายรับ-รายจ่ายที่ถูกต้องตั้งแต่ต้น จะช่วยป้องกันการถูกประเมินภาษีและเบี้ยปรับย้อนหลังจามกรมสรรพากร 
+                        และที่สำคัญที่สุดคือ ทำให้เราเห็น <b>"กำไรสุทธิ (Net Profit)"</b> ที่แท้จริงของธุรกิจ 
+                        <br/>ระบบ MerchantTax ถูกออกแบบมาเพื่อเป็นเครื่องมือกั้นข้อผิดพลาดเหล่านี้ และช่วยให้ผู้ประกอบการทำงานได้ง่ายและปลอดภัยที่สุดครับ
+                    </p>
+                </div>
+            </div>
         </div>
     );
 }
@@ -1915,10 +1821,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           map[groupKey] = { groupKey, name: nameKey, sku: batch.sku || '-', totalQty: 0, batches: [] }; 
       }
       const remaining = Number(batch.quantity) - Number(batch.sold || 0);
-      
-      // --- 🔥 FIX: เอา Math.max(0) ออก เพื่อให้รองรับยอดติดลบจากใบลดหนี้/โอนย้าย ---
-      map[groupKey].totalQty += remaining;
-      
+      map[groupKey].totalQty += Math.max(0, remaining);
       map[groupKey].batches.push({ ...batch, remaining });
     });
     return Object.values(map).filter(i => i.totalQty > 0).sort((a,b) => b.totalQty - a.totalQty);
@@ -3670,8 +3573,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                               </td>
                                           </tr>
                                       ))}
+                                      {discrepancyDetailsData.length === 0 && (
+                                          <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ไม่พบออเดอร์ที่มีส่วนต่างค่าจัดส่ง</td></tr>
+                                      )}
                                   </tbody>
                               </table>
+                          </div>
+                          <div className="pt-4 mt-2 border-t border-slate-100 flex justify-end">
+                              <button onClick={()=>setShowDiscrepancyModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">รับทราบและปิดหน้าต่าง</button>
                           </div>
                       </div>
                   </div>
@@ -4573,7 +4482,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   // --- NEW: Stock Sync Preview States ---
   const [showSyncPreviewModal, setShowSyncPreviewModal] = useState(false);
   const [syncPreviewData, setSyncPreviewData] = useState(null);
-  const [selectedSyncItems, setSelectedSyncItems] = useState([]); // 🔥 FIX: เพิ่มตัวแปรสำหรับเก็บบันทึกการติ๊กเลือกซิงค์
 
   // --- NEW: Stock Audit States ---
   const [showStockAuditModal, setShowStockAuditModal] = useState(false);
@@ -4790,17 +4698,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     setIsProcessing(true);
     try {
       showToast('กำลังจำลองการประมวลผล FIFO...', 'success');
-      
       // 1. จำลองข้อมูลล็อตทั้งหมด โดยรีเซ็ต sold เป็น 0 เพื่อคำนวณใหม่
-      // 🔥 THE REAL FIX: ล็อกเป้าชัดเจน! ถ้าเป็นล็อตปรับปรุง (ชำรุด/โอนย้าย) ห้ามแตะยอด sold เดิมเด็ดขาด
-      let localBatches = stockBatches.map(b => {
-          // หากเป็นล็อตที่เกิดจากการตัดชำรุด, โอนย้าย หรือล็อต Dummy ให้คงยอดเดิมไว้ 100%
-          if (b.isAdjustment === true) {
-              return { ...b, simulatedSold: Number(b.sold || 0), originalSold: Number(b.sold || 0) };
-          }
-          // ส่วนล็อตรับเข้าปกติ (ซื้อมาขาย) รีเซ็ต sold เป็น 0 เพื่อให้บิลขายมาไล่ตัดใหม่
-          return { ...b, simulatedSold: 0, originalSold: Number(b.sold || 0) };
-      });
+      let localBatches = stockBatches.map(b => ({ ...b, simulatedSold: 0, originalSold: Number(b.sold || 0) }));
       
       // 2. ดึงประวัติรายรับทั้งหมด เฉพาะรายการที่ "ไม่ถูกยกเลิก (!t.isCancelled)" และเรียงจากเก่าไปใหม่
       const incomeTrans = transactions.filter(t => t.type === 'income' && !t.isCancelled).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
@@ -4813,9 +4712,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           let needed = Number(item.qty);
           if (needed <= 0) return;
           
-          // 🔥 FIX: ให้บิลขายไล่ตัดเฉพาะล็อตที่ "ไม่ใช่" ล็อต Dummy หรือล็อตชำรุด (ป้องกันการตัดซ้อนทับ)
           const targetBatches = localBatches
-            .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && b.isAdjustment !== true)
+            .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
             .sort(sortOldestFirst);
 
           for (let i = 0; i < targetBatches.length; i++) {
@@ -4848,9 +4746,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   sellPrice: item.sellPrice || item.price || 0,
                   date: trans.date,
                   sold: needed, // ยอดที่จำลองว่าขาย
-                  originalSold: 0, // ไม่มีในของเดิม
-                  isAdjustment: true,
-                  adjustReason: 'สต็อกติดลบ (ซิงค์ออโต้)'
+                  originalSold: 0 // ไม่มีในของเดิม
               });
           }
         });
@@ -4905,28 +4801,14 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
   // --- 🔥 NEW: ฟังก์ชันยืนยันการเขียนข้อมูลลงฐานข้อมูลจริง ---
   const executeSyncStock = async () => {
-      if (!syncPreviewData || !user || selectedSyncItems.length === 0) return;
+      if (!syncPreviewData || !user) return;
       setIsProcessing(true);
       try {
           let batch = writeBatch(dbInstance);
           let opsCount = 0;
-          let processedSKUs = 0;
 
-          // ดึงข้อมูล Dummy เดิมทั้งหมดมารอไว้ก่อน เพื่อหาว่าตัวไหนต้องลบ
-          const allDummies = stockBatches.filter(b => b.isAdjustment && b.adjustReason === 'สต็อกติดลบ (ไม่มีในคลัง)');
-
-          // คัดกรองเฉพาะสินค้าที่ User ติ๊กเลือกให้ซิงก์
-          const itemsToSync = syncPreviewData.filter(item => selectedSyncItems.includes(item.sku));
-
-          for (const item of itemsToSync) {
-              // 1. ลบ Dummy เก่าทิ้ง **เฉพาะของสินค้านี้เท่านั้น**
-              const dummiesForThisSKU = allDummies.filter(d => (d.sku || '-') === item.sku && d.productName === item.name);
-              for (const dummy of dummiesForThisSKU) {
-                  batch.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', dummy.id));
-                  opsCount++;
-              }
-
-              // 2. อัปเดตยอด Sold ของล็อตรับเข้าปกติ **เฉพาะของสินค้านี้**
+          for (const item of syncPreviewData) {
+              // 1. อัปเดตล็อตเดิมที่มีการเปลี่ยนแปลงยอด sold
               for (const b of item.batchesToUpdate) {
                   const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
                   batch.update(docRef, { sold: b.newSold });
@@ -4939,7 +4821,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   }
               }
 
-              // 3. สร้าง Dummy ใหม่ (ถ้ามี) **เฉพาะของสินค้านี้**
+              // 2. สร้างล็อต Dummy ใหม่ (กรณีของหมดแต่มีบิลขาย)
               for (const d of item.newDummiesToCreate) {
                   const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
                   batch.set(dummyRef, {
@@ -4949,7 +4831,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                       quantity: d.quantity,
                       costPerUnit: d.costPerUnit,
                       sellPrice: d.sellPrice,
-                      date: d.date || new Date(),
+                      date: normalizeDate(d.date) || new Date(),
                       sold: d.sold,
                       userId: user.uid,
                       createdAt: serverTimestamp(),
@@ -4965,21 +4847,18 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                       opsCount = 0;
                   }
               }
-              
-              processedSKUs++;
           }
 
           if (opsCount > 0) {
               await batch.commit();
           }
 
-          showToast(`อัปเดตยอดสต็อกสำเร็จ ${processedSKUs} รายการ (ข้ามรายการที่ไม่ได้เลือก)`, 'success');
+          showToast('ซิงค์และบันทึกยอดสต็อกใหม่สำเร็จ!', 'success');
           setShowSyncPreviewModal(false);
           setSyncPreviewData(null);
-          setSelectedSyncItems([]);
       } catch (e) {
           console.error(e);
-          showToast('เกิดข้อผิดพลาดในการอัปเดตข้อมูล', 'error');
+          showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูล', 'error');
       }
       setIsProcessing(false);
   };
@@ -5259,8 +5138,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               batches: [], 
               category: batch.category || 'ทั่วไป',
               isGiveaway: false,
-              lastSoldDate: lastSoldMap[groupKey] || null, 
-              daysSinceLastSold: lastSoldMap[groupKey] ? Math.floor((new Date() - lastSoldMap[groupKey]) / (1000 * 60 * 60 * 24)) : Infinity 
+              lastSoldDate: lastSoldMap[groupKey] || null, // NEW: เพิ่มข้อมูลวันที่ขายล่าสุด
+              daysSinceLastSold: lastSoldMap[groupKey] ? Math.floor((new Date() - lastSoldMap[groupKey]) / (1000 * 60 * 60 * 24)) : Infinity // NEW
           }; 
       }
       
@@ -5278,12 +5157,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           map[groupKey].periodInbound += Number(batch.quantity);
       }
 
-      // --- 🔥 THE FIX: เอา Math.max(0) ออก เพื่อให้ยอดคงเหลือรวมคำนวณถูกต้อง 100% ---
-      map[groupKey].totalQty += remaining; 
-      
+      map[groupKey].totalQty += remaining; // รองรับยอดติดลบ
       map[groupKey].totalSold += sold; 
-      
-      // การคำนวณมูลค่าคงคลัง ให้ตีความว่าของติดลบคือ 0 บาท (เพื่อไม่ให้เงินในพอร์ตติดลบ)
       map[groupKey].totalValue += (Math.max(0, remaining) * costPerUnit);
       map[groupKey].totalPotentialProfit += (Math.max(0, remaining) * profitPerUnit);
       map[groupKey].batches.push({ ...batch, remaining });
@@ -5825,8 +5700,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                             </td>
                             <td className="p-5 text-center">
                                 <div className="flex justify-center gap-2 text-center">
-                                    {/* --- 🔥 FIX: เพิ่มการรีเซ็ตค่า Default ให้ครบ รวมถึงวันที่และรูปภาพ --- */}
-                                    <button onClick={(e) => { e.stopPropagation(); setAdjustStockItem(item); setAdjustData({ type: 'add', qty: '', reason: 'นับสต็อกจริงไม่ตรง (ยอดเกิน)', targetKey: '', date: formatDateISO(new Date()), evidenceBase64: '' }); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-blue-600 text-center" title="ปรับปรุงสต็อก (+/-)"><ArrowRightLeft size={16}/></button>
+                                    <button onClick={(e) => { e.stopPropagation(); setAdjustStockItem(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-blue-600 text-center" title="ปรับปรุงสต็อก (+/-)"><ArrowRightLeft size={16}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); setViewHistory(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-indigo-600 text-center" title="ดูประวัติราคาต้นทุนและประวัติขายออก"><History size={16}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); openEditCategory(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-amber-600 text-center" title="แก้ไขข้อมูลสินค้า"><Edit size={16}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); setDeleteStockConfirm(item); }} className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-rose-600 text-center" title="ลบสินค้า"><Trash2 size={16}/></button>
@@ -6307,9 +6181,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               </div>
               
               <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
-                  <button onClick={()=>setAdjustData({...adjustData, type: 'add', reason: 'นับสต็อกจริงไม่ตรง (ยอดเกิน)'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'add' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>+ เพิ่ม</button>
-                  <button onClick={()=>setAdjustData({...adjustData, type: 'remove', reason: 'สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'remove' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>- ลบ</button>
-                  <button onClick={()=>{setAdjustData({...adjustData, type: 'transfer', targetKey: '', reason: 'แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อขายลดราคา)'}); setTransferSearchTerm(''); setShowTransferList(false);}} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'transfer' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>⇄ สลับ/โอนย้าย</button>
+                  <button onClick={()=>setAdjustData({...adjustData, type: 'add'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'add' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>+ เพิ่ม</button>
+                  <button onClick={()=>setAdjustData({...adjustData, type: 'remove'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'remove' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>- ลบ</button>
+                  <button onClick={()=>{setAdjustData({...adjustData, type: 'transfer', targetKey: ''}); setTransferSearchTerm(''); setShowTransferList(false);}} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'transfer' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>⇄ สลับ/โอนย้าย</button>
               </div>
 
               <div>
@@ -6317,8 +6191,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   <input type="number" min="1" value={adjustData.qty} onChange={e=>setAdjustData({...adjustData, qty: e.target.value})} className="w-full bg-white border-2 border-slate-100 p-4 rounded-2xl text-xl font-black outline-none focus:border-blue-300 text-center text-slate-800" placeholder="ระบุจำนวนชิ้น..." />
               </div>
 
-              {adjustData.type === 'transfer' && (
-                  <div className="animate-fadeIn mb-4">
+              {adjustData.type === 'transfer' ? (
+                  <div className="animate-fadeIn">
                       <label className="text-[10px] font-bold uppercase text-indigo-600 mb-1 block">โอนจำนวนด้านบน ไปให้สินค้าใด?</label>
                       <div className="relative">
                           <Search className="absolute left-3 top-4 text-indigo-300" size={16}/>
@@ -6363,39 +6237,19 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                           )}
                       </div>
                   </div>
+              ) : (
+                  <div className="animate-fadeIn">
+                      <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">เหตุผลการปรับปรุง</label>
+                      <select value={adjustData.reason} onChange={e=>setAdjustData({...adjustData, reason: e.target.value})} className="w-full bg-slate-50 p-3.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-slate-700 cursor-pointer focus:ring-2 focus:ring-blue-100">
+                          <option value="นับสต็อกจริงไม่ตรง">นับสต็อกจริงไม่ตรง (Cycle Count)</option>
+                          <option value="สินค้าชำรุด/สูญหาย">สินค้าชำรุด/สูญหาย</option>
+                          <option value="ได้ของแถมจาก Supplier">ได้ของแถมจาก Supplier</option>
+                          <option value="นำไปใช้ในกิจการ/แจก">นำไปใช้ในกิจการ/แจก</option>
+                          <option value="ลูกค้ารับสินค้านี้ทดแทน">ลูกค้ารับสินค้านี้ทดแทน</option>
+                          <option value="อื่นๆ">อื่นๆ</option>
+                      </select>
+                  </div>
               )}
-
-              <div className="animate-fadeIn">
-                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">เหตุผลการปรับปรุง (บันทึกเป็นหลักฐาน)</label>
-                  <select value={adjustData.reason} onChange={e=>setAdjustData({...adjustData, reason: e.target.value})} className="w-full bg-slate-50 p-3.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-slate-700 cursor-pointer focus:ring-2 focus:ring-blue-100">
-                      {adjustData.type === 'remove' && (
-                          <>
-                              <option value="สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)">สินค้าชำรุด/สูญหาย (ตัดทิ้งเป็นค่าใช้จ่าย)</option>
-                              <option value="สินค้าหมดอายุ (ตัดจำหน่าย)">สินค้าหมดอายุ (ตัดทิ้งเป็นค่าใช้จ่าย)</option>
-                              <option value="สูญเสียจากการขนส่ง (เคลมไม่ได้)">สูญเสียจากการขนส่ง เคลมไม่ได้ (ตัดทิ้งเป็นค่าใช้จ่าย)</option>
-                              <option value="นับสต็อกจริงไม่ตรง (ยอดขาด)">นับสต็อกจริงไม่ตรง (ยอดขาด)</option>
-                              <option value="นำไปใช้ในกิจการ/แจก">นำไปใช้ในกิจการ/แจก</option>
-                              <option value="อื่นๆ">อื่นๆ</option>
-                          </>
-                      )}
-                      {adjustData.type === 'add' && (
-                          <>
-                              <option value="นับสต็อกจริงไม่ตรง (ยอดเกิน)">นับสต็อกจริงไม่ตรง (ยอดเกิน)</option>
-                              <option value="ได้ของแถมจาก Supplier">ได้ของแถมจาก Supplier</option>
-                              <option value="ลูกค้ารับสินค้านี้ทดแทน">ลูกค้ารับสินค้านี้ทดแทน</option>
-                              <option value="อื่นๆ">อื่นๆ</option>
-                          </>
-                      )}
-                      {adjustData.type === 'transfer' && (
-                          <>
-                              <option value="แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อขายลดราคา)">แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อขายลดราคา)</option>
-                              <option value="บันทึกผิดรสชาติ/ผิดรุ่น (โอนแก้)">บันทึกผิดรสชาติ/ผิดรุ่น (โอนแก้)</option>
-                              <option value="แพ็คจัดเป็นชุด Bundle/เซ็ต">แพ็คจัดเป็นชุด Bundle/เซ็ต</option>
-                              <option value="อื่นๆ">อื่นๆ</option>
-                          </>
-                      )}
-                  </select>
-              </div>
 
               <div className="flex gap-3 pt-4 text-center">
                 <button onClick={() => {setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false);}} className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
@@ -6499,67 +6353,36 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                           <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><RefreshCw className="text-amber-500"/> ตรวจสอบยอดซิงค์สต็อก (Preview)</h3>
                           <p className="text-xs text-slate-500 mt-1">ระบบจำลองการประมวลผล FIFO ใหม่ทั้งหมด นี่คือรายการสินค้าที่จะได้รับผลกระทบหากกดยืนยัน</p>
                       </div>
-                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null); setSelectedSyncItems([]);}} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
+                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null);}} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
                   </div>
-
-                  {syncPreviewData.length > 0 && (
-                      <div className="flex justify-between items-center mb-3">
-                          <p className="text-sm font-bold text-slate-700">เลือกรายการที่ต้องการให้ระบบอัปเดตยอด</p>
-                          <span className="text-[10px] font-black bg-amber-100 text-amber-700 px-3 py-1.5 rounded-full">เลือกอยู่: {selectedSyncItems.length} / {syncPreviewData.length}</span>
-                      </div>
-                  )}
 
                   <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl bg-slate-50">
                       {syncPreviewData.length > 0 ? (
                           <table className="w-full text-xs text-left">
                               <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
                                   <tr>
-                                      <th className="p-3 pl-4 w-12 text-center">
-                                          <input 
-                                              type="checkbox" 
-                                              className="w-4 h-4 rounded text-amber-500 border-slate-300 focus:ring-amber-500 cursor-pointer"
-                                              onChange={(e) => {
-                                                  if (e.target.checked) setSelectedSyncItems(syncPreviewData.map(i => i.sku));
-                                                  else setSelectedSyncItems([]);
-                                              }}
-                                              checked={selectedSyncItems.length === syncPreviewData.length && syncPreviewData.length > 0}
-                                          />
-                                      </th>
-                                      <th className="p-3">ชื่อสินค้า (Product)</th>
+                                      <th className="p-3 pl-4">ชื่อสินค้า (Product)</th>
                                       <th className="p-3 text-center">ยอดคงเหลือ (เดิม)</th>
                                       <th className="p-3 text-center">ยอดคงเหลือ (คำนวณใหม่)</th>
                                       <th className="p-3 text-right pr-6">ส่วนต่าง (Diff)</th>
                                   </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-200 bg-white">
-                                  {syncPreviewData.map((item, idx) => {
-                                      const isSelected = selectedSyncItems.includes(item.sku);
-                                      return (
-                                      <tr key={idx} className={`transition-colors ${isSelected ? 'hover:bg-amber-50/30' : 'bg-slate-50/50 opacity-60'}`}>
-                                          <td className="p-3 pl-4 text-center">
-                                              <input 
-                                                  type="checkbox" 
-                                                  className="w-4 h-4 rounded text-amber-500 border-slate-300 focus:ring-amber-500 cursor-pointer"
-                                                  checked={isSelected}
-                                                  onChange={() => {
-                                                      if (isSelected) setSelectedSyncItems(prev => prev.filter(sku => sku !== item.sku));
-                                                      else setSelectedSyncItems(prev => [...prev, item.sku]);
-                                                  }}
-                                              />
-                                          </td>
-                                          <td className="p-3">
-                                              <p className={`font-bold ${isSelected ? 'text-slate-800' : 'text-slate-500'}`}>{item.name}</p>
+                                  {syncPreviewData.map((item, idx) => (
+                                      <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                          <td className="p-3 pl-4">
+                                              <p className="font-bold text-slate-800">{item.name}</p>
                                               <p className="text-[10px] text-slate-400 font-mono mt-0.5">SKU: {item.sku}</p>
                                           </td>
                                           <td className="p-3 text-center font-bold text-slate-500">{item.oldQty}</td>
-                                          <td className={`p-3 text-center font-black ${isSelected ? 'text-slate-800' : 'text-slate-500'}`}>{item.newQty}</td>
+                                          <td className="p-3 text-center font-black text-slate-800">{item.newQty}</td>
                                           <td className="p-3 text-right pr-6">
-                                              <span className={`px-2 py-1 rounded font-black text-[10px] ${item.diff > 0 ? (isSelected ? 'bg-emerald-100 text-emerald-700' : 'text-emerald-500') : item.diff < 0 ? (isSelected ? 'bg-rose-100 text-rose-700' : 'text-rose-500') : 'bg-slate-100 text-slate-500'}`}>
+                                              <span className={`px-2 py-1 rounded font-black text-[10px] ${item.diff > 0 ? 'bg-emerald-100 text-emerald-700' : item.diff < 0 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>
                                                   {item.diff > 0 ? '+' : ''}{item.diff !== 0 ? item.diff : 'เปลี่ยนแปลงระดับล็อต'}
                                               </span>
                                           </td>
                                       </tr>
-                                  )})}
+                                  ))}
                               </tbody>
                           </table>
                       ) : (
@@ -6572,13 +6395,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   </div>
 
                   <div className="pt-6 mt-4 border-t border-slate-100 flex justify-end gap-3 text-center">
-                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null); setSelectedSyncItems([]);}} disabled={isProcessing} className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">
+                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null);}} disabled={isProcessing} className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">
                           {syncPreviewData.length > 0 ? 'ยกเลิก' : 'ปิดหน้าต่าง'}
                       </button>
                       {syncPreviewData.length > 0 && (
-                          <button onClick={executeSyncStock} disabled={isProcessing || selectedSyncItems.length === 0} className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg shadow-amber-200 transition-colors flex items-center gap-2 disabled:opacity-50">
-                              {isProcessing ? <Loader size={16} className="animate-spin"/> : <RefreshCw size={16}/>} 
-                              {selectedSyncItems.length > 0 ? `ยืนยันซิงค์เฉพาะ ${selectedSyncItems.length} รายการที่เลือก` : 'กรุณาเลือกรายการที่ต้องการซิงค์'}
+                          <button onClick={executeSyncStock} disabled={isProcessing} className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg shadow-amber-200 transition-colors flex items-center gap-2 disabled:opacity-50">
+                              {isProcessing ? <Loader size={16} className="animate-spin"/> : <RefreshCw size={16}/>} ยืนยันการซิงค์ข้อมูลลงระบบ
                           </button>
                       )}
                   </div>
@@ -7711,256 +7533,143 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
           )}
 
           {reportTab === 'pit90' && (
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 p-4 md:p-8 text-left animate-fadeIn">
-                
-                {/* --- Left Column: Inputs --- */}
-                <div className="xl:col-span-4 space-y-6">
-                   <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                       <h3 className="font-black text-lg text-slate-800 border-b border-slate-100 pb-3 mb-4 flex items-center gap-2"><Settings size={18} className="text-indigo-600"/> การหักค่าใช้จ่าย</h3>
-                       <div className="space-y-4">
-                          <div className="flex bg-slate-100 p-1.5 rounded-xl w-full">
-                              <button onClick={()=>setExpenseMode('standard')} className={`flex-1 py-2.5 text-xs font-bold rounded-lg transition-all ${expenseMode === 'standard' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>หักเหมา 60%</button>
-                              <button onClick={()=>setExpenseMode('actual')} className={`flex-1 py-2.5 text-xs font-bold rounded-lg transition-all ${expenseMode === 'actual' ? 'bg-white text-indigo-600 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>หักตามจริง (มีบิล)</button>
-                          </div>
-                          
-                          {/* --- 🔥 NEW: แจกแจงโครงสร้างค่าใช้จ่ายตามหลักสรรพากรให้เห็นชัดๆ --- */}
-                          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
-                              <div className="flex justify-between items-center text-xs">
-                                  <span className="text-slate-500 font-bold">สิทธิหักเหมาจ่าย 60%:</span>
-                                  <span className="font-black text-indigo-600">{formatCurrency(pitAnalysis.standardExpense)}</span>
-                              </div>
-                              <div className="flex justify-between items-center text-xs">
-                                 <span className="text-slate-500 font-bold flex items-center gap-1" title="รวมต้นทุนสินค้าขาย (COGS) + ค่าใช้จ่ายดำเนินงาน">
-                                     ค่าใช้จ่ายจริงในระบบ <Info size={12}/>:
-                                 </span>
-                                 <span className="font-black text-emerald-600">{formatCurrency(pitAnalysis.actualExpense)}</span>
-                              </div>
-                              {expenseMode === 'actual' && (
-                                 <div className="pt-3 mt-3 border-t border-slate-200 space-y-1.5 animate-fadeIn">
-                                     <div className="flex justify-between text-[10px] text-slate-500 font-medium">
-                                         <span>- ต้นทุนสินค้าขาย (COGS):</span>
-                                         <span>{formatCurrency(pitAnalysis.cogsForTax)}</span>
-                                     </div>
-                                     <div className="flex justify-between text-[10px] text-slate-500 font-medium">
-                                         <span>- ค่าดำเนินงาน (OPEX):</span>
-                                         <span>{formatCurrency(pitAnalysis.opexForTax)}</span>
-                                     </div>
-                                     <p className="text-[9px] text-emerald-600 font-bold mt-2 bg-emerald-50 px-2 py-1 rounded">*ระบบแยกรายจ่ายส่วนตัวออกให้อัตโนมัติแล้ว</p>
-                                 </div>
-                              )}
-                          </div>
-                       </div>
-                   </div>
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 p-4 md:p-8 text-left">
+                <div className="xl:col-span-1 space-y-6">
+                   <h3 className="font-black text-xl text-slate-800 border-b pb-4">ตั้งค่าลดหย่อนภาษี</h3>
+                   <div className="space-y-4">
+                      <div className="space-y-2">
+                         <label className="text-xs font-bold text-slate-500 uppercase">รูปแบบการหักค่าใช้จ่าย</label>
+                         <div className="flex bg-slate-100 p-1 rounded-xl w-full">
+                            <button onClick={()=>setExpenseMode('standard')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${expenseMode === 'standard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}>เหมาจ่าย 60%</button>
+                            <button onClick={()=>setExpenseMode('actual')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${expenseMode === 'actual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}>ตามจริง</button>
+                         </div>
+                         <p className="text-[10px] text-slate-400 mt-1">
+                            สิทธิเหมาจ่าย: {formatCurrency(pitAnalysis.standardExpense)} | ค่าใช้จ่ายจริง: {formatCurrency(pitAnalysis.actualExpense)}
+                         </p>
+                         {pitAnalysis.standardExpense > pitAnalysis.actualExpense && expenseMode === 'actual' && (
+                            <p className="text-[10px] text-rose-500 font-bold">*คำแนะนำ: ปัจจุบันหักแบบเหมาจ่ายคุ้มกว่า</p>
+                         )}
+                      </div>
 
-                   <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                       <h3 className="font-black text-lg text-slate-800 border-b border-slate-100 pb-3 mb-4 flex items-center gap-2"><User size={18} className="text-indigo-600"/> ค่าลดหย่อน (Deductions)</h3>
-                       <div className="space-y-3">
-                           <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
-                              <span className="text-sm font-bold text-slate-700">ผู้มีเงินได้ (อัตโนมัติ)</span>
-                              <span className="text-sm font-black text-indigo-600">60,000</span>
-                           </div>
-                           <label className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100 cursor-pointer group">
-                              <span className="text-sm font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">คู่สมรสไม่มีรายได้ (60k)</span>
-                              <input type="checkbox" checked={pitDeductions.spouse} onChange={e=>setPitDeductions({...pitDeductions, spouse: e.target.checked})} className="w-5 h-5 rounded text-indigo-600 border-slate-300 cursor-pointer" />
-                           </label>
-                           <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
-                              <span className="text-sm font-bold text-slate-700">บุตร (คนละ 30k)</span>
-                              <div className="flex items-center gap-2">
-                                  <input type="number" min="0" value={pitDeductions.children} onChange={e=>setPitDeductions({...pitDeductions, children: parseInt(e.target.value)||0})} className="w-16 bg-white border border-slate-200 rounded-lg p-1.5 text-center font-bold outline-none text-indigo-600 focus:border-indigo-400" />
-                                  <span className="text-xs text-slate-500 font-bold">คน</span>
-                              </div>
-                           </div>
-                           <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
-                              <span className="text-sm font-bold text-slate-700">บิดา/มารดา (คนละ 30k)</span>
-                              <div className="flex items-center gap-2">
-                                  <input type="number" min="0" max="4" value={pitDeductions.parents} onChange={e=>setPitDeductions({...pitDeductions, parents: parseInt(e.target.value)||0})} className="w-16 bg-white border border-slate-200 rounded-lg p-1.5 text-center font-bold outline-none text-indigo-600 focus:border-indigo-400" />
-                                  <span className="text-xs text-slate-500 font-bold">คน</span>
-                              </div>
-                           </div>
-                           <div className="space-y-1.5 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                              <span className="text-xs font-bold text-slate-700">ประกันชีวิต/สุขภาพ/SSO</span>
-                              <input type="number" value={pitDeductions.lifeInsurance} onChange={e=>setPitDeductions({...pitDeductions, lifeInsurance: parseInt(e.target.value)||0})} className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-right font-bold outline-none text-indigo-600 focus:border-indigo-400" placeholder="0" />
-                           </div>
-                           <div className="space-y-1.5 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                              <span className="text-xs font-bold text-slate-700">ลดหย่อนอื่นๆ (กองทุน/บริจาค)</span>
-                              <input type="number" value={pitDeductions.otherDeductions} onChange={e=>setPitDeductions({...pitDeductions, otherDeductions: parseInt(e.target.value)||0})} className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-right font-bold outline-none text-indigo-600 focus:border-indigo-400" placeholder="0" />
-                           </div>
-                       </div>
+                      <div className="space-y-3 pt-4 border-t">
+                         <label className="text-xs font-bold text-slate-500 uppercase">รายการลดหย่อน (Deductions)</label>
+                         <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <span className="text-sm font-bold text-slate-700">ผู้มีเงินได้ (อัตโนมัติ)</span>
+                            <span className="text-sm font-black text-indigo-600">60,000</span>
+                         </div>
+                         <label className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100 cursor-pointer">
+                            <span className="text-sm font-bold text-slate-700">คู่สมรสไม่มีเงินได้ (60k)</span>
+                            <input type="checkbox" checked={pitDeductions.spouse} onChange={e=>setPitDeductions({...pitDeductions, spouse: e.target.checked})} className="w-5 h-5 rounded text-indigo-600 border-slate-300" />
+                         </label>
+                         <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <span className="text-sm font-bold text-slate-700">บุตร (คนละ 30k)</span>
+                            <input type="number" min="0" value={pitDeductions.children} onChange={e=>setPitDeductions({...pitDeductions, children: parseInt(e.target.value)||0})} className="w-16 bg-white border border-slate-200 rounded-lg p-1 text-center font-bold outline-none text-indigo-600 focus:border-indigo-400" />
+                         </div>
+                         <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <span className="text-sm font-bold text-slate-700">บิดามารดา (คนละ 30k)</span>
+                            <input type="number" min="0" max="4" value={pitDeductions.parents} onChange={e=>setPitDeductions({...pitDeductions, parents: parseInt(e.target.value)||0})} className="w-16 bg-white border border-slate-200 rounded-lg p-1 text-center font-bold outline-none text-indigo-600 focus:border-indigo-400" />
+                         </div>
+                         <div className="space-y-1 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <span className="text-xs font-bold text-slate-700">ประกันชีวิต / ประกันสังคม / กองทุน</span>
+                            <input type="number" value={pitDeductions.lifeInsurance} onChange={e=>setPitDeductions({...pitDeductions, lifeInsurance: parseInt(e.target.value)||0})} className="w-full bg-white border border-slate-200 rounded-lg p-2 text-right font-bold outline-none text-indigo-600 focus:border-indigo-400" placeholder="0" />
+                         </div>
+                         <div className="space-y-1 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <span className="text-xs font-bold text-slate-700">ลดหย่อนอื่นๆ (เช่น บริจาค, E-Receipt)</span>
+                            <input type="number" value={pitDeductions.otherDeductions} onChange={e=>setPitDeductions({...pitDeductions, otherDeductions: parseInt(e.target.value)||0})} className="w-full bg-white border border-slate-200 rounded-lg p-2 text-right font-bold outline-none text-indigo-600 focus:border-indigo-400" placeholder="0" />
+                         </div>
+                      </div>
                    </div>
                 </div>
 
-                {/* --- Right Column: Analysis & AI --- */}
-                <div className="xl:col-span-8 space-y-6">
-                   
-                   {/* Top Summary Cards */}
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                       {/* Tax Payable Card */}
-                       <div className="bg-slate-900 text-white p-8 rounded-[32px] shadow-xl relative overflow-hidden flex flex-col justify-center">
-                           <Calculator size={140} className="absolute -right-10 -bottom-10 opacity-10 text-white" />
-                           <div className="relative z-10">
-                               <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-1">Estimated Net Tax (ประมาณการภาษีเงินได้สุทธิ)</p>
-                               <h3 className={`text-5xl font-black mb-2 ${pitAnalysis.payableTax <= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                <div className="xl:col-span-2 space-y-6">
+                   <div className="bg-slate-900 text-white p-8 rounded-[32px] shadow-xl relative overflow-hidden">
+                       <Calculator size={140} className="absolute -right-10 -bottom-10 opacity-10 text-white" />
+                       <div className="flex justify-between items-start relative z-10">
+                           <div>
+                               <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-1">Estimated Net Tax Payable (ภ.ง.ด. 90/94)</p>
+                               <h3 className="text-4xl md:text-5xl font-black mb-4">
                                   {pitAnalysis.payableTax <= 0 ? 'ไม่มีภาษีต้องชำระ' : formatCurrency(pitAnalysis.payableTax)}
                                </h3>
-                               
-                               <div className="flex flex-wrap gap-2 mt-4">
-                                   <span className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/50 px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
-                                       <Activity size={14}/> ฐานภาษีปัจจุบัน: {pitAnalysis.currentBracket}
-                                   </span>
-                                   {pitAnalysis.payableTax < 0 && (
-                                       <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
-                                           <CheckCircle size={14}/> ขอคืนภาษีได้ {formatCurrency(Math.abs(pitAnalysis.payableTax))} ฿
-                                       </span>
-                                   )}
-                               </div>
                            </div>
-                       </div>
-
-                       {/* --- 🔥 NEW: Tax Provision Reserve (เตรียมเงินสดจ่าย VAT) --- */}
-                       <div className={`p-8 rounded-[32px] shadow-sm border flex flex-col justify-center relative overflow-hidden transition-colors ${vatAnalysis.net > 0 ? 'bg-orange-50 border-orange-200' : 'bg-emerald-50 border-emerald-200'}`}>
-                           <p className={`text-[10px] font-black uppercase tracking-widest mb-1 ${vatAnalysis.net > 0 ? 'text-orange-600' : 'text-emerald-600'}`}>
-                               Tax Provision Reserve (กันเงินสดเตรียมจ่าย VAT ภ.พ.30)
-                           </p>
-                           
-                           {vatAnalysis.net > 0 ? (
-                               <>
-                                   <h3 className="text-3xl font-black mb-2 text-orange-700">
-                                       {formatCurrency(vatAnalysis.net)} <span className="text-base font-bold text-orange-500">บาท</span>
-                                   </h3>
-                                   <p className="text-xs font-bold text-orange-800/80 mt-1">
-                                       คิดเป็น {pitAnalysis.totalIncome > 0 ? ((vatAnalysis.net / pitAnalysis.totalIncome) * 100).toFixed(1) : 0}% ของยอดขายเดือนนี้
-                                   </p>
-                                   <div className="w-full bg-orange-200 rounded-full h-2 mt-4 overflow-hidden">
-                                       <div className="bg-orange-500 h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(((vatAnalysis.net / (pitAnalysis.totalIncome || 1)) * 100) * 3, 100)}%` }}></div>
-                                   </div>
-                                   <p className="text-[10px] font-bold mt-3 flex items-center gap-1 text-orange-600">
-                                       <AlertTriangle size={14}/> อย่าลืมกันเงินสดก้อนนี้ออกจากกำไร! เพื่อเตรียมนำส่งสรรพากร
-                                   </p>
-                               </>
-                           ) : (
-                               <>
-                                   <h3 className="text-3xl font-black mb-2 text-emerald-700">
-                                       {formatCurrency(Math.abs(vatAnalysis.net))} <span className="text-base font-bold text-emerald-500">บาท</span>
-                                   </h3>
-                                   <p className="text-xs font-bold text-emerald-800/80 mt-1">
-                                       ยอดภาษีซื้อมากกว่าขาย (เครดิตภาษี)
-                                   </p>
-                                   <div className="w-full bg-emerald-200 rounded-full h-2 mt-4 overflow-hidden">
-                                       <div className="bg-emerald-500 h-full rounded-full w-full"></div>
-                                   </div>
-                                   <p className="text-[10px] font-bold mt-3 flex items-center gap-1 text-emerald-600">
-                                       <CheckCircle size={14}/> เดือนนี้กระแสเงินสดปลอดภัย ไม่ต้องนำส่งเงินสดเพิ่ม
-                                   </p>
-                               </>
-                           )}
-                       </div>
-                   </div>
-
-                   {/* --- AI Tax Planner Box --- */}
-                   <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-6 md:p-8 rounded-[32px] border border-indigo-100 shadow-sm relative">
-                       <Wand2 size={80} className="absolute right-4 top-4 text-indigo-200 opacity-40 pointer-events-none" />
-                       <div className="relative z-10 flex justify-between items-center mb-6">
-                           <div>
-                               <h4 className="font-bold text-indigo-900 flex items-center gap-2 text-lg"><Sparkles className="text-amber-500"/> AI Tax Planner & Optimizer</h4>
-                               <p className="text-xs text-indigo-600/70 mt-1">ผู้ช่วยผู้สอบบัญชี AI: วิเคราะห์โครงสร้างภาษีของคุณแบบเรียลไทม์</p>
-                           </div>
-                           <button onClick={getTaxAdvice} disabled={isGettingTaxAdvice} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all flex items-center gap-2 disabled:opacity-50">
-                               {isGettingTaxAdvice ? <Loader size={16} className="animate-spin"/> : <Search size={16}/>} 
-                               {isGettingTaxAdvice ? 'กำลังวิเคราะห์...' : 'เริ่มการวิเคราะห์'}
+                           <button onClick={getTaxAdvice} disabled={isGettingTaxAdvice} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg disabled:opacity-50">
+                               {isGettingTaxAdvice ? <Loader size={16} className="animate-spin" /> : <Sparkles size={16} />} AI Tax Advisor
                            </button>
                        </div>
-
-                       {aiTaxAdvice && typeof aiTaxAdvice === 'object' && (
-                           <div className="relative z-10 space-y-4 animate-fadeIn">
-                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                   <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-                                       <p className="text-[10px] font-black text-slate-400 uppercase mb-2">คำแนะนำการหักค่าใช้จ่าย</p>
-                                       <p className="text-sm font-bold text-indigo-700">{aiTaxAdvice.bestExpenseMode}</p>
-                                   </div>
-                                   <div className="bg-white p-5 rounded-2xl shadow-sm border border-rose-100">
-                                       <p className="text-[10px] font-black text-rose-400 uppercase mb-2">วิเคราะห์ความเสี่ยง VAT</p>
-                                       <p className="text-sm font-bold text-rose-700">{aiTaxAdvice.vatWarning}</p>
-                                   </div>
-                               </div>
-                               
-                               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-                                   <p className="text-[10px] font-black text-slate-400 uppercase mb-4 flex items-center gap-1"><Lightbulb size={14} className="text-amber-500"/> เทคนิคประหยัดภาษีที่ควรทำเพิ่ม</p>
-                                   <div className="space-y-4">
-                                       {(aiTaxAdvice.taxSavingTips || []).map((tip, i) => (
-                                           <div key={i} className="flex gap-3 items-start">
-                                               <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 font-black text-xs">{i+1}</div>
-                                               <div>
-                                                   <p className="font-bold text-slate-800 text-sm">{tip.title}</p>
-                                                   <p className="text-xs text-slate-600 mt-1 leading-relaxed">{tip.desc}</p>
-                                               </div>
-                                           </div>
-                                       ))}
-                                   </div>
-                               </div>
+                       
+                       {aiTaxAdvice && (
+                           <div className="mt-4 bg-slate-800 border border-indigo-500/30 p-5 rounded-2xl animate-fadeIn relative z-10">
+                               <h4 className="text-amber-400 font-bold text-sm mb-2 flex items-center gap-2"><Activity size={16}/> ข้อเสนอแนะจาก AI:</h4>
+                               <ul className="space-y-2 text-indigo-100 text-sm font-medium">
+                                   {aiTaxAdvice.map((adv, i) => (
+                                       <li key={i} className="flex gap-2 items-start"><span className="text-amber-400 mt-0.5">•</span> <span>{adv}</span></li>
+                                   ))}
+                               </ul>
                            </div>
                        )}
-                       {!aiTaxAdvice && !isGettingTaxAdvice && (
-                           <div className="border-2 border-dashed border-indigo-200 rounded-2xl flex flex-col items-center justify-center text-indigo-300 py-10 relative z-10 bg-white/50">
-                               <Activity size={40} className="mb-2 opacity-50"/>
-                               <p className="font-bold text-sm">พร้อมวิเคราะห์โครงสร้างภาษี</p>
-                               <p className="text-xs opacity-70 mt-1">กรอกข้อมูลลดหย่อนด้านซ้ายให้ครบ แล้วกดปุ่ม "เริ่มการวิเคราะห์" ได้เลย</p>
-                           </div>
+
+                       {pitAnalysis.payableTax < 0 && !aiTaxAdvice && (
+                           <p className="text-emerald-400 font-bold bg-emerald-400/10 w-fit px-4 py-2 rounded-xl mt-2">สามารถขอคืนภาษีได้ {formatCurrency(Math.abs(pitAnalysis.payableTax))} บาท</p>
+                       )}
+                       {pitAnalysis.payableTax > 0 && pitAnalysis.totalWHT > 0 && !aiTaxAdvice && (
+                           <p className="text-amber-400 text-sm font-bold bg-amber-400/10 w-fit px-4 py-2 rounded-xl mt-2">มีหัก ณ ที่จ่ายไว้แล้ว {formatCurrency(pitAnalysis.totalWHT)} บาท (คำนวณหักลบแล้ว)</p>
                        )}
                    </div>
 
-                   {/* Calculation Steps Table */}
-                   <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm">
-                       <h4 className="font-bold text-slate-800 border-b border-slate-100 pb-3 mb-4 flex items-center gap-2"><List size={18} className="text-indigo-600"/> รายละเอียดการคำนวณ</h4>
-                       <div className="space-y-3 text-sm">
-                           <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                               <span className="font-bold text-slate-600">1. รวมรายได้ประเมิน 40(8)</span>
-                               <span className="font-mono font-bold text-base text-slate-800">{formatCurrency(pitAnalysis.totalIncome)}</span>
+                   <div className="bg-slate-50 p-6 md:p-8 rounded-[32px] border border-slate-100 space-y-3 text-sm shadow-sm">
+                       <div className="flex justify-between items-center py-2 border-b border-slate-200">
+                           <span className="font-bold text-slate-600">1. รวมรายได้ประเมิน 40(8)</span>
+                           <span className="font-mono font-bold text-base text-slate-800">{formatCurrency(pitAnalysis.totalIncome)}</span>
+                       </div>
+                       <div className="flex justify-between items-center py-2 border-b border-slate-200">
+                           <span className="font-bold text-slate-600">2. หัก ค่าใช้จ่าย ({expenseMode === 'standard' ? 'เหมา 60%' : 'ตามจริง'})</span>
+                           <span className="font-mono font-bold text-base text-rose-600">-{formatCurrency(pitAnalysis.usedExpense)}</span>
+                       </div>
+                       <div className="flex justify-between items-center py-2 border-b border-slate-200">
+                           <span className="font-bold text-slate-600">3. หัก ค่าลดหย่อนรวม</span>
+                           <span className="font-mono font-bold text-base text-rose-600">-{formatCurrency(pitAnalysis.totalDeductions)}</span>
+                       </div>
+                       <div className="flex justify-between items-center py-5 border-b border-slate-200 bg-white px-5 rounded-2xl shadow-sm my-3 border border-indigo-50">
+                           <span className="font-black text-indigo-700">4. เงินได้สุทธิเพื่อคำนวณภาษี</span>
+                           <span className="font-mono font-black text-xl text-indigo-700">{formatCurrency(pitAnalysis.netIncome)}</span>
+                       </div>
+                       
+                       <div className="py-2">
+                           <span className="font-bold text-slate-600 block mb-3">5. คำนวณภาษีตามขั้นบันได</span>
+                           <div className="border border-slate-200 rounded-2xl overflow-hidden text-xs shadow-sm">
+                               <table className="w-full text-left bg-white">
+                                   <thead className="bg-slate-100 text-slate-500 font-bold uppercase">
+                                       <tr><th className="p-3 pl-5">ขั้นเงินได้สุทธิ</th><th className="p-3 text-center">อัตราภาษี</th><th className="p-3 text-right">เงินได้ในขั้น</th><th className="p-3 pr-5 text-right">ภาษีสะสม</th></tr>
+                                   </thead>
+                                   <tbody className="divide-y divide-slate-50">
+                                       {pitAnalysis.steps.map((s, idx) => (
+                                           <tr key={idx} className="hover:bg-slate-50/50">
+                                               <td className="p-3 pl-5 text-slate-600 font-medium">{s.range}</td>
+                                               <td className="p-3 text-center font-black text-indigo-600 bg-indigo-50/30">{s.rate}</td>
+                                               <td className="p-3 text-right font-mono text-slate-600">{formatCurrency(s.amount)}</td>
+                                               <td className="p-3 pr-5 text-right font-black text-slate-800">{formatCurrency(s.tax)}</td>
+                                           </tr>
+                                       ))}
+                                       {pitAnalysis.steps.length === 0 && (
+                                           <tr><td colSpan="4" className="p-6 text-center text-slate-400 font-bold">ยอดเงินได้สุทธิอยู่ในเกณฑ์ได้รับการยกเว้นภาษี</td></tr>
+                                       )}
+                                   </tbody>
+                               </table>
                            </div>
-                           <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                               <span className="font-bold text-slate-600">2. หัก ค่าใช้จ่าย ({expenseMode === 'standard' ? 'เหมา 60%' : 'ตามจริง'})</span>
-                               <span className="font-mono font-bold text-base text-rose-500">-{formatCurrency(pitAnalysis.usedExpense)}</span>
-                           </div>
-                           <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                               <span className="font-bold text-slate-600">3. หัก ค่าลดหย่อนรวม</span>
-                               <span className="font-mono font-bold text-base text-rose-500">-{formatCurrency(pitAnalysis.totalDeductions)}</span>
-                           </div>
-                           <div className="flex justify-between items-center py-4 bg-slate-50 px-4 rounded-xl my-2 border border-slate-100">
-                               <span className="font-black text-indigo-700">4. เงินได้สุทธิเพื่อคำนวณภาษี</span>
-                               <span className="font-mono font-black text-lg text-indigo-700">{formatCurrency(pitAnalysis.netIncome)}</span>
-                           </div>
-                           
-                           <div className="py-2">
-                               <span className="font-bold text-slate-600 block mb-3">5. คำนวณภาษีตามขั้นบันได</span>
-                               <div className="border border-slate-200 rounded-xl overflow-hidden text-xs shadow-sm">
-                                   <table className="w-full text-left bg-white">
-                                       <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
-                                           <tr><th className="p-3 pl-4">ขั้นเงินได้สุทธิ</th><th className="p-3 text-center">อัตราภาษี</th><th className="p-3 text-right">เงินได้ในขั้น</th><th className="p-3 pr-4 text-right">ภาษีสะสม</th></tr>
-                                       </thead>
-                                       <tbody className="divide-y divide-slate-50">
-                                           {pitAnalysis.steps.map((s, idx) => (
-                                               <tr key={idx} className="hover:bg-slate-50/50">
-                                                   <td className="p-3 pl-4 text-slate-600 font-medium">{s.range}</td>
-                                                   <td className="p-3 text-center font-black text-indigo-600 bg-indigo-50/30">{s.rate}</td>
-                                                   <td className="p-3 text-right font-mono text-slate-600">{formatCurrency(s.amount)}</td>
-                                                   <td className="p-3 pr-4 text-right font-black text-slate-800">{formatCurrency(s.tax)}</td>
-                                               </tr>
-                                           ))}
-                                           {pitAnalysis.steps.length === 0 && (
-                                               <tr><td colSpan="4" className="p-6 text-center text-emerald-500 font-bold">ยอดเงินได้สุทธิอยู่ในเกณฑ์ได้รับการยกเว้นภาษี</td></tr>
-                                           )}
-                                       </tbody>
-                                   </table>
-                               </div>
-                           </div>
+                       </div>
 
-                           <div className="flex justify-between items-center py-3 border-b border-slate-100 mt-2">
-                               <span className="font-bold text-slate-600">6. ภาษีที่คำนวณได้ {pitAnalysis.isGrossTaxApplied ? '(ใช้ฐาน 0.5% ของรายได้)' : '(ฐานขั้นบันได)'}</span>
-                               <span className="font-mono font-black text-base text-slate-800">{formatCurrency(pitAnalysis.finalTax)}</span>
-                           </div>
-                           <div className="flex justify-between items-center py-3">
-                               <span className="font-bold text-slate-600">7. หัก ภาษีถูกหัก ณ ที่จ่าย (WHT)</span>
-                               <span className="font-mono font-bold text-base text-emerald-600">-{formatCurrency(pitAnalysis.totalWHT)}</span>
-                           </div>
+                       <div className="flex justify-between items-center py-3 border-b border-slate-200 mt-2">
+                           <span className="font-bold text-slate-600">6. ภาษีที่คำนวณได้ {pitAnalysis.isGrossTaxApplied ? '(ใช้ฐาน 0.5% ของรายได้)' : '(ฐานขั้นบันได)'}</span>
+                           <span className="font-mono font-black text-base text-slate-800">{formatCurrency(pitAnalysis.finalTax)}</span>
+                       </div>
+                       <div className="flex justify-between items-center py-3 border-b border-slate-200">
+                           <span className="font-bold text-slate-600">7. หัก ภาษีถูกหัก ณ ที่จ่าย (WHT)</span>
+                           <span className="font-mono font-bold text-base text-emerald-600">-{formatCurrency(pitAnalysis.totalWHT)}</span>
+                       </div>
+                       <div className="flex justify-between items-center py-5 bg-indigo-50 px-5 rounded-2xl mt-4 border border-indigo-100">
+                           <span className="font-black text-slate-800 text-lg">สรุปภาษีสุทธิ</span>
+                           <span className={`font-mono font-black text-2xl ${pitAnalysis.payableTax <= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                               {formatCurrency(pitAnalysis.payableTax)}
+                           </span>
                        </div>
                    </div>
                 </div>
@@ -8796,14 +8505,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               }
           } catch (err) {
               console.error(err);
-              // --- 🔥 FIX: จับ Error ระดับเจาะจง เพื่อให้รู้ว่าพลาดที่อะไรบน Vercel ---
-              if (err.message === "API_KEY_MISSING") {
-                  showToast("กรุณาตั้งค่า API Key ก่อนใช้งาน (เมนูซ้ายล่าง 'เครื่องมือขั้นสูง' > 'ตั้งค่า AI API Key')", "error");
-              } else if (err.message === "INVALID_API_KEY") {
-                  showToast("API Key ไม่ถูกต้อง หรือถูกจำกัดสิทธิ์ (Restrictions) ไว้ กรุณาตรวจสอบ", "error");
-              } else {
-                  showToast("ไม่สามารถสแกนใบเสร็จได้ กรุณากรอกข้อมูลเอง หรือลองใหม่อีกครั้ง", "error");
-              }
+              showToast("ไม่สามารถสแกนใบเสร็จได้ กรุณากรอกข้อมูลเอง (หรือตรวจสอบ API Key)", "error");
           }
           setIsOcrProcessing(false);
           if (ocrInputRef.current) ocrInputRef.current.value = '';
@@ -13004,12 +12706,10 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           let processedCount = 0;
 
           const checkAndCommit = async () => {
-              // --- 🔥 FIX: ป้องกันคิว Firebase เต็ม ---
-              if (opsCount >= 200) {
+              if (opsCount >= 300) {
                   await batchWriter.commit();
                   batchWriter = writeBatch(dbInstance);
                   opsCount = 0;
-                  await new Promise(r => setTimeout(r, 200)); // พัก 0.2 วิ
               }
           };
 
@@ -14188,11 +13888,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                 <td className="p-4 text-center">
                                     <div className="flex justify-center gap-2 text-center flex-wrap max-w-[180px] mx-auto">
                                         {docItem.source === 'transaction' ? (
-                                            <>
-                                                <button onClick={() => handleLoadTransaction(docItem)} className="text-white bg-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 text-center"><PlusCircle size={12}/> สร้าง</button>
-                                                {/* อนุญาตให้ลบถาวรได้เฉพาะบิลชั่วคราว/รอออกเอกสารเท่านั้น */}
-                                                <button onClick={() => setHardDeleteInvoiceId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center flex items-center gap-1" title="ลบถาวร (Hard Delete)"><Trash2 size={12}/> ลบ</button>
-                                            </>
+                                            <button onClick={() => handleLoadTransaction(docItem)} className="text-white bg-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 text-center"><PlusCircle size={12}/> สร้าง</button>
                                         ) : (
                                             <>
                                                 <button onClick={() => handleEditInvoice(docItem)} className="text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center">ดู/แก้ไข</button>
@@ -14200,10 +13896,10 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                                 {docItem.status !== 'cancelled' && (
                                                     <>
                                                         <button onClick={() => handleCreateCreditNote(docItem)} className="text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="สร้างใบลดหนี้">ลดหนี้</button>
-                                                        <button onClick={() => setCancelConfirmId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="ยกเลิกเอกสาร (Void)"><X size={12}/></button>
+                                                        <button onClick={() => setCancelConfirmId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="ยกเลิกเอกสาร"><X size={12}/></button>
                                                     </>
                                                 )}
-                                                {/* 🚫 ถอดปุ่มลบถาวรออกอย่างสมบูรณ์ สำหรับเอกสารที่รันเลขแล้ว (INV, ABB, CN, ฯลฯ) เพื่อให้ระบบบัญชีปลอดภัย 100% */}
+                                                <button onClick={() => setHardDeleteInvoiceId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="ลบถาวร (Hard Delete)"><Trash2 size={12}/></button>
                                             </>
                                         )}
                                     </div>
@@ -14356,17 +14052,9 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                       <div className="border border-slate-300 p-2 w-full max-w-[200px] text-right">
                           <div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เลขที่ (No.)</span><span className="font-bold text-right text-[10px]">{currentBulkPrintDoc.invNo}</span></div>
                           <div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(currentBulkPrintDoc.date)}</span></div>
-                          
-                          {/* --- 🔥 NEW: แสดงบนหน้าบิล Bulk Print --- */}
                           {currentBulkPrintDoc.docType === 'credit_note' && currentBulkPrintDoc.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{currentBulkPrintDoc.refInvNo}</span></div>)}
-                          {currentBulkPrintDoc.docType === 'credit_note' && currentBulkPrintDoc.creditNoteReason && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">สาเหตุ</span><span className="text-right text-[10px] text-rose-600 text-right">{currentBulkPrintDoc.creditNoteReason}</span></div>)}
-                          
                           {currentBulkPrintDoc.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{currentBulkPrintDoc.orderId}</span></div>)}
-                          {currentBulkPrintDoc.orderDate && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ทำรายการ</span><span className="text-right text-[10px] text-right">{formatDate(currentBulkPrintDoc.orderDate)}</span></div>)}
-                          
-                          {/* --- 🔥 NEW: โชว์ข้อมูลร้านและช่องทาง บนใบเอกสาร Bulk (อ้างอิงภายใน) --- */}
-                          {currentBulkPrintDoc.channel && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">ช่องทาง</span><span className="text-right text-[10px] text-right">{currentBulkPrintDoc.channel}</span></div>)}
-                          {currentBulkPrintDoc.shopName && currentBulkPrintDoc.shopName !== 'ไม่ระบุ' && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">ร้านค้า</span><span className="text-right text-[10px] text-right">{currentBulkPrintDoc.shopName}</span></div>)}
+                          {currentBulkPrintDoc.orderDate && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">วันที่ทำรายการ</span><span className="text-right text-[10px] text-right">{formatDate(currentBulkPrintDoc.orderDate)}</span></div>)}
                       </div>
                   </div>
               </div>
@@ -14543,7 +14231,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                     
                     <div className="flex justify-between items-start mb-8 text-left relative z-10">
                       <div className="w-[70%] flex items-start gap-5 text-left">{invData.logo && (<img src={invData.logo} className="w-[90px] h-[90px] object-contain flex-shrink-0 text-center" alt="Logo"/>)}<div className="flex flex-col justify-center flex-1 text-left"><h2 className="text-xl font-bold text-slate-900 mb-1 leading-tight text-left">{invData.sellerName}</h2><div className="text-xs leading-relaxed space-y-1 mt-1 text-left"><p className="text-slate-600 text-left">{[invData.sellerAddress, fmtAddr.sub(invData.sellerSubDistrict)].filter(Boolean).join(' ')}</p><p className="text-slate-600 text-left">{[fmtAddr.dist(invData.sellerDistrict), fmtAddr.prov(invData.sellerProvince), invData.sellerZipCode].filter(Boolean).join(' ')}</p><p className="text-slate-700 text-left"><b>เลขผู้เสียภาษี:</b> {invData.sellerTaxId} <span className="ml-2"><b>สาขา:</b> {invData.sellerBranchId === '00000' || !invData.sellerBranchId ? 'สำนักงานใหญ่' : invData.sellerBranchId} {invData.sellerBranchName && `(${invData.sellerBranchName})`}</span></p><p className="text-slate-700 text-left"><b>โทร:</b> {invData.sellerPhone}</p></div></div></div>
-                      <div className="text-right w-[30%] flex flex-col items-end text-right"><div className="text-lg font-bold uppercase mb-0 text-right">{invData.docType === 'quotation' ? 'ใบเสนอราคา / QUOTATION' : (invData.docType === 'receipt' ? 'ใบเสร็จรับเงิน / RECEIPT' : (invData.docType === 'payment_voucher' ? 'ใบสำคัญจ่าย / PAYMENT VOUCHER' : (invData.docType === 'credit_note' ? 'ใบลดหนี้ / CREDIT NOTE' : (invData.docType === 'abb' ? 'ใบกำกับภาษีอย่างย่อ' : 'ใบกำกับภาษี / ใบเสร็จรับเงิน'))))}</div><div className={`status-badge text-lg font-bold uppercase mb-3 text-right ${invData.status === 'cancelled' ? 'text-rose-600' : ''}`}>{invData.status === 'cancelled' ? 'ยกเลิกแล้ว (Cancelled)' : 'ต้นฉบับ (Original)'}</div><div className="border border-slate-300 p-2 w-full max-w-[200px] text-right"><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เลขที่ (No.)</span><span className="font-bold text-right text-[10px]">{invData.invNo}</span></div><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(invData.date)}</span></div>{invData.docType === 'credit_note' && invData.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{invData.refInvNo}</span></div>)}{invData.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{invData.orderId}</span></div>)}{invData.orderDate && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ทำรายการ</span><span className="text-right text-[10px] text-right">{formatDate(invData.orderDate)}</span></div>)}{invData.channel && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">ช่องทาง</span><span className="text-right text-[10px] text-right">{invData.channel}</span></div>)}{invData.shopName && invData.shopName !== 'ไม่ระบุ' && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">ร้านค้า</span><span className="text-right text-[10px] text-right">{invData.shopName}</span></div>)}</div></div>
+                      <div className="text-right w-[30%] flex flex-col items-end text-right"><div className="text-lg font-bold uppercase mb-0 text-right">{invData.docType === 'quotation' ? 'ใบเสนอราคา / QUOTATION' : (invData.docType === 'receipt' ? 'ใบเสร็จรับเงิน / RECEIPT' : (invData.docType === 'payment_voucher' ? 'ใบสำคัญจ่าย / PAYMENT VOUCHER' : (invData.docType === 'credit_note' ? 'ใบลดหนี้ / CREDIT NOTE' : (invData.docType === 'abb' ? 'ใบกำกับภาษีอย่างย่อ' : 'ใบกำกับภาษี / ใบเสร็จรับเงิน'))))}</div><div className={`status-badge text-lg font-bold uppercase mb-3 text-right ${invData.status === 'cancelled' ? 'text-rose-600' : ''}`}>{invData.status === 'cancelled' ? 'ยกเลิกแล้ว (Cancelled)' : 'ต้นฉบับ (Original)'}</div><div className="border border-slate-300 p-2 w-full max-w-[200px] text-right"><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เลขที่ (No.)</span><span className="font-bold text-right text-[10px]">{invData.invNo}</span></div><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(invData.date)}</span></div>{invData.docType === 'credit_note' && invData.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{invData.refInvNo}</span></div>)}{invData.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{invData.orderId}</span></div>)}</div></div>
                     </div>
                     <div className="border border-slate-300 p-4 mb-4 flex flex-col gap-1 text-left text-left relative z-10">
                         <div className="text-xs font-bold text-slate-400 uppercase mb-1 text-left">{invData.docType === 'payment_voucher' ? 'จ่ายให้แก่ (Pay To)' : 'ลูกค้า (Customer)'}</div>
@@ -16706,7 +16394,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
 }
 
 // --- 🔥 NEW: เครื่องมือตั้งราคาอัจฉริยะ (AI Smart Pricing Module) ---
-function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 FIX: เพิ่ม transactions เข้ามารับค่า
+function PricingCalculator({ stockBatches, showToast }) {
     const [cost, setCost] = useState('');
     const [desiredProfit, setDesiredProfit] = useState('');
     const [competitorPrice, setCompetitorPrice] = useState(''); // NEW: ราคาคู่แข่ง
@@ -16716,12 +16404,12 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
     
     // NEW: State สำหรับ Simulator
     const [simulatedPrice, setSimulatedPrice] = useState(''); 
-    const [includeVat, setIncludeVat] = useState(false); // State สำหรับเปิด/ปิดการคิด VAT
+    const [includeVat, setIncludeVat] = useState(false); // --- 🔥 NEW: State สำหรับเปิด/ปิดการคิด VAT ---
 
     const [aiSuggestion, setAiSuggestion] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-    // --- Pricing History Database (Local State for MVP) ---
+    // --- 🔥 NEW: Pricing History Database (Local State for MVP) ---
     const [pricingHistory, setPricingHistory] = useState(() => {
         try {
             return JSON.parse(localStorage.getItem('merchant_pricing_history') || '[]');
@@ -16744,45 +16432,6 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
         return Object.values(map);
     }, [stockBatches]);
 
-    // --- 🔥 NEW: ฟังก์ชันประเมินยอดขายย้อนหลัง (Feedback Loop) ---
-    const itemSalesStats = useMemo(() => {
-        if (!selectedItemKey || !transactions) return null;
-        
-        const targetItem = uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey);
-        if (!targetItem) return null;
-
-        const targetSku = targetItem.sku;
-        const targetName = targetItem.name;
-        
-        let totalSold = 0;
-        let soldLast30Days = 0;
-        let totalRevenue = 0;
-        
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-        transactions.forEach(t => {
-            if (t.type !== 'income' || t.isCancelled || t.isFromReconciliation) return;
-            
-            const tDate = normalizeDate(t.date);
-            const isLast30Days = tDate && tDate >= thirtyDaysAgo;
-
-            (t.items || []).forEach(item => {
-                if (matchItemToBatch(item.sku, item.desc, targetSku, targetName)) {
-                    const qty = Number(item.qty) || 0;
-                    const price = Number(item.sellPrice || item.price || 0);
-                    totalSold += qty;
-                    totalRevenue += (qty * price);
-                    if (isLast30Days) soldLast30Days += qty;
-                }
-            });
-        });
-
-        const avgPrice = totalSold > 0 ? totalRevenue / totalSold : 0;
-
-        return { totalSold, soldLast30Days, totalRevenue, avgPrice };
-    }, [selectedItemKey, transactions, uniqueItems]);
-
     const handleSelectItem = (e) => {
         const val = e.target.value;
         setSelectedItemKey(val);
@@ -16790,7 +16439,7 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
             const item = uniqueItems.find(i => (i.sku === val || i.name === val));
             if (item && item.cost > 0) {
                 setCost(item.cost);
-                setSimulatedPrice(item.sellPrice || ''); 
+                setSimulatedPrice(item.sellPrice || ''); // ดึงราคาขายเดิมมาจำลอง
             }
         } else {
             setCost('');
@@ -16847,78 +16496,45 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
     }, [simulatedPrice, cost, marketingBufferPct, includeVat]);
 
     const handleAiAnalysis = async () => {
-        if (!cost || (!desiredProfit && !simulatedPrice)) {
+        if (calculations.recommendedPrice <= 0 || !cost || (!desiredProfit && !simulatedPrice)) {
             showToast("กรุณากรอกต้นทุน และ กำไร/ราคาขายที่ต้องการ ให้ครบถ้วนก่อน", "error");
             return;
         }
         setIsAnalyzing(true);
         try {
-            // --- 🔥 THE FIX: คำนวณขอบเขตราคา (Price Boundaries) เพื่อบังคับให้ AI คิดเลขให้ถูกต้อง ---
-            const c = Number(cost);
-            const feeDecimal = (Number(platformFeePct) + Number(marketingBufferPct)) / 100;
-            // คำนวณจุดคุ้มทุน: ราคาที่หักค่าธรรมเนียมแล้วเหลือเท่าทุนพอดีเป๊ะ (กำไร = 0)
-            const breakEvenPrice = feeDecimal < 1 ? c / (1 - feeDecimal) : c; 
-            // ราคาเพื่อให้ได้กำไรตามเป้า
-            const targetPrice = calculations.recommendedPrice; 
-
-            const basePrice = simulatedPrice ? Number(simulatedPrice) : targetPrice;
+            const basePrice = simulatedPrice ? Number(simulatedPrice) : calculations.recommendedPrice;
             const compText = competitorPrice ? `- ราคาคู่แข่งในตลาดเฉลี่ย: ${competitorPrice} บาท` : '- ไม่มีข้อมูลราคาคู่แข่ง';
             
-            const salesHistoryText = itemSalesStats ? `- ประวัติการขายของร้าน: ขายไปแล้ว ${itemSalesStats.totalSold} ชิ้น (30 วันล่าสุด: ${itemSalesStats.soldLast30Days} ชิ้น), ลูกค้าเคยยอมจ่ายที่ราคาเฉลี่ย: ${itemSalesStats.avgPrice.toFixed(2)} บาท` : '- ไม่มีประวัติการขาย';
-            const fixedCostText = fixedCost ? `- งบโฆษณา/ฟิกซ์คอสต์รายเดือน: ${fixedCost} บาท (ต้องขายให้คืนทุนส่วนนี้ด้วย)` : '';
-            const desiredProfitText = desiredProfit ? `- เป้าหมายกำไรสุทธิที่ต้องการ: ${desiredProfit} บาท/ชิ้น (หลังหักค่าธรรมเนียมแล้ว)` : '';
-
             const prompt = `
-            คุณคือ Chief Pricing Officer และนักกลยุทธ์การตลาด E-commerce ระดับแนวหน้า
-            หน้าที่ของคุณคือการวิเคราะห์และเสนอ "กลยุทธ์การตั้งราคาสินค้า" ที่ถูกต้องตามหลักคณิตศาสตร์การเงิน และจิตวิทยาผู้บริโภค
-
-            [ข้อมูลพื้นฐานของสินค้า (ห้ามละเมิด)]
-            - ต้นทุนสินค้า (Cost): ${c} บาท
-            - ภาระค่าธรรมเนียม Platform + งบการตลาดที่ต้องถูกหักออกไป: ${(feeDecimal * 100).toFixed(1)}% ของราคาขาย
-            * กฎเหล็กข้อที่ 1: "จุดคุ้มทุน (Break-even Price)" คือ ${Math.ceil(breakEvenPrice)} บาท (ห้ามแนะนำราคาที่ต่ำกว่า ${Math.ceil(breakEvenPrice)} บาท เด็ดขาด เพราะร้านค้าจะขาดทุนทันทีเมื่อโดนหัก ${(feeDecimal * 100).toFixed(1)}%)
-            ${desiredProfitText}
-            - ราคาขายเป้าหมายเพื่อให้ได้กำไรตามเป้า: ${Math.ceil(targetPrice)} บาท
-            - ราคาที่ร้านตั้งไว้ทดสอบในระบบล่าสุด: ${basePrice} บาท
-            
-            [ข้อมูลสภาพตลาดและสถิติ]
+            คุณคือผู้เชี่ยวชาญด้านกลยุทธ์การตั้งราคา (Pricing Strategy & Consumer Psychology)
+            ข้อมูลสินค้าและต้นทุน:
+            - ต้นทุนสินค้า: ${cost} บาท
+            - ราคาที่คำนวณเบื้องต้น: ${basePrice.toFixed(2)} บาท
             ${compText}
-            ${salesHistoryText}
-            ${fixedCostText}
 
-            [คำสั่งการทำงาน]
-            จงนำเสนอโครงสร้างราคา 3 ระดับ (3-Tier Pricing Strategy) โดยอิงตาม กฎเหล็กจุดคุ้มทุน และให้มีเศษลงท้ายด้วยเลขจิตวิทยา (เช่น .00, .90, .99):
-            1. Penetration (ราคาจัด Flash Sale/ดึงทราฟฟิก): ต้อง "สูงกว่า" จุดคุ้มทุน (${Math.ceil(breakEvenPrice)} ฿) เล็กน้อย เพื่อให้ยังมีกำไรนิดหน่อย เน้นปล่อยของไว
-            2. Optimal (ราคาขายปกติ/แนะนำ): ควรใกล้เคียงหรือสูงกว่าราคาเป้าหมาย (${Math.ceil(targetPrice)} ฿) หรืออิงราคาตลาดที่แข่งขันได้ พร้อมเหลือกำไรเข้าเป้า
-            3. Premium (ราคาตั้งเผื่อจัดโปร/อัปเกรด): ราคาสูงสุด เน้นจับกลุ่มลูกค้าที่มีกำลังซื้อสูง หรือตั้งเผื่อไว้แจกโค้ดส่วนลดหน้าร้านหลอกๆ (Price Anchoring)
+            กรุณาให้คำแนะนำ:
+            1. "Charm Price" (ราคาจิตวิทยา) ที่เหมาะสมลงท้ายด้วย 9, 5 หรือ 0 (และควรมี Margin เพียงพอ)
+            2. เหตุผลเชิงจิตวิทยา (สั้นๆ กระชับ)
+            3. "Bundle Price" (ราคาขายส่ง/จัดเซ็ต) เช่น ซื้อ 2 ชิ้น หรือ 3 ชิ้น ควรตั้งราคาเท่าไหร่ให้ลูกค้ารู้สึกคุ้ม แต่เรายังได้กำไร
+            4. "Value Proposition" ถ้าเราขายแพงกว่าคู่แข่ง เราควรชูจุดขายอะไร? (สั้นๆ)
 
-            ตอบกลับเป็น JSON format เท่านั้น ตามโครงสร้างเป๊ะๆ ห้ามมีข้อความหรือ markdown อื่นๆ นอกเหนือจาก JSON:
+            ตอบกลับเป็น JSON format เท่านั้น ห้ามมีข้อความอื่น:
             {
-                "tiers": [
-                    { "name": "Penetration (Flash Sale / ดึงทราฟฟิก)", "price": 0, "reason": "คำอธิบายเชิงกลยุทธ์..." },
-                    { "name": "Optimal (ราคาขายปกติ / แนะนำ)", "price": 0, "reason": "คำอธิบายเชิงกลยุทธ์..." },
-                    { "name": "Premium (ราคาพรีเมียม / ตั้งเผื่อทำโปร)", "price": 0, "reason": "คำอธิบายเชิงกลยุทธ์..." }
-                ],
-                "campaignHook": "ประโยคพาดหัว (Hook) สั้นๆ โดนใจ สำหรับนำไปยิงแอดโปรโมทสินค้านี้...",
-                "bundleIdea": "ไอเดียกลยุทธ์จัดเซ็ต (Bundle/Cross-sell) หรือจับคู่กับสินค้าอื่น เพื่อดันยอดขายและเพิ่ม AOV...",
-                "valueProp": "จุดขายหลัก (Value Proposition) ที่ทำให้ลูกค้ายอมจ่ายซื้อราคานี้ แม้คู่แข่งจะถูกกว่า..."
+                "charmPrice": 299,
+                "reason": "เลข 9 ทำให้ลูกค้ารู้สึกว่ายังไม่ถึง 300...",
+                "bundleIdea": "ซื้อ 2 ชิ้น 550 บาท (ลด X บาท) ช่วยเพิ่ม AOV...",
+                "valueProp": "เน้นการรับประกัน หรือ แพ็คเกจที่ดูพรีเมียมกว่าคู่แข่ง..."
             }
             `;
-            
             const res = await callGeminiAPI(prompt, true);
-            if (res && res.tiers) {
+            if (res && res.charmPrice) {
                 setAiSuggestion(res);
-                setSimulatedPrice(res.tiers[1]?.price || basePrice); 
-                showToast("AI วิเคราะห์กลยุทธ์ราคาและโปรโมชั่นสำเร็จ!", "success");
+                setSimulatedPrice(res.charmPrice); // อัปเดตราคาใน Simulator เป็นราคาที่ AI แนะนำอัตโนมัติ
+                showToast("AI วิเคราะห์ราคาเสร็จสิ้น!", "success");
             }
         } catch (e) {
-            console.error("AI Pricing Error:", e);
-            if (e.message && e.message.includes("API key not valid")) {
-                showToast("API Key ไม่ถูกต้อง กรุณาตรวจสอบการตั้งค่าอีกครั้ง", "error");
-            } else if (e.message && (e.message.includes("400") || e.message.includes("404"))) {
-                showToast("โมเดล AI ขัดข้อง หรือ API Key ใช้ไม่ได้ กรุณาตรวจสอบ", "error");
-            } else {
-                showToast("AI ขัดข้อง กรุณาลองใหม่อีกครั้ง", "error");
-            }
+            console.error(e);
+            showToast("AI ขัดข้อง หรือ API Key ไม่ถูกต้อง กรุณาลองใหม่", "error");
         }
         setIsAnalyzing(false);
     };
@@ -16942,7 +16558,7 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
             sellPrice: Number(simulatedPrice),
             competitorPrice: competitorPrice ? Number(competitorPrice) : null,
             targetProfit: Number(desiredProfit) || 0,
-            aiCharmPrice: aiSuggestion?.tiers?.[1]?.price || null, // เก็บราคา Optimal
+            aiCharmPrice: aiSuggestion?.charmPrice || null,
             bundleIdea: aiSuggestion?.bundleIdea || '-',
             valueProp: aiSuggestion?.valueProp || '-',
             simulations: simulator.map(s => ({
@@ -17043,33 +16659,6 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                                     </option>
                                 ))}
                             </select>
-
-                            {/* --- 🔥 NEW: UI แสดงสถิติย้อนหลัง (Feedback Loop) --- */}
-                            {itemSalesStats && selectedItemKey && (
-                                <div className="mt-4 pt-4 border-t border-slate-200 grid grid-cols-2 gap-3 animate-fadeIn">
-                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ขายไปแล้วรวม</p>
-                                        <p className="text-sm font-black text-indigo-600">{itemSalesStats.totalSold.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
-                                    </div>
-                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ยอดขาย 30 วันล่าสุด</p>
-                                        <p className="text-sm font-black text-emerald-600">{itemSalesStats.soldLast30Days.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
-                                    </div>
-                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ราคาขายเฉลี่ย</p>
-                                        <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.avgPrice)} <span className="text-[10px]">฿</span></p>
-                                    </div>
-                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">สร้างรายได้แล้ว</p>
-                                        <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.totalRevenue)} <span className="text-[10px]">฿</span></p>
-                                    </div>
-                                    {itemSalesStats.soldLast30Days === 0 && (
-                                        <p className="col-span-2 text-[10px] text-rose-500 font-bold mt-1 text-center bg-rose-50 p-1.5 rounded-md">
-                                            ⚠️ สินค้านี้ยังขายไม่ได้เลยในช่วง 30 วันที่ผ่านมา
-                                        </p>
-                                    )}
-                                </div>
-                            )}
                         </div>
 
                         <div className="grid grid-cols-2 gap-4">
@@ -17200,14 +16789,16 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                         <Wand2 size={80} className="absolute right-4 top-4 text-indigo-200 opacity-40 pointer-events-none" />
                         <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
                             <div>
-                                <h4 className="font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="text-amber-500"/> AI Strategy Insight (ทีมวิเคราะห์ราคา)</h4>
-                                <p className="text-xs text-indigo-600/70 mt-1">ให้ทีม AI ช่วยวางโครงสร้างราคา โปรจัดเซ็ต และจุดขายเพื่อสู้กับคู่แข่ง</p>
+                                <h4 className="font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="text-amber-500"/> AI Strategy Insight (วิเคราะห์จิตวิทยาราคา)</h4>
+                                <p className="text-xs text-indigo-600/70 mt-1">ให้ AI ช่วยเกลาตัวเลข แนะนำโปรโมชั่นแบบจัดเซ็ต และหาจุดขายเพื่อสู้กับคู่แข่ง</p>
                             </div>
                             <div className="flex gap-2 w-full md:w-auto">
-                                <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
-                                    {isAnalyzing ? <Loader className="animate-spin" size={16}/> : <Activity size={16}/>} 
-                                    {isAnalyzing ? 'กำลังวิเคราะห์...' : 'ให้ AI แนะนำกลยุทธ์'}
-                                </button>
+                                {!aiSuggestion && (
+                                    <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
+                                        {isAnalyzing ? <Loader className="animate-spin" size={16}/> : <Activity size={16}/>} 
+                                        {isAnalyzing ? 'กำลังวิเคราะห์...' : 'ให้ AI แนะนำกลยุทธ์'}
+                                    </button>
+                                )}
                                 {/* --- 🔥 NEW: Save Strategy Button --- */}
                                 {simulatedPrice && cost && (
                                     <button onClick={handleSaveStrategy} className="flex-1 md:flex-none bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2 shrink-0">
@@ -17217,36 +16808,42 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                             </div>
                         </div>
                         
-                        {/* --- 🔥 NEW: AI Output 3-Tier Strategy UI --- */}
-                        {aiSuggestion && Array.isArray(aiSuggestion) ? (
-                            <div className="space-y-4 animate-fadeIn relative z-10 w-full mt-2">
-                                {aiSuggestion.map((chat, idx) => (
-                                    <div key={idx} className="bg-slate-900 p-5 md:p-6 rounded-[24px] border border-slate-800 flex flex-col md:flex-row gap-5 shadow-lg relative overflow-hidden">
-                                        <div className={`w-14 h-14 shrink-0 rounded-[18px] border flex items-center justify-center shadow-inner ${chat.color}`}>
-                                            {chat.icon}
+                        {aiSuggestion ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fadeIn relative z-10 flex-1">
+                                <div className="space-y-4 flex flex-col">
+                                    <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm flex justify-between items-center">
+                                        <div>
+                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">ราคาจิตวิทยา (Charm Price)</p>
+                                            <p className="text-3xl font-black text-indigo-600 mt-1">{formatCurrency(aiSuggestion.charmPrice)} <span className="text-base">฿</span></p>
                                         </div>
-                                        <div className="flex-1">
-                                            <div className="flex flex-wrap items-center gap-2 mb-3">
-                                                <p className="text-sm font-black uppercase tracking-widest text-slate-200">{chat.name}</p>
-                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">{chat.role}</span>
-                                            </div>
-                                            <div className="text-sm text-indigo-50/90 leading-loose font-medium whitespace-pre-line break-words">
-                                                {chat.text}
-                                            </div>
-                                        </div>
+                                        <div className="p-3 bg-indigo-50 text-indigo-500 rounded-xl"><Tag size={24}/></div>
                                     </div>
-                                ))}
-                                <div className="pt-2 flex justify-end">
+                                    <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm flex-1">
+                                        <p className="text-[10px] font-black uppercase text-indigo-500 mb-2 flex items-center gap-1"><Info size={12}/> ทำไมต้องราคานี้?</p>
+                                        <p className="text-sm font-medium text-slate-700 leading-relaxed">{aiSuggestion.reason}</p>
+                                    </div>
+                                </div>
+                                <div className="space-y-4 flex flex-col">
+                                    <div className="bg-amber-50 p-5 rounded-2xl border border-amber-100 shadow-sm flex-1">
+                                        <p className="text-[10px] font-black uppercase text-amber-600 mb-2 flex items-center gap-1"><LayersIcon size={12}/> กลยุทธ์ขายส่ง / จัดเซ็ต (Bundle Idea)</p>
+                                        <p className="text-sm font-medium text-amber-900 leading-relaxed">{aiSuggestion.bundleIdea}</p>
+                                    </div>
+                                    <div className="bg-rose-50 p-5 rounded-2xl border border-rose-100 shadow-sm flex-1">
+                                        <p className="text-[10px] font-black uppercase text-rose-600 mb-2 flex items-center gap-1"><TrendingUp size={12}/> จุดขายสู้คู่แข่ง (Value Proposition)</p>
+                                        <p className="text-sm font-medium text-rose-900 leading-relaxed">{aiSuggestion.valueProp}</p>
+                                    </div>
+                                </div>
+                                <div className="col-span-full pt-2 flex justify-end">
                                     <button onClick={() => setAiSuggestion(null)} className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors flex items-center gap-1">
-                                        <RefreshCw size={12}/> ล้างข้อมูล (Clear)
+                                        <RefreshCw size={12}/> คำนวณใหม่ (Regenerate)
                                     </button>
                                 </div>
                             </div>
-                        ) : !isAnalyzing && (
+                        ) : (
                             <div className="flex-1 border-2 border-dashed border-indigo-200 rounded-2xl flex flex-col items-center justify-center text-indigo-300 py-10 relative z-10 bg-white/50">
                                 <Sparkles size={40} className="mb-2 opacity-50"/>
-                                <p className="font-bold text-sm">พร้อมให้ทีม AI ช่วยวางกลยุทธ์แล้ว</p>
-                                <p className="text-xs opacity-70">ระบุต้นทุนและราคาขาย แล้วกดปุ่มด้านบนได้เลย</p>
+                                <p className="font-bold text-sm">พร้อมให้ AI ช่วยวางกลยุทธ์แล้ว</p>
+                                <p className="text-xs opacity-70">ระบุต้นทุน กำไร หรือใส่ราคาคู่แข่ง แล้วกดปุ่มด้านบนได้เลย</p>
                             </div>
                         )}
                     </div>
@@ -18442,7 +18039,7 @@ export default function App() {
       case 'promotions': return <PromotionManager appId={currentAppId} promotions={promotions} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} />;
       
       {/* --- 🔥 NEW: Router สำหรับเครื่องมือตั้งราคา --- */}
-      case 'pricing': return <PricingCalculator stockBatches={stockBatches} transactions={transactions} showToast={addToast} />;
+      case 'pricing': return <PricingCalculator stockBatches={stockBatches} showToast={addToast} />;
       
       case 'guide': return <TaxGuide />;
       default: return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
