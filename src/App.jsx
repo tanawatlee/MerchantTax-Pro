@@ -358,45 +358,84 @@ const calculatePromotions = (currentItems, allPromotions) => {
     return { totalDiscount, newFreeItems, appliedNames: [...new Set(appliedNames)] };
 };
 
+// --- 🔥 UPGRADED: AI Core Engine (Gemini 3.5 Flash) ---
 const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
     const userApiKey = localStorage.getItem('gemini_api_key');
-    let url = "";
     
-    if (userApiKey && userApiKey.trim() !== "") {
-        const customKey = userApiKey.trim();
-        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${customKey}`;
-    } else {
-        const apiKey = "";
-        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+    if (!userApiKey || userApiKey.trim() === "") {
+        throw new Error("API_KEY_MISSING");
     }
+
+    // --- 🔥 FIX: ใช้โมเดลล่าสุดของปี 2026 (Gemini 3.5 Flash) แทนโมเดล 1.5 ที่ถูกปิดตัวไปแล้ว ---
+    const modelName = "gemini-3.5-flash"; 
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${userApiKey.trim()}`;
 
     const parts = [{ text: prompt }];
     
+    // โหลดรูปภาพและระบุ MimeType อัตโนมัติ
     if (imageBase64) {
         const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
         const mimeType = imageBase64.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
         parts.push({ inlineData: { mimeType, data: base64Data } });
     }
     
-    const payload = { contents: [{ role: "user", parts }] };
-    if (isJson) payload.generationConfig = { responseMimeType: "application/json" };
+    const payload = { 
+        contents: [{ role: "user", parts }],
+        generationConfig: {
+            temperature: 0.3, // ปรับค่า 0.3 ให้ AI เน้นความแม่นยำของตัวเลข ลดการเดาสุ่ม
+            topK: 40,
+            topP: 0.95
+        }
+    };
+    
+    // บังคับให้ AI ส่งข้อมูลกลับมาเป็น JSON ตามโครงสร้างเป๊ะๆ
+    if (isJson) {
+        payload.generationConfig.responseMimeType = "application/json";
+    }
     
     let delay = 1000;
     for (let i = 0; i < 5; i++) {
         try {
-            const res = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
-            if (!res.ok) throw new Error(`API Error: ${res.status}`);
+            const res = await fetch(url, { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify(payload) 
+            });
+            
+            // อ่านข้อความ Error จากฝั่ง Google โดยตรงเพื่อนำมาแสดงผล
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(`[API Error ${res.status}] ${errorData?.error?.message || res.statusText}`);
+            }
+            
             const data = await res.json();
             let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            
             if (isJson) {
+                // ล้างอักขระขยะที่ AI อาจพ่นแถมมา เพื่อป้องกัน JSON.parse พัง
                 text = text.replace(/```json/g, '').replace(/```/g, '').trim();
                 return JSON.parse(text);
             }
             return text;
         } catch (e) {
+            console.warn(`[Gemini AI] Attempt ${i + 1} Failed:`, e.message);
+            
+            if (e.message.includes('API_KEY_MISSING')) {
+                throw new Error("กรุณาตั้งค่า API Key ของคุณในเมนู 'เครื่องมือขั้นสูง' ก่อนใช้งาน AI");
+            }
+            if (e.message.includes('[API Error 400]')) {
+                throw new Error(`ส่งข้อมูลไม่สำเร็จ (HTTP 400) กรุณาตรวจสอบรูปภาพหรือข้อมูล: ${e.message}`);
+            }
+            if (e.message.includes('[API Error 403]')) {
+                throw new Error(`API Key ไม่ถูกต้อง หรือไม่มีสิทธิ์การใช้งาน (HTTP 403)`);
+            }
+            if (e.message.includes('[API Error 404]')) {
+                throw new Error(`ไม่พบโมเดล AI ในระบบ (HTTP 404): ${e.message}`);
+            }
+            
             if (i === 4) throw e;
             await new Promise(r => setTimeout(r, delay));
-            delay *= 2;
+            delay *= 2; 
         }
     }
 };
@@ -1821,7 +1860,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           map[groupKey] = { groupKey, name: nameKey, sku: batch.sku || '-', totalQty: 0, batches: [] }; 
       }
       const remaining = Number(batch.quantity) - Number(batch.sold || 0);
-      map[groupKey].totalQty += Math.max(0, remaining);
+      
+      // --- 🔥 FIX: เอา Math.max(0) ออก เพื่อให้รองรับยอดติดลบจากใบลดหนี้/โอนย้าย ---
+      map[groupKey].totalQty += remaining;
+      
       map[groupKey].batches.push({ ...batch, remaining });
     });
     return Object.values(map).filter(i => i.totalQty > 0).sort((a,b) => b.totalQty - a.totalQty);
@@ -4482,6 +4524,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   // --- NEW: Stock Sync Preview States ---
   const [showSyncPreviewModal, setShowSyncPreviewModal] = useState(false);
   const [syncPreviewData, setSyncPreviewData] = useState(null);
+  const [selectedSyncItems, setSelectedSyncItems] = useState([]); // 🔥 FIX: เพิ่มตัวแปรสำหรับเก็บบันทึกการติ๊กเลือกซิงค์
 
   // --- NEW: Stock Audit States ---
   const [showStockAuditModal, setShowStockAuditModal] = useState(false);
@@ -4698,8 +4741,17 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     setIsProcessing(true);
     try {
       showToast('กำลังจำลองการประมวลผล FIFO...', 'success');
+      
       // 1. จำลองข้อมูลล็อตทั้งหมด โดยรีเซ็ต sold เป็น 0 เพื่อคำนวณใหม่
-      let localBatches = stockBatches.map(b => ({ ...b, simulatedSold: 0, originalSold: Number(b.sold || 0) }));
+      // 🔥 THE REAL FIX: ล็อกเป้าชัดเจน! ถ้าเป็นล็อตปรับปรุง (ชำรุด/โอนย้าย) ห้ามแตะยอด sold เดิมเด็ดขาด
+      let localBatches = stockBatches.map(b => {
+          // หากเป็นล็อตที่เกิดจากการตัดชำรุด, โอนย้าย หรือล็อต Dummy ให้คงยอดเดิมไว้ 100%
+          if (b.isAdjustment === true) {
+              return { ...b, simulatedSold: Number(b.sold || 0), originalSold: Number(b.sold || 0) };
+          }
+          // ส่วนล็อตรับเข้าปกติ (ซื้อมาขาย) รีเซ็ต sold เป็น 0 เพื่อให้บิลขายมาไล่ตัดใหม่
+          return { ...b, simulatedSold: 0, originalSold: Number(b.sold || 0) };
+      });
       
       // 2. ดึงประวัติรายรับทั้งหมด เฉพาะรายการที่ "ไม่ถูกยกเลิก (!t.isCancelled)" และเรียงจากเก่าไปใหม่
       const incomeTrans = transactions.filter(t => t.type === 'income' && !t.isCancelled).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
@@ -4712,8 +4764,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           let needed = Number(item.qty);
           if (needed <= 0) return;
           
+          // 🔥 FIX: ให้บิลขายไล่ตัดเฉพาะล็อตที่ "ไม่ใช่" ล็อต Dummy หรือล็อตชำรุด (ป้องกันการตัดซ้อนทับ)
           const targetBatches = localBatches
-            .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
+            .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && b.isAdjustment !== true)
             .sort(sortOldestFirst);
 
           for (let i = 0; i < targetBatches.length; i++) {
@@ -4746,7 +4799,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   sellPrice: item.sellPrice || item.price || 0,
                   date: trans.date,
                   sold: needed, // ยอดที่จำลองว่าขาย
-                  originalSold: 0 // ไม่มีในของเดิม
+                  originalSold: 0, // ไม่มีในของเดิม
+                  isAdjustment: true,
+                  adjustReason: 'สต็อกติดลบ (ซิงค์ออโต้)'
               });
           }
         });
@@ -4801,14 +4856,28 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
   // --- 🔥 NEW: ฟังก์ชันยืนยันการเขียนข้อมูลลงฐานข้อมูลจริง ---
   const executeSyncStock = async () => {
-      if (!syncPreviewData || !user) return;
+      if (!syncPreviewData || !user || selectedSyncItems.length === 0) return;
       setIsProcessing(true);
       try {
           let batch = writeBatch(dbInstance);
           let opsCount = 0;
+          let processedSKUs = 0;
 
-          for (const item of syncPreviewData) {
-              // 1. อัปเดตล็อตเดิมที่มีการเปลี่ยนแปลงยอด sold
+          // ดึงข้อมูล Dummy เดิมทั้งหมดมารอไว้ก่อน เพื่อหาว่าตัวไหนต้องลบ
+          const allDummies = stockBatches.filter(b => b.isAdjustment && b.adjustReason === 'สต็อกติดลบ (ไม่มีในคลัง)');
+
+          // คัดกรองเฉพาะสินค้าที่ User ติ๊กเลือกให้ซิงก์
+          const itemsToSync = syncPreviewData.filter(item => selectedSyncItems.includes(item.sku));
+
+          for (const item of itemsToSync) {
+              // 1. ลบ Dummy เก่าทิ้ง **เฉพาะของสินค้านี้เท่านั้น**
+              const dummiesForThisSKU = allDummies.filter(d => (d.sku || '-') === item.sku && d.productName === item.name);
+              for (const dummy of dummiesForThisSKU) {
+                  batch.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', dummy.id));
+                  opsCount++;
+              }
+
+              // 2. อัปเดตยอด Sold ของล็อตรับเข้าปกติ **เฉพาะของสินค้านี้**
               for (const b of item.batchesToUpdate) {
                   const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
                   batch.update(docRef, { sold: b.newSold });
@@ -4821,7 +4890,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   }
               }
 
-              // 2. สร้างล็อต Dummy ใหม่ (กรณีของหมดแต่มีบิลขาย)
+              // 3. สร้าง Dummy ใหม่ (ถ้ามี) **เฉพาะของสินค้านี้**
               for (const d of item.newDummiesToCreate) {
                   const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
                   batch.set(dummyRef, {
@@ -4831,7 +4900,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                       quantity: d.quantity,
                       costPerUnit: d.costPerUnit,
                       sellPrice: d.sellPrice,
-                      date: normalizeDate(d.date) || new Date(),
+                      date: d.date || new Date(),
                       sold: d.sold,
                       userId: user.uid,
                       createdAt: serverTimestamp(),
@@ -4847,18 +4916,21 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                       opsCount = 0;
                   }
               }
+              
+              processedSKUs++;
           }
 
           if (opsCount > 0) {
               await batch.commit();
           }
 
-          showToast('ซิงค์และบันทึกยอดสต็อกใหม่สำเร็จ!', 'success');
+          showToast(`อัปเดตยอดสต็อกสำเร็จ ${processedSKUs} รายการ (ข้ามรายการที่ไม่ได้เลือก)`, 'success');
           setShowSyncPreviewModal(false);
           setSyncPreviewData(null);
+          setSelectedSyncItems([]);
       } catch (e) {
           console.error(e);
-          showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูล', 'error');
+          showToast('เกิดข้อผิดพลาดในการอัปเดตข้อมูล', 'error');
       }
       setIsProcessing(false);
   };
@@ -5138,8 +5210,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               batches: [], 
               category: batch.category || 'ทั่วไป',
               isGiveaway: false,
-              lastSoldDate: lastSoldMap[groupKey] || null, // NEW: เพิ่มข้อมูลวันที่ขายล่าสุด
-              daysSinceLastSold: lastSoldMap[groupKey] ? Math.floor((new Date() - lastSoldMap[groupKey]) / (1000 * 60 * 60 * 24)) : Infinity // NEW
+              lastSoldDate: lastSoldMap[groupKey] || null, 
+              daysSinceLastSold: lastSoldMap[groupKey] ? Math.floor((new Date() - lastSoldMap[groupKey]) / (1000 * 60 * 60 * 24)) : Infinity 
           }; 
       }
       
@@ -5157,8 +5229,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           map[groupKey].periodInbound += Number(batch.quantity);
       }
 
-      map[groupKey].totalQty += remaining; // รองรับยอดติดลบ
+      // --- 🔥 THE FIX: เอา Math.max(0) ออก เพื่อให้ยอดคงเหลือรวมคำนวณถูกต้อง 100% ---
+      map[groupKey].totalQty += remaining; 
+      
       map[groupKey].totalSold += sold; 
+      
+      // การคำนวณมูลค่าคงคลัง ให้ตีความว่าของติดลบคือ 0 บาท (เพื่อไม่ให้เงินในพอร์ตติดลบ)
       map[groupKey].totalValue += (Math.max(0, remaining) * costPerUnit);
       map[groupKey].totalPotentialProfit += (Math.max(0, remaining) * profitPerUnit);
       map[groupKey].batches.push({ ...batch, remaining });
@@ -6181,9 +6257,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               </div>
               
               <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
-                  <button onClick={()=>setAdjustData({...adjustData, type: 'add'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'add' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>+ เพิ่ม</button>
-                  <button onClick={()=>setAdjustData({...adjustData, type: 'remove'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'remove' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>- ลบ</button>
-                  <button onClick={()=>{setAdjustData({...adjustData, type: 'transfer', targetKey: ''}); setTransferSearchTerm(''); setShowTransferList(false);}} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'transfer' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>⇄ สลับ/โอนย้าย</button>
+                  <button onClick={()=>setAdjustData({...adjustData, type: 'add', reason: 'นับสต็อกจริงไม่ตรง (ยอดเกิน)'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'add' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>+ เพิ่ม</button>
+                  <button onClick={()=>setAdjustData({...adjustData, type: 'remove', reason: 'สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'remove' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>- ลบ</button>
+                  <button onClick={()=>{setAdjustData({...adjustData, type: 'transfer', targetKey: '', reason: 'แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อขายลดราคา)'}); setTransferSearchTerm(''); setShowTransferList(false);}} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'transfer' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>⇄ สลับ/โอนย้าย</button>
               </div>
 
               <div>
@@ -6191,8 +6267,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   <input type="number" min="1" value={adjustData.qty} onChange={e=>setAdjustData({...adjustData, qty: e.target.value})} className="w-full bg-white border-2 border-slate-100 p-4 rounded-2xl text-xl font-black outline-none focus:border-blue-300 text-center text-slate-800" placeholder="ระบุจำนวนชิ้น..." />
               </div>
 
-              {adjustData.type === 'transfer' ? (
-                  <div className="animate-fadeIn">
+              {adjustData.type === 'transfer' && (
+                  <div className="animate-fadeIn mb-4">
                       <label className="text-[10px] font-bold uppercase text-indigo-600 mb-1 block">โอนจำนวนด้านบน ไปให้สินค้าใด?</label>
                       <div className="relative">
                           <Search className="absolute left-3 top-4 text-indigo-300" size={16}/>
@@ -6237,19 +6313,39 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                           )}
                       </div>
                   </div>
-              ) : (
-                  <div className="animate-fadeIn">
-                      <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">เหตุผลการปรับปรุง</label>
-                      <select value={adjustData.reason} onChange={e=>setAdjustData({...adjustData, reason: e.target.value})} className="w-full bg-slate-50 p-3.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-slate-700 cursor-pointer focus:ring-2 focus:ring-blue-100">
-                          <option value="นับสต็อกจริงไม่ตรง">นับสต็อกจริงไม่ตรง (Cycle Count)</option>
-                          <option value="สินค้าชำรุด/สูญหาย">สินค้าชำรุด/สูญหาย</option>
-                          <option value="ได้ของแถมจาก Supplier">ได้ของแถมจาก Supplier</option>
-                          <option value="นำไปใช้ในกิจการ/แจก">นำไปใช้ในกิจการ/แจก</option>
-                          <option value="ลูกค้ารับสินค้านี้ทดแทน">ลูกค้ารับสินค้านี้ทดแทน</option>
-                          <option value="อื่นๆ">อื่นๆ</option>
-                      </select>
-                  </div>
               )}
+
+              <div className="animate-fadeIn">
+                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">เหตุผลการปรับปรุง (บันทึกเป็นหลักฐาน)</label>
+                  <select value={adjustData.reason} onChange={e=>setAdjustData({...adjustData, reason: e.target.value})} className="w-full bg-slate-50 p-3.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-slate-700 cursor-pointer focus:ring-2 focus:ring-blue-100">
+                      {adjustData.type === 'remove' && (
+                          <>
+                              <option value="สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)">สินค้าชำรุด/สูญหาย (ตัดทิ้งเป็นค่าใช้จ่าย)</option>
+                              <option value="สินค้าหมดอายุ (ตัดจำหน่าย)">สินค้าหมดอายุ (ตัดทิ้งเป็นค่าใช้จ่าย)</option>
+                              <option value="สูญเสียจากการขนส่ง (เคลมไม่ได้)">สูญเสียจากการขนส่ง เคลมไม่ได้ (ตัดทิ้งเป็นค่าใช้จ่าย)</option>
+                              <option value="นับสต็อกจริงไม่ตรง (ยอดขาด)">นับสต็อกจริงไม่ตรง (ยอดขาด)</option>
+                              <option value="นำไปใช้ในกิจการ/แจก">นำไปใช้ในกิจการ/แจก</option>
+                              <option value="อื่นๆ">อื่นๆ</option>
+                          </>
+                      )}
+                      {adjustData.type === 'add' && (
+                          <>
+                              <option value="นับสต็อกจริงไม่ตรง (ยอดเกิน)">นับสต็อกจริงไม่ตรง (ยอดเกิน)</option>
+                              <option value="ได้ของแถมจาก Supplier">ได้ของแถมจาก Supplier</option>
+                              <option value="ลูกค้ารับสินค้านี้ทดแทน">ลูกค้ารับสินค้านี้ทดแทน</option>
+                              <option value="อื่นๆ">อื่นๆ</option>
+                          </>
+                      )}
+                      {adjustData.type === 'transfer' && (
+                          <>
+                              <option value="แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อขายลดราคา)">แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อขายลดราคา)</option>
+                              <option value="บันทึกผิดรสชาติ/ผิดรุ่น (โอนแก้)">บันทึกผิดรสชาติ/ผิดรุ่น (โอนแก้)</option>
+                              <option value="แพ็คจัดเป็นชุด Bundle/เซ็ต">แพ็คจัดเป็นชุด Bundle/เซ็ต</option>
+                              <option value="อื่นๆ">อื่นๆ</option>
+                          </>
+                      )}
+                  </select>
+              </div>
 
               <div className="flex gap-3 pt-4 text-center">
                 <button onClick={() => {setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false);}} className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
@@ -6353,36 +6449,67 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                           <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><RefreshCw className="text-amber-500"/> ตรวจสอบยอดซิงค์สต็อก (Preview)</h3>
                           <p className="text-xs text-slate-500 mt-1">ระบบจำลองการประมวลผล FIFO ใหม่ทั้งหมด นี่คือรายการสินค้าที่จะได้รับผลกระทบหากกดยืนยัน</p>
                       </div>
-                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null);}} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
+                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null); setSelectedSyncItems([]);}} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
                   </div>
+
+                  {syncPreviewData.length > 0 && (
+                      <div className="flex justify-between items-center mb-3">
+                          <p className="text-sm font-bold text-slate-700">เลือกรายการที่ต้องการให้ระบบอัปเดตยอด</p>
+                          <span className="text-[10px] font-black bg-amber-100 text-amber-700 px-3 py-1.5 rounded-full">เลือกอยู่: {selectedSyncItems.length} / {syncPreviewData.length}</span>
+                      </div>
+                  )}
 
                   <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl bg-slate-50">
                       {syncPreviewData.length > 0 ? (
                           <table className="w-full text-xs text-left">
                               <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
                                   <tr>
-                                      <th className="p-3 pl-4">ชื่อสินค้า (Product)</th>
+                                      <th className="p-3 pl-4 w-12 text-center">
+                                          <input 
+                                              type="checkbox" 
+                                              className="w-4 h-4 rounded text-amber-500 border-slate-300 focus:ring-amber-500 cursor-pointer"
+                                              onChange={(e) => {
+                                                  if (e.target.checked) setSelectedSyncItems(syncPreviewData.map(i => i.sku));
+                                                  else setSelectedSyncItems([]);
+                                              }}
+                                              checked={selectedSyncItems.length === syncPreviewData.length && syncPreviewData.length > 0}
+                                          />
+                                      </th>
+                                      <th className="p-3">ชื่อสินค้า (Product)</th>
                                       <th className="p-3 text-center">ยอดคงเหลือ (เดิม)</th>
                                       <th className="p-3 text-center">ยอดคงเหลือ (คำนวณใหม่)</th>
                                       <th className="p-3 text-right pr-6">ส่วนต่าง (Diff)</th>
                                   </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-200 bg-white">
-                                  {syncPreviewData.map((item, idx) => (
-                                      <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                                          <td className="p-3 pl-4">
-                                              <p className="font-bold text-slate-800">{item.name}</p>
+                                  {syncPreviewData.map((item, idx) => {
+                                      const isSelected = selectedSyncItems.includes(item.sku);
+                                      return (
+                                      <tr key={idx} className={`transition-colors ${isSelected ? 'hover:bg-amber-50/30' : 'bg-slate-50/50 opacity-60'}`}>
+                                          <td className="p-3 pl-4 text-center">
+                                              <input 
+                                                  type="checkbox" 
+                                                  className="w-4 h-4 rounded text-amber-500 border-slate-300 focus:ring-amber-500 cursor-pointer"
+                                                  checked={isSelected}
+                                                  onChange={() => {
+                                                      if (isSelected) setSelectedSyncItems(prev => prev.filter(sku => sku !== item.sku));
+                                                      else setSelectedSyncItems(prev => [...prev, item.sku]);
+                                                  }}
+                                              />
+                                          </td>
+                                          <td className="p-3">
+                                              <p className={`font-bold ${isSelected ? 'text-slate-800' : 'text-slate-500'}`}>{item.name}</p>
                                               <p className="text-[10px] text-slate-400 font-mono mt-0.5">SKU: {item.sku}</p>
                                           </td>
                                           <td className="p-3 text-center font-bold text-slate-500">{item.oldQty}</td>
-                                          <td className="p-3 text-center font-black text-slate-800">{item.newQty}</td>
+                                          <td className={`p-3 text-center font-black ${isSelected ? 'text-slate-800' : 'text-slate-500'}`}>{item.newQty}</td>
                                           <td className="p-3 text-right pr-6">
-                                              <span className={`px-2 py-1 rounded font-black text-[10px] ${item.diff > 0 ? 'bg-emerald-100 text-emerald-700' : item.diff < 0 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>
+                                              <span className={`px-2 py-1 rounded font-black text-[10px] ${item.diff > 0 ? (isSelected ? 'bg-emerald-100 text-emerald-700' : 'text-emerald-500') : item.diff < 0 ? (isSelected ? 'bg-rose-100 text-rose-700' : 'text-rose-500') : 'bg-slate-100 text-slate-500'}`}>
                                                   {item.diff > 0 ? '+' : ''}{item.diff !== 0 ? item.diff : 'เปลี่ยนแปลงระดับล็อต'}
                                               </span>
                                           </td>
                                       </tr>
-                                  ))}
+                                  )})}
                               </tbody>
                           </table>
                       ) : (
@@ -6395,12 +6522,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   </div>
 
                   <div className="pt-6 mt-4 border-t border-slate-100 flex justify-end gap-3 text-center">
-                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null);}} disabled={isProcessing} className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">
+                      <button onClick={() => {setShowSyncPreviewModal(false); setSyncPreviewData(null); setSelectedSyncItems([]);}} disabled={isProcessing} className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">
                           {syncPreviewData.length > 0 ? 'ยกเลิก' : 'ปิดหน้าต่าง'}
                       </button>
                       {syncPreviewData.length > 0 && (
-                          <button onClick={executeSyncStock} disabled={isProcessing} className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg shadow-amber-200 transition-colors flex items-center gap-2 disabled:opacity-50">
-                              {isProcessing ? <Loader size={16} className="animate-spin"/> : <RefreshCw size={16}/>} ยืนยันการซิงค์ข้อมูลลงระบบ
+                          <button onClick={executeSyncStock} disabled={isProcessing || selectedSyncItems.length === 0} className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-lg shadow-amber-200 transition-colors flex items-center gap-2 disabled:opacity-50">
+                              {isProcessing ? <Loader size={16} className="animate-spin"/> : <RefreshCw size={16}/>} 
+                              {selectedSyncItems.length > 0 ? `ยืนยันซิงค์เฉพาะ ${selectedSyncItems.length} รายการที่เลือก` : 'กรุณาเลือกรายการที่ต้องการซิงค์'}
                           </button>
                       )}
                   </div>
@@ -12706,10 +12834,12 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           let processedCount = 0;
 
           const checkAndCommit = async () => {
-              if (opsCount >= 300) {
+              // --- 🔥 FIX: ป้องกันคิว Firebase เต็ม ---
+              if (opsCount >= 200) {
                   await batchWriter.commit();
                   batchWriter = writeBatch(dbInstance);
                   opsCount = 0;
+                  await new Promise(r => setTimeout(r, 200)); // พัก 0.2 วิ
               }
           };
 
@@ -16394,7 +16524,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
 }
 
 // --- 🔥 NEW: เครื่องมือตั้งราคาอัจฉริยะ (AI Smart Pricing Module) ---
-function PricingCalculator({ stockBatches, showToast }) {
+function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 FIX: เพิ่ม transactions เข้ามารับค่า
     const [cost, setCost] = useState('');
     const [desiredProfit, setDesiredProfit] = useState('');
     const [competitorPrice, setCompetitorPrice] = useState(''); // NEW: ราคาคู่แข่ง
@@ -16404,12 +16534,12 @@ function PricingCalculator({ stockBatches, showToast }) {
     
     // NEW: State สำหรับ Simulator
     const [simulatedPrice, setSimulatedPrice] = useState(''); 
-    const [includeVat, setIncludeVat] = useState(false); // --- 🔥 NEW: State สำหรับเปิด/ปิดการคิด VAT ---
+    const [includeVat, setIncludeVat] = useState(false); // State สำหรับเปิด/ปิดการคิด VAT
 
     const [aiSuggestion, setAiSuggestion] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-    // --- 🔥 NEW: Pricing History Database (Local State for MVP) ---
+    // --- Pricing History Database (Local State for MVP) ---
     const [pricingHistory, setPricingHistory] = useState(() => {
         try {
             return JSON.parse(localStorage.getItem('merchant_pricing_history') || '[]');
@@ -16432,6 +16562,45 @@ function PricingCalculator({ stockBatches, showToast }) {
         return Object.values(map);
     }, [stockBatches]);
 
+    // --- 🔥 NEW: ฟังก์ชันประเมินยอดขายย้อนหลัง (Feedback Loop) ---
+    const itemSalesStats = useMemo(() => {
+        if (!selectedItemKey || !transactions) return null;
+        
+        const targetItem = uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey);
+        if (!targetItem) return null;
+
+        const targetSku = targetItem.sku;
+        const targetName = targetItem.name;
+        
+        let totalSold = 0;
+        let soldLast30Days = 0;
+        let totalRevenue = 0;
+        
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+        transactions.forEach(t => {
+            if (t.type !== 'income' || t.isCancelled || t.isFromReconciliation) return;
+            
+            const tDate = normalizeDate(t.date);
+            const isLast30Days = tDate && tDate >= thirtyDaysAgo;
+
+            (t.items || []).forEach(item => {
+                if (matchItemToBatch(item.sku, item.desc, targetSku, targetName)) {
+                    const qty = Number(item.qty) || 0;
+                    const price = Number(item.sellPrice || item.price || 0);
+                    totalSold += qty;
+                    totalRevenue += (qty * price);
+                    if (isLast30Days) soldLast30Days += qty;
+                }
+            });
+        });
+
+        const avgPrice = totalSold > 0 ? totalRevenue / totalSold : 0;
+
+        return { totalSold, soldLast30Days, totalRevenue, avgPrice };
+    }, [selectedItemKey, transactions, uniqueItems]);
+
     const handleSelectItem = (e) => {
         const val = e.target.value;
         setSelectedItemKey(val);
@@ -16439,7 +16608,7 @@ function PricingCalculator({ stockBatches, showToast }) {
             const item = uniqueItems.find(i => (i.sku === val || i.name === val));
             if (item && item.cost > 0) {
                 setCost(item.cost);
-                setSimulatedPrice(item.sellPrice || ''); // ดึงราคาขายเดิมมาจำลอง
+                setSimulatedPrice(item.sellPrice || ''); 
             }
         } else {
             setCost('');
@@ -16496,45 +16665,78 @@ function PricingCalculator({ stockBatches, showToast }) {
     }, [simulatedPrice, cost, marketingBufferPct, includeVat]);
 
     const handleAiAnalysis = async () => {
-        if (calculations.recommendedPrice <= 0 || !cost || (!desiredProfit && !simulatedPrice)) {
+        if (!cost || (!desiredProfit && !simulatedPrice)) {
             showToast("กรุณากรอกต้นทุน และ กำไร/ราคาขายที่ต้องการ ให้ครบถ้วนก่อน", "error");
             return;
         }
         setIsAnalyzing(true);
         try {
-            const basePrice = simulatedPrice ? Number(simulatedPrice) : calculations.recommendedPrice;
+            // --- 🔥 THE FIX: คำนวณขอบเขตราคา (Price Boundaries) เพื่อบังคับให้ AI คิดเลขให้ถูกต้อง ---
+            const c = Number(cost);
+            const feeDecimal = (Number(platformFeePct) + Number(marketingBufferPct)) / 100;
+            // คำนวณจุดคุ้มทุน: ราคาที่หักค่าธรรมเนียมแล้วเหลือเท่าทุนพอดีเป๊ะ (กำไร = 0)
+            const breakEvenPrice = feeDecimal < 1 ? c / (1 - feeDecimal) : c; 
+            // ราคาเพื่อให้ได้กำไรตามเป้า
+            const targetPrice = calculations.recommendedPrice; 
+
+            const basePrice = simulatedPrice ? Number(simulatedPrice) : targetPrice;
             const compText = competitorPrice ? `- ราคาคู่แข่งในตลาดเฉลี่ย: ${competitorPrice} บาท` : '- ไม่มีข้อมูลราคาคู่แข่ง';
             
+            const salesHistoryText = itemSalesStats ? `- ประวัติการขายของร้าน: ขายไปแล้ว ${itemSalesStats.totalSold} ชิ้น (30 วันล่าสุด: ${itemSalesStats.soldLast30Days} ชิ้น), ลูกค้าเคยยอมจ่ายที่ราคาเฉลี่ย: ${itemSalesStats.avgPrice.toFixed(2)} บาท` : '- ไม่มีประวัติการขาย';
+            const fixedCostText = fixedCost ? `- งบโฆษณา/ฟิกซ์คอสต์รายเดือน: ${fixedCost} บาท (ต้องขายให้คืนทุนส่วนนี้ด้วย)` : '';
+            const desiredProfitText = desiredProfit ? `- เป้าหมายกำไรสุทธิที่ต้องการ: ${desiredProfit} บาท/ชิ้น (หลังหักค่าธรรมเนียมแล้ว)` : '';
+
             const prompt = `
-            คุณคือผู้เชี่ยวชาญด้านกลยุทธ์การตั้งราคา (Pricing Strategy & Consumer Psychology)
-            ข้อมูลสินค้าและต้นทุน:
-            - ต้นทุนสินค้า: ${cost} บาท
-            - ราคาที่คำนวณเบื้องต้น: ${basePrice.toFixed(2)} บาท
+            คุณคือ Chief Pricing Officer และนักกลยุทธ์การตลาด E-commerce ระดับแนวหน้า
+            หน้าที่ของคุณคือการวิเคราะห์และเสนอ "กลยุทธ์การตั้งราคาสินค้า" ที่ถูกต้องตามหลักคณิตศาสตร์การเงิน และจิตวิทยาผู้บริโภค
+
+            [ข้อมูลพื้นฐานของสินค้า (ห้ามละเมิด)]
+            - ต้นทุนสินค้า (Cost): ${c} บาท
+            - ภาระค่าธรรมเนียม Platform + งบการตลาดที่ต้องถูกหักออกไป: ${(feeDecimal * 100).toFixed(1)}% ของราคาขาย
+            * กฎเหล็กข้อที่ 1: "จุดคุ้มทุน (Break-even Price)" คือ ${Math.ceil(breakEvenPrice)} บาท (ห้ามแนะนำราคาที่ต่ำกว่า ${Math.ceil(breakEvenPrice)} บาท เด็ดขาด เพราะร้านค้าจะขาดทุนทันทีเมื่อโดนหัก ${(feeDecimal * 100).toFixed(1)}%)
+            ${desiredProfitText}
+            - ราคาขายเป้าหมายเพื่อให้ได้กำไรตามเป้า: ${Math.ceil(targetPrice)} บาท
+            - ราคาที่ร้านตั้งไว้ทดสอบในระบบล่าสุด: ${basePrice} บาท
+            
+            [ข้อมูลสภาพตลาดและสถิติ]
             ${compText}
+            ${salesHistoryText}
+            ${fixedCostText}
 
-            กรุณาให้คำแนะนำ:
-            1. "Charm Price" (ราคาจิตวิทยา) ที่เหมาะสมลงท้ายด้วย 9, 5 หรือ 0 (และควรมี Margin เพียงพอ)
-            2. เหตุผลเชิงจิตวิทยา (สั้นๆ กระชับ)
-            3. "Bundle Price" (ราคาขายส่ง/จัดเซ็ต) เช่น ซื้อ 2 ชิ้น หรือ 3 ชิ้น ควรตั้งราคาเท่าไหร่ให้ลูกค้ารู้สึกคุ้ม แต่เรายังได้กำไร
-            4. "Value Proposition" ถ้าเราขายแพงกว่าคู่แข่ง เราควรชูจุดขายอะไร? (สั้นๆ)
+            [คำสั่งการทำงาน]
+            จงนำเสนอโครงสร้างราคา 3 ระดับ (3-Tier Pricing Strategy) โดยอิงตาม กฎเหล็กจุดคุ้มทุน และให้มีเศษลงท้ายด้วยเลขจิตวิทยา (เช่น .00, .90, .99):
+            1. Penetration (ราคาจัด Flash Sale/ดึงทราฟฟิก): ต้อง "สูงกว่า" จุดคุ้มทุน (${Math.ceil(breakEvenPrice)} ฿) เล็กน้อย เพื่อให้ยังมีกำไรนิดหน่อย เน้นปล่อยของไว
+            2. Optimal (ราคาขายปกติ/แนะนำ): ควรใกล้เคียงหรือสูงกว่าราคาเป้าหมาย (${Math.ceil(targetPrice)} ฿) หรืออิงราคาตลาดที่แข่งขันได้ พร้อมเหลือกำไรเข้าเป้า
+            3. Premium (ราคาตั้งเผื่อจัดโปร/อัปเกรด): ราคาสูงสุด เน้นจับกลุ่มลูกค้าที่มีกำลังซื้อสูง หรือตั้งเผื่อไว้แจกโค้ดส่วนลดหน้าร้านหลอกๆ (Price Anchoring)
 
-            ตอบกลับเป็น JSON format เท่านั้น ห้ามมีข้อความอื่น:
+            ตอบกลับเป็น JSON format เท่านั้น ตามโครงสร้างเป๊ะๆ ห้ามมีข้อความหรือ markdown อื่นๆ นอกเหนือจาก JSON:
             {
-                "charmPrice": 299,
-                "reason": "เลข 9 ทำให้ลูกค้ารู้สึกว่ายังไม่ถึง 300...",
-                "bundleIdea": "ซื้อ 2 ชิ้น 550 บาท (ลด X บาท) ช่วยเพิ่ม AOV...",
-                "valueProp": "เน้นการรับประกัน หรือ แพ็คเกจที่ดูพรีเมียมกว่าคู่แข่ง..."
+                "tiers": [
+                    { "name": "Penetration (Flash Sale / ดึงทราฟฟิก)", "price": 0, "reason": "คำอธิบายเชิงกลยุทธ์..." },
+                    { "name": "Optimal (ราคาขายปกติ / แนะนำ)", "price": 0, "reason": "คำอธิบายเชิงกลยุทธ์..." },
+                    { "name": "Premium (ราคาพรีเมียม / ตั้งเผื่อทำโปร)", "price": 0, "reason": "คำอธิบายเชิงกลยุทธ์..." }
+                ],
+                "campaignHook": "ประโยคพาดหัว (Hook) สั้นๆ โดนใจ สำหรับนำไปยิงแอดโปรโมทสินค้านี้...",
+                "bundleIdea": "ไอเดียกลยุทธ์จัดเซ็ต (Bundle/Cross-sell) หรือจับคู่กับสินค้าอื่น เพื่อดันยอดขายและเพิ่ม AOV...",
+                "valueProp": "จุดขายหลัก (Value Proposition) ที่ทำให้ลูกค้ายอมจ่ายซื้อราคานี้ แม้คู่แข่งจะถูกกว่า..."
             }
             `;
+            
             const res = await callGeminiAPI(prompt, true);
-            if (res && res.charmPrice) {
+            if (res && res.tiers) {
                 setAiSuggestion(res);
-                setSimulatedPrice(res.charmPrice); // อัปเดตราคาใน Simulator เป็นราคาที่ AI แนะนำอัตโนมัติ
-                showToast("AI วิเคราะห์ราคาเสร็จสิ้น!", "success");
+                setSimulatedPrice(res.tiers[1]?.price || basePrice); 
+                showToast("AI วิเคราะห์กลยุทธ์ราคาและโปรโมชั่นสำเร็จ!", "success");
             }
         } catch (e) {
-            console.error(e);
-            showToast("AI ขัดข้อง หรือ API Key ไม่ถูกต้อง กรุณาลองใหม่", "error");
+            console.error("AI Pricing Error:", e);
+            if (e.message && e.message.includes("API key not valid")) {
+                showToast("API Key ไม่ถูกต้อง กรุณาตรวจสอบการตั้งค่าอีกครั้ง", "error");
+            } else if (e.message && (e.message.includes("400") || e.message.includes("404"))) {
+                showToast("โมเดล AI ขัดข้อง หรือ API Key ใช้ไม่ได้ กรุณาตรวจสอบ", "error");
+            } else {
+                showToast("AI ขัดข้อง กรุณาลองใหม่อีกครั้ง", "error");
+            }
         }
         setIsAnalyzing(false);
     };
@@ -16558,7 +16760,7 @@ function PricingCalculator({ stockBatches, showToast }) {
             sellPrice: Number(simulatedPrice),
             competitorPrice: competitorPrice ? Number(competitorPrice) : null,
             targetProfit: Number(desiredProfit) || 0,
-            aiCharmPrice: aiSuggestion?.charmPrice || null,
+            aiCharmPrice: aiSuggestion?.tiers?.[1]?.price || null, // เก็บราคา Optimal
             bundleIdea: aiSuggestion?.bundleIdea || '-',
             valueProp: aiSuggestion?.valueProp || '-',
             simulations: simulator.map(s => ({
@@ -16659,6 +16861,33 @@ function PricingCalculator({ stockBatches, showToast }) {
                                     </option>
                                 ))}
                             </select>
+
+                            {/* --- 🔥 NEW: UI แสดงสถิติย้อนหลัง (Feedback Loop) --- */}
+                            {itemSalesStats && selectedItemKey && (
+                                <div className="mt-4 pt-4 border-t border-slate-200 grid grid-cols-2 gap-3 animate-fadeIn">
+                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ขายไปแล้วรวม</p>
+                                        <p className="text-sm font-black text-indigo-600">{itemSalesStats.totalSold.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
+                                    </div>
+                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ยอดขาย 30 วันล่าสุด</p>
+                                        <p className="text-sm font-black text-emerald-600">{itemSalesStats.soldLast30Days.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
+                                    </div>
+                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ราคาขายเฉลี่ย</p>
+                                        <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.avgPrice)} <span className="text-[10px]">฿</span></p>
+                                    </div>
+                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase">สร้างรายได้แล้ว</p>
+                                        <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.totalRevenue)} <span className="text-[10px]">฿</span></p>
+                                    </div>
+                                    {itemSalesStats.soldLast30Days === 0 && (
+                                        <p className="col-span-2 text-[10px] text-rose-500 font-bold mt-1 text-center bg-rose-50 p-1.5 rounded-md">
+                                            ⚠️ สินค้านี้ยังขายไม่ได้เลยในช่วง 30 วันที่ผ่านมา
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         <div className="grid grid-cols-2 gap-4">
@@ -16789,16 +17018,14 @@ function PricingCalculator({ stockBatches, showToast }) {
                         <Wand2 size={80} className="absolute right-4 top-4 text-indigo-200 opacity-40 pointer-events-none" />
                         <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
                             <div>
-                                <h4 className="font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="text-amber-500"/> AI Strategy Insight (วิเคราะห์จิตวิทยาราคา)</h4>
-                                <p className="text-xs text-indigo-600/70 mt-1">ให้ AI ช่วยเกลาตัวเลข แนะนำโปรโมชั่นแบบจัดเซ็ต และหาจุดขายเพื่อสู้กับคู่แข่ง</p>
+                                <h4 className="font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="text-amber-500"/> AI Strategy Insight (ทีมวิเคราะห์ราคา)</h4>
+                                <p className="text-xs text-indigo-600/70 mt-1">ให้ทีม AI ช่วยวางโครงสร้างราคา โปรจัดเซ็ต และจุดขายเพื่อสู้กับคู่แข่ง</p>
                             </div>
                             <div className="flex gap-2 w-full md:w-auto">
-                                {!aiSuggestion && (
-                                    <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
-                                        {isAnalyzing ? <Loader className="animate-spin" size={16}/> : <Activity size={16}/>} 
-                                        {isAnalyzing ? 'กำลังวิเคราะห์...' : 'ให้ AI แนะนำกลยุทธ์'}
-                                    </button>
-                                )}
+                                <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
+                                    {isAnalyzing ? <Loader className="animate-spin" size={16}/> : <Activity size={16}/>} 
+                                    {isAnalyzing ? 'กำลังวิเคราะห์...' : 'ให้ AI แนะนำกลยุทธ์'}
+                                </button>
                                 {/* --- 🔥 NEW: Save Strategy Button --- */}
                                 {simulatedPrice && cost && (
                                     <button onClick={handleSaveStrategy} className="flex-1 md:flex-none bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2 shrink-0">
@@ -16808,42 +17035,36 @@ function PricingCalculator({ stockBatches, showToast }) {
                             </div>
                         </div>
                         
-                        {aiSuggestion ? (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fadeIn relative z-10 flex-1">
-                                <div className="space-y-4 flex flex-col">
-                                    <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm flex justify-between items-center">
-                                        <div>
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">ราคาจิตวิทยา (Charm Price)</p>
-                                            <p className="text-3xl font-black text-indigo-600 mt-1">{formatCurrency(aiSuggestion.charmPrice)} <span className="text-base">฿</span></p>
+                        {/* --- 🔥 NEW: AI Output 3-Tier Strategy UI --- */}
+                        {aiSuggestion && Array.isArray(aiSuggestion) ? (
+                            <div className="space-y-4 animate-fadeIn relative z-10 w-full mt-2">
+                                {aiSuggestion.map((chat, idx) => (
+                                    <div key={idx} className="bg-slate-900 p-5 md:p-6 rounded-[24px] border border-slate-800 flex flex-col md:flex-row gap-5 shadow-lg relative overflow-hidden">
+                                        <div className={`w-14 h-14 shrink-0 rounded-[18px] border flex items-center justify-center shadow-inner ${chat.color}`}>
+                                            {chat.icon}
                                         </div>
-                                        <div className="p-3 bg-indigo-50 text-indigo-500 rounded-xl"><Tag size={24}/></div>
+                                        <div className="flex-1">
+                                            <div className="flex flex-wrap items-center gap-2 mb-3">
+                                                <p className="text-sm font-black uppercase tracking-widest text-slate-200">{chat.name}</p>
+                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">{chat.role}</span>
+                                            </div>
+                                            <div className="text-sm text-indigo-50/90 leading-loose font-medium whitespace-pre-line break-words">
+                                                {chat.text}
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm flex-1">
-                                        <p className="text-[10px] font-black uppercase text-indigo-500 mb-2 flex items-center gap-1"><Info size={12}/> ทำไมต้องราคานี้?</p>
-                                        <p className="text-sm font-medium text-slate-700 leading-relaxed">{aiSuggestion.reason}</p>
-                                    </div>
-                                </div>
-                                <div className="space-y-4 flex flex-col">
-                                    <div className="bg-amber-50 p-5 rounded-2xl border border-amber-100 shadow-sm flex-1">
-                                        <p className="text-[10px] font-black uppercase text-amber-600 mb-2 flex items-center gap-1"><LayersIcon size={12}/> กลยุทธ์ขายส่ง / จัดเซ็ต (Bundle Idea)</p>
-                                        <p className="text-sm font-medium text-amber-900 leading-relaxed">{aiSuggestion.bundleIdea}</p>
-                                    </div>
-                                    <div className="bg-rose-50 p-5 rounded-2xl border border-rose-100 shadow-sm flex-1">
-                                        <p className="text-[10px] font-black uppercase text-rose-600 mb-2 flex items-center gap-1"><TrendingUp size={12}/> จุดขายสู้คู่แข่ง (Value Proposition)</p>
-                                        <p className="text-sm font-medium text-rose-900 leading-relaxed">{aiSuggestion.valueProp}</p>
-                                    </div>
-                                </div>
-                                <div className="col-span-full pt-2 flex justify-end">
+                                ))}
+                                <div className="pt-2 flex justify-end">
                                     <button onClick={() => setAiSuggestion(null)} className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors flex items-center gap-1">
-                                        <RefreshCw size={12}/> คำนวณใหม่ (Regenerate)
+                                        <RefreshCw size={12}/> ล้างข้อมูล (Clear)
                                     </button>
                                 </div>
                             </div>
-                        ) : (
+                        ) : !isAnalyzing && (
                             <div className="flex-1 border-2 border-dashed border-indigo-200 rounded-2xl flex flex-col items-center justify-center text-indigo-300 py-10 relative z-10 bg-white/50">
                                 <Sparkles size={40} className="mb-2 opacity-50"/>
-                                <p className="font-bold text-sm">พร้อมให้ AI ช่วยวางกลยุทธ์แล้ว</p>
-                                <p className="text-xs opacity-70">ระบุต้นทุน กำไร หรือใส่ราคาคู่แข่ง แล้วกดปุ่มด้านบนได้เลย</p>
+                                <p className="font-bold text-sm">พร้อมให้ทีม AI ช่วยวางกลยุทธ์แล้ว</p>
+                                <p className="text-xs opacity-70">ระบุต้นทุนและราคาขาย แล้วกดปุ่มด้านบนได้เลย</p>
                             </div>
                         )}
                     </div>
@@ -18039,7 +18260,7 @@ export default function App() {
       case 'promotions': return <PromotionManager appId={currentAppId} promotions={promotions} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} />;
       
       {/* --- 🔥 NEW: Router สำหรับเครื่องมือตั้งราคา --- */}
-      case 'pricing': return <PricingCalculator stockBatches={stockBatches} showToast={addToast} />;
+      case 'pricing': return <PricingCalculator stockBatches={stockBatches} transactions={transactions} showToast={addToast} />;
       
       case 'guide': return <TaxGuide />;
       default: return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
