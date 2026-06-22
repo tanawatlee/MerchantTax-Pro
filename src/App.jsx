@@ -788,10 +788,9 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
 
   const analytics = useMemo(() => {
     let perfSales = 0; let perfCogs = 0; let perfFees = 0; let perfExp = 0; let perfBuyerShipping = 0; let lostGmv = 0; 
-    let perfShippingBalance = 0;
+    let perfShippingBalance = 0; let perfActualShipping = 0;
     let cashSettled = 0; let cashPending = 0; let cashExp = 0; let cashShipping = 0; let cashFees = 0; let cashCogs = 0; let cashGrossSales = 0; 
 
-    // --- ตัวแปรสำหรับคำนวณเดือนก่อนหน้า (Previous Month) ---
     let prevPerfSales = 0; let prevPerfCogs = 0; let prevPerfFees = 0; let prevPerfExp = 0; let prevLostGmv = 0;
     let prevPerfShippingBalance = 0;
     let prevCashSettled = 0; let prevCashPending = 0; let prevCashExp = 0;
@@ -857,6 +856,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     perfCogs += cogs;
                     perfBuyerShipping += shipBuyer;
                     perfShippingBalance += shipBal; 
+                    perfActualShipping += shipActual;
                     lostGmv += Number(t.refundAmount || 0);
                 } else if (matchPrevOrderMonth) {
                     prevPerfSales += trueNetSales;
@@ -954,7 +954,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     const prevNetProfit = prevPerfSales - prevPerfCogs - (prevPerfFees + prevPerfExp - prevPerfShippingBalance);
 
     return { 
-        perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: currentNetProfit, buyerShipping: perfBuyerShipping, netSales: perfSales, lostGmv },
+        perf: { sales: perfSales, cogs: perfCogs, fees: perfFees, expense: perfExp, netProfit: currentNetProfit, buyerShipping: perfBuyerShipping, netSales: perfSales, lostGmv, actualShipping: perfActualShipping },
         cash: { settled: cashSettled, pending: cashPending, expense: cashExp, netCash: cashSettled - cashExp, shipping: cashShipping, fees: cashFees, supplierDebt, cogs: cashCogs, grossSales: cashGrossSales },
         trends: {
             perfSales: getTrend(perfSales, prevPerfSales),
@@ -1268,6 +1268,35 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                         <div className="text-right pl-3 border-l-2 border-indigo-50">
                             <p className="text-[10px] text-indigo-600 font-black uppercase">ฐานภาษีรวม (Tax Base)</p>
                             <p className="font-black text-indigo-700 text-xl">{formatCurrency(analytics.perf.netSales + (analytics.perf.buyerShipping || analytics.cash.shipping))}</p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* --- 🔥 NEW: แถบประเมินภาษีซื้อจากค่าจัดส่ง (Shipping Input VAT Estimate) --- */}
+                <div className="mt-4 bg-rose-50/80 border border-rose-200 rounded-[24px] p-5 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 shadow-sm animate-fadeIn">
+                    <div className="flex items-center gap-3">
+                        <div className="p-3 bg-rose-500 rounded-xl text-white shadow-md">
+                            <ShoppingCart size={20} />
+                        </div>
+                        <div>
+                            <p className="text-sm font-black text-rose-900 uppercase tracking-wide">ประเมินภาษีซื้อจากขนส่ง (Input VAT Estimate)</p>
+                            <p className="text-xs text-rose-700/80 mt-1 font-medium">ใบเสร็จค่าส่งที่ Platform ออกให้ ถือเป็น <span className="font-bold">"รายจ่าย" (เคลมภาษีซื้อได้)</span> ห้ามนำไปรวมกับภาษีขาย</p>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-4 bg-white px-5 py-3 rounded-2xl shadow-sm border border-rose-100 w-full xl:w-auto">
+                        <div className="text-right cursor-help" title="ค่าจัดส่งที่แพลตฟอร์มหักจากเราไป">
+                            <p className="text-[10px] text-slate-400 font-bold uppercase">ค่าส่งที่ถูกหัก (Actual)</p>
+                            <p className="font-black text-slate-700 text-base">{formatCurrency(analytics.perf.actualShipping || 0)}</p>
+                        </div>
+                        <div className="text-rose-300 font-black text-lg">x</div>
+                        <div className="text-right">
+                            <p className="text-[10px] text-rose-500 font-bold uppercase">VAT</p>
+                            <p className="font-black text-rose-600 text-base">7/107</p>
+                        </div>
+                        <div className="text-rose-300 font-black text-lg">=</div>
+                        <div className="text-right pl-3 border-l-2 border-rose-50">
+                            <p className="text-[10px] text-rose-600 font-black uppercase">คาดการณ์ภาษีซื้อที่เคลมได้</p>
+                            <p className="font-black text-rose-700 text-xl">{formatCurrency((analytics.perf.actualShipping || 0) * 7 / 107)}</p>
                         </div>
                     </div>
                 </div>
@@ -7020,6 +7049,65 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     return { months, totals };
   }, [invoices, transactions, trackingYear, selectedBranch]); // เพิ่ม selectedBranch เข้าไปใน Dependency Array
 
+  // --- 🔥 NEW: ข้อมูลกระทบยอดค่าจัดส่ง (Shipping VAT Reconciliation) ---
+  const shippingVatData = useMemo(() => {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    start.setHours(0,0,0,0);
+    end.setHours(23,59,59,999);
+
+    const platformStats = {};
+
+    transactions.forEach(t => {
+      if (t.type !== 'income' || t.isCancelled || t.isFromReconciliation) return;
+      
+      const d = normalizeDate(t.date);
+      if (!d || d < start || d > end) return;
+      
+      const branchMatch = selectedBranch === 'all' || (t.branch || '00000') === selectedBranch;
+      if (!branchMatch) return;
+
+      const ch = (t.channel || 'หน้าร้าน').toUpperCase();
+      if (!platformStats[ch]) {
+          platformStats[ch] = {
+              channel: ch,
+              orderCount: 0,
+              buyerShipping: 0, // ฐานภาษีขาย
+              actualShipping: 0, // ฐานภาษีซื้อ
+              shippingSubsidy: 0,
+              returnShipping: 0,
+          };
+      }
+
+      platformStats[ch].orderCount++;
+      platformStats[ch].buyerShipping += Number(t.shippingFee || 0);
+      platformStats[ch].actualShipping += Number(t.estimatedShippingFee || 0);
+      platformStats[ch].shippingSubsidy += Number(t.shippingFeeSubsidy || 0);
+      platformStats[ch].returnShipping += Number(t.returnShippingFee || 0);
+    });
+
+    const totals = {
+        buyerShipping: 0,
+        actualShipping: 0,
+        shippingSubsidy: 0,
+        returnShipping: 0,
+        netBalance: 0
+    };
+
+    const results = Object.values(platformStats).sort((a, b) => b.buyerShipping - a.buyerShipping);
+    results.forEach(r => {
+        totals.buyerShipping += r.buyerShipping;
+        totals.actualShipping += r.actualShipping;
+        totals.shippingSubsidy += r.shippingSubsidy;
+        totals.returnShipping += r.returnShipping;
+        
+        r.netBalance = (r.buyerShipping + r.shippingSubsidy) - (r.actualShipping + r.returnShipping);
+        totals.netBalance += r.netBalance;
+    });
+
+    return { list: results, totals };
+  }, [transactions, startDate, endDate, selectedBranch]);
+
   const pitAnalysis = useMemo(() => {
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -7205,6 +7293,14 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
           toFixedNum(yearlyTrackingData.totals.netVat)
       ];
       dataRows = [...headerRows, tableHeader, ...body, footer];
+    } else if (reportTab === 'shipping_vat') {
+      fileName = `Shipping_VAT_Recon_${startDate}.xlsx`;
+      const tableHeader = ["แพลตฟอร์ม", "จำนวนออเดอร์", "ค่าส่งที่ลูกค้าจ่าย (Output VAT Base)", "แพลตฟอร์มหักค่าส่ง (Actual)", "Platform ออกให้ (Subsidy)", "ค่าส่งตีกลับ (Return Fee)", "ส่วนต่างสุทธิ"];
+      const body = shippingVatData.list.map((m) => [
+          m.channel, m.orderCount, toFixedNum(m.buyerShipping), toFixedNum(m.actualShipping), toFixedNum(m.shippingSubsidy), toFixedNum(m.returnShipping), toFixedNum(m.netBalance)
+      ]);
+      const footer = [ "รวมทั้งหมด", "", toFixedNum(shippingVatData.totals.buyerShipping), toFixedNum(shippingVatData.totals.actualShipping), toFixedNum(shippingVatData.totals.shippingSubsidy), toFixedNum(shippingVatData.totals.returnShipping), toFixedNum(shippingVatData.totals.netBalance) ];
+      dataRows = [...headerRows, tableHeader, ...body, footer];
     }
 
     try {
@@ -7327,6 +7423,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
         <TabBtn id="inventory" label="คุมสินค้า (Stock)" icon={<Box size={18}/>} />
         <TabBtn id="cancellations" label="รายการยกเลิก/ตีกลับ" icon={<FileMinus size={18}/>} />
         <TabBtn id="pp30" label="สรุป ภ.พ.30" icon={<Calculator size={18}/>} />
+        <TabBtn id="shipping_vat" label="กระทบยอดค่าส่ง" icon={<TruckIcon size={18}/>} />
         <TabBtn id="yearly_tracking" label="Tracking ภาษี (Yearly)" icon={<BarChart2 size={18}/>} />
         <TabBtn id="pit90" label="ภ.ง.ด. 90/94 (บุคคลธรรมดา)" icon={<User size={18}/>} />
       </div>
@@ -7656,6 +7753,94 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
                             </tr>
                         </tfoot>
                     </table>
+                </div>
+            </div>
+          )}
+
+          {reportTab === 'shipping_vat' && (
+            <div className="p-8 max-w-5xl mx-auto my-4 bg-white border border-slate-200 rounded-3xl text-sm shadow-sm font-sarabun text-left">
+                <div className="flex justify-between items-center mb-8 border-b border-slate-200 pb-4">
+                    <div>
+                        <h3 className="font-black text-2xl text-slate-800 tracking-tight flex items-center gap-2"><TruckIcon className="text-blue-600"/> กระทบยอดค่าขนส่ง (Shipping VAT Reconciliation)</h3>
+                        <p className="text-slate-500 mt-2">รายงานตรวจสอบค่าจัดส่งแยกตามแพลตฟอร์ม (อ้างอิงมาตรฐานบัญชี Business Plus) สำหรับรอบวันที่: {formatDate(startDate)} ถึง {formatDate(endDate)}</p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div className="bg-indigo-50 border border-indigo-100 p-5 rounded-2xl">
+                        <p className="text-[10px] font-bold text-indigo-600 uppercase mb-1">ค่าส่งที่ลูกค้าจ่ายจริง (Buyer Paid)</p>
+                        <p className="text-2xl font-black text-indigo-700">{formatCurrency(shippingVatData.totals.buyerShipping)}</p>
+                        <p className="text-[10px] font-bold text-indigo-600/80 mt-1.5 flex items-center gap-1"><CheckCircle size={10}/> นำไปรวมเป็นฐานภาษีขาย (Output VAT)</p>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Platform ออกให้ (Subsidy / โค้ดส่งฟรี)</p>
+                        <p className="text-2xl font-black text-slate-700">{formatCurrency(shippingVatData.totals.shippingSubsidy)}</p>
+                        <p className="text-[10px] font-bold text-rose-500 mt-1.5 flex items-center gap-1"><XCircle size={10}/> ไม่ต้องนำมาคิดภาษีขาย (Non-VAT Base)</p>
+                    </div>
+                    <div className="bg-rose-50 border border-rose-100 p-5 rounded-2xl">
+                        <p className="text-[10px] font-bold text-rose-600 uppercase mb-1">ค่าส่งที่หักจริง (Actual Shipping)</p>
+                        <p className="text-2xl font-black text-rose-700">{formatCurrency(shippingVatData.totals.actualShipping)}</p>
+                        <p className="text-[10px] font-bold text-rose-600/80 mt-1.5 flex items-center gap-1"><CheckCircle size={10}/> นำบิลมาเคลมเป็นภาษีซื้อได้ (Input VAT)</p>
+                    </div>
+                </div>
+
+                <div className="overflow-x-auto custom-scrollbar">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-500">
+                            <tr>
+                                <th className="p-4 rounded-tl-2xl border-b border-slate-100">แพลตฟอร์ม</th>
+                                <th className="p-4 text-center border-b border-slate-100">จำนวนออเดอร์</th>
+                                <th className="p-4 text-right border-b border-slate-100 text-indigo-600">ค่าส่งที่ลูกค้าจ่าย<br/><span className="text-[9px] font-medium">(Output VAT Base)</span></th>
+                                <th className="p-4 text-right border-b border-slate-100 text-slate-500">Platform ออกให้<br/><span className="text-[9px] font-medium">(ไม่คิดภาษีขาย)</span></th>
+                                <th className="p-4 text-right border-b border-slate-100 text-rose-600">แพลตฟอร์มหักค่าส่ง<br/><span className="text-[9px] font-medium">(Actual Shipping)</span></th>
+                                <th className="p-4 text-right border-b border-slate-100 text-rose-500">ค่าส่งตีกลับ<br/><span className="text-[9px] font-medium">(Return Fee)</span></th>
+                                <th className="p-4 text-right rounded-tr-2xl border-b border-slate-100 text-slate-800">ส่วนต่างสุทธิ<br/><span className="text-[9px] font-medium">(เข้าเนื้อ / ได้กำไร)</span></th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {shippingVatData.list.map((m, i) => (
+                                <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                                    <td className="p-4 font-bold text-slate-700">{m.channel}</td>
+                                    <td className="p-4 text-center font-bold text-slate-600">{m.orderCount.toLocaleString()}</td>
+                                    <td className="p-4 text-right font-black text-indigo-600">{formatCurrency(m.buyerShipping)}</td>
+                                    <td className="p-4 text-right font-black text-rose-600">{formatCurrency(m.actualShipping)}</td>
+                                    <td className="p-4 text-right font-bold text-amber-600">{formatCurrency(m.shippingSubsidy)}</td>
+                                    <td className="p-4 text-right font-bold text-rose-500">{formatCurrency(m.returnShipping)}</td>
+                                    <td className="p-4 text-right font-black">
+                                        <span className={m.netBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                                            {m.netBalance > 0 ? '+' : ''}{formatCurrency(m.netBalance)}
+                                        </span>
+                                    </td>
+                                </tr>
+                            ))}
+                            {shippingVatData.list.length === 0 && (
+                                <tr><td colSpan="7" className="p-10 text-center text-slate-400 font-bold">ไม่พบข้อมูลค่าจัดส่งในช่วงเวลานี้</td></tr>
+                            )}
+                        </tbody>
+                        <tfoot className="bg-slate-900 text-white font-bold">
+                            <tr>
+                                <td colSpan="2" className="p-4 text-right uppercase tracking-widest text-xs opacity-60 rounded-bl-2xl">รวมทั้งหมด</td>
+                                <td className="p-4 text-right text-indigo-400">{formatCurrency(shippingVatData.totals.buyerShipping)}</td>
+                                <td className="p-4 text-right text-slate-400">{formatCurrency(shippingVatData.totals.shippingSubsidy)}</td>
+                                <td className="p-4 text-right text-rose-400">{formatCurrency(shippingVatData.totals.actualShipping)}</td>
+                                <td className="p-4 text-right text-rose-400">{formatCurrency(shippingVatData.totals.returnShipping)}</td>
+                                <td className="p-4 text-right rounded-br-2xl">
+                                    <span className={shippingVatData.totals.netBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                        {formatCurrency(shippingVatData.totals.netBalance)}
+                                    </span>
+                                </td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                
+                <div className="mt-4 p-4 bg-amber-50 border border-amber-100 rounded-2xl flex items-start gap-3">
+                    <Info size={20} className="text-amber-500 shrink-0 mt-0.5"/>
+                    <div className="text-xs text-amber-800 leading-relaxed font-medium">
+                        <p className="font-bold mb-1">หลักการลงบัญชีที่ถูกต้อง (อ้างอิง ERP Standard):</p>
+                        <p>1. <b>ส่วนต่างสุทธิเป็นบวก (สีเขียว):</b> ถือเป็น "รายได้อื่น" ต้องนำไปคำนวณเสียภาษีเงินได้นิติบุคคลตอนสิ้นปี</p>
+                        <p>2. <b>ส่วนต่างสุทธิเป็นลบ (สีแดง):</b> ถือเป็น "ค่าใช้จ่าย (เข้าเนื้อ)" สามารถนำไปลดหย่อนภาษีตอนคำนวณกำไรสุทธิประจำปีได้</p>
+                    </div>
                 </div>
             </div>
           )}
@@ -12052,6 +12237,10 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [historyChannel, setHistoryChannel] = useState('all');
   const [historyPaymentStatus, setHistoryPaymentStatus] = useState('all'); 
   
+  // --- NEW: Pagination States ---
+  const [histPage, setHistPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+
   const [selectedDocIds, setSelectedDocIds] = useState([]);
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
   const [bulkStatus, setBulkStatus] = useState({ current: 0, total: 0, message: '' });
@@ -13106,6 +13295,12 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       });
   }, [combinedDocs, historyFilter, historyStartDate, historyEndDate, historyChannel, historyPaymentStatus]);
 
+  // Reset page when filters change
+  useEffect(() => { setHistPage(1); }, [invoiceSearch, historyFilter, historyStartDate, historyEndDate, historyChannel, historyPaymentStatus, itemsPerPage]);
+
+  const histTotalPages = Math.max(1, Math.ceil(displayDocs.length / itemsPerPage));
+  const currentHistData = displayDocs.slice((histPage - 1) * itemsPerPage, histPage * itemsPerPage);
+
   // --- NEW: Toggle Payment Status ---
   const togglePaymentStatus = async (docItem) => {
       try {
@@ -13931,6 +14126,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                 <table className="w-full text-sm text-left whitespace-nowrap text-left">
                     <thead className="bg-slate-50 text-slate-500 font-semibold uppercase tracking-wider text-xs sticky top-0 z-10 text-left border-b">
                         <tr>
+                            {/* --- 🔥 NEW: หัวตาราง Checkbox สำหรับเลือกทั้งหมด --- */}
                             <th className="p-4 w-12 text-center border-b">
                                 <input 
                                     type="checkbox" 
@@ -13944,11 +14140,11 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                             <th className="p-4 text-left border-b">Customer / Payer</th>
                             <th className="p-4 text-right text-right border-b">Total</th>
                             <th className="p-4 text-center text-center border-b">Status</th>
-                            <th className="p-4 text-center text-center border-b">Action</th>
+                            <th className="p-5 text-center text-center border-b">Action</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50 text-left">
-                        {displayDocs.length > 0 ? displayDocs.map((docItem, idx) => {
+                        {currentHistData.length > 0 ? currentHistData.map((docItem, idx) => {
                             let badgeClass = 'bg-slate-100 text-slate-600';
                             if (docItem.status === 'cancelled') badgeClass = 'bg-slate-200 text-slate-500';
                             else if (docItem.source === 'transaction') badgeClass = 'bg-amber-100 text-amber-700';
@@ -14026,24 +14222,90 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                                 {docItem.status !== 'cancelled' && (
                                                     <>
                                                         <button onClick={() => handleCreateCreditNote(docItem)} className="text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="สร้างใบลดหนี้">ลดหนี้</button>
-                                                        <button onClick={() => setCancelConfirmId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="ยกเลิกเอกสาร"><X size={12}/></button>
-                                                    </>
-                                                )}
-                                                <button onClick={() => setHardDeleteInvoiceId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="ลบถาวร (Hard Delete)"><Trash2 size={12}/></button>
+                                                <button onClick={() => setCancelConfirmId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="ยกเลิกเอกสาร"><X size={12}/></button>
                                             </>
                                         )}
-                                    </div>
-                                </td>
-                            </tr>
-                        )}) : (
-                            <tr><td colSpan="7" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารในหมวดหมู่นี้ หรือ ในช่วงเวลาที่เลือก</td></tr>
-                        )}
-                    </tbody>
-                </table>
+                                        <button onClick={() => setHardDeleteInvoiceId(docItem)} className="text-rose-600 bg-rose-50 hover:bg-rose-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center" title="ลบถาวร (Hard Delete)"><Trash2 size={12}/></button>
+                                    </>
+                                )}
+                            </div>
+                        </td>
+                    </tr>
+                )}) : (
+                    <tr><td colSpan="7" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารในหมวดหมู่นี้ หรือ ในช่วงเวลาที่เลือก</td></tr>
+                )}
+            </tbody>
+        </table>
+    </div>
+    
+    {/* Pagination Controls */}
+    {histTotalPages > 0 && (
+        <div className="p-4 border-t bg-slate-50 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-b-3xl">
+            <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
+                <p className="text-xs font-bold text-slate-500 hidden sm:block">แสดงรายการ {displayDocs.length > 0 ? ((histPage - 1) * itemsPerPage) + 1 : 0} - {Math.min(histPage * itemsPerPage, displayDocs.length)} จากทั้งหมด {displayDocs.length} รายการ</p>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-500">แสดงหน้าละ:</span>
+                    <select 
+                        value={itemsPerPage} 
+                        onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                        className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold outline-none focus:border-indigo-400 cursor-pointer shadow-sm"
+                    >
+                        <option value={20}>20</option>
+                        <option value={30}>30</option>
+                        <option value={40}>40</option>
+                        <option value={50}>50</option>
+                    </select>
+                </div>
             </div>
             
-            {cancelConfirmId && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+            {histTotalPages > 1 && (
+                <div className="flex items-center gap-1.5 w-full sm:w-auto justify-center sm:justify-end">
+                    <button onClick={() => setHistPage(p => Math.max(1, p - 1))} disabled={histPage === 1} className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold disabled:opacity-50 hover:bg-indigo-50 hover:text-indigo-600 transition-colors shadow-sm">
+                        ย้อนกลับ
+                    </button>
+                    
+                    {(() => {
+                        const pages = [];
+                        if (histTotalPages <= 5) {
+                            for (let i = 1; i <= histTotalPages; i++) pages.push(i);
+                        } else {
+                            if (histPage <= 3) {
+                                pages.push(1, 2, 3, 4, '...', histTotalPages);
+                            } else if (histPage >= histTotalPages - 2) {
+                                pages.push(1, '...', histTotalPages - 3, histTotalPages - 2, histTotalPages - 1, histTotalPages);
+                            } else {
+                                pages.push(1, '...', histPage - 1, histPage, histPage + 1, '...', histTotalPages);
+                            }
+                        }
+
+                        return pages.map((p, pIdx) => (
+                            <button
+                                key={pIdx}
+                                onClick={() => p !== '...' && setHistPage(p)}
+                                disabled={p === '...'}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                                    p === histPage
+                                        ? 'bg-indigo-600 text-white border-indigo-600 scale-105'
+                                        : p === '...'
+                                        ? 'bg-transparent text-slate-400 cursor-default shadow-none border-transparent'
+                                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-indigo-50 hover:text-indigo-600'
+                                }`}
+                            >
+                                {p}
+                            </button>
+                        ));
+                    })()}
+
+                    <button onClick={() => setHistPage(p => Math.min(histTotalPages, p + 1))} disabled={histPage === histTotalPages} className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold disabled:opacity-50 hover:bg-indigo-50 hover:text-indigo-600 transition-colors shadow-sm">
+                        ถัดไป
+                    </button>
+                </div>
+            )}
+        </div>
+    )}
+    
+    {cancelConfirmId && (
+<div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
                   <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
                     <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
                       <XCircle size={32}/>
@@ -14359,43 +14621,160 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                         </div>
                     )}
                     
-                    <div className="flex justify-between items-start mb-8 text-left relative z-10">
-                      <div className="w-[70%] flex items-start gap-5 text-left">{invData.logo && (<img src={invData.logo} className="w-[90px] h-[90px] object-contain flex-shrink-0 text-center" alt="Logo"/>)}<div className="flex flex-col justify-center flex-1 text-left"><h2 className="text-xl font-bold text-slate-900 mb-1 leading-tight text-left">{invData.sellerName}</h2><div className="text-xs leading-relaxed space-y-1 mt-1 text-left"><p className="text-slate-600 text-left">{[invData.sellerAddress, fmtAddr.sub(invData.sellerSubDistrict)].filter(Boolean).join(' ')}</p><p className="text-slate-600 text-left">{[fmtAddr.dist(invData.sellerDistrict), fmtAddr.prov(invData.sellerProvince), invData.sellerZipCode].filter(Boolean).join(' ')}</p><p className="text-slate-700 text-left"><b>เลขผู้เสียภาษี:</b> {invData.sellerTaxId} <span className="ml-2"><b>สาขา:</b> {invData.sellerBranchId === '00000' || !invData.sellerBranchId ? 'สำนักงานใหญ่' : invData.sellerBranchId} {invData.sellerBranchName && `(${invData.sellerBranchName})`}</span></p><p className="text-slate-700 text-left"><b>โทร:</b> {invData.sellerPhone}</p></div></div></div>
-                      <div className="text-right w-[30%] flex flex-col items-end text-right"><div className="text-lg font-bold uppercase mb-0 text-right">{invData.docType === 'quotation' ? 'ใบเสนอราคา / QUOTATION' : (invData.docType === 'receipt' ? 'ใบเสร็จรับเงิน / RECEIPT' : (invData.docType === 'payment_voucher' ? 'ใบสำคัญจ่าย / PAYMENT VOUCHER' : (invData.docType === 'credit_note' ? 'ใบลดหนี้ / CREDIT NOTE' : (invData.docType === 'abb' ? 'ใบกำกับภาษีอย่างย่อ' : 'ใบกำกับภาษี / ใบเสร็จรับเงิน'))))}</div><div className={`status-badge text-lg font-bold uppercase mb-3 text-right ${invData.status === 'cancelled' ? 'text-rose-600' : ''}`}>{invData.status === 'cancelled' ? 'ยกเลิกแล้ว (Cancelled)' : 'ต้นฉบับ (Original)'}</div><div className="border border-slate-300 p-2 w-full max-w-[200px] text-right"><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เลขที่ (No.)</span><span className="font-bold text-right text-[10px]">{invData.invNo}</span></div><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(invData.date)}</span></div>{invData.docType === 'credit_note' && invData.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{invData.refInvNo}</span></div>)}{invData.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{invData.orderId}</span></div>)}</div></div>
-                    </div>
-                    <div className="border border-slate-300 p-4 mb-4 flex flex-col gap-1 text-left text-left relative z-10">
-                        <div className="text-xs font-bold text-slate-400 uppercase mb-1 text-left">{invData.docType === 'payment_voucher' ? 'จ่ายให้แก่ (Pay To)' : 'ลูกค้า (Customer)'}</div>
-                        <p className="font-bold text-base text-left">{invData.customerName || (invData.docType === 'payment_voucher' ? 'ผู้รับเงิน' : 'ลูกค้าทั่วไป (เงินสด)')}</p>
-                        {invData.docType !== 'abb' && (
-                            <>
-                                <p className="text-slate-600 text-sm leading-relaxed text-left">{invData.address}</p>
-                                <div className="flex gap-4 text-xs text-slate-600"><p>เลขผู้เสียภาษี: {invData.taxId || '-'}</p><p>สาขา: {invData.branch === '00000' || !invData.branch ? 'สำนักงานใหญ่' : invData.branch}</p></div>
-                            </>
-                        )}
-                    </div>
-                    <table className="w-full mb-6 border-collapse text-left text-[10px] text-left relative z-10"><thead><tr className="bg-slate-100 text-slate-800 font-bold uppercase text-center"><th className="py-2 border-y border-slate-300 w-10 text-center">No.</th><th className="py-2 border-y border-slate-300 text-left pl-2 text-left">Description</th><th className="py-2 border-y border-slate-300 w-14 text-center text-center">Qty</th><th className="py-2 border-y border-slate-300 w-20 text-right text-right">Price</th><th className="py-2 border-y border-slate-300 w-24 text-right text-right">Amount</th></tr></thead><tbody>{invData.items.map((it, i) => (<tr key={i} className="text-left"><td className="py-1.5 border-b border-slate-200 text-center">{i+1}</td><td className="py-1.5 border-b border-slate-200 pl-2 text-left">{it.desc}</td><td className="py-1.5 border-b border-slate-200 text-center">{it.qty}</td><td className="py-1.5 border-b border-slate-200 text-right">{formatCurrency(it.price)}</td><td className="p-1.5 border-b border-slate-200 text-right pr-2 font-bold">{formatCurrency(it.qty * it.price)}</td></tr>))}</tbody></table>
-                    <div className="flex justify-between items-start text-left relative z-10"><div className="flex-1 mt-4 mr-4 text-left"><div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center">({THBText(totals.total)})</div><div className="mt-8 text-[10px] text-slate-500 text-left text-left">หมายเหตุ: {invData.notes || (invData.docType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน')}</div></div><div className="w-[45%] text-right text-[10px] space-y-1 text-right"><div className="flex justify-between px-2 text-right"><span>รวมมูลค่า (Subtotal)</span><span>{formatCurrency(totals.sub)}</span></div>{invData.discount > 0 && <div className="flex justify-between px-2 text-rose-600 text-right"><span>ส่วนลด/หักเงิน (Discount/WHT)</span><span>-{formatCurrency(invData.discount)}</span></div>}<div className="flex justify-between px-2 pt-1 border-t border-slate-200 text-right"><span>รวมก่อนภาษี (Net Before VAT)</span><span>{formatCurrency(totals.preVat)}</span></div><div className="flex justify-between px-2 text-right"><span>ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(totals.vat)}</span></div><div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>ยอดเงินสุทธิ (Grand Total)</span><span>{formatCurrency(totals.total)}</span></div></div></div>
-                    <div className="mt-20 grid grid-cols-2 gap-10 text-center relative z-10">
-                        <div className="flex flex-col items-center text-center">
-                            <div className="h-14 flex items-center justify-center mb-1 relative w-full text-center">
-                                {invData.signature && <img src={invData.signature} className="max-h-full object-contain text-center" alt="Signature"/>}
+                    {(() => {
+                        // --- Shared Helper Components ---
+                        const SellerHeader = ({ titleTh, titleEn }) => (
+                            <div className="flex justify-between items-start mb-8 text-left relative z-10">
+                              <div className="w-[70%] flex items-start gap-5 text-left">{invData.logo && (<img src={invData.logo} className="w-[90px] h-[90px] object-contain flex-shrink-0 text-center" alt="Logo"/>)}<div className="flex flex-col justify-center flex-1 text-left"><h2 className="text-xl font-bold text-slate-900 mb-1 leading-tight text-left">{invData.sellerName}</h2><div className="text-xs leading-relaxed space-y-1 mt-1 text-left"><p className="text-slate-600 text-left">{[invData.sellerAddress, fmtAddr.sub(invData.sellerSubDistrict)].filter(Boolean).join(' ')}</p><p className="text-slate-600 text-left">{[fmtAddr.dist(invData.sellerDistrict), fmtAddr.prov(invData.sellerProvince), invData.sellerZipCode].filter(Boolean).join(' ')}</p><p className="text-slate-700 text-left"><b>เลขผู้เสียภาษี:</b> {invData.sellerTaxId} <span className="ml-2"><b>สาขา:</b> {invData.sellerBranchId === '00000' || !invData.sellerBranchId ? 'สำนักงานใหญ่' : invData.sellerBranchId} {invData.sellerBranchName && `(${invData.sellerBranchName})`}</span></p><p className="text-slate-700 text-left"><b>โทร:</b> {invData.sellerPhone}</p></div></div></div>
+                              <div className="text-right w-[30%] flex flex-col items-end text-right"><div className="text-lg font-bold uppercase mb-0 text-right">{titleTh} <br/><span className="text-sm">{titleEn}</span></div><div className={`status-badge text-lg font-bold uppercase mb-3 text-right mt-2 ${invData.status === 'cancelled' ? 'text-rose-600' : ''}`}>{invData.status === 'cancelled' ? 'ยกเลิกแล้ว (Cancelled)' : 'ต้นฉบับ (Original)'}</div><div className="border border-slate-300 p-2 w-full max-w-[200px] text-right"><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เลขที่ (No.)</span><span className="font-bold text-right text-[10px]">{invData.invNo}</span></div><div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(invData.date)}</span></div>{invData.docType === 'credit_note' && invData.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{invData.refInvNo}</span></div>)}{invData.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{invData.orderId}</span></div>)}</div></div>
                             </div>
-                            <div className="w-full text-[10px] space-y-1 text-center">
-                                <p className="mb-1 text-center">(...........................................................................)</p>
-                                <p className="font-bold text-slate-700 text-center">{invData.docType === 'credit_note' ? 'ผู้อนุมัติ / Authorized Signature' : invData.docType === 'payment_voucher' ? 'ผู้รับเงิน / Receiver' : 'ผู้รับเงิน / Authorized Signature'}</p>
-                                <p className="mt-1 text-center">วันที่ (Date): {formatDate(invData.date)}</p>
+                        );
+
+                        const CustomerSection = ({ label }) => (
+                            <div className="border border-slate-300 p-4 mb-4 flex flex-col gap-1 text-left text-left relative z-10">
+                                <div className="text-xs font-bold text-slate-400 uppercase mb-1 text-left">{label}</div>
+                                <p className="font-bold text-base text-left">{invData.customerName || (invData.docType === 'payment_voucher' ? 'ผู้รับเงิน' : 'ลูกค้าทั่วไป (เงินสด)')}</p>
+                                {invData.docType !== 'abb' && (
+                                    <>
+                                        <p className="text-slate-600 text-sm leading-relaxed text-left">{invData.address}</p>
+                                        <div className="flex gap-4 text-xs text-slate-600"><p>เลขผู้เสียภาษี: {invData.taxId || '-'}</p><p>สาขา: {invData.branch === '00000' || !invData.branch ? 'สำนักงานใหญ่' : invData.branch}</p></div>
+                                    </>
+                                )}
                             </div>
-                        </div>
-                        <div className="flex flex-col items-center text-center">
-                            <div className="h-14 flex items-center justify-center mb-1 w-full text-center">
+                        );
+
+                        const ItemsTable = () => (
+                            <table className="w-full mb-6 border-collapse text-left text-[10px] text-left relative z-10"><thead><tr className="bg-slate-100 text-slate-800 font-bold uppercase text-center"><th className="py-2 border-y border-slate-300 w-10 text-center">No.</th><th className="py-2 border-y border-slate-300 text-left pl-2 text-left">Description</th><th className="py-2 border-y border-slate-300 w-14 text-center text-center">Qty</th><th className="py-2 border-y border-slate-300 w-20 text-right text-right">Price</th><th className="py-2 border-y border-slate-300 w-24 text-right text-right">Amount</th></tr></thead><tbody>{invData.items.map((it, i) => (<tr key={i} className="text-left"><td className="py-1.5 border-b border-slate-200 text-center">{i+1}</td><td className="py-1.5 border-b border-slate-200 pl-2 text-left">{it.desc}</td><td className="py-1.5 border-b border-slate-200 text-center">{it.qty}</td><td className="py-1.5 border-b border-slate-200 text-right">{formatCurrency(it.price)}</td><td className="p-1.5 border-b border-slate-200 text-right pr-2 font-bold">{formatCurrency(it.qty * it.price)}</td></tr>))}</tbody></table>
+                        );
+
+                        const Signatures = ({ leftLine1, leftLine2, rightLine1, rightLine2 }) => (
+                            <div className="mt-20 grid grid-cols-2 gap-10 text-center relative z-10">
+                                <div className="flex flex-col items-center text-center">
+                                    <div className="h-14 flex items-center justify-center mb-1 relative w-full text-center">
+                                        {invData.signature && <img src={invData.signature} className="max-h-full object-contain text-center" alt="Signature"/>}
+                                    </div>
+                                    <div className="w-full text-[10px] space-y-1 text-center">
+                                        <p className="mb-1 text-center">(...........................................................................)</p>
+                                        <p className="font-bold text-slate-700 text-center">{leftLine1}</p>
+                                        <p className="mt-1 text-center">{leftLine2}</p>
+                                    </div>
+                                </div>
+                                {rightLine1 && (
+                                <div className="flex flex-col items-center text-center">
+                                    <div className="h-14 flex items-center justify-center mb-1 w-full text-center">
+                                    </div>
+                                    <div className="w-full text-[10px] space-y-1 text-center">
+                                        <p className="mb-1 text-center">(...........................................................................)</p>
+                                        <p className="font-bold text-slate-700 text-center">{rightLine1}</p>
+                                        <p className="mt-1 text-center text-center">{rightLine2}</p>
+                                    </div>
+                                </div>
+                                )}
                             </div>
-                            <div className="w-full text-[10px] space-y-1 text-center">
-                                <p className="mb-1 text-center">(...........................................................................)</p>
-                                <p className="font-bold text-slate-700 text-center">{invData.docType === 'credit_note' ? 'ผู้รับเอกสาร / Document Received By' : invData.docType === 'payment_voucher' ? 'ผู้จ่ายเงิน / ผู้อนุมัติ' : 'ผู้รับสินค้า / Received By'}</p>
-                                <p className="mt-1 text-center text-center">วันที่ (Date): .......................................</p>
-                            </div>
-                        </div>
-                    </div>
+                        );
+
+                        // --- Render Logic based on DocType ---
+                        if (invData.docType === 'abb') {
+                            return (
+                                <>
+                                    <SellerHeader titleTh="ใบกำกับภาษีอย่างย่อ" titleEn="TAX INVOICE (ABB)" />
+                                    <CustomerSection label="ลูกค้า (Customer)" />
+                                    <ItemsTable />
+                                    <div className="flex justify-between items-start text-left relative z-10">
+                                        <div className="flex-1 mt-4 mr-4 text-left">
+                                            <div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center w-fit">({THBText(totals.total)})</div>
+                                            <div className="mt-6 text-[10px] text-slate-800 font-bold uppercase text-left">* ราคารวมภาษีมูลค่าเพิ่มแล้ว (VAT Included)</div>
+                                            <div className="mt-1 text-[10px] text-slate-500 text-left">หมายเหตุ: {invData.notes || 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน'}</div>
+                                        </div>
+                                        <div className="w-[45%] text-right text-[10px] space-y-1 text-right">
+                                            {invData.discount > 0 && <div className="flex justify-between px-2 text-rose-600 text-right"><span>ส่วนลด (Discount)</span><span>-{formatCurrency(invData.discount)}</span></div>}
+                                            <div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>ยอดเงินสุทธิ (Grand Total)</span><span>{formatCurrency(totals.total)}</span></div>
+                                        </div>
+                                    </div>
+                                    <Signatures leftLine1="พนักงานรับเงิน / Cashier" leftLine2={`วันที่ (Date): ${formatDate(invData.date)}`} />
+                                </>
+                            );
+                        } 
+                        else if (invData.docType === 'credit_note') {
+                            return (
+                                <>
+                                    <SellerHeader titleTh="ใบลดหนี้" titleEn="CREDIT NOTE" />
+                                    <CustomerSection label="ลูกค้า (Customer)" />
+                                    <ItemsTable />
+                                    <div className="flex justify-between items-start text-left relative z-10">
+                                        <div className="flex-1 mt-4 mr-4 text-left">
+                                            <div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center w-fit">({THBText(totals.total)})</div>
+                                            <div className="mt-8 text-[10px] text-slate-500 text-left">สาเหตุการลดหนี้: {invData.creditNoteReason || 'รับคืนสินค้า / ส่วนลด'}</div>
+                                            <div className="mt-1 text-[10px] text-slate-500 text-left">อ้างอิงใบกำกับภาษีเดิมเลขที่: {invData.refInvNo || '-'}</div>
+                                            <div className="mt-1 text-[10px] text-slate-500 text-left">หมายเหตุ: {invData.notes || '-'}</div>
+                                        </div>
+                                        <div className="w-[45%] text-right text-[10px] space-y-1 text-right">
+                                            <div className="flex justify-between px-2 text-right"><span>มูลค่าสินค้าที่รับคืน/ลดหนี้</span><span>{formatCurrency(totals.preVat)}</span></div>
+                                            <div className="flex justify-between px-2 text-right"><span>ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(totals.vat)}</span></div>
+                                            <div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>รวมยอดลดหนี้สุทธิ</span><span>{formatCurrency(totals.total)}</span></div>
+                                        </div>
+                                    </div>
+                                    <Signatures leftLine1="ผู้อนุมัติ / Authorized Signature" leftLine2={`วันที่ (Date): ${formatDate(invData.date)}`} rightLine1="ผู้รับเอกสาร / Document Received By" rightLine2="วันที่ (Date): ......................................." />
+                                </>
+                            );
+                        }
+                        else if (invData.docType === 'payment_voucher') {
+                            return (
+                                <>
+                                    <SellerHeader titleTh="ใบสำคัญจ่าย" titleEn="PAYMENT VOUCHER" />
+                                    <CustomerSection label="จ่ายให้แก่ (Pay To)" />
+                                    <ItemsTable />
+                                    <div className="flex justify-between items-start text-left relative z-10">
+                                        <div className="flex-1 mt-4 mr-4 text-left">
+                                            <div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center w-fit">({THBText(totals.total)})</div>
+                                            <div className="mt-8 text-[10px] text-slate-500 text-left">หมายเหตุ: {invData.notes || 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ'}</div>
+                                        </div>
+                                        <div className="w-[45%] text-right text-[10px] space-y-1 text-right">
+                                            <div className="flex justify-between px-2 text-right"><span>รวมมูลค่า (Subtotal)</span><span>{formatCurrency(totals.sub)}</span></div>
+                                            {invData.discount > 0 && <div className="flex justify-between px-2 text-rose-600 text-right"><span>หัก ณ ที่จ่าย / ส่วนลด</span><span>-{formatCurrency(invData.discount)}</span></div>}
+                                            {invData.vatType !== 'none' && (
+                                                <>
+                                                    <div className="flex justify-between px-2 pt-1 border-t border-slate-200 text-right"><span>รวมก่อนภาษี (Net Before VAT)</span><span>{formatCurrency(totals.preVat)}</span></div>
+                                                    <div className="flex justify-between px-2 text-right"><span>ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(totals.vat)}</span></div>
+                                                </>
+                                            )}
+                                            <div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>ยอดจ่ายสุทธิ (Net Paid)</span><span>{formatCurrency(totals.total)}</span></div>
+                                        </div>
+                                    </div>
+                                    <Signatures leftLine1="ผู้รับเงิน / Receiver" leftLine2={`วันที่ (Date): ${formatDate(invData.date)}`} rightLine1="ผู้อนุมัติจ่าย / Authorized Payer" rightLine2="วันที่ (Date): ......................................." />
+                                </>
+                            );
+                        }
+                        else {
+                            // Standard (Invoice, Receipt, Quotation)
+                            let th = 'ใบกำกับภาษี / ใบเสร็จรับเงิน';
+                            let en = 'TAX INVOICE / RECEIPT';
+                            if (invData.docType === 'quotation') { th = 'ใบเสนอราคา'; en = 'QUOTATION'; }
+                            else if (invData.docType === 'receipt') { th = 'ใบเสร็จรับเงิน'; en = 'RECEIPT'; }
+
+                            return (
+                                <>
+                                    <SellerHeader titleTh={th} titleEn={en} />
+                                    <CustomerSection label="ลูกค้า (Customer)" />
+                                    <ItemsTable />
+                                    <div className="flex justify-between items-start text-left relative z-10">
+                                        <div className="flex-1 mt-4 mr-4 text-left">
+                                            <div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center w-fit">({THBText(totals.total)})</div>
+                                            <div className="mt-8 text-[10px] text-slate-500 text-left">หมายเหตุ: {invData.notes || 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน'}</div>
+                                        </div>
+                                        <div className="w-[45%] text-right text-[10px] space-y-1 text-right">
+                                            <div className="flex justify-between px-2 text-right"><span>รวมมูลค่า (Subtotal)</span><span>{formatCurrency(totals.sub)}</span></div>
+                                            {invData.discount > 0 && <div className="flex justify-between px-2 text-rose-600 text-right"><span>ส่วนลด (Discount)</span><span>-{formatCurrency(invData.discount)}</span></div>}
+                                            <div className="flex justify-between px-2 pt-1 border-t border-slate-200 text-right"><span>รวมก่อนภาษี (Net Before VAT)</span><span>{formatCurrency(totals.preVat)}</span></div>
+                                            <div className="flex justify-between px-2 text-right"><span>ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(totals.vat)}</span></div>
+                                            <div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>ยอดเงินสุทธิ (Grand Total)</span><span>{formatCurrency(totals.total)}</span></div>
+                                        </div>
+                                    </div>
+                                    <Signatures leftLine1="ผู้รับเงิน / Authorized Signature" leftLine2={`วันที่ (Date): ${formatDate(invData.date)}`} rightLine1={invData.docType === 'quotation' ? 'ผู้อนุมัติสั่งซื้อ / Authorized Buyer' : 'ผู้รับสินค้า / Received By'} rightLine2="วันที่ (Date): ......................................." />
+                                </>
+                            );
+                        }
+                    })()}
                 </div>
             </div>
         </>
@@ -15599,7 +15978,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
             cogs: 0, grossProfit: 0, 
             platformFees: 0, directExp: 0, shippingBalance: 0, totalOpEx: 0,
             netProfit: 0, buyerShipping: 0, buyerShippingDetails: [],
-            lostGmv: 0, wastedFee: 0 // <-- NEW: เก็บยอดสูญเสีย/ค่าธรรมเนียมเสียฟรี
+            lostGmv: 0, wastedFee: 0, actualShipping: 0
         };
 
         // --- 2. กลุ่มข้อมูลกระแสเงินสดรับ (Settlement) อิงตามวันที่เงินโอนเข้า (Settled Date) ---
@@ -15668,6 +16047,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                         
                         const shipFeeAmt = Number(t.shippingFee || 0);
                         perf.buyerShipping += shipFeeAmt; 
+                        perf.actualShipping += Number(t.estimatedShippingFee || 0);
                         if (shipFeeAmt > 0) {
                             perf.buyerShippingDetails.push({
                                 id: t.id,
@@ -16114,6 +16494,35 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                         <div className="text-right pl-3 border-l-2 border-indigo-50">
                             <p className="text-[10px] text-indigo-600 font-black uppercase">ฐานภาษีรวม (Tax Base)</p>
                             <p className="font-black text-indigo-700 text-xl">{formatCurrency(reportData.perf.netSales + reportData.perf.buyerShipping)}</p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* --- 🔥 NEW: แถบประเมินภาษีซื้อจากค่าจัดส่ง (Shipping Input VAT Estimate) --- */}
+                <div className="mt-4 bg-rose-50/80 border border-rose-200 rounded-[24px] p-5 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 shadow-sm animate-fadeIn">
+                    <div className="flex items-center gap-3">
+                        <div className="p-3 bg-rose-500 rounded-xl text-white shadow-md">
+                            <ShoppingCart size={20} />
+                        </div>
+                        <div>
+                            <p className="text-sm font-black text-rose-900 uppercase tracking-wide">ประเมินภาษีซื้อจากขนส่ง (Input VAT Estimate)</p>
+                            <p className="text-xs text-rose-700/80 mt-1 font-medium">ใบเสร็จค่าส่งที่ Platform ออกให้ ถือเป็น <span className="font-bold">"รายจ่าย" (เคลมภาษีซื้อได้)</span> ห้ามนำไปรวมกับภาษีขาย</p>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-4 bg-white px-5 py-3 rounded-2xl shadow-sm border border-rose-100 w-full xl:w-auto">
+                        <div className="text-right cursor-help" title="ค่าจัดส่งที่แพลตฟอร์มหักจากเราไป">
+                            <p className="text-[10px] text-slate-400 font-bold uppercase">ค่าส่งที่ถูกหัก (Actual)</p>
+                            <p className="font-black text-slate-700 text-base">{formatCurrency(reportData.perf.actualShipping || 0)}</p>
+                        </div>
+                        <div className="text-rose-300 font-black text-lg">x</div>
+                        <div className="text-right">
+                            <p className="text-[10px] text-rose-500 font-bold uppercase">VAT</p>
+                            <p className="font-black text-rose-600 text-base">7/107</p>
+                        </div>
+                        <div className="text-rose-300 font-black text-lg">=</div>
+                        <div className="text-right pl-3 border-l-2 border-rose-50">
+                            <p className="text-[10px] text-rose-600 font-black uppercase">คาดการณ์ภาษีซื้อที่เคลมได้</p>
+                            <p className="font-black text-rose-700 text-xl">{formatCurrency((reportData.perf.actualShipping || 0) * 7 / 107)}</p>
                         </div>
                     </div>
                 </div>
