@@ -9063,7 +9063,13 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   };
 
   const selectPartner = (p) => { 
-    setFormData({ ...formData, partnerName: p.name || '', partnerTaxId: p.taxId || '', partnerAddress: p.address || '', partnerBranch: p.branch || '00000', partnerBranchName: p.branchName || '' }); 
+    let newItems = [...formData.items];
+    if (p.name && (p.name.includes('อินเตอร์เอ็กซ์เพรส') || p.name.toLowerCase().includes('inter express'))) {
+        if (newItems.length === 1 && (!newItems[0].desc || newItems[0].desc.trim() === '')) {
+            newItems[0].desc = 'ค่าบริการขนส่งสินค้าควบคุมอุณหภูมิ';
+        }
+    }
+    setFormData({ ...formData, partnerName: p.name || '', partnerTaxId: p.taxId || '', partnerAddress: p.address || '', partnerBranch: p.branch || '00000', partnerBranchName: p.branchName || '', items: newItems }); 
     setShowPartnerModal(false); 
     setPartnerSearchTerm('');
   };
@@ -9897,7 +9903,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       let totalIncome = 0;
       let totalExpense = 0;
       docSummaryData.forEach(t => {
-          const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+          const amt = t.type === 'income' 
+              ? (Number(t.total || 0) - Number(t.couponDiscount || 0) - Number(t.cashCoupon || 0) - Number(t.refundAmount || 0) + Number(t.shippingFee || 0))
+              : (Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0);
           if (t.type === 'income') totalIncome += amt;
           else if (t.type === 'expense') totalExpense += amt;
       });
@@ -9915,7 +9923,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
           if (mStr !== docSummaryMonth) return;
 
-          const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+          const amt = t.type === 'income' 
+              ? (Number(t.total || 0) - Number(t.couponDiscount || 0) - Number(t.cashCoupon || 0) - Number(t.refundAmount || 0) + Number(t.shippingFee || 0))
+              : (Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0);
           const cat = t.category || 'ทั่วไป';
 
           if (t.type === 'income') {
@@ -10181,7 +10191,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       'เอกสารตกหล่น (Missing)'
                   ]);
               } else {
-                  const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+                  const amt = t.type === 'income' 
+                      ? (Number(t.total || 0) - Number(t.couponDiscount || 0) - Number(t.cashCoupon || 0) - Number(t.refundAmount || 0) + Number(t.shippingFee || 0))
+                      : (Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0);
                   if (!t.isCancelled) {
                       if (t.type === 'income') sumListIn += amt;
                       if (t.type === 'expense') sumListOut += amt;
@@ -10221,7 +10233,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               ];
               let sumIncomeSheet = 0;
               incomeDocs.forEach((t, i) => {
-                  const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+                  const amt = (Number(t.total || 0) - Number(t.couponDiscount || 0) - Number(t.cashCoupon || 0) - Number(t.refundAmount || 0) + Number(t.shippingFee || 0));
                   if (!t.isCancelled) sumIncomeSheet += amt;
                   incomeRows.push([
                       i + 1,
@@ -10653,7 +10665,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-3 text-left">
-                  <input value={formData.partnerName} onChange={e=>setFormData({...formData, partnerName: e.target.value})} className="bg-slate-50 p-3 rounded-2xl border border-slate-100 text-sm font-bold outline-none text-left" placeholder="ชื่อคู่ค้า..." />
+                  <input value={formData.partnerName} onChange={e=>{
+                      const newName = e.target.value;
+                      let newItems = [...formData.items];
+                      if (newName && (newName.includes('อินเตอร์เอ็กซ์เพรส') || newName.toLowerCase().includes('inter express'))) {
+                          if (newItems.length === 1 && (!newItems[0].desc || newItems[0].desc.trim() === '')) {
+                              newItems[0].desc = 'ค่าบริการขนส่งสินค้าควบคุมอุณหภูมิ';
+                          }
+                      }
+                      setFormData({...formData, partnerName: newName, items: newItems});
+                  }} className="bg-slate-50 p-3 rounded-2xl border border-slate-100 text-sm font-bold outline-none text-left" placeholder="ชื่อคู่ค้า..." />
                   <input value={formData.partnerTaxId} onChange={e=>setFormData({...formData, partnerTaxId: e.target.value})} className="bg-slate-50 p-3 rounded-2xl border border-slate-100 text-sm font-mono outline-none text-left" placeholder="เลขผู้เสียภาษี..." />
                   <input value={formData.partnerBranch} onChange={e=>setFormData({...formData, partnerBranch: e.target.value})} className="bg-slate-50 p-3 rounded-2xl border border-slate-100 text-sm font-mono outline-none text-left" placeholder="รหัสสาขา..." />
                   <input value={formData.partnerBranchName} onChange={e=>setFormData({...formData, partnerBranchName: e.target.value})} className="bg-slate-50 p-3 rounded-2xl border border-slate-100 text-sm font-bold outline-none text-left" placeholder="ชื่อสาขา..." />
@@ -11262,7 +11283,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     );
                                 }
 
-                                const amt = Number(doc.grandTotal !== undefined ? doc.grandTotal : doc.total) || 0;
+                                const amt = doc.type === 'income' 
+                                    ? (Number(doc.total || 0) - Number(doc.couponDiscount || 0) - Number(doc.cashCoupon || 0) - Number(doc.refundAmount || 0) + Number(doc.shippingFee || 0))
+                                    : (Number(doc.grandTotal !== undefined ? doc.grandTotal : doc.total) || 0);
                                 return (
                                 <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
                                     <td className="p-4 text-slate-600 whitespace-nowrap">{formatDate(doc.date)}</td>
@@ -13416,11 +13439,19 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
           // 3. Prepare History Details Sheet Data
           const dataRows = [
-              ["รายละเอียดประวัติเอกสาร (Filtered)"],
+              ["รายงานประวัติรายการเชิงลึก (Detailed Transaction Audit)"],
               ["รอบระยะเวลา", dateRangeStr],
               ["วันที่ดึงข้อมูล", formatDate(new Date())],
               [],
-              ["วันที่สั่งซื้อ/ออกบิล", "วันที่รับเงิน (Settled)", "เลขที่เอกสาร", "Order ID", "ชื่อลูกค้า/คู่ค้า", "ประเภทเอกสาร", "สถานะเอกสาร", "สถานะการชำระ", "ยอดรวม (บาท)"]
+              [
+                  "วันที่ทำรายการ", "วันที่รับ/จ่ายเงิน", "ช่องทาง", "ร้านค้า",
+                  "เลขระบบ (Sys ID)", "Order ID", "เลขที่เอกสาร (INV/REF)", 
+                  "ประเภท", "หมวดหมู่", "ชื่อลูกค้า/คู่ค้า", 
+                  "รายการสินค้า", "มูลค่าสินค้า(Subtotal)", "ส่วนลดรวม", 
+                  "ค่าจัดส่ง(รับจากลูกค้า)", "ค่าจัดส่ง(ถูกหักจริง)", 
+                  "ค่าธรรมเนียม Platform", "หัก ณ ที่จ่าย", "ภาษีมูลค่าเพิ่ม(VAT)",
+                  "ยอดสุทธิ (Grand Total)", "สถานะรายการ", "สถานะการชำระเงิน"
+              ]
           ];
 
           displayDocs.forEach(d => {
@@ -13433,16 +13464,47 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   else settleDateStr = formatDate(d.date);
               }
 
+              // รวมรายการสินค้าเป็น Text
+              const itemsText = (d.items || []).map(it => `${it.desc} (x${it.qty})`).join(', ');
+
+              // สกัดยอดต่างๆ
+              const subtotal = d.sub || (d.items || []).reduce((sum, it) => sum + (Number(it.qty) * Number(it.price || it.sellPrice || it.buyPrice || 0)), 0);
+              const discount = Number(d.couponDiscount || d.discount || 0) + Number(d.cashCoupon || 0);
+              const shipBuyer = Number(d.shippingFee || 0);
+              const shipActual = Number(d.estimatedShippingFee || 0);
+              const platformFee = Number(d.platformFee || 0);
+              const wht = Number(d.whtAmount || 0);
+              const vat = Number(d.vat || d.vatAmount || 0);
+              
+              // ใช้ยอดรับเงินจริงถ้ามี
+              const grandTotal = d.actualSettledAmt !== undefined ? Number(d.actualSettledAmt) : Number(d.grandTotal || d.total || 0);
+
+              // เครื่องหมายบวก/ลบ สำหรับรายรับรายจ่าย
+              const isExpenseLike = d.type === 'expense' || d.docType === 'payment_voucher' || d.docType === 'credit_note';
+              const mult = isExpenseLike ? -1 : 1;
+
               dataRows.push([
                   formatDate(d.date),
                   settleDateStr,
-                  d.invNo || '-',
-                  d.orderId || '-',
-                  d.customerName || 'ลูกค้าทั่วไป',
-                  d.displayStatus || '-',
-                  d.status === 'cancelled' ? 'ยกเลิก' : 'ปกติ',
-                  isPaid ? 'ชำเนียงแล้ว' : 'ค้างชำระ',
-                  Number(d.total * (d.docType === 'credit_note' ? -1 : 1)).toFixed(2)
+                  d.channel || 'หน้าร้าน',
+                  d.shopName || '-',
+                  d.sysDocId || '-',
+                  d.orderId || d.linkedOrderNo || '-',
+                  d.invNo || d.taxInvoiceNo || '-',
+                  d.type === 'income' || d.source === 'invoice' && !isExpenseLike ? 'รายรับ' : 'รายจ่าย',
+                  d.category || d.displayStatus || '-',
+                  d.customerName || d.partnerName || 'ทั่วไป',
+                  itemsText,
+                  Number(subtotal * mult).toFixed(2),
+                  Number(discount * mult).toFixed(2),
+                  Number(shipBuyer * mult).toFixed(2),
+                  Number(shipActual * mult).toFixed(2),
+                  Number(platformFee * mult).toFixed(2),
+                  Number(wht * mult).toFixed(2),
+                  Number(vat * mult).toFixed(2),
+                  Number(grandTotal * mult).toFixed(2),
+                  d.status === 'cancelled' ? 'ยกเลิกแล้ว' : 'ปกติ',
+                  isPaid ? 'ชำระแล้ว' : 'ค้างชำระ'
               ]);
           });
 
@@ -13704,7 +13766,16 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                             <h4 className="font-black text-slate-800 text-sm border-b pb-1">{group.companyName}</h4>
                             <div className="space-y-2 pl-2">
                                 {group.branches.map((c, idx) => (
-                                    <div key={idx} onClick={()=>{setInvData(p=>({...p, customerName: c.customerName, address: c.address, taxId: c.taxId, branch: c.branch || '00000', sellerBranchName: c.branchName || ''})); setShowCustomerModal(false); setCustomerSearchTerm('');}} className="p-3 rounded-2xl border border-slate-100 hover:border-rose-200 hover:bg-rose-50/50 cursor-pointer transition-all group flex justify-between items-center bg-white shadow-sm text-left">
+                                    <div key={idx} onClick={()=>{
+                                        let newItems = [...invData.items];
+                                        if (c.customerName && (c.customerName.includes('อินเตอร์เอ็กซ์เพรส') || c.customerName.toLowerCase().includes('inter express'))) {
+                                            if (newItems.length === 1 && (!newItems[0].desc || newItems[0].desc.trim() === '')) {
+                                                newItems[0].desc = 'ค่าบริการขนส่งสินค้าควบคุมอุณหภูมิ';
+                                            }
+                                        }
+                                        setInvData(p=>({...p, customerName: c.customerName, address: c.address, taxId: c.taxId, branch: c.branch || '00000', sellerBranchName: c.branchName || '', items: newItems})); 
+                                        setShowCustomerModal(false); setCustomerSearchTerm('');
+                                    }} className="p-3 rounded-2xl border border-slate-100 hover:border-rose-200 hover:bg-rose-50/50 cursor-pointer transition-all group flex justify-between items-center bg-white shadow-sm text-left">
                                         <div className="space-y-1 text-left">
                                             <div className="flex items-center gap-3 text-left">
                                                 <span className="text-[9px] font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-500 uppercase tracking-tighter text-left">TAX: {c.taxId || '-'}</span>
@@ -14549,7 +14620,16 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                         <div className="grid grid-cols-2 gap-3 text-left">
                             <div className="col-span-2 text-left">
                                 <label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">{invData.docType === 'payment_voucher' ? 'จ่ายให้แก่ (Pay To)' : 'ชื่อลูกค้า / บริษัท'}</label>
-                                <input className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-bold shadow-sm text-slate-800 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none transition-colors" value={invData.customerName} onChange={e=>setInvData({...invData, customerName: e.target.value})} placeholder={invData.docType === 'payment_voucher' ? "ระบุชื่อผู้รับเงิน..." : "ระบุชื่อลูกค้าหรือบริษัท..."} />
+                                <input className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-bold shadow-sm text-slate-800 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none transition-colors" value={invData.customerName} onChange={e=>{
+                                    const newName = e.target.value;
+                                    let newItems = [...invData.items];
+                                    if (newName && (newName.includes('อินเตอร์เอ็กซ์เพรส') || newName.toLowerCase().includes('inter express'))) {
+                                        if (newItems.length === 1 && (!newItems[0].desc || newItems[0].desc.trim() === '')) {
+                                            newItems[0].desc = 'ค่าบริการขนส่งสินค้าควบคุมอุณหภูมิ';
+                                        }
+                                    }
+                                    setInvData({...invData, customerName: newName, items: newItems});
+                                }} placeholder={invData.docType === 'payment_voucher' ? "ระบุชื่อผู้รับเงิน..." : "ระบุชื่อลูกค้าหรือบริษัท..."} />
                             </div>
                             <div className="text-left">
                                 <label className="text-[10px] text-slate-500 font-bold mb-1 block text-left">Tax ID</label>
