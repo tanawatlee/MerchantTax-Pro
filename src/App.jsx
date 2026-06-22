@@ -3022,32 +3022,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         batch.set(docRef, { ...cleanTrans, sysDocId, createdAt: serverTimestamp(), userId: user.uid });
         importOpsCount++;
 
-        // สร้างบิลรายจ่ายแยกอิสระ
-        if (shouldCreateFeeBill) {
-            const expSysDocId = getNextDateBasedSysDocId('expense', getExpensePrefix('ค่าธรรมเนียม Platform'), cleanTrans.settlementDate || cleanTrans.date || new Date());
-            const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
-            batch.set(expRef, {
-                sysDocId: expSysDocId,
-                type: 'expense',
-                category: 'ค่าธรรมเนียม Platform',
-                description: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`,
-                items: [{ desc: `ค่าธรรมเนียม (ลูกค้ายกเลิก/ตีคืน): ออเดอร์ ${cleanTrans.orderId || '-'}`, qty: 1, buyPrice: feeForCancelled, sellPrice: 0, sku: '' }],
-                total: feeForCancelled,
-                date: cleanTrans.settlementDate || cleanTrans.date || new Date(),
-                userId: user.uid,
-                createdAt: serverTimestamp(),
-                status: 'paid',
-                partnerName: cleanTrans.channel ? `Platform (${cleanTrans.channel})` : 'Platform',
-                partnerBranch: '00000',
-                isFromReconciliation: true,
-                linkedOrderId: docRef.id,
-                linkedOrderNo: cleanTrans.orderId || '-',
-                orderId: cleanTrans.orderId || '-',
-                channel: cleanTrans.channel || '',
-                shopName: cleanTrans.shopName || 'ไม่ระบุ'
-            });
-            importOpsCount++;
-        }
+        // 🚨 ยกเลิกการสร้างบิลรายจ่ายค่าธรรมเนียมแบบแยกอิสระอัตโนมัติ 
+        // เพื่อป้องกันบิลซ้ำซ้อนกับใบกำกับภาษีจริงที่แพลตฟอร์มออกให้สิ้นเดือน
 
         const isForceCancelled = cleanTrans.isCancelled;
         const isDiscarded = cleanTrans.returnAction === 'discard';
@@ -9396,73 +9372,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           if (originalTrans) {
               if (formData.type === 'income') {
                   
-                  // --- 🔥 THE ULTIMATE FIX: ซิงค์ค่าธรรมเนียมกลับไปยังบิลรายจ่ายที่เชื่อมโยงกัน ---
-                  const transFee = parseFloat(formData.transactionFee) || 0;
-                  const infraFee = parseFloat(formData.infrastructureFee) || 0;
-                  const commFee = parseFloat(formData.commissionFee) || 0;
-                  const servFee = parseFloat(formData.serviceFee) || 0;
-                  const affiliateFee = parseFloat(formData.affiliateFee) || 0;
-                  const updatedTotalFees = transFee + infraFee + commFee + servFee + affiliateFee;
-
-                  // ค้นหาบิลรายจ่ายหมวด 'ค่าธรรมเนียม Platform' ที่อ้างอิงถึง Order ID นี้
-                  const linkedFeeTx = transactions.find(t => t.type === 'expense' && t.category === 'ค่าธรรมเนียม Platform' && t.linkedOrderNo === formData.orderId && !t.isCancelled);
-
-                  if (linkedFeeTx) {
-                      if (updatedTotalFees > 0) {
-                          // ถ้ามีบิลเดิม และยอดใหม่ > 0 ให้อัปเดตข้อมูลทับ
-                          const feeRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', linkedFeeTx.id);
-                          batchWriter.update(feeRef, {
-                              total: updatedTotalFees,
-                              items: [
-                                  { desc: 'ค่าคอมมิชชั่น', qty: 1, buyPrice: commFee, sellPrice: 0, sku: '' },
-                                  { desc: 'ค่าบริการ', qty: 1, buyPrice: servFee, sellPrice: 0, sku: '' },
-                                  { desc: 'ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', qty: 1, buyPrice: infraFee, sellPrice: 0, sku: '' },
-                                  { desc: 'ค่าธุรกรรมการชำระเงิน', qty: 1, buyPrice: transFee, sellPrice: 0, sku: '' },
-                                  { desc: 'ค่าคอมมิชชั่น Affiliate', qty: 1, buyPrice: affiliateFee, sellPrice: 0, sku: '' }
-                              ].filter(i => i.buyPrice > 0),
-                              updatedAt: serverTimestamp()
-                          });
-                      } else {
-                          // ถ้ายอดใหม่เป็น 0 ให้ยกเลิกบิลรายจ่ายเดิมทิ้ง
-                          const feeRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', linkedFeeTx.id);
-                          batchWriter.update(feeRef, {
-                              isCancelled: true,
-                              cancelledAt: serverTimestamp(),
-                              updatedAt: serverTimestamp()
-                          });
-                      }
-                  } else if (updatedTotalFees > 0 && formData.orderId) {
-                      // ถ้ายังไม่มีบิลเดิม แต่มีการใส่ยอดค่าธรรมเนียม ให้สร้างบิลใหม่พ่วงให้ทันที
-                      const prefix = getExpensePrefix('ค่าธรรมเนียม Platform');
-                      const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), prefix, formData.date, 'sysDocId');
-                      const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
-                      batchWriter.set(expRef, {
-                          sysDocId: expSysDocId,
-                          type: 'expense',
-                          category: 'ค่าธรรมเนียม Platform',
-                          description: `ค่าธรรมเนียม Platform (แก้ไข): ออเดอร์ ${formData.orderId || '-'}`,
-                          items: [
-                              { desc: 'ค่าคอมมิชชั่น', qty: 1, buyPrice: commFee, sellPrice: 0, sku: '' },
-                              { desc: 'ค่าบริการ', qty: 1, buyPrice: servFee, sellPrice: 0, sku: '' },
-                              { desc: 'ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม', qty: 1, buyPrice: infraFee, sellPrice: 0, sku: '' },
-                              { desc: 'ค่าธุรกรรมการชำระเงิน', qty: 1, buyPrice: transFee, sellPrice: 0, sku: '' },
-                              { desc: 'ค่าคอมมิชชั่น Affiliate', qty: 1, buyPrice: affiliateFee, sellPrice: 0, sku: '' }
-                          ].filter(i => i.buyPrice > 0),
-                          total: updatedTotalFees,
-                          date: normalizeDate(formData.date),
-                          userId: user.uid,
-                          createdAt: serverTimestamp(),
-                          status: 'paid',
-                          partnerName: formData.channel ? `Platform (${formData.channel})` : 'Platform',
-                          partnerBranch: '00000',
-                          isFromReconciliation: true,
-                          linkedOrderId: mainRef.id,
-                          linkedOrderNo: formData.orderId || '-',
-                          orderId: formData.orderId || '-',
-                          channel: formData.channel || '',
-                          shopName: formData.shopName || 'ไม่ระบุ'
-                      });
-                  }
+                  // 🚨 ยกเลิกการซิงค์ค่าธรรมเนียมไปสร้างบิลรายจ่าย "ค่าธรรมเนียม Platform (แก้ไข)" อัตโนมัติ
+                  // เก็บค่าธรรมเนียมไว้คำนวณกำไรใน Dashboard อย่างเดียว เพื่อรอรับบิลจริงจาก Shopee สิ้นเดือน
 
                   // --- 🔥 THE ULTIMATE FIX: แก้ไขการจัดกลุ่มคีย์ในการเช็คสต็อกให้แม่นยำ 100% ---
                   const oldItemsMap = {};
@@ -12272,6 +12183,12 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [bulkSettings, setBulkSettings] = useState({ docType: 'abb', vatType: 'included' });
   const [isExportingHistory, setIsExportingHistory] = useState(false);
 
+  // --- 🔥 NEW: Email Modal States ---
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emailTargetDoc, setEmailTargetDoc] = useState(null);
+  const [emailForm, setEmailForm] = useState({ to: '', subject: '', body: '' });
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+
   // --- NEW: ตรวจจับเลขที่ตกหล่น / ฟันหลอ จากการออกบิลทั้งหมด ---
   const sequenceAudit = useMemo(() => {
     const prefixMap = {};
@@ -13031,6 +12948,96 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       
       setCurrentBulkPrintDoc(null);
       setIsBulkProcessing(false);
+  };
+
+  // --- 🔥 NEW: Email Sending Function (via Webhook) ---
+  const openEmailModal = (docItem) => {
+      setEmailTargetDoc(docItem);
+      setEmailForm({
+          to: '',
+          subject: `นำส่งเอกสารเลขที่ ${docItem.invNo} จาก ${docItem.sellerName || 'ร้านค้า'}`,
+          body: `เรียน ลูกค้าที่เคารพ,\n\nทางร้านขอแนบเอกสารเลขที่ ${docItem.invNo} มาพร้อมกับอีเมลฉบับนี้\n\nหากมีข้อสงสัยเพิ่มเติม สามารถติดต่อสอบถามกลับได้ทันที\n\nขอแสดงความนับถือ\n${docItem.sellerName || 'ร้านค้า'}`
+      });
+      setShowEmailModal(true);
+  };
+
+  const executeSendEmail = async (e) => {
+      e.preventDefault();
+      if (!emailForm.to) return showToast("กรุณาระบุอีเมลผู้รับ", "error");
+      
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (!webhookUrl) {
+          showToast("กรุณาตั้งค่า Google Drive Webhook URL ในเมนู Admin ก่อนใช้งาน (ระบบจะใช้อีเมลผูกกับ Webhook นั้นในการส่ง)", "error");
+          return;
+      }
+
+      setIsSendingEmail(true);
+      try {
+          showToast("กำลังสร้างไฟล์ PDF เพื่อเตรียมส่ง...", "success");
+          
+          if (!window.html2canvas || !window.jspdf) {
+            const loadScript = (src) => new Promise(res => {
+              const s = document.createElement('script');
+              s.src = src; s.onload = res; document.body.appendChild(s);
+            });
+            await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+            await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+          }
+
+          // 1. Render Hidden Document for PDF capture
+          setCurrentBulkPrintDoc(emailTargetDoc);
+          await new Promise(res => setTimeout(res, 200)); 
+
+          const element = document.getElementById('bulk-invoice-preview-area');
+          if (!element) throw new Error("ไม่สามารถสร้างแบบร่างเอกสารได้");
+          
+          const originalBoxShadow = element.style.boxShadow;
+          element.style.boxShadow = 'none';
+
+          const canvas = await window.html2canvas(element, { scale: 1.5, useCORS: true, logging: false });
+          const imgData = canvas.toDataURL('image/jpeg', 0.85);
+          const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+          const pdfWidth = pdf.internal.pageSize.getWidth();
+          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+          pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+          
+          // Get Base64 without 'data:application/pdf;base64,' prefix
+          const base64Data = pdf.output('datauristring').split(',')[1];
+          
+          element.style.boxShadow = originalBoxShadow;
+          setCurrentBulkPrintDoc(null); // Clear hidden area
+
+          showToast("กำลังส่งมอบเอกสารไปยังอีเมล...", "success");
+
+          // 2. Send via Webhook
+          const payload = {
+              action: 'sendEmail',
+              to: emailForm.to,
+              subject: emailForm.subject,
+              body: emailForm.body,
+              fileName: `${emailTargetDoc.invNo.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`,
+              base64Data: base64Data,
+              mimeType: 'application/pdf'
+          };
+
+          const res = await fetch(webhookUrl.trim(), {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(payload)
+          });
+
+          const data = await res.json();
+          if (data.status === 'success' || data.message?.includes('sent')) {
+              showToast(`ส่งเอกสารไปยัง ${emailForm.to} สำเร็จ!`, "success");
+              setShowEmailModal(false);
+          } else {
+              throw new Error(data.message || "การส่งล้มเหลวที่ฝั่งเซิร์ฟเวอร์");
+          }
+      } catch (err) {
+          console.error(err);
+          showToast(`ส่งอีเมลไม่สำเร็จ: ${err.message}`, "error");
+      }
+      setIsSendingEmail(false);
   };
 
   // --- NEW: ฟังก์ชันลบถาวรแบบกลุ่ม (Bulk Hard Delete) สำหรับหน้าใบกำกับภาษี ---
@@ -14289,6 +14296,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                         ) : (
                                             <>
                                                 <button onClick={() => handleEditInvoice(docItem)} className="text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center">ดู/แก้ไข</button>
+                                                <button onClick={() => openEmailModal(docItem)} className="text-amber-600 bg-amber-50 hover:bg-amber-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center flex items-center gap-1" title="ส่ง PDF แนบอีเมล"><Mail size={12}/> อีเมล</button>
                                                 <button onClick={() => handleCloneInvoice(docItem)} className="text-blue-600 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded-lg text-[10px] font-bold text-center flex items-center gap-1" title="คัดลอกเอกสาร"><Copy size={12}/> คัดลอก</button>
                                                 {docItem.status !== 'cancelled' && (
                                                     <>
@@ -14395,24 +14403,49 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         </div>
       )}
 
-      {/* Hard Delete Invoice Confirm Modal */}
-      {hardDeleteInvoiceId && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-                  <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
-                    <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
-                      <Trash2 size={32}/>
+      {/* --- 🔥 NEW: Send Email Modal --- */}
+      {showEmailModal && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95">
+                <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
+                    <div>
+                        <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Mail className="text-indigo-600"/> ส่งเอกสารทางอีเมล</h3>
+                        <p className="text-xs text-slate-400 mt-1">ส่ง <b>{emailTargetDoc?.invNo}</b> ให้ลูกค้าอัตโนมัติผ่าน Webhook</p>
                     </div>
-                    <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ยืนยันลบเอกสารถาวร?</h3>
-                    <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
-                      เอกสารเลขที่ <b>{hardDeleteInvoiceId.invNo}</b> จะถูกลบออกจากระบบถาวร<br/>
-                      และออเดอร์ <b>{hardDeleteInvoiceId.orderId || '-'}</b> จะถูกปลดล็อกให้สร้างเอกสารใหม่ได้<br/>
-                      <span className="text-rose-600 font-bold underline">การกระทำนี้ไม่สามารถย้อนกลับได้</span>
-                    </p>
-                    <div className="flex gap-3 text-center">
-              <button onClick={() => setHardDeleteInvoiceId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ยกเลิก</button>
-              <button onClick={handleHardDeleteInvoice} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center hover:bg-rose-700 transition-colors">ยืนยันลบถาวร</button>
+                    <button onClick={() => setShowEmailModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors p-2 bg-slate-50 rounded-full"><X size={18}/></button>
+                </div>
+                
+                <form onSubmit={executeSendEmail} className="space-y-4 text-left">
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase">ถึงอีเมล (To):</label>
+                        <input type="email" required value={emailForm.to} onChange={e=>setEmailForm({...emailForm, to: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100" placeholder="อีเมลลูกค้า..." />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase">หัวข้อ (Subject):</label>
+                        <input required value={emailForm.subject} onChange={e=>setEmailForm({...emailForm, subject: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100" />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase">ข้อความ (Message):</label>
+                        <textarea required value={emailForm.body} onChange={e=>setEmailForm({...emailForm, body: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm mt-1 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 min-h-[140px] leading-relaxed custom-scrollbar" />
+                    </div>
+                    
+                    <div className="pt-4 border-t border-slate-100 mt-4">
+                        <div className="bg-blue-50 p-3 rounded-xl border border-blue-100 flex items-start gap-2 mb-4">
+                            <FileText size={16} className="text-blue-500 shrink-0 mt-0.5"/>
+                            <p className="text-[10px] text-blue-700 font-bold leading-relaxed">
+                                ระบบจะสร้างไฟล์ <span className="font-mono text-indigo-600 bg-white px-1 rounded">{emailTargetDoc?.invNo}.pdf</span> ต้นฉบับ และแนบไปพร้อมกับอีเมลฉบับนี้โดยอัตโนมัติ
+                            </p>
+                        </div>
+                        <div className="flex gap-3">
+                            <button type="button" onClick={() => setShowEmailModal(false)} disabled={isSendingEmail} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
+                            <button type="submit" disabled={isSendingEmail} className="flex-[2] py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black shadow-lg transition-colors flex justify-center items-center gap-2 disabled:opacity-50">
+                                {isSendingEmail ? <Loader size={16} className="animate-spin"/> : <Mail size={16}/>} 
+                                {isSendingEmail ? 'กำลังส่งข้อมูล...' : 'ส่งอีเมลทันที'}
+                            </button>
+                        </div>
+                    </div>
+                </form>
             </div>
-          </div>
         </div>
       )}
 
