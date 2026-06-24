@@ -16901,142 +16901,73 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                         </div>
                         
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl text-center shadow-sm">
-                                <p className="text-[10px] font-black uppercase text-slate-400 mb-1">ออเดอร์ในไฟล์</p>
-                                <p className="text-xl font-black text-slate-700">{auditResults.totalExcel} <span className="text-[10px]">รายการ</span></p>
+                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl">
+                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">จำนวนออเดอร์ในไฟล์</p>
+                                <p className="text-xl font-black text-slate-700">{auditResults.totalExcel}</p>
                             </div>
-                            <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl text-center shadow-sm">
-                                <p className="text-[10px] font-black uppercase text-indigo-500 mb-1">พบในระบบ</p>
-                                <p className="text-xl font-black text-indigo-700">{auditResults.checked} <span className="text-[10px]">รายการ</span></p>
+                            <div className="bg-blue-50 border border-blue-200 p-4 rounded-2xl">
+                                <p className="text-[10px] font-bold text-blue-600 uppercase mb-1">ตรวจสอบแล้ว</p>
+                                <p className="text-xl font-black text-blue-700">{auditResults.checked}</p>
                             </div>
-                            <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl text-center shadow-sm">
-                                <p className="text-[10px] font-black uppercase text-emerald-600 mb-1">ข้อมูลตรงกันเป๊ะ</p>
-                                <p className="text-xl font-black text-emerald-700">{auditResults.matched} <span className="text-[10px]">รายการ</span></p>
+                            <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
+                                <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">ข้อมูลตรงกัน</p>
+                                <p className="text-xl font-black text-emerald-700">{auditResults.matched}</p>
                             </div>
-                            <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl text-center shadow-sm relative overflow-hidden">
-                                <p className="text-[10px] font-black uppercase text-rose-600 mb-1">พบความคลาดเคลื่อน</p>
-                                <p className="text-xl font-black text-rose-700">{auditResults.discrepancies.length} <span className="text-[10px]">รายการ</span></p>
+                            <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl">
+                                <p className="text-[10px] font-bold text-rose-600 uppercase mb-1">พบความคลาดเคลื่อน</p>
+                                <p className="text-xl font-black text-rose-700">{auditResults.discrepancies.length}</p>
                             </div>
                         </div>
-
-                        {/* --- 🔥 NEW: ปุ่มเวทมนตร์ (Auto-Fix) ซิงค์ข้อมูลให้ตรงกับไฟล์อัตโนมัติ --- */}
-                        {auditResults.discrepancies.length > 0 && (
-                            <div className="mb-4 bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex flex-col sm:flex-row justify-between items-center gap-4 animate-fadeIn shadow-sm">
-                                <div>
-                                    <p className="text-sm font-bold text-emerald-800 flex items-center gap-2"><Wand2 size={18}/> ต้องการให้ระบบแก้ตัวเลขให้ตรงกับไฟล์อัตโนมัติไหม?</p>
-                                    <p className="text-xs text-emerald-700/80 mt-1">ระบบจะเขียนทับ "ยอดขายสุทธิ", "ส่วนลด", "ค่าจัดส่งทุกประเภท" และ "ค่าธรรมเนียม" ให้ตรงกับไฟล์นี้เป๊ะ 100% ทันที</p>
-                                </div>
-                                <button 
-                                    onClick={handleAutoFixDiscrepancies} 
-                                    disabled={isAuditing}
-                                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-emerald-200 transition-all flex items-center gap-2 shrink-0 disabled:opacity-50"
-                                >
-                                    {isAuditing ? <Loader className="animate-spin" size={16}/> : <RefreshCw size={16}/>} ซิงค์ยอดให้ตรงไฟล์ 100%
-                                </button>
-                            </div>
-                        )}
 
                         <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl">
                             <table className="w-full text-xs text-left">
                                 <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 border-b border-slate-200">
                                     <tr>
-                                        <th className="p-4 pl-6 w-16">No.</th>
-                                        <th className="p-4">Order ID</th>
-                                        <th className="p-4">ปัญหาที่พบ (Issues)</th>
-                                        <th className="p-4 text-right pr-6">รายละเอียด (Details)</th>
+                                        <th className="p-3 pl-4">Order ID</th>
+                                        <th className="p-3">ปัญหาที่พบ</th>
+                                        <th className="p-3">รายละเอียด (ระบบ vs Shopee)</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
                                     {auditResults.discrepancies.map((item, idx) => (
-                                        <tr key={idx} className="hover:bg-rose-50/20 transition-colors group">
-                                            <td className="p-4 pl-6 text-slate-400 font-bold">{idx + 1}</td>
-                                            <td className="p-4 font-mono font-bold text-slate-800">{item.orderId}</td>
-                                            <td className="p-4">
-                                                <span className={`px-2 py-1 rounded text-[10px] font-bold ${item.issue === 'ไม่พบในระบบ' ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'}`}>
-                                                    {item.issue}
-                                                </span>
+                                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                            <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
+                                            <td className="p-3">
+                                                <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[10px] font-bold">{item.issue}</span>
                                                 <p className="text-[10px] text-slate-500 mt-1">{item.desc}</p>
                                             </td>
-                                            <td className="p-4 pr-6 text-right space-y-2">
-                                                {item.details.map((diff, i) => (
-                                                    <div key={i} className="flex flex-col items-end gap-0.5 bg-white p-2 rounded-lg border border-slate-100 shadow-sm ml-auto w-full max-w-[280px]">
-                                                        <div className="flex justify-between w-full border-b border-slate-50 pb-1 mb-1">
-                                                            <span className="text-[10px] font-bold text-slate-500">{diff.label}</span>
-                                                            <span className={`text-[10px] font-black ${diff.diff > 0 ? 'text-emerald-500' : 'text-rose-500'}`}>ดิฟ {diff.diff > 0 ? '+' : ''}{formatCurrency(diff.diff)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between w-full text-[10px]">
-                                                            <span className="text-slate-400">ระบบ: <b className="text-slate-700">{formatCurrency(diff.db)}</b></span>
-                                                            <span className="text-slate-400">ไฟล์: <b className="text-slate-700">{formatCurrency(diff.excel)}</b></span>
-                                                        </div>
+                                            <td className="p-3">
+                                                {item.details.length > 0 ? (
+                                                    <div className="space-y-1">
+                                                        {item.details.map((d, i) => (
+                                                            <div key={i} className="flex items-center gap-2 text-[10px]">
+                                                                <span className="font-bold text-slate-600 w-24">{d.label}:</span>
+                                                                <span className="text-slate-400 line-through">{formatCurrency(d.db)}</span>
+                                                                <ArrowRight size={10} className="text-slate-300"/>
+                                                                <span className="font-bold text-indigo-600">{formatCurrency(d.excel)}</span>
+                                                                <span className="text-rose-500 font-bold ml-2">(ดิฟ {formatCurrency(d.diff)})</span>
+                                                            </div>
+                                                        ))}
                                                     </div>
-                                                ))}
-                                                {item.details.length === 0 && <span className="text-slate-300">-</span>}
+                                                ) : <span className="text-slate-400">-</span>}
                                             </td>
                                         </tr>
                                     ))}
                                     {auditResults.discrepancies.length === 0 && (
-                                        <tr><td colSpan="4" className="p-10 text-center text-slate-500 font-bold">สุดยอด! ยอดเงินทุกออเดอร์ในระบบตรงกับไฟล์ Shopee 100%</td></tr>
+                                        <tr><td colSpan="3" className="p-10 text-center text-slate-400 font-bold">ข้อมูลตรงกัน 100% ไม่มีจุดคลาดเคลื่อน</td></tr>
                                     )}
                                 </tbody>
                             </table>
                         </div>
-                        
-                        <div className="pt-6 mt-4 border-t border-slate-100 flex justify-between items-center">
-                            <p className="text-[10px] font-bold text-slate-400">*สามารถซิงค์ยอดผ่านปุ่ม Auto-Fix เพื่อปรับปรุงบัญชีให้สมบูรณ์แบบได้ทันที</p>
-                            <button onClick={() => setAuditResults(null)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
-            {/* --- NEW: Shipping Details Modal --- */}
-            {showShippingDetailsModal && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-                    <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
-                        <div className="flex justify-between items-center mb-6">
-                            <div>
-                                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><TruckIcon className="text-emerald-600"/> รายการที่เรียกเก็บค่าจัดส่งจากลูกค้า</h3>
-                                <p className="text-xs text-slate-500 mt-1">ออเดอร์ที่มีการบวกค่าจัดส่งเพิ่ม ซึ่งจะถูกนำไปรวมในฐานภาษีขาย (เดือน {selectedMonth})</p>
-                            </div>
-                            <button onClick={() => setShowShippingDetailsModal(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
-                        </div>
-
-                        <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl">
-                            <table className="w-full text-xs text-left">
-                                <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 border-b border-slate-200">
-                                    <tr>
-                                        <th className="p-4 pl-6 w-16 text-center">No.</th>
-                                        <th className="p-4">วันที่ (Order Date)</th>
-                                        <th className="p-4">Order ID</th>
-                                        <th className="p-4">ลูกค้า</th>
-                                        <th className="p-4 text-right pr-6">ค่าส่งที่เรียกเก็บ (฿)</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    {reportData.perf.buyerShippingDetails.length > 0 ? reportData.perf.buyerShippingDetails.map((item, idx) => (
-                                        <tr key={idx} className="hover:bg-emerald-50/30 transition-colors">
-                                            <td className="p-4 pl-6 text-center text-slate-400 font-bold">{idx + 1}</td>
-                                            <td className="p-4 text-slate-600 font-bold">{formatDate(item.date)}</td>
-                                            <td className="p-4 font-mono font-bold text-indigo-600">{item.orderId}</td>
-                                            <td className="p-4 text-slate-700">{item.partnerName}</td>
-                                            <td className="p-4 text-right pr-6 font-black text-emerald-600">+{formatCurrency(item.shippingFee)}</td>
-                                        </tr>
-                                    )) : (
-                                        <tr><td colSpan="5" className="p-10 text-center text-slate-500 font-bold">ไม่มีรายการออเดอร์ที่เรียกเก็บค่าส่งจากลูกค้าในเดือนนี้</td></tr>
-                                    )}
-                                </tbody>
-                                {reportData.perf.buyerShippingDetails.length > 0 && (
-                                    <tfoot className="bg-slate-50 sticky bottom-0 border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-                                        <tr>
-                                            <td colSpan="4" className="p-4 text-right font-black text-slate-600 uppercase tracking-widest text-xs">รวมค่าจัดส่งทั้งหมด</td>
-                                            <td className="p-4 text-right pr-6 font-black text-emerald-700 text-base">{formatCurrency(reportData.perf.buyerShipping)}</td>
-                                        </tr>
-                                    </tfoot>
-                                )}
-                            </table>
-                        </div>
-                        <div className="pt-6 mt-4 border-t border-slate-100 flex justify-end">
-                            <button onClick={() => setShowShippingDetailsModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors shadow-md">ปิดหน้าต่าง</button>
+                        <div className="flex justify-end gap-3 pt-6 border-t border-slate-100 mt-4">
+                            <button onClick={() => setAuditResults(null)} disabled={isAuditing} className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
+                            {auditResults.discrepancies.length > 0 && (
+                                <button onClick={handleAutoFixDiscrepancies} disabled={isAuditing} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg transition-colors flex items-center gap-2 disabled:opacity-50">
+                                    {isAuditing ? <Loader size={16} className="animate-spin"/> : <Wand2 size={16}/>} 
+                                    {isAuditing ? 'กำลังปรับปรุง...' : 'Auto-Fix (ยึดตามยอด Shopee)'}
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -17045,35 +16976,32 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     );
 }
 
-// --- 🔥 NEW: เครื่องมือตั้งราคาอัจฉริยะ (AI Smart Pricing Module) ---
-function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 FIX: เพิ่ม transactions เข้ามารับค่า
+function PricingCalculator({ stockBatches, transactions, showToast, appId, user }) { 
+    const [pricingTab, setPricingTab] = useState('single'); // 'single', 'bulk'
+
+    // --- Single Item States ---
     const [cost, setCost] = useState('');
     const [desiredProfit, setDesiredProfit] = useState('');
-    const [competitorPrice, setCompetitorPrice] = useState(''); // NEW: ราคาคู่แข่ง
-    const [platformFeePct, setPlatformFeePct] = useState(15); 
-    const [marketingBufferPct, setMarketingBufferPct] = useState(5); 
+    const [competitorPrice, setCompetitorPrice] = useState('');
+    const [platformFeePct, setPlatformFeePct] = useState(25); 
+    const [marketingBufferPct, setMarketingBufferPct] = useState(0); 
     const [selectedItemKey, setSelectedItemKey] = useState('');
-    
-    // NEW: State สำหรับ Simulator
     const [simulatedPrice, setSimulatedPrice] = useState(''); 
-    const [includeVat, setIncludeVat] = useState(false); // State สำหรับเปิด/ปิดการคิด VAT
-
+    const [includeVat, setIncludeVat] = useState(false);
     const [aiSuggestion, setAiSuggestion] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-
-    // --- Pricing History Database (Local State for MVP) ---
     const [pricingHistory, setPricingHistory] = useState(() => {
-        try {
-            return JSON.parse(localStorage.getItem('merchant_pricing_history') || '[]');
-        } catch (e) {
-            return [];
-        }
+        try { return JSON.parse(localStorage.getItem('merchant_pricing_history') || '[]'); } catch (e) { return []; }
     });
 
-    // Save to LocalStorage whenever history changes
-    useEffect(() => {
-        localStorage.setItem('merchant_pricing_history', JSON.stringify(pricingHistory));
-    }, [pricingHistory]);
+    // --- 🔥 NEW: Bulk / Mass Update States ---
+    const [bulkProducts, setBulkProducts] = useState([]);
+    const [bulkFeePct, setBulkFeePct] = useState(25);
+    const [isParsingBulk, setIsParsingBulk] = useState(false);
+    const [isAnalyzingBulk, setIsAnalyzingBulk] = useState(false); // NEW: State สำหรับ AI วิเคราะห์ทั้งร้าน
+    const bulkFileInputRef = useRef(null);
+
+    useEffect(() => { localStorage.setItem('merchant_pricing_history', JSON.stringify(pricingHistory)); }, [pricingHistory]);
 
     const uniqueItems = useMemo(() => {
         const map = {};
@@ -17084,26 +17012,19 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
         return Object.values(map);
     }, [stockBatches]);
 
-    // --- 🔥 NEW: ฟังก์ชันประเมินยอดขายย้อนหลัง (Feedback Loop) ---
     const itemSalesStats = useMemo(() => {
         if (!selectedItemKey || !transactions) return null;
-        
         const targetItem = uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey);
         if (!targetItem) return null;
 
         const targetSku = targetItem.sku;
         const targetName = targetItem.name;
         
-        let totalSold = 0;
-        let soldLast30Days = 0;
-        let totalRevenue = 0;
-        
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        let totalSold = 0; let soldLast30Days = 0; let totalRevenue = 0;
+        const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
         transactions.forEach(t => {
             if (t.type !== 'income' || t.isCancelled || t.isFromReconciliation) return;
-            
             const tDate = normalizeDate(t.date);
             const isLast30Days = tDate && tDate >= thirtyDaysAgo;
 
@@ -17117,9 +17038,7 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                 }
             });
         });
-
         const avgPrice = totalSold > 0 ? totalRevenue / totalSold : 0;
-
         return { totalSold, soldLast30Days, totalRevenue, avgPrice };
     }, [selectedItemKey, transactions, uniqueItems]);
 
@@ -17133,24 +17052,58 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                 setSimulatedPrice(item.sellPrice || ''); 
             }
         } else {
-            setCost('');
-            setSimulatedPrice('');
+            setCost(''); setSimulatedPrice('');
         }
     };
 
-    // สมการ 1: Reverse Calculation (หาจากกำไรที่อยากได้)
+    const updateSellPriceInInventory = async (newPrice) => {
+        if (!selectedItemKey || !user || newPrice <= 0) return;
+        setIsAnalyzing(true);
+        try {
+            const batchWriter = writeBatch(dbInstance);
+            const targetBatches = stockBatches.filter(b => b.sku === selectedItemKey || b.productName === selectedItemKey);
+            targetBatches.forEach(b => {
+                const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+                batchWriter.update(ref, { sellPrice: newPrice });
+            });
+            await batchWriter.commit();
+            showToast(`อัปเดตราคาขายใหม่ (${formatCurrency(newPrice)} ฿) ลงในคลังสำเร็จ!`, "success");
+            setSimulatedPrice(newPrice);
+        } catch (e) {
+            console.error(e);
+            showToast("เกิดข้อผิดพลาดในการอัปเดตราคา", "error");
+        }
+        setIsAnalyzing(false);
+    };
+
+    const marginCalculations = useMemo(() => {
+        const c = Number(cost) || 0;
+        const feePct = (Number(platformFeePct) || 0) / 100;
+        const mktPct = (Number(marketingBufferPct) || 0) / 100;
+        const totalDeductionPct = feePct + mktPct;
+
+        const calcPrice = (targetMargin) => {
+            const denominator = 1 - totalDeductionPct - targetMargin;
+            if (denominator <= 0) return 0;
+            return c / denominator;
+        };
+
+        return [
+            { label: 'กำไร 40%', margin: 0.40, price: calcPrice(0.40) },
+            { label: 'กำไร 50%', margin: 0.50, price: calcPrice(0.50) },
+            { label: 'กำไร 60%', margin: 0.60, price: calcPrice(0.60) },
+        ];
+    }, [cost, platformFeePct, marketingBufferPct]);
+
     const calculations = useMemo(() => {
         const c = Number(cost) || 0;
         const p = Number(desiredProfit) || 0;
         const feePct = (Number(platformFeePct) || 0) / 100;
         const mktPct = (Number(marketingBufferPct) || 0) / 100;
-
         const totalDeductionPct = feePct + mktPct;
         
         let recommendedPrice = 0;
-        if (1 - totalDeductionPct > 0) {
-            recommendedPrice = (c + p) / (1 - totalDeductionPct);
-        }
+        if (1 - totalDeductionPct > 0) recommendedPrice = (c + p) / (1 - totalDeductionPct);
 
         const feeAmount = recommendedPrice * feePct;
         const mktAmount = recommendedPrice * mktPct;
@@ -17158,14 +17111,13 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
         return { recommendedPrice, feeAmount, mktAmount, totalDeductionPct: totalDeductionPct * 100 };
     }, [cost, desiredProfit, platformFeePct, marketingBufferPct]);
 
-    // --- 🔥 FIX: เพิ่มกรณี 0% สำหรับขายหน้าร้าน/ช่องทางปกติ และการหัก VAT ---
     const simulator = useMemo(() => {
         const p = Number(simulatedPrice) || 0;
         const c = Number(cost) || 0;
         const mkt = p * ((Number(marketingBufferPct) || 0) / 100);
 
         const scenarios = [
-            { name: 'ไม่หักค่าธรรมเนียม 0%', feePct: 0 },   // <-- เพิ่ม 0% สำหรับช่องทางปกติ
+            { name: 'ไม่หักค่าธรรมเนียม 0%', feePct: 0 },
             { name: 'กรณีค่าธรรมเนียม 25%', feePct: 25 },
             { name: 'กรณีค่าธรรมเนียม 27%', feePct: 27 },
             { name: 'กรณีค่าธรรมเนียม 30%', feePct: 30 } 
@@ -17173,13 +17125,8 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
 
         return scenarios.map(scenario => {
             const feeAmt = p * (scenario.feePct / 100);
-            
-            // 🔥 คำนวณ VAT 7% จากส่วนต่างกำไร (ราคาขาย - ต้นทุน)
             let vatAmt = 0;
-            if (includeVat && p > c) {
-                vatAmt = (p - c) * 7 / 107;
-            }
-
+            if (includeVat && p > c) vatAmt = (p - c) * 7 / 107;
             const netProfit = p - c - feeAmt - mkt - vatAmt;
             const marginPct = p > 0 ? (netProfit / p) * 100 : 0;
             return { ...scenario, feeAmt, netProfit, marginPct, mkt, vatAmt };
@@ -17187,62 +17134,30 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
     }, [simulatedPrice, cost, marketingBufferPct, includeVat]);
 
     const handleAiAnalysis = async () => {
-        if (!cost || (!desiredProfit && !simulatedPrice)) {
-            showToast("กรุณากรอกต้นทุน และ กำไร/ราคาขายที่ต้องการ ให้ครบถ้วนก่อน", "error");
-            return;
-        }
+        if (!cost || (!desiredProfit && !simulatedPrice)) { showToast("กรุณากรอกต้นทุน และ กำไร/ราคาขายที่ต้องการ ให้ครบถ้วนก่อน", "error"); return; }
         setIsAnalyzing(true);
         try {
-            // --- 🔥 THE FIX: คำนวณขอบเขตราคา (Price Boundaries) เพื่อบังคับให้ AI คิดเลขให้ถูกต้อง ---
             const c = Number(cost);
             const feeDecimal = (Number(platformFeePct) + Number(marketingBufferPct)) / 100;
-            // คำนวณจุดคุ้มทุน: ราคาที่หักค่าธรรมเนียมแล้วเหลือเท่าทุนพอดีเป๊ะ (กำไร = 0)
             const breakEvenPrice = feeDecimal < 1 ? c / (1 - feeDecimal) : c; 
-            // ราคาเพื่อให้ได้กำไรตามเป้า
             const targetPrice = calculations.recommendedPrice; 
-
             const basePrice = simulatedPrice ? Number(simulatedPrice) : targetPrice;
             const compText = competitorPrice ? `- ราคาคู่แข่งในตลาดเฉลี่ย: ${competitorPrice} บาท` : '- ไม่มีข้อมูลราคาคู่แข่ง';
-            
             const salesHistoryText = itemSalesStats ? `- ประวัติการขายของร้าน: ขายไปแล้ว ${itemSalesStats.totalSold} ชิ้น (30 วันล่าสุด: ${itemSalesStats.soldLast30Days} ชิ้น), ลูกค้าเคยยอมจ่ายที่ราคาเฉลี่ย: ${itemSalesStats.avgPrice.toFixed(2)} บาท` : '- ไม่มีประวัติการขาย';
-            const fixedCostText = fixedCost ? `- งบโฆษณา/ฟิกซ์คอสต์รายเดือน: ${fixedCost} บาท (ต้องขายให้คืนทุนส่วนนี้ด้วย)` : '';
             const desiredProfitText = desiredProfit ? `- เป้าหมายกำไรสุทธิที่ต้องการ: ${desiredProfit} บาท/ชิ้น (หลังหักค่าธรรมเนียมแล้ว)` : '';
 
-            const prompt = `
-            คุณคือ Chief Pricing Officer และนักกลยุทธ์การตลาด E-commerce ระดับแนวหน้า
-            หน้าที่ของคุณคือการวิเคราะห์และเสนอ "กลยุทธ์การตั้งราคาสินค้า" ที่ถูกต้องตามหลักคณิตศาสตร์การเงิน และจิตวิทยาผู้บริโภค
-
-            [ข้อมูลพื้นฐานของสินค้า (ห้ามละเมิด)]
-            - ต้นทุนสินค้า (Cost): ${c} บาท
-            - ภาระค่าธรรมเนียม Platform + งบการตลาดที่ต้องถูกหักออกไป: ${(feeDecimal * 100).toFixed(1)}% ของราคาขาย
-            * กฎเหล็กข้อที่ 1: "จุดคุ้มทุน (Break-even Price)" คือ ${Math.ceil(breakEvenPrice)} บาท (ห้ามแนะนำราคาที่ต่ำกว่า ${Math.ceil(breakEvenPrice)} บาท เด็ดขาด เพราะร้านค้าจะขาดทุนทันทีเมื่อโดนหัก ${(feeDecimal * 100).toFixed(1)}%)
+            const prompt = `คุณคือ Chief Pricing Officer... [คำสั่ง AI เดิม]
+            [ข้อมูลพื้นฐานของสินค้า]
+            - ต้นทุนสินค้า: ${c} บาท
+            - ภาระค่าธรรมเนียม Platform: ${(feeDecimal * 100).toFixed(1)}%
+            - จุดคุ้มทุน (Break-even): ${Math.ceil(breakEvenPrice)} บาท
             ${desiredProfitText}
-            - ราคาขายเป้าหมายเพื่อให้ได้กำไรตามเป้า: ${Math.ceil(targetPrice)} บาท
-            - ราคาที่ร้านตั้งไว้ทดสอบในระบบล่าสุด: ${basePrice} บาท
-            
-            [ข้อมูลสภาพตลาดและสถิติ]
+            - ราคาเป้าหมาย: ${Math.ceil(targetPrice)} บาท
+            - ราคาที่ตั้งไว้ทดสอบ: ${basePrice} บาท
             ${compText}
             ${salesHistoryText}
-            ${fixedCostText}
-
-            [คำสั่งการทำงาน]
-            จงนำเสนอโครงสร้างราคา 3 ระดับ (3-Tier Pricing Strategy) โดยอิงตาม กฎเหล็กจุดคุ้มทุน และให้มีเศษลงท้ายด้วยเลขจิตวิทยา (เช่น .00, .90, .99):
-            1. Penetration (ราคาจัด Flash Sale/ดึงทราฟฟิก): ต้อง "สูงกว่า" จุดคุ้มทุน (${Math.ceil(breakEvenPrice)} ฿) เล็กน้อย เพื่อให้ยังมีกำไรนิดหน่อย เน้นปล่อยของไว
-            2. Optimal (ราคาขายปกติ/แนะนำ): ควรใกล้เคียงหรือสูงกว่าราคาเป้าหมาย (${Math.ceil(targetPrice)} ฿) หรืออิงราคาตลาดที่แข่งขันได้ พร้อมเหลือกำไรเข้าเป้า
-            3. Premium (ราคาตั้งเผื่อจัดโปร/อัปเกรด): ราคาสูงสุด เน้นจับกลุ่มลูกค้าที่มีกำลังซื้อสูง หรือตั้งเผื่อไว้แจกโค้ดส่วนลดหน้าร้านหลอกๆ (Price Anchoring)
-
-            ตอบกลับเป็น JSON format เท่านั้น ตามโครงสร้างเป๊ะๆ ห้ามมีข้อความหรือ markdown อื่นๆ นอกเหนือจาก JSON:
-            {
-                "tiers": [
-                    { "name": "Penetration (Flash Sale / ดึงทราฟฟิก)", "price": 0, "reason": "คำอธิบายเชิงกลยุทธ์..." },
-                    { "name": "Optimal (ราคาขายปกติ / แนะนำ)", "price": 0, "reason": "คำอธิบายเชิงกลยุทธ์..." },
-                    { "name": "Premium (ราคาพรีเมียม / ตั้งเผื่อทำโปร)", "price": 0, "reason": "คำอธิบายเชิงกลยุทธ์..." }
-                ],
-                "campaignHook": "ประโยคพาดหัว (Hook) สั้นๆ โดนใจ สำหรับนำไปยิงแอดโปรโมทสินค้านี้...",
-                "bundleIdea": "ไอเดียกลยุทธ์จัดเซ็ต (Bundle/Cross-sell) หรือจับคู่กับสินค้าอื่น เพื่อดันยอดขายและเพิ่ม AOV...",
-                "valueProp": "จุดขายหลัก (Value Proposition) ที่ทำให้ลูกค้ายอมจ่ายซื้อราคานี้ แม้คู่แข่งจะถูกกว่า..."
-            }
-            `;
+            
+            ตอบกลับเป็น JSON... { "tiers": [...], "campaignHook": "...", "bundleIdea": "...", "valueProp": "..." }`;
             
             const res = await callGeminiAPI(prompt, true);
             if (res && res.tiers) {
@@ -17251,109 +17166,264 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                 showToast("AI วิเคราะห์กลยุทธ์ราคาและโปรโมชั่นสำเร็จ!", "success");
             }
         } catch (e) {
-            console.error("AI Pricing Error:", e);
-            if (e.message && e.message.includes("API key not valid")) {
-                showToast("API Key ไม่ถูกต้อง กรุณาตรวจสอบการตั้งค่าอีกครั้ง", "error");
-            } else if (e.message && (e.message.includes("400") || e.message.includes("404"))) {
-                showToast("โมเดล AI ขัดข้อง หรือ API Key ใช้ไม่ได้ กรุณาตรวจสอบ", "error");
-            } else {
-                showToast("AI ขัดข้อง กรุณาลองใหม่อีกครั้ง", "error");
-            }
+            showToast("AI ขัดข้อง กรุณาลองใหม่อีกครั้ง", "error");
         }
         setIsAnalyzing(false);
     };
 
-    // --- 🔥 NEW: ฟังก์ชันบันทึกข้อมูลกลยุทธ์ราคา (Save Strategy) ---
     const handleSaveStrategy = () => {
-        if (!cost || !simulatedPrice) {
-            showToast("กรุณาระบุต้นทุนและราคาขายก่อนบันทึก", "error");
-            return;
-        }
-
+        if (!cost || !simulatedPrice) { showToast("กรุณาระบุต้นทุนและราคาขายก่อนบันทึก", "error"); return; }
         const itemName = selectedItemKey ? uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey)?.name : 'สินค้าทั่วไป (ไม่ระบุชื่อ)';
         const itemSku = selectedItemKey ? uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey)?.sku : '-';
-
         const newEntry = {
-            id: Date.now().toString(),
-            date: formatDateISO(new Date()),
-            name: itemName,
-            sku: itemSku,
-            cost: Number(cost),
-            sellPrice: Number(simulatedPrice),
-            competitorPrice: competitorPrice ? Number(competitorPrice) : null,
-            targetProfit: Number(desiredProfit) || 0,
-            aiCharmPrice: aiSuggestion?.tiers?.[1]?.price || null, // เก็บราคา Optimal
-            bundleIdea: aiSuggestion?.bundleIdea || '-',
-            valueProp: aiSuggestion?.valueProp || '-',
-            simulations: simulator.map(s => ({
-                feePct: s.feePct,
-                netProfit: s.netProfit,
-                marginPct: s.marginPct
-            }))
+            id: Date.now().toString(), date: formatDateISO(new Date()), name: itemName, sku: itemSku, cost: Number(cost), sellPrice: Number(simulatedPrice),
+            competitorPrice: competitorPrice ? Number(competitorPrice) : null, targetProfit: Number(desiredProfit) || 0,
+            aiCharmPrice: aiSuggestion?.tiers?.[1]?.price || null, bundleIdea: aiSuggestion?.bundleIdea || '-', valueProp: aiSuggestion?.valueProp || '-',
+            simulations: simulator.map(s => ({ feePct: s.feePct, netProfit: s.netProfit, marginPct: s.marginPct }))
         };
-
         setPricingHistory(prev => [newEntry, ...prev]);
         showToast("บันทึกกลยุทธ์ราคาสำเร็จ", "success");
     };
 
-    const handleDeleteHistory = (id) => {
-        setPricingHistory(prev => prev.filter(h => h.id !== id));
-        showToast("ลบประวัติสำเร็จ", "success");
-    };
-
-    // --- 🔥 NEW: ฟังก์ชันส่งออก Excel (Export Strategy) ---
+    const handleDeleteHistory = (id) => { setPricingHistory(prev => prev.filter(h => h.id !== id)); showToast("ลบประวัติสำเร็จ", "success"); };
+    
     const handleExportPricingExcel = async () => {
-        if (pricingHistory.length === 0) {
-            showToast("ไม่มีข้อมูลสำหรับส่งออก", "error");
-            return;
-        }
-        
+        if (pricingHistory.length === 0) { showToast("ไม่มีข้อมูลสำหรับส่งออก", "error"); return; }
         showToast("กำลังเตรียมไฟล์ Excel...", "success");
         if (!window.XLSX) {
-            const script = document.createElement('script');
-            script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+            const script = document.createElement('script'); script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
             await new Promise(res => { script.onload = res; document.body.appendChild(script); });
         }
-
         try {
             const dataRows = [
-                ["รายงานฐานข้อมูลกลยุทธ์ราคา (Pricing Strategy Database)"],
-                ["วันที่ดึงข้อมูล", formatDate(new Date())],
-                [],
+                ["รายงานฐานข้อมูลกลยุทธ์ราคา (Pricing Strategy Database)"], ["วันที่ดึงข้อมูล", formatDate(new Date())], [],
                 ["วันที่วิเคราะห์", "SKU", "ชื่อสินค้า", "ต้นทุน (Cost)", "ราคาตลาด (Competitor)", "ราคาที่ตั้ง (Sell Price)", "กำไรสุทธิ 0% (หน้าร้าน)", "กำไรสุทธิ 25%", "กำไรสุทธิ 27%", "กำไรสุทธิ 30%", "ไอเดียจัดเซ็ต (Bundle)", "จุดขายสู้คู่แข่ง (Value Prop)"]
             ];
-
             pricingHistory.forEach(h => {
-                const getSim = (pct) => {
-                    const sim = h.simulations?.find(s => s.feePct === pct);
-                    return sim ? Number(sim.netProfit).toFixed(2) : '-';
-                };
+                const getSim = (pct) => { const sim = h.simulations?.find(s => s.feePct === pct); return sim ? Number(sim.netProfit).toFixed(2) : '-'; };
+                dataRows.push([ formatDate(h.date), h.sku, h.name, Number(h.cost).toFixed(2), h.competitorPrice ? Number(h.competitorPrice).toFixed(2) : '-', Number(h.sellPrice).toFixed(2), getSim(0), getSim(25), getSim(27), getSim(30), h.bundleIdea, h.valueProp ]);
+            });
+            const wb = window.XLSX.utils.book_new(); const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
+            window.XLSX.utils.book_append_sheet(wb, ws, "Pricing Strategy"); window.XLSX.writeFile(wb, `Pricing_Strategy_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
+            showToast("ดาวน์โหลดไฟล์ Excel สำเร็จ", "success");
+        } catch (e) { showToast("เกิดข้อผิดพลาดในการส่งออก Excel", "error"); }
+    };
 
+    // --- 🔥 NEW: ฟังก์ชันประมวลผลไฟล์ Shopee Mass Update ---
+    const handleBulkFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const processBulkFile = (f) => {
+            setIsParsingBulk(true);
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                try {
+                    const dataBuffer = new Uint8Array(evt.target.result);
+                    const wb = window.XLSX.read(dataBuffer, { type: 'array' });
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    const rawAoA = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+                    
+                    // หาระยะบรรทัดที่เป็น Header ภาษาไทย หรือ ภาษาอังกฤษ
+                    let headerRowIdx = -1;
+                    for (let i = 0; i < Math.min(rawAoA.length, 10); i++) {
+                        const rowStr = rawAoA[i].join('').replace(/\s/g, '').toLowerCase();
+                        if (rowStr.includes('รหัสสินค้า') || rowStr.includes('ชื่อสินค้า') || rowStr.includes('เลขsku') || rowStr.includes('productname') || rowStr.includes('variationsku') || rowStr.includes('et_title_product_name')) {
+                            headerRowIdx = i;
+                            break;
+                        }
+                    }
+
+                    if (headerRowIdx === -1) {
+                        showToast("รูปแบบไฟล์ไม่ถูกต้อง ไม่พบคอลัมน์ 'ชื่อสินค้า' หรือ 'เลข SKU'", "error");
+                        setIsParsingBulk(false);
+                        return;
+                    }
+
+                    const headers = rawAoA[headerRowIdx];
+                    const rawData = [];
+                    for (let i = headerRowIdx + 1; i < rawAoA.length; i++) {
+                        const rowArr = rawAoA[i] || [];
+                        const rowObj = {};
+                        let hasData = false;
+                        headers.forEach((h, colIdx) => {
+                            if (h && String(h).trim() !== '') {
+                                rowObj[String(h).trim()] = rowArr[colIdx];
+                                if (rowArr[colIdx] !== '' && rowArr[colIdx] !== undefined) hasData = true;
+                            }
+                        });
+                        if (hasData) rawData.push(rowObj);
+                    }
+
+                    // สกัดข้อมูลและประมวลผล
+                    const cleanStr = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
+                    const parsedProducts = [];
+
+                    rawData.forEach(row => {
+                        const sku = cleanStr(row['เลข SKU'] || row['Variation SKU'] || row['รหัสตัวเลือกสินค้า'] || row['รหัสสินค้า'] || row['et_title_variation_sku']);
+                        const parentSku = cleanStr(row['Parent SKU'] || row['รหัสสินค้า'] || row['et_title_parent_sku']);
+                        const finalSku = sku || parentSku;
+
+                        const name = cleanStr(row['ชื่อสินค้า'] || row['Product Name'] || row['et_title_product_name']);
+                        const variationName = cleanStr(row['ชื่อตัวเลือกสินค้า'] || row['Variation Name'] || row['et_title_variation_name']);
+                        const price = Number(row['ราคา'] || row['Price'] || row['et_title_variation_price'] || 0);
+
+                        if (!name || price <= 0) return; // ข้ามบรรทัดเปล่า
+
+                        const displayName = variationName && variationName !== '-' ? `${name} - ${variationName}` : name;
+
+                        // วิ่งไปจับคู่กับ Cost ในคลังสินค้า (ถ้ามี)
+                        let matchedCost = 0;
+                        if (finalSku && finalSku !== '-') {
+                            const matchedItem = uniqueItems.find(i => String(i.sku).toLowerCase() === String(finalSku).toLowerCase());
+                            if (matchedItem) matchedCost = matchedItem.cost;
+                        }
+                        if (matchedCost === 0) {
+                            const matchedByName = uniqueItems.find(i => String(i.name).toLowerCase() === String(name).toLowerCase());
+                            if (matchedByName) matchedCost = matchedByName.cost;
+                        }
+
+                        parsedProducts.push({
+                            sku: finalSku || '-',
+                            name: displayName,
+                            shopeePrice: price,
+                            cost: matchedCost > 0 ? matchedCost : '',
+                            aiMargin: null, // สำหรับรับค่าจาก AI แนะนำ
+                            aiReason: ''
+                        });
+                    });
+
+                    if (parsedProducts.length === 0) {
+                         showToast("ไม่พบรายการสินค้าในไฟล์ กรุณาตรวจสอบความถูกต้อง", "error");
+                    } else {
+                         setBulkProducts(parsedProducts);
+                         showToast(`อ่านข้อมูลและผูกต้นทุนสำเร็จ ${parsedProducts.length} รายการ`, "success");
+                    }
+                } catch (err) {
+                    console.error("Parse Error:", err);
+                    showToast("ไม่สามารถอ่านไฟล์ได้ กรุณาใช้ไฟล์ Mass Update ของ Shopee", "error");
+                }
+                setIsParsingBulk(false);
+                if (bulkFileInputRef.current) bulkFileInputRef.current.value = '';
+            };
+            
+            // ใช้ readAsArrayBuffer แทนเพื่อให้ XLSX ดึงข้อมูลได้ครบถ้วนแม้เป็น CSV
+            reader.readAsArrayBuffer(f);
+        };
+
+        if (!window.XLSX) {
+            setIsParsingBulk(true);
+            const script = document.createElement('script');
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+            script.onload = () => processBulkFile(file);
+            document.body.appendChild(script);
+        } else {
+            processBulkFile(file);
+        }
+    };
+
+    const updateBulkCost = (index, val) => {
+        const newArr = [...bulkProducts];
+        newArr[index].cost = val;
+        setBulkProducts(newArr);
+    };
+
+    // --- Helper function สำหรับคำนวณราคาในตาราง Bulk ---
+    const calcBulkPrice = (costVal, targetMargin) => {
+        const c = Number(costVal) || 0;
+        if (c <= 0) return 0;
+        const feeDecimal = Number(bulkFeePct) / 100;
+        const denominator = 1 - feeDecimal - targetMargin;
+        if (denominator <= 0) return 0;
+        return c / denominator;
+    };
+
+    // --- 🔥 NEW: AI Bulk Repricing Strategy (วิเคราะห์กลยุทธ์ทั้งกระดาน) ---
+    const handleBulkAiAnalysis = async () => {
+        const validItems = bulkProducts.filter(p => Number(p.cost) > 0);
+        if (validItems.length === 0) {
+            showToast("ไม่พบต้นทุนสินค้า (Cost) เลยสักรายการ กรุณาระบุต้นทุนก่อนให้ AI วิเคราะห์", "error");
+            return;
+        }
+
+        setIsAnalyzingBulk(true);
+        try {
+            // จำกัดส่งข้อมูลให้ AI แค่ 30 รายการแรกเพื่อป้องกัน Token ทะลุลิมิต
+            const sampleData = validItems.slice(0, 30).map(p => ({
+                sku: p.sku,
+                name: p.name,
+                cost: p.cost,
+                currentPrice: p.shopeePrice
+            }));
+
+            const prompt = `คุณคือผู้เชี่ยวชาญด้านตั้งราคาสินค้า E-commerce (Pricing Strategist)
+            วิเคราะห์ตารางสินค้าต่อไปนี้ ซึ่งมีภาระค่าธรรมเนียม Platform คงที่ ${bulkFeePct}%
+            เป้าหมาย: แนะนำให้ผู้ขายตั้งกำไรสุทธิ (Net Margin) สำหรับสินค้าแต่ละชิ้นว่าควรเป็นกี่เปอร์เซ็นต์ ระหว่าง 40%, 50%, หรือ 60%
+            หลักการพิจารณา:
+            - หากต้นทุนต่ำ (เช่น หลักสิบ) ควรตั้ง Margin สูง (60%) เพื่อให้คุ้มค่าแพ็ค/ค่าแรง
+            - หากต้นทุนสูงมาก หรือสินค้าน่าจะเป็นสินค้าแข่งขันสูง ควรตั้ง Margin ต่ำลงมาหน่อย (40-50%) เพื่อดึงดูดลูกค้า
+            
+            ข้อมูลสินค้า:
+            ${JSON.stringify(sampleData)}
+            
+            ตอบกลับเป็น JSON Array โครงสร้างนี้เท่านั้น:
+            [
+              { "sku": "รหัสsku", "recommendedMargin": 40 หรือ 50 หรือ 60, "reason": "เหตุผลสั้นๆ ไม่เกิน 10 คำ" }
+            ]`;
+
+            showToast("AI กำลังสแกนและประเมินราคาสินค้าทั้งร้าน...", "success");
+            const res = await callGeminiAPI(prompt, true);
+            
+            if (Array.isArray(res)) {
+                // ผสานข้อมูลกลับเข้า State
+                const newBulk = bulkProducts.map(p => {
+                    const aiRec = res.find(r => r.sku === p.sku);
+                    if (aiRec) {
+                        return { ...p, aiMargin: aiRec.recommendedMargin, aiReason: aiRec.reason };
+                    }
+                    return p;
+                });
+                setBulkProducts(newBulk);
+                showToast("AI วิเคราะห์ราคาทั้งกระดานเสร็จสิ้น! (ทำไฮไลต์รายการที่แนะนำให้แล้ว)", "success");
+            } else {
+                throw new Error("Invalid AI format");
+            }
+        } catch (err) {
+            console.error(err);
+            showToast("AI เกิดข้อขัดข้องในการวิเคราะห์ข้อมูลจำนวนมาก", "error");
+        }
+        setIsAnalyzingBulk(false);
+    };
+
+    const handleExportBulkExcel = async () => {
+        if (bulkProducts.length === 0) return;
+        showToast("กำลังเตรียมไฟล์ Excel...", "success");
+        try {
+            const dataRows = [
+                ["เลข SKU", "ชื่อสินค้า (Name)", "ราคาเดิม (Shopee)", "ต้นทุน (Cost)", "ราคาแนะนำ กำไร 40%", "ราคาแนะนำ กำไร 50%", "ราคาแนะนำ กำไร 60%", "AI แนะนำ % กำไร", "เหตุผลจาก AI"]
+            ];
+
+            bulkProducts.forEach(p => {
                 dataRows.push([
-                    formatDate(h.date),
-                    h.sku,
-                    h.name,
-                    Number(h.cost).toFixed(2),
-                    h.competitorPrice ? Number(h.competitorPrice).toFixed(2) : '-',
-                    Number(h.sellPrice).toFixed(2),
-                    getSim(0),
-                    getSim(25),
-                    getSim(27),
-                    getSim(30),
-                    h.bundleIdea,
-                    h.valueProp
+                    p.sku,
+                    p.name,
+                    p.shopeePrice,
+                    p.cost || 0,
+                    Math.ceil(calcBulkPrice(p.cost, 0.40)),
+                    Math.ceil(calcBulkPrice(p.cost, 0.50)),
+                    Math.ceil(calcBulkPrice(p.cost, 0.60)),
+                    p.aiMargin ? `${p.aiMargin}%` : '-',
+                    p.aiReason || '-'
                 ]);
             });
 
             const wb = window.XLSX.utils.book_new();
             const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
-            window.XLSX.utils.book_append_sheet(wb, ws, "Pricing Strategy");
-            window.XLSX.writeFile(wb, `Pricing_Strategy_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
-            
-            showToast("ดาวน์โหลดไฟล์ Excel สำเร็จ", "success");
+            window.XLSX.utils.book_append_sheet(wb, ws, "Bulk Pricing");
+            window.XLSX.writeFile(wb, `Shopee_Repricing_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
+            showToast("ส่งออกไฟล์สำเร็จ นำราคากลับไปวางใน Shopee ได้เลย", "success");
         } catch (e) {
-            console.error(e);
-            showToast("เกิดข้อผิดพลาดในการส่งออก Excel", "error");
+            showToast("เกิดข้อผิดพลาดในการส่งออก", "error");
         }
     };
 
@@ -17366,234 +17436,415 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-                
-                {/* --- Left Column: Inputs --- */}
-                <div className="xl:col-span-4 flex flex-col gap-6">
-                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm space-y-5">
-                        <h3 className="text-base font-black text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2"><Box size={16} className="text-indigo-500"/> ข้อมูลสินค้า & ต้นทุน</h3>
-                        
-                        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                            <label className="text-xs font-bold text-slate-500 uppercase">ดึงข้อมูลจากคลังสินค้า (Optional)</label>
-                            <select value={selectedItemKey} onChange={handleSelectItem} className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer">
-                                <option value="">-- ระบุต้นทุนเอง (Manual) --</option>
-                                {uniqueItems.map((item, idx) => (
-                                    <option key={idx} value={item.sku !== '-' ? item.sku : item.name}>
-                                        {item.name} (ต้นทุน: {formatCurrency(item.cost)} ฿)
-                                    </option>
-                                ))}
-                            </select>
+            {/* --- 🔥 NEW: Tab Switcher --- */}
+            <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit mb-6 overflow-x-auto shadow-inner border border-slate-200/50">
+                <button onClick={() => setPricingTab('single')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${pricingTab === 'single' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                    <Box size={16}/> วิเคราะห์รายชิ้น (Single Item)
+                </button>
+                <button onClick={() => setPricingTab('bulk')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${pricingTab === 'bulk' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                    <Layers size={16}/> อัปเดตทั้งร้านจากไฟล์ Shopee (Mass Update)
+                </button>
+            </div>
 
-                            {/* --- 🔥 NEW: UI แสดงสถิติย้อนหลัง (Feedback Loop) --- */}
-                            {itemSalesStats && selectedItemKey && (
-                                <div className="mt-4 pt-4 border-t border-slate-200 grid grid-cols-2 gap-3 animate-fadeIn">
-                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ขายไปแล้วรวม</p>
-                                        <p className="text-sm font-black text-indigo-600">{itemSalesStats.totalSold.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
+            {pricingTab === 'single' ? (
+                // ==========================================
+                // 🏷️ TAB 1: SINGLE ITEM PRICING (ORIGINAL)
+                // ==========================================
+                <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 animate-fadeIn">
+                    {/* ... (เนื้อหา Single Item คงเดิม) ... */}
+                    {/* --- Left Column: Inputs --- */}
+                    <div className="xl:col-span-4 flex flex-col gap-6">
+                        <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm space-y-5">
+                            <h3 className="text-base font-black text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2"><Box size={16} className="text-indigo-500"/> ข้อมูลสินค้า & ต้นทุน</h3>
+                            
+                            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                                <label className="text-xs font-bold text-slate-500 uppercase">ดึงข้อมูลจากคลังสินค้า (Optional)</label>
+                                <select value={selectedItemKey} onChange={handleSelectItem} className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer">
+                                    <option value="">-- ระบุต้นทุนเอง (Manual) --</option>
+                                    {uniqueItems.map((item, idx) => (
+                                        <option key={idx} value={item.sku !== '-' ? item.sku : item.name}>
+                                            {item.name} (ต้นทุน: {formatCurrency(item.cost)} ฿)
+                                        </option>
+                                    ))}
+                                </select>
+
+                                {/* --- UI แสดงสถิติย้อนหลัง (Feedback Loop) --- */}
+                                {itemSalesStats && selectedItemKey && (
+                                    <div className="mt-4 pt-4 border-t border-slate-200 grid grid-cols-2 gap-3 animate-fadeIn">
+                                        <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                                            <p className="text-[9px] font-bold text-slate-400 uppercase">ขายไปแล้วรวม</p>
+                                            <p className="text-sm font-black text-indigo-600">{itemSalesStats.totalSold.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
+                                        </div>
+                                        <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                                            <p className="text-[9px] font-bold text-slate-400 uppercase">ยอดขาย 30 วันล่าสุด</p>
+                                            <p className="text-sm font-black text-emerald-600">{itemSalesStats.soldLast30Days.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
+                                        </div>
+                                        <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                                            <p className="text-[9px] font-bold text-slate-400 uppercase">ราคาขายเฉลี่ย</p>
+                                            <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.avgPrice)} <span className="text-[10px]">฿</span></p>
+                                        </div>
+                                        <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                                            <p className="text-[9px] font-bold text-slate-400 uppercase">สร้างรายได้แล้ว</p>
+                                            <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.totalRevenue)} <span className="text-[10px]">฿</span></p>
+                                        </div>
+                                        {itemSalesStats.soldLast30Days === 0 && (
+                                            <p className="col-span-2 text-[10px] text-rose-500 font-bold mt-1 text-center bg-rose-50 p-1.5 rounded-md">
+                                                ⚠️ สินค้านี้ยังขายไม่ได้เลยในช่วง 30 วันที่ผ่านมา
+                                            </p>
+                                        )}
                                     </div>
-                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ยอดขาย 30 วันล่าสุด</p>
-                                        <p className="text-sm font-black text-emerald-600">{itemSalesStats.soldLast30Days.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
+                                )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">ต้นทุนสินค้า (Cost)</label>
+                                    <input type="number" value={cost} onChange={e=>setCost(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-base font-black mt-1 outline-none focus:ring-2 focus:ring-indigo-200 text-slate-800" placeholder="0.00" />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-amber-500 uppercase">ราคาคู่แข่ง (Competitor)</label>
+                                    <input type="number" value={competitorPrice} onChange={e=>setCompetitorPrice(e.target.value)} className="w-full bg-amber-50 border border-amber-200 rounded-xl p-3 text-base font-black mt-1 outline-none focus:ring-2 focus:ring-amber-200 text-amber-700" placeholder="ไม่บังคับ" />
+                                </div>
+                            </div>
+
+                            <div className="pt-3 border-t border-slate-100">
+                                <label className="text-xs font-bold text-slate-700 uppercase mb-2 flex items-center gap-2"><Percent size={14} className="text-rose-500"/> ภาระค่าใช้จ่ายแฝง (%)</label>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-[9px] font-bold text-slate-400 uppercase">Platform Fee (เฉลี่ย)</label>
+                                        <input type="number" value={platformFeePct} onChange={e=>setPlatformFeePct(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold mt-1 outline-none focus:border-indigo-400 text-slate-700" placeholder="15" />
                                     </div>
-                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ราคาขายเฉลี่ย</p>
-                                        <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.avgPrice)} <span className="text-[10px]">฿</span></p>
+                                    <div>
+                                        <label className="text-[9px] font-bold text-slate-400 uppercase">เผื่อส่วนลด/Ads Buffer</label>
+                                        <input type="number" value={marketingBufferPct} onChange={e=>setMarketingBufferPct(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold mt-1 outline-none focus:border-indigo-400 text-slate-700" placeholder="5" />
                                     </div>
-                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">สร้างรายได้แล้ว</p>
-                                        <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.totalRevenue)} <span className="text-[10px]">฿</span></p>
-                                    </div>
-                                    {itemSalesStats.soldLast30Days === 0 && (
-                                        <p className="col-span-2 text-[10px] text-rose-500 font-bold mt-1 text-center bg-rose-50 p-1.5 rounded-md">
-                                            ⚠️ สินค้านี้ยังขายไม่ได้เลยในช่วง 30 วันที่ผ่านมา
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* เครื่องมือที่ 1: หาจากกำไร */}
+                        <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-6 rounded-[32px] shadow-lg text-white relative overflow-hidden">
+                            <TrendingUp size={80} className="absolute -right-4 -bottom-4 opacity-10" />
+                            <h3 className="text-sm font-black text-indigo-200 mb-4 flex items-center gap-2 relative z-10">โหมดที่ 1: กำหนดราคาจาก Margin (40%, 50%, 60%)</h3>
+                            
+                            <div className="relative z-10 grid grid-cols-3 gap-3 mb-5">
+                                {marginCalculations.map((tier, idx) => (
+                                    <div key={idx} className="bg-white/10 border border-white/20 p-3 rounded-2xl text-center flex flex-col justify-between">
+                                        <p className="text-[10px] font-bold text-indigo-200 uppercase">{tier.label}</p>
+                                        <p className="text-lg font-black mt-1 text-white">
+                                            {tier.price > 0 ? formatCurrency(tier.price) : 'N/A'}
                                         </p>
+                                        <button 
+                                            onClick={() => {
+                                                if(tier.price > 0) {
+                                                    setSimulatedPrice(tier.price.toFixed(0));
+                                                    updateSellPriceInInventory(Number(tier.price.toFixed(0)));
+                                                }
+                                            }} 
+                                            disabled={tier.price <= 0 || isAnalyzing}
+                                            className="mt-2 w-full bg-white/20 hover:bg-white/30 py-1.5 rounded-lg text-[10px] font-bold transition-colors disabled:opacity-50"
+                                        >
+                                            ใช้ราคานี้
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="pt-4 border-t border-white/20 relative z-10">
+                                <label className="text-[10px] font-bold text-white uppercase opacity-80">หรือระบุกำไรสุทธิที่ต้องการ/ชิ้น (฿)</label>
+                                <div className="flex items-center gap-3 mt-1">
+                                    <input type="number" value={desiredProfit} onChange={e=>setDesiredProfit(e.target.value)} className="w-full bg-white/20 border border-white/30 rounded-xl p-2.5 text-lg font-black outline-none focus:border-white text-white placeholder-white/40" placeholder="0.00" />
+                                    <span className="font-bold text-sm text-indigo-300">฿</span>
+                                    <button onClick={() => {
+                                        setSimulatedPrice(calculations.recommendedPrice.toFixed(0));
+                                        updateSellPriceInInventory(Number(calculations.recommendedPrice.toFixed(0)));
+                                    }} className="whitespace-nowrap px-4 bg-white/20 hover:bg-white/30 py-2.5 rounded-xl text-xs font-bold transition-colors disabled:opacity-50" disabled={isAnalyzing}>
+                                        ใช้ราคานี้
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* --- Right Column: Simulators & AI --- */}
+                    <div className="xl:col-span-8 flex flex-col gap-6">
+                        
+                        {/* เครื่องมือที่ 2: Multi-Platform Simulator */}
+                        <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm">
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 border-b border-slate-100 pb-4">
+                                <div>
+                                    <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Layers size={20} className="text-emerald-500"/> โหมดที่ 2: จำลองกำไรตามโครงสร้างค่าธรรมเนียม</h3>
+                                    <p className="text-xs text-slate-400 mt-1">ใส่ราคาขายสุทธิ เพื่อดูว่าเมื่อโดนหักแล้ว จะเหลือกำไรเข้ากระเป๋าจริงๆ กี่บาท</p>
+                                </div>
+                                <div className="flex flex-col md:items-end gap-3 w-full md:w-auto">
+                                    <div className="flex items-center gap-3 bg-emerald-50 p-2 rounded-2xl border border-emerald-100 w-full md:w-auto">
+                                        <span className="text-xs font-bold text-emerald-700 whitespace-nowrap pl-2">ราคาขาย (Price):</span>
+                                        <input type="number" value={simulatedPrice} onChange={e=>setSimulatedPrice(e.target.value)} className="w-full md:w-32 bg-white border-none rounded-xl p-2 text-lg font-black text-emerald-700 outline-none focus:ring-2 focus:ring-emerald-300 shadow-sm text-center" placeholder="0" />
+                                    </div>
+                                    <label className="flex items-center gap-2 cursor-pointer w-fit group">
+                                        <input type="checkbox" checked={includeVat} onChange={e=>setIncludeVat(e.target.checked)} className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer" />
+                                        <span className="text-[10px] font-bold text-slate-500 group-hover:text-indigo-600 transition-colors">
+                                            กัน VAT 7% นำส่งสรรพากร (คิดจากส่วนต่าง)
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                {simulator.map((plat, idx) => {
+                                    const is0 = plat.feePct === 0;
+                                    const is25 = plat.feePct === 25;
+                                    const is27 = plat.feePct === 27;
+                                    
+                                    const bgClass = is0 ? 'bg-emerald-50 border-emerald-200' : is25 ? 'bg-indigo-50 border-indigo-200' : is27 ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200';
+                                    const titleClass = is0 ? 'text-emerald-600' : is25 ? 'text-indigo-600' : is27 ? 'text-amber-600' : 'text-rose-600';
+                                    const feeTextClass = is0 ? 'text-emerald-500' : is25 ? 'text-indigo-500' : is27 ? 'text-amber-500' : 'text-rose-500';
+                                    const badgeClass = plat.netProfit > 0 
+                                        ? (is0 ? 'bg-emerald-100 text-emerald-700' : is25 ? 'bg-indigo-100 text-indigo-700' : is27 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700')
+                                        : 'bg-slate-200 text-slate-500';
+
+                                    return (
+                                        <div key={idx} className={`p-4 rounded-2xl border flex flex-col justify-between ${bgClass}`}>
+                                            <div>
+                                                <p className={`text-[10px] font-black uppercase tracking-widest ${titleClass}`}>{plat.name}</p>
+                                                <div className="flex justify-between items-center mt-3 mb-1.5">
+                                                    <span className="text-[10px] font-bold text-slate-500">โดนหัก ({plat.feePct}%):</span>
+                                                    <span className={`text-xs font-bold ${feeTextClass}`}>-{formatCurrency(plat.feeAmt)}</span>
+                                                </div>
+                                                <div className="flex justify-between items-center mb-1.5">
+                                                    <span className="text-[10px] font-bold text-slate-500">เผื่อทำโปร/Ads:</span>
+                                                    <span className="text-xs font-bold text-slate-400">-{formatCurrency(plat.mkt)}</span>
+                                                </div>
+                                                {includeVat && (
+                                                    <div className="flex justify-between items-center mb-1.5 animate-fadeIn">
+                                                        <span className="text-[10px] font-bold text-rose-500">กัน VAT 7% ส่งหลวง:</span>
+                                                        <span className="text-xs font-black text-rose-500">-{formatCurrency(plat.vatAmt)}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="pt-3 border-t border-slate-200/60 mt-2">
+                                                <p className={`text-[9px] font-bold uppercase mb-0.5 ${titleClass}`}>กำไรสุทธิ (Net Profit)</p>
+                                                <div className="flex items-end justify-between">
+                                                    <p className="text-2xl font-black text-slate-800">{formatCurrency(plat.netProfit)}</p>
+                                                </div>
+                                                <div className="mt-1">
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-black w-fit inline-block ${badgeClass}`}>
+                                                        Margin {plat.marginPct.toFixed(1)}%
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* เครื่องมือที่ 3: AI Pricing Strategy */}
+                        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-6 md:p-8 rounded-[32px] border border-indigo-100 shadow-sm relative flex-1 flex flex-col justify-center min-h-[250px]">
+                            <Wand2 size={80} className="absolute right-4 top-4 text-indigo-200 opacity-40 pointer-events-none" />
+                            <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                                <div>
+                                    <h4 className="font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="text-amber-500"/> AI Strategy Insight (ทีมวิเคราะห์ราคา)</h4>
+                                    <p className="text-xs text-indigo-600/70 mt-1">ให้ทีม AI ช่วยวางโครงสร้างราคา โปรจัดเซ็ต และจุดขายเพื่อสู้กับคู่แข่ง</p>
+                                </div>
+                                <div className="flex gap-2 w-full md:w-auto">
+                                    <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
+                                        {isAnalyzing ? <Loader className="animate-spin" size={16}/> : <Activity size={16}/>} 
+                                        {isAnalyzing ? 'กำลังวิเคราะห์...' : 'ให้ AI แนะนำกลยุทธ์'}
+                                    </button>
+                                    {simulatedPrice && cost && (
+                                        <button onClick={handleSaveStrategy} className="flex-1 md:flex-none bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2 shrink-0">
+                                            <Save size={16}/> บันทึกกลยุทธ์
+                                        </button>
                                     )}
+                                </div>
+                            </div>
+                            
+                            {aiSuggestion && Array.isArray(aiSuggestion) ? (
+                                <div className="space-y-4 animate-fadeIn relative z-10 w-full mt-2">
+                                    {aiSuggestion.map((chat, idx) => (
+                                        <div key={idx} className="bg-slate-900 p-5 md:p-6 rounded-[24px] border border-slate-800 flex flex-col md:flex-row gap-5 shadow-lg relative overflow-hidden">
+                                            <div className={`w-14 h-14 shrink-0 rounded-[18px] border flex items-center justify-center shadow-inner ${chat.color}`}>
+                                                {chat.icon}
+                                            </div>
+                                            <div className="flex-1">
+                                                <div className="flex flex-wrap items-center gap-2 mb-3">
+                                                    <p className="text-sm font-black uppercase tracking-widest text-slate-200">{chat.name}</p>
+                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">{chat.role}</span>
+                                                </div>
+                                                <div className="text-sm text-indigo-50/90 leading-loose font-medium whitespace-pre-line break-words">
+                                                    {chat.text}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    <div className="pt-2 flex justify-end">
+                                        <button onClick={() => setAiSuggestion(null)} className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors flex items-center gap-1">
+                                            <RefreshCw size={12}/> ล้างข้อมูล (Clear)
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : !isAnalyzing && (
+                                <div className="flex-1 border-2 border-dashed border-indigo-200 rounded-2xl flex flex-col items-center justify-center text-indigo-300 py-10 relative z-10 bg-white/50">
+                                    <Sparkles size={40} className="mb-2 opacity-50"/>
+                                    <p className="font-bold text-sm">พร้อมให้ทีม AI ช่วยวางกลยุทธ์แล้ว</p>
+                                    <p className="text-xs opacity-70">ระบุต้นทุนและราคาขาย แล้วกดปุ่มด้านบนได้เลย</p>
                                 </div>
                             )}
                         </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="text-[10px] font-bold text-slate-500 uppercase">ต้นทุนสินค้า (Cost)</label>
-                                <input type="number" value={cost} onChange={e=>setCost(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-base font-black mt-1 outline-none focus:ring-2 focus:ring-indigo-200 text-slate-800" placeholder="0.00" />
-                            </div>
-                            <div>
-                                <label className="text-[10px] font-bold text-amber-500 uppercase">ราคาคู่แข่ง (Competitor)</label>
-                                <input type="number" value={competitorPrice} onChange={e=>setCompetitorPrice(e.target.value)} className="w-full bg-amber-50 border border-amber-200 rounded-xl p-3 text-base font-black mt-1 outline-none focus:ring-2 focus:ring-amber-200 text-amber-700" placeholder="ไม่บังคับ" />
-                            </div>
-                        </div>
-
-                        <div className="pt-3 border-t border-slate-100">
-                            <label className="text-xs font-bold text-slate-700 uppercase mb-2 flex items-center gap-2"><Percent size={14} className="text-rose-500"/> ภาระค่าใช้จ่ายแฝง (%)</label>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="text-[9px] font-bold text-slate-400 uppercase">Platform Fee (เฉลี่ย)</label>
-                                    <input type="number" value={platformFeePct} onChange={e=>setPlatformFeePct(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold mt-1 outline-none focus:border-indigo-400 text-slate-700" placeholder="15" />
-                                </div>
-                                <div>
-                                    <label className="text-[9px] font-bold text-slate-400 uppercase">เผื่อส่วนลด/Ads Buffer</label>
-                                    <input type="number" value={marketingBufferPct} onChange={e=>setMarketingBufferPct(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold mt-1 outline-none focus:border-indigo-400 text-slate-700" placeholder="5" />
-                                </div>
-                            </div>
-                        </div>
                     </div>
-
-                    {/* เครื่องมือที่ 1: หาจากกำไร */}
-                    <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-6 rounded-[32px] shadow-lg text-white relative overflow-hidden">
-                        <TrendingUp size={80} className="absolute -right-4 -bottom-4 opacity-10" />
-                        <h3 className="text-sm font-black text-indigo-200 mb-4 flex items-center gap-2 relative z-10">โหมดที่ 1: หาจากกำไรที่อยากได้</h3>
-                        <div className="relative z-10">
-                            <label className="text-[10px] font-bold text-white uppercase opacity-80">กำไรสุทธิที่ต้องการ/ชิ้น (Net Profit)</label>
-                            <div className="flex items-center gap-3 mt-1">
-                                <input type="number" value={desiredProfit} onChange={e=>setDesiredProfit(e.target.value)} className="w-full bg-white/20 border border-white/30 rounded-xl p-3 text-2xl font-black outline-none focus:border-white text-white placeholder-white/40" placeholder="0.00" />
-                                <span className="font-bold text-lg text-indigo-300">฿</span>
-                            </div>
+                </div>
+            ) : (
+                // ==========================================
+                // 📦 TAB 2: BULK SHOPEE DATA IMPORT (NEW)
+                // ==========================================
+                <div className="bg-white p-6 md:p-8 rounded-[32px] border border-orange-100 shadow-sm animate-fadeIn">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8 border-b border-orange-100 pb-6">
+                        <div>
+                            <h3 className="text-xl font-black text-orange-600 flex items-center gap-2"><FileSpreadsheet size={24}/> Mass Update Pricing (Shopee Data)</h3>
+                            <p className="text-sm text-slate-500 mt-2 max-w-2xl leading-relaxed">
+                                อัปโหลดไฟล์ <b className="text-orange-500">"Mass Update Sales Info"</b> จากระบบ Shopee Seller Centre<br/>
+                                เพื่อดึง <span className="bg-slate-100 px-1 rounded font-bold">ต้นทุน</span> อัตโนมัติจากคลังสินค้า FIFO และคำนวณราคาใหม่รวดเดียวทั้งร้าน
+                            </p>
                         </div>
-                        <div className="mt-5 pt-4 border-t border-white/20 relative z-10">
-                            <p className="text-[10px] uppercase font-bold text-indigo-200">คุณต้องตั้งราคาขายอย่างน้อย</p>
-                            <p className="text-3xl font-black mt-1">{formatCurrency(calculations.recommendedPrice)} <span className="text-base font-bold">฿</span></p>
-                            <button onClick={() => setSimulatedPrice(calculations.recommendedPrice.toFixed(0))} className="mt-3 w-full bg-white/20 hover:bg-white/30 py-2 rounded-xl text-xs font-bold transition-colors">
-                                นำราคานี้ไปจำลอง (Simulate)
+                        <div className="w-full md:w-auto flex flex-col gap-3 shrink-0">
+                            <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 p-2.5 rounded-2xl w-full">
+                                <span className="text-xs font-bold text-slate-600 whitespace-nowrap pl-2">Platform Fee:</span>
+                                <input type="number" value={bulkFeePct} onChange={e=>setBulkFeePct(e.target.value)} className="w-20 bg-white border border-slate-200 rounded-xl p-2 text-sm font-black text-orange-600 outline-none focus:ring-2 focus:ring-orange-200 text-center" placeholder="25" />
+                                <span className="text-xs font-bold text-slate-500">%</span>
+                            </div>
+                            
+                            <input type="file" ref={bulkFileInputRef} hidden accept=".xlsx, .xls, .csv" onChange={handleBulkFileUpload} />
+                            <button onClick={() => bulkFileInputRef.current?.click()} disabled={isParsingBulk || isAnalyzingBulk} className="w-full bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-2xl font-bold shadow-lg shadow-orange-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
+                                {isParsingBulk ? <Loader className="animate-spin" size={18}/> : <FileUp size={18}/>} 
+                                อัปโหลดไฟล์ Shopee (Mass Update)
                             </button>
                         </div>
                     </div>
-                </div>
 
-                {/* --- Right Column: Simulators & AI --- */}
-                <div className="xl:col-span-8 flex flex-col gap-6">
-                    
-                    {/* เครื่องมือที่ 2: Multi-Platform Simulator */}
-                    <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm">
-                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 border-b border-slate-100 pb-4">
-                            <div>
-                                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Layers size={20} className="text-emerald-500"/> โหมดที่ 2: จำลองกำไรตามโครงสร้างค่าธรรมเนียม</h3>
-                                <p className="text-xs text-slate-400 mt-1">ใส่ราคาขายสุทธิ เพื่อดูว่าเมื่อโดนหักแล้ว จะเหลือกำไรเข้ากระเป๋าจริงๆ กี่บาท</p>
-                            </div>
-                            <div className="flex flex-col md:items-end gap-3 w-full md:w-auto">
-                                <div className="flex items-center gap-3 bg-emerald-50 p-2 rounded-2xl border border-emerald-100 w-full md:w-auto">
-                                    <span className="text-xs font-bold text-emerald-700 whitespace-nowrap pl-2">ราคาขาย (Price):</span>
-                                    <input type="number" value={simulatedPrice} onChange={e=>setSimulatedPrice(e.target.value)} className="w-full md:w-32 bg-white border-none rounded-xl p-2 text-lg font-black text-emerald-700 outline-none focus:ring-2 focus:ring-emerald-300 shadow-sm text-center" placeholder="0" />
+                    {bulkProducts.length > 0 ? (
+                        <>
+                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+                                <p className="text-sm font-bold text-slate-600">พบสินค้าทั้งหมด <span className="text-orange-600 font-black">{bulkProducts.length}</span> รายการ</p>
+                                <div className="flex gap-2 w-full sm:w-auto">
+                                    <button onClick={handleBulkAiAnalysis} disabled={isAnalyzingBulk} className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-700 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-200 flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap">
+                                        {isAnalyzingBulk ? <Loader size={14} className="animate-spin"/> : <Sparkles size={14}/>} 
+                                        {isAnalyzingBulk ? 'AI กำลังประเมินราคาทั้งร้าน...' : 'ให้ AI วิเคราะห์โครงสร้างราคาทั้งร้าน'}
+                                    </button>
+                                    <button onClick={handleExportBulkExcel} disabled={isAnalyzingBulk} className="flex-1 sm:flex-none bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 shadow-sm whitespace-nowrap">
+                                        <Download size={14}/> Export เป็น Excel
+                                    </button>
                                 </div>
-                                {/* --- 🔥 NEW: ปุ่ม Toggle หัก VAT 7% --- */}
-                                <label className="flex items-center gap-2 cursor-pointer w-fit group">
-                                    <input type="checkbox" checked={includeVat} onChange={e=>setIncludeVat(e.target.checked)} className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer" />
-                                    <span className="text-[10px] font-bold text-slate-500 group-hover:text-indigo-600 transition-colors">
-                                        กัน VAT 7% นำส่งสรรพากร (คิดจากส่วนต่าง)
-                                    </span>
-                                </label>
                             </div>
-                        </div>
-
-                        {/* --- 🔥 FIX: ขยาย Grid เป็น 4 ช่อง เพื่อให้เรียงสวยงาม --- */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                            {simulator.map((plat, idx) => {
-                                const is0 = plat.feePct === 0;
-                                const is25 = plat.feePct === 25;
-                                const is27 = plat.feePct === 27;
-                                
-                                const bgClass = is0 ? 'bg-emerald-50 border-emerald-200' : is25 ? 'bg-indigo-50 border-indigo-200' : is27 ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200';
-                                const titleClass = is0 ? 'text-emerald-600' : is25 ? 'text-indigo-600' : is27 ? 'text-amber-600' : 'text-rose-600';
-                                const feeTextClass = is0 ? 'text-emerald-500' : is25 ? 'text-indigo-500' : is27 ? 'text-amber-500' : 'text-rose-500';
-                                const badgeClass = plat.netProfit > 0 
-                                    ? (is0 ? 'bg-emerald-100 text-emerald-700' : is25 ? 'bg-indigo-100 text-indigo-700' : is27 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700')
-                                    : 'bg-slate-200 text-slate-500';
-
-                                return (
-                                    <div key={idx} className={`p-4 rounded-2xl border flex flex-col justify-between ${bgClass}`}>
-                                        <div>
-                                            <p className={`text-[10px] font-black uppercase tracking-widest ${titleClass}`}>{plat.name}</p>
-                                            <div className="flex justify-between items-center mt-3 mb-1.5">
-                                                <span className="text-[10px] font-bold text-slate-500">โดนหัก ({plat.feePct}%):</span>
-                                                <span className={`text-xs font-bold ${feeTextClass}`}>-{formatCurrency(plat.feeAmt)}</span>
-                                            </div>
-                                            <div className="flex justify-between items-center mb-1.5">
-                                                <span className="text-[10px] font-bold text-slate-500">เผื่อทำโปร/Ads:</span>
-                                                <span className="text-xs font-bold text-slate-400">-{formatCurrency(plat.mkt)}</span>
-                                            </div>
-                                            {/* --- 🔥 NEW: โชว์ยอดหัก VAT เมื่อเปิด Toggle --- */}
-                                            {includeVat && (
-                                                <div className="flex justify-between items-center mb-1.5 animate-fadeIn">
-                                                    <span className="text-[10px] font-bold text-rose-500">กัน VAT 7% ส่งหลวง:</span>
-                                                    <span className="text-xs font-black text-rose-500">-{formatCurrency(plat.vatAmt)}</span>
-                                                </div>
+                            
+                            <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-2xl shadow-sm">
+                                <table className="w-full text-xs text-left whitespace-nowrap">
+                                    <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 border-b border-slate-200">
+                                        <tr>
+                                            <th className="p-4 pl-6">SKU / ชื่อสินค้า (จาก Shopee)</th>
+                                            <th className="p-4 text-right">ราคาปัจจุบัน</th>
+                                            <th className="p-4 text-center bg-indigo-50/50 border-x border-indigo-100 w-32" title="ระบบดึงจาก คลังสินค้า FIFO (เปลี่ยนตัวเลขเองได้ถ้าต้องการ)">
+                                                ต้นทุน (Cost ฿)
+                                            </th>
+                                            <th className="p-4 text-right bg-emerald-50/50 text-emerald-700 border-r border-emerald-100">
+                                                ราคาใหม่<br/><span className="text-[9px] font-black uppercase text-emerald-500">กำไร 40%</span>
+                                            </th>
+                                            <th className="p-4 text-right bg-indigo-50/50 text-indigo-700 border-r border-indigo-100">
+                                                ราคาใหม่<br/><span className="text-[9px] font-black uppercase text-indigo-500">กำไร 50%</span>
+                                            </th>
+                                            <th className="p-4 text-right bg-rose-50/50 text-rose-700 pr-6 border-r border-rose-100">
+                                                ราคาใหม่<br/><span className="text-[9px] font-black uppercase text-rose-500">กำไร 60%</span>
+                                            </th>
+                                            {/* --- 🔥 NEW: AI Column --- */}
+                                            {bulkProducts.some(p => p.aiMargin) && (
+                                                <th className="p-4 text-left bg-slate-900 text-amber-400">
+                                                    <span className="flex items-center gap-1"><Sparkles size={12}/> AI แนะนำ & เหตุผล</span>
+                                                </th>
                                             )}
-                                        </div>
-                                        <div className="pt-3 border-t border-slate-200/60 mt-2">
-                                            <p className={`text-[9px] font-bold uppercase mb-0.5 ${titleClass}`}>กำไรสุทธิ (Net Profit)</p>
-                                            <div className="flex items-end justify-between">
-                                                <p className="text-2xl font-black text-slate-800">{formatCurrency(plat.netProfit)}</p>
-                                            </div>
-                                            <div className="mt-1">
-                                                <span className={`px-2 py-0.5 rounded text-[10px] font-black w-fit inline-block ${badgeClass}`}>
-                                                    Margin {plat.marginPct.toFixed(1)}%
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-
-                    {/* เครื่องมือที่ 3: AI Pricing Strategy */}
-                    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-6 md:p-8 rounded-[32px] border border-indigo-100 shadow-sm relative flex-1 flex flex-col justify-center min-h-[250px]">
-                        <Wand2 size={80} className="absolute right-4 top-4 text-indigo-200 opacity-40 pointer-events-none" />
-                        <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-                            <div>
-                                <h4 className="font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="text-amber-500"/> AI Strategy Insight (ทีมวิเคราะห์ราคา)</h4>
-                                <p className="text-xs text-indigo-600/70 mt-1">ให้ทีม AI ช่วยวางโครงสร้างราคา โปรจัดเซ็ต และจุดขายเพื่อสู้กับคู่แข่ง</p>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {bulkProducts.map((p, idx) => {
+                                            const price40 = Math.ceil(calcBulkPrice(p.cost, 0.40));
+                                            const price50 = Math.ceil(calcBulkPrice(p.cost, 0.50));
+                                            const price60 = Math.ceil(calcBulkPrice(p.cost, 0.60));
+                                            
+                                            // Highlight CSS based on AI recommendation
+                                            const isAi40 = p.aiMargin === 40;
+                                            const isAi50 = p.aiMargin === 50;
+                                            const isAi60 = p.aiMargin === 60;
+                                            
+                                            return (
+                                            <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                                                <td className="p-4 pl-6">
+                                                    <p className="font-mono font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded w-fit mb-1">SKU: {p.sku}</p>
+                                                    <p className="font-bold text-slate-700 truncate max-w-[250px]" title={p.name}>{p.name}</p>
+                                                </td>
+                                                <td className="p-4 text-right font-black text-slate-500">{formatCurrency(p.shopeePrice)}</td>
+                                                <td className="p-3 border-x border-slate-100 bg-slate-50/30">
+                                                    <input 
+                                                        type="number" 
+                                                        value={p.cost} 
+                                                        onChange={e => updateBulkCost(idx, e.target.value)}
+                                                        className="w-full bg-white border border-slate-300 rounded-lg p-2 text-center font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-200"
+                                                        placeholder="ระบุทุน"
+                                                    />
+                                                </td>
+                                                <td className={`p-4 text-right font-black border-r border-emerald-50/50 relative ${isAi40 ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-400 z-10' : 'bg-emerald-50/20 text-emerald-600'}`}>
+                                                    {isAi40 && <Sparkles size={12} className="absolute top-1 left-1 text-amber-500"/>}
+                                                    {price40 > 0 ? formatCurrency(price40) : '-'}
+                                                </td>
+                                                <td className={`p-4 text-right font-black border-r border-indigo-50/50 relative ${isAi50 ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-400 z-10' : 'bg-indigo-50/20 text-indigo-600'}`}>
+                                                    {isAi50 && <Sparkles size={12} className="absolute top-1 left-1 text-amber-500"/>}
+                                                    {price50 > 0 ? formatCurrency(price50) : '-'}
+                                                </td>
+                                                <td className={`p-4 text-right font-black pr-6 border-r border-rose-50/50 relative ${isAi60 ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-400 z-10' : 'bg-rose-50/20 text-rose-600'}`}>
+                                                    {isAi60 && <Sparkles size={12} className="absolute top-1 left-1 text-amber-500"/>}
+                                                    {price60 > 0 ? formatCurrency(price60) : '-'}
+                                                </td>
+                                                
+                                                {/* --- 🔥 NEW: AI Reason Column --- */}
+                                                {bulkProducts.some(item => item.aiMargin) && (
+                                                    <td className="p-4 text-left max-w-[250px] whitespace-normal bg-slate-50/30">
+                                                        {p.aiMargin ? (
+                                                            <div>
+                                                                <span className="text-[10px] font-black bg-slate-800 text-amber-400 px-2 py-0.5 rounded-full mr-2 shadow-sm">แนะนำ {p.aiMargin}%</span>
+                                                                <span className="text-[10px] text-slate-600 font-bold">{p.aiReason}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-[10px] text-slate-400">-</span>
+                                                        )}
+                                                    </td>
+                                                )}
+                                            </tr>
+                                        )})}
+                                    </tbody>
+                                </table>
                             </div>
-                            <div className="flex gap-2 w-full md:w-auto">
-                                <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
-                                    {isAnalyzing ? <Loader className="animate-spin" size={16}/> : <Activity size={16}/>} 
-                                    {isAnalyzing ? 'กำลังวิเคราะห์...' : 'ให้ AI แนะนำกลยุทธ์'}
-                                </button>
-                                {/* --- 🔥 NEW: Save Strategy Button --- */}
-                                {simulatedPrice && cost && (
-                                    <button onClick={handleSaveStrategy} className="flex-1 md:flex-none bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2 shrink-0">
-                                        <Save size={16}/> บันทึกกลยุทธ์
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                        
-                        {/* --- 🔥 NEW: AI Output 3-Tier Strategy UI --- */}
-                        {aiSuggestion && Array.isArray(aiSuggestion) ? (
-                            <div className="space-y-4 animate-fadeIn relative z-10 w-full mt-2">
-                                {aiSuggestion.map((chat, idx) => (
-                                    <div key={idx} className="bg-slate-900 p-5 md:p-6 rounded-[24px] border border-slate-800 flex flex-col md:flex-row gap-5 shadow-lg relative overflow-hidden">
-                                        <div className={`w-14 h-14 shrink-0 rounded-[18px] border flex items-center justify-center shadow-inner ${chat.color}`}>
-                                            {chat.icon}
-                                        </div>
-                                        <div className="flex-1">
-                                            <div className="flex flex-wrap items-center gap-2 mb-3">
-                                                <p className="text-sm font-black uppercase tracking-widest text-slate-200">{chat.name}</p>
-                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">{chat.role}</span>
-                                            </div>
-                                            <div className="text-sm text-indigo-50/90 leading-loose font-medium whitespace-pre-line break-words">
-                                                {chat.text}
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                                <div className="pt-2 flex justify-end">
-                                    <button onClick={() => setAiSuggestion(null)} className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors flex items-center gap-1">
-                                        <RefreshCw size={12}/> ล้างข้อมูล (Clear)
-                                    </button>
+                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl mt-4 flex items-start gap-3">
+                                <Info size={18} className="text-slate-400 shrink-0 mt-0.5"/>
+                                <div className="text-[10px] font-bold text-slate-500 leading-relaxed">
+                                    <p className="text-slate-700 font-black mb-1">การคำนวณและข้อแนะนำ:</p>
+                                    <p>1. ระบบปัดเศษขึ้น (Ceil) ให้อัตโนมัติ เพื่อป้องกันการขาดทุนทศนิยม</p>
+                                    <p>2. ราคาที่แสดงคำนวณหักลบค่าธรรมเนียม Platform {bulkFeePct}% ให้แล้ว (แปลว่าถ้าบอสขายราคานี้ บอสจะได้กำไร {40}% สุทธิเข้ากระเป๋าแน่นอน)</p>
+                                    <p>3. <span className="text-indigo-600 underline">ต้นทุน (Cost)</span> ถูกดึงมาจาก "คลังสินค้า FIFO" อัตโนมัติโดยเทียบจากเลข SKU ให้แล้ว (บอสสามารถพิมพ์แก้ไขตัวเลขเองในตารางได้เลยหากต้องการปรับเปลี่ยนเฉพาะกิจ)</p>
                                 </div>
                             </div>
-                        ) : !isAnalyzing && (
-                            <div className="flex-1 border-2 border-dashed border-indigo-200 rounded-2xl flex flex-col items-center justify-center text-indigo-300 py-10 relative z-10 bg-white/50">
-                                <Sparkles size={40} className="mb-2 opacity-50"/>
-                                <p className="font-bold text-sm">พร้อมให้ทีม AI ช่วยวางกลยุทธ์แล้ว</p>
-                                <p className="text-xs opacity-70">ระบุต้นทุนและราคาขาย แล้วกดปุ่มด้านบนได้เลย</p>
-                            </div>
-                        )}
-                    </div>
+                        </>
+                    ) : (
+                        <div className="flex flex-col items-center justify-center py-20 text-slate-400 border-2 border-dashed border-orange-200 rounded-3xl bg-orange-50/30">
+                            <Layers size={64} className="opacity-30 mb-4 text-orange-400"/>
+                            <p className="font-bold text-base text-slate-700">อัปโหลดไฟล์ตารางจาก Shopee เพื่อเริ่มวิเคราะห์ภาพรวม</p>
+                            <p className="text-xs mt-2 text-slate-500 text-center leading-relaxed">
+                                ระบบรองรับไฟล์ <b>Mass Update (การขาย)</b> นามสกุล .xlsx หรือ .csv<br/>
+                                (ดาวน์โหลดได้จากเมนู สินค้าของฉัน {`>`} เครื่องมือจัดการแบบชุด {`>`} Mass Update {`>`} ข้อมูลการขาย)
+                            </p>
+                        </div>
+                    )}
                 </div>
-            </div>
+            )}
 
-            {/* --- 🔥 NEW: Pricing History Database Table --- */}
+            {/* --- Pricing History Database Table --- */}
             <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm mt-6">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 border-b border-slate-100 pb-4 gap-4">
                     <div>
@@ -17606,7 +17857,7 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                 </div>
                 
                 <div className="overflow-x-auto custom-scrollbar">
-                    <table className="w-full text-sm text-left">
+                    <table className="w-full text-sm text-left whitespace-nowrap">
                         <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-500 sticky top-0">
                             <tr>
                                 <th className="p-4 rounded-tl-xl border-b border-slate-100">วันที่ / สินค้า</th>
@@ -17624,8 +17875,8 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                                 <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
                                     <td className="p-4">
                                         <p className="text-[10px] text-slate-400 font-bold mb-1">{formatDate(item.date)}</p>
-                                        <p className="font-bold text-slate-700 line-clamp-1">{item.name}</p>
-                                        <p className="text-[10px] font-mono text-indigo-500 mt-0.5">SKU: {item.sku}</p>
+                                        <p className="font-bold text-slate-700 line-clamp-1 max-w-[200px]" title={item.name}>{item.name}</p>
+                                        <p className="text-[10px] font-mono text-indigo-500 mt-0.5 bg-indigo-50 px-1.5 py-0.5 rounded w-fit">SKU: {item.sku}</p>
                                     </td>
                                     <td className="p-4 text-right font-bold text-slate-500">{formatCurrency(item.cost)}</td>
                                     <td className="p-4 text-right">
@@ -17635,7 +17886,6 @@ function PricingCalculator({ stockBatches, transactions, showToast }) { // 🔥 
                                         )}
                                     </td>
                                     
-                                    {/* Simulated Profits */}
                                     <td className="p-4 text-right font-black text-emerald-600 bg-emerald-50/20">
                                         {formatCurrency(item.simulations?.find(s => s.feePct === 0)?.netProfit)}
                                     </td>
@@ -18782,7 +19032,7 @@ export default function App() {
       case 'promotions': return <PromotionManager appId={currentAppId} promotions={promotions} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} />;
       
       {/* --- 🔥 NEW: Router สำหรับเครื่องมือตั้งราคา --- */}
-      case 'pricing': return <PricingCalculator stockBatches={stockBatches} transactions={transactions} showToast={addToast} />;
+      case 'pricing': return <PricingCalculator stockBatches={stockBatches} transactions={transactions} showToast={addToast} appId={currentAppId} user={user} />;
       
       case 'guide': return <TaxGuide />;
       default: return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
