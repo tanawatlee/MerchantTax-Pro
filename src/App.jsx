@@ -2013,12 +2013,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         orderId: ['หมายเลขคำสั่งซื้อ', 'Order ID'],
         status: ['สถานะการสั่งซื้อ', 'Order Status'],
         cancelReason: ['เหตุผลในการยกเลิกคำสั่งซื้อ', 'Cancel Reason'],
-        // --- FIX: แยกคอลัมน์ วันที่สั่งซื้อ vs วันที่รับเงิน ให้ชัดเจน ---
         orderDate: ['เวลาที่ทำการสั่งซื้อ', 'วันที่ทำการสั่งซื้อ', 'Order Creation Date'],
         settleDate: ['วันที่โอนชำระเงินสำเร็จ', 'เวลาการชำระสินค้า', 'Payment Time', 'เวลาชำระเงิน'],
         price: ['ราคาเสนอ', 'ราคาต่อชิ้น', 'Deal Price', 'ราคาขาย', 'สินค้าราคาปกติ'], 
         qty: ['จำนวน', 'Quantity'],
-        // --- FIX: เพิ่มการดึงส่วนลดผู้ขาย เพื่อให้ยอดตั้งต้นตรงกับ Shopee ---
         sellerDiscount: ['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount', 'ส่วนลดจากร้านค้า'],
         transFee: ['Transaction Fee', 'ค่าธรรมเนียมการทำธุรกรรม', 'ค่าธรรมเนียมธุรกรรม', 'ค่าธุรกรรมการชำระเงิน'],
         commFee: ['ค่าคอมมิชชั่น', 'Commission Fee', 'ค่าคอมมิชชั่น AMS'],
@@ -2041,11 +2039,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         orderId: ['Order No.', 'Order Number', 'เลขที่สั่งซื้อ', 'หมายเลขคำสั่งซื้อ'],
         status: ['Status', 'สถานะ', 'สถานะคำสั่งซื้อ'],
         cancelReason: ['เหตุผลในการยกเลิก', 'Cancellation Reason'],
-        orderDate: ['Order Creation Date', 'วันที่สร้างคำสั่งซื้อ', 'Create Time'],
-        settleDate: ['วันที่ชำระเงิน', 'Settlement Date', 'Payout Date'],
+        orderDate: ['Order Creation Date', 'วันที่สร้างคำสั่งซื้อ', 'Create Time', 'created_at'],
+        settleDate: ['วันที่ชำระเงิน', 'Settlement Date', 'Payout Date', 'updated_at'],
         price: ['Unit Price', 'ราคาต่อชิ้น', 'paid_price', 'ราคาขาย'],
         qty: ['Quantity', 'จำนวน', 'Qty'],
-        sellerDiscount: ['Seller Discount', 'ส่วนลดจากผู้ขาย', 'Seller Promotion'],
+        sellerDiscount: ['Seller Discount', 'ส่วนลดจากผู้ขาย', 'Seller Promotion', 'Voucher (Seller)'],
         transFee: ['Payment Fee', 'ค่าธุรกรรม', 'Transaction Fee'],
         commFee: ['Commission', 'ค่าคอมมิชชั่น', 'Commission Fee'],
         servFee: ['Service Fee', 'ค่าธรรมเนียม', 'ค่าธรรมเนียมการชำระเงิน'],
@@ -2068,7 +2066,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         cancelReason: ['เหตุผลการยกเลิก', 'Cancel Reason'],
         orderDate: ['Order Creation Time', 'Created Time', 'เวลาที่สร้างคำสั่งซื้อ', 'เวลาที่สร้าง'],
         settleDate: ['Payment Time', 'วันที่ชำระเงิน', 'เวลาชำระเงิน', 'Settlement Time'],
-        price: ['Product Price', 'ราคาขาย', 'Unit Price', 'ราคาปกติ'],
+        price: ['SKU Unit Original Price', 'ราคาปกติของ SKU', 'Product Price', 'ราคาขาย', 'Unit Price', 'ราคาปกติ'],
         qty: ['Quantity', 'จำนวน', 'Qty'],
         sellerDiscount: ['Seller Discount', 'ส่วนลดจากผู้ขาย', 'ส่วนลดร้านค้า', 'Merchant Discount'],
         transFee: ['Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน', 'Fee'],
@@ -2105,21 +2103,27 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
-        const bstr = evt.target.result;
-        const wb = window.XLSX.read(bstr, { type: 'binary', cellDates: false });
+        // --- 🔥 FIX: เปลี่ยนมาใช้ ArrayBuffer แทน BinaryString เพื่อแก้ปัญหาภาษาไทยตัวยึกยือในไฟล์ CSV ของ TikTok/Lazada ---
+        const dataBuffer = new Uint8Array(evt.target.result);
+        const wb = window.XLSX.read(dataBuffer, { type: 'array', cellDates: false });
         const ws = wb.Sheets[wb.SheetNames[0]];
         
         // --- Smart Header Row Detection ---
         const rawAoA = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-        let headerRowIdx = 0;
+        let headerRowIdx = -1;
         
         for (let i = 0; i < Math.min(rawAoA.length, 20); i++) {
             const rowArr = rawAoA[i] || [];
             const rowStr = rowArr.join('').replace(/\s/g, '').toLowerCase();
-            if (rowStr.includes('หมายเลขคำสั่งซื้อ') || rowStr.includes('orderid') || rowStr.includes('orderno')) {
+            if (rowStr.includes('หมายเลขคำสั่งซื้อ') || rowStr.includes('orderid') || rowStr.includes('orderno') || rowStr.includes('เลขที่สั่งซื้อ')) {
                 headerRowIdx = i;
                 break;
             }
+        }
+
+        if (headerRowIdx === -1) {
+            showToast("รูปแบบไฟล์ไม่ถูกต้อง หรือหาหัวตารางอ้างอิง Order ID ไม่เจอ", "error");
+            return;
         }
 
         const headers = rawAoA[headerRowIdx] || [];
@@ -2158,6 +2162,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             const status = String(findVal(row, schema.status) || '').toLowerCase();
             let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
                                       status.includes('unpaid') || status.includes('รอชำระเงิน') ||
+                                      status.includes('ยังไม่ชำระเงิน') || status.includes('awaiting payment') ||
                                       (status.includes('ไม่สำเร็จ') && !status.includes('จัดส่งไม่สำเร็จ'));
             
             const refundAmtRow = getRowValAbs(row, schema.refundAmount);
@@ -2165,8 +2170,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 isCancelledOrUnpaid = false;
             }
 
-            const transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
-            const comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']);
+            const transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน']);
+            const comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee', 'Platform Commission']);
             const serv = getExactRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
             const baseInfra = getExactRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
             const shippingProgFee = getExactRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
@@ -2175,9 +2180,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             // ข้ามรายการที่ยกเลิกและไม่มีการหักค่าธรรมเนียม (เหมือนที่ Shopee ทำ)
             if (isCancelledOrUnpaid && Math.abs(rowTotalFees) < 0.01) return;
 
-            // 1. หมวดรายชิ้น (Item Level) - Shopee กระจายยอดพวกนี้ในทุกบรรทัดย่อย ให้บวกสะสมได้เลย
-            detailedStats.productPrice += getRowValAbs(row, ['สินค้าราคาปกติ', 'Original Price', 'Product Price', 'ราคาเสนอ']);
-            detailedStats.sellerDiscount += getRowValAbs(row, ['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount']);
+            // 1. หมวดรายชิ้น (Item Level)
+            detailedStats.productPrice += getRowValAbs(row, ['สินค้าราคาปกติ', 'Original Price', 'Product Price', 'ราคาเสนอ', 'Unit Price']);
+            detailedStats.sellerDiscount += getRowValAbs(row, ['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount', 'Voucher (Seller)']);
             detailedStats.feeComm += comm;
             detailedStats.feeServ += serv;
             detailedStats.feeInfra += (baseInfra + shippingProgFee);
@@ -2185,15 +2190,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
             // 2. หมวดรายออเดอร์ (Order Level) - ต้องบวกแค่ครั้งเดียวต่อ 1 Order ID เพื่อป้องกันยอดเบิ้ล
             if (!seenOrdersForStats.has(orderId)) {
-                detailedStats.refundAmount += getRowValAbs(row, ['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน']);
-                detailedStats.shipBuyer += getRowValAbs(row, ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ', 'Shipping Fee Paid by Buyer']);
-                detailedStats.shipShopee += getRowValAbs(row, ['ค่าจัดส่งสินค้าที่ออกโดย Shopee', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง']);
-                detailedStats.shipActual += getRowValAbs(row, ['ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee']);
+                detailedStats.refundAmount += getRowValAbs(row, ['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน', 'Customer Refund']);
+                detailedStats.shipBuyer += getRowValAbs(row, ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ', 'Shipping Fee Paid by Buyer', 'Customer Shipping Fee']);
+                detailedStats.shipShopee += getRowValAbs(row, ['ค่าจัดส่งสินค้าที่ออกโดย Shopee', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง', 'Platform Shipping Subsidy']);
+                detailedStats.shipActual += getRowValAbs(row, ['ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee', 'ค่าจัดส่งที่ผู้ขายชำระ', 'Seller shipping fee']);
                 detailedStats.shipReturn += getRowValAbs(row, ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee']);
 
-                const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount']);
+                const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'Total settlement amount']);
                 if (actualSettledAmtRaw !== undefined) {
-                    // อนุญาตให้ยอด Payout ติดลบได้ (Shopee อาจหักค่าแอด)
                     detailedStats.totalSettled += cleanNum(actualSettledAmtRaw); 
                 }
 
@@ -2253,7 +2257,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 let finalSettleDate = normalizeDate(dateStr);
 
                 if (existingTrans) {
-                    // --- 🚀 FIX: ตรวจสอบยอดค่าธรรมเนียมและยอดรายรับ ถ้ายอดตรงกันเป๊ะและรับเงินแล้ว ให้ข้าม (ไม่ต้องอัปเดตอะไร) ---
                     const existingFee = existingTrans.platformFee || 0;
                     const expectedExistingPayout = (existingTrans.grandTotal !== undefined ? existingTrans.grandTotal : (existingTrans.total || 0)) - existingFee;
                     const existingSettledAmt = existingTrans.actualSettledAmt !== undefined ? existingTrans.actualSettledAmt : expectedExistingPayout;
@@ -2276,7 +2279,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                         });
                         return; // ข้ามการอัปเดตแถวนี้
                     }
-                    // -------------------------------------------------------------------------
 
                     if (!existingTrans.isCancelled) {
                         if (!matchedMap[existingTrans.id]) {
@@ -2391,12 +2393,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
             matched.forEach(m => {
                 if (!m.isAlreadyCancelled) {
-                    // --- 🚀 FIX: กระทบยอดโดยนำ "ยอดค่าธรรมเนียม" และ "ยอดรายรับจริง" มาเทียบตรงๆ ---
-                    // ยอดที่ควรได้ = (ยอดตั้งต้นสุทธิ) - ค่าธรรมเนียมที่อัปเดตใหม่
                     const expectedPayout = (m.grandTotal !== undefined ? m.grandTotal : (m.total || 0)) - (m.newPlatformFee !== undefined ? m.newPlatformFee : (m.platformFee || 0));
                     const actualPayout = m.actualSettledAmt !== undefined ? m.actualSettledAmt : expectedPayout;
-                    
-                    // ส่วนต่าง = ยอดที่ควรได้ - ยอดโอนจริง
                     const payoutDiff = expectedPayout - actualPayout;
                     
                     if (payoutDiff > 0.05) { // เงินขาด (โอนเข้าจริงได้น้อยกว่า)
@@ -2423,7 +2421,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                         });
                     }
                 } else {
-                    // สำหรับออเดอร์ยกเลิก/ตีคืน ที่เสียค่าธรรมเนียม ให้ดึงมาสร้างบิลแยก
                     const feeToCharge = m.newPlatformFee !== undefined ? m.newPlatformFee : 0;
                     if (feeToCharge > 0) {
                         currentDiffDetails.push({ 
@@ -2443,11 +2440,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             setStats({ 
                 totalRows: raw.length, processed: matched.length, skipped: skippedCount, 
                 totalAmount: totalExpected, 
-                totalActualSettled: exactExcelTotalSettled, // ใช้ยอดจาก Excel ตรงๆ
+                totalActualSettled: exactExcelTotalSettled, 
                 totalDiffShort: totalDiffShort, totalDiffSurplus: totalDiffSurplus, 
-                totalFees: exactExcelTotalFees, // ใช้ยอดจาก Excel ตรงๆ
+                totalFees: exactExcelTotalFees, 
                 duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0,
-                detailedSummary: detailedStats // ใส่ข้อมูลตารางสรุปแบบเป๊ะ 100%
+                detailedSummary: detailedStats 
             });
             setSkippedDetailsData(currentSkippedDetails);
             setDeliveryFailedDetailsData([]);
@@ -2485,7 +2482,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                    status.includes('จัดส่งไม่สำเร็จ') ||
                                    status.includes('ตีกลับ');
           
-          // --- 🔥 THE REAL FIX: โหมด 1 และ 2 บังคับใช้กฎเหล็ก 4 ช่อง ---
           const fees = extractFeesAndShipping(row, importMode, schema);
           const transFee = fees.transFee;
           const comm = fees.comm; 
@@ -2493,33 +2489,27 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const affiliateRow = fees.affiliateRow;
           const infraRow = fees.infraRow;
           
-          // --- FIX: บังคับใช้เลขที่คุณพิมพ์ในกล่อง "เพิ่มเติม" เสมอ ---
           const parsedFixed = parseFloat(fixedInfraFee);
           const infra = !isNaN(parsedFixed) ? parsedFixed : (infraRow !== 0 ? infraRow : 0);
           const rowTotalFees = transFee + comm + serv + affiliateRow + infra;
 
-          // NEW: กฎเหล็ก! ดึงยอดคืนเงินขึ้นมาตรวจสอบก่อน เพื่อป้องกันการเข้าใจผิดว่าเป็นออเดอร์ยกเลิก
           const refundAmtRow = getRowValAbs(row, schema.refundAmount); 
-          // --- FIX: ตัด || refundAmtRow > 0 ทิ้ง ป้องกันการคืนเงิน 1-3 บาท เด้งเป็นตีคืนทั้งออเดอร์ ---
           let isReturnedRow = status.includes('คืน') || status.includes('refund') || status.includes('return');
           
-          // --- 🔥 FIX: ป้องกันประโยค "ผู้ซื้อสามารถยื่นคำขอคืนเงิน/คืนสินค้าได้จนถึง" ---
           if (status.includes('สามารถยื่น') || status.includes('ได้รับสินค้าแล้ว')) {
               isReturnedRow = false; 
           }
 
           let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
                                       status.includes('unpaid') || status.includes('รอชำระเงิน') ||
+                                      status.includes('ยังไม่ชำระเงิน') || status.includes('awaiting payment') ||
                                       (status.includes('ไม่สำเร็จ') && !status.includes('จัดส่งไม่สำเร็จ'));
           
-          // กฎเหล็ก: หากเป็นออเดอร์ที่มีการคืนสินค้า/คืนเงิน (Return/Refund) ห้ามระบบตีความว่าเป็นการยกเลิกเด็ดขาด
           if (isReturnedRow) {
               isCancelledOrUnpaid = false;
           }
                                       
           const isCompleted = status === '' || !isCancelledOrUnpaid;
-          
-          // --- 🔥 FIX: โหมด 1 และ 2 ไม่อนุญาตให้ดึงออเดอร์ที่ยกเลิกแล้วเข้ามา (ให้ข้ามไปเลย 100%) ---
           const forceImportDueToFee = false;
                               
           const orderDateVal = findVal(row, schema.orderDate) || findVal(row, schema.settleDate);
@@ -2528,7 +2518,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               settleDateVal = findVal(row, schema.settleDate) || findVal(row, ['วันที่โอนชำระเงินสำเร็จ', 'วันที่โอนเงิน']);
           }
           
-          // --- FIX: เพิ่มคำว่า ยอดเงินที่ชำระทั้งหมด ---
           const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'Total settlement amount', 'ยอดเงินที่ชำระทั้งหมด']);
           const actualSettledAmtFromRow = actualSettledAmtRaw !== undefined ? cleanNum(actualSettledAmtRaw) : undefined;
           
@@ -2539,9 +2528,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
           const skuInput = findVal(row, schema.sku);
           let skuVal = String(skuInput || '-').replace(/^['"=]+|['"=]+$/g, '').trim();
-          if (skuVal.endsWith('.0')) skuVal = skuVal.slice(0, -2); // แก้ปัญหา Excel ปัดเลขเป็นทศนิยม
+          if (skuVal.endsWith('.0')) skuVal = skuVal.slice(0, -2);
 
-          // ถ้าข้อมูลไม่ครบ หรือ (ไม่สำเร็จ และ ไม่ได้ถูกบังคับให้นำเข้า) ให้ข้าม
           if (!orderId || (!isCompleted && !forceImportDueToFee) || !orderDateVal) { 
               skipped++; 
               skippedQty += qty; 
@@ -2614,20 +2602,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
           const price = getRowValAbs(row, schema.price);
           const sellerDiscount = getRowValAbs(row, schema.sellerDiscount);
-          // ย้าย refundAmtRow ไปคำนวณด้านบนแทนแล้ว
           
           const shippingAddress = String(findVal(row, schema.shipping) || '');
-          const buyerName = String(findVal(row, schema.buyer) || 'ลูกค้า ' + platform);
+          const buyerName = String(findVal(row, schema.buyer) || `ลูกค้า ${platform}`);
           const courier = String(findVal(row, schema.courier) || '-').trim();
           const trackingNo = String(findVal(row, schema.trackingNo) || '-').trim();
           
-          // ลบการประกาศซ้ำออก เพราะดึงมาจากตัวสกัดข้อมูลกลาง (extractFeesAndShipping) ไว้แล้วด้านบน
           const shopName = String(findVal(row, schema.shopName) || 'ไม่ระบุ').trim();
 
           const lineTotal = price * qty;
 
           if (!ordersMap[orderId]) {
-            const baseProdName = String(findVal(row, schema.product) || 'สินค้าจาก ' + platform);
+            const baseProdName = String(findVal(row, schema.product) || `สินค้าจาก ${platform}`);
             const descStr = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdName.substring(0, 80)}` : baseProdName.substring(0, 100);
             const itemDescStr = isDeliveryFailed ? `[จัดส่งไม่สำเร็จ] ${baseProdName.trim()}` : baseProdName.trim();
             
@@ -2658,12 +2644,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
               returnShippingFee: returnShippingFee,
               ...(importMode === 'new_settled' && actualSettledAmtFromRow !== undefined ? { actualSettledAmt: actualSettledAmtFromRow } : {}),
               paymentStatus: importMode === 'new_pending' ? 'pending_platform' : 'settled',
-              // --- FIX: ใช้ข้อมูลจากคอลัมน์โดยตรง ไม่ต้องผ่าน defaultSettleDate ---
               settlementDate: importMode === 'new_pending' ? null : (normalizeDate(settleDateVal) || normalizeDate(orderDateVal)),
               ...(shopName !== 'ไม่ระบุ' ? { shopName: shopName } : {}),
               isDeliveryFailed: isDeliveryFailed,
               isReturned: isReturnedRow,
-              
               isCancelled: forceImportDueToFee,
               cancelledAt: forceImportDueToFee ? (normalizeDate(settleDateVal) || normalizeDate(orderDateVal)) : null
             };
@@ -2676,21 +2660,15 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             }
           } else {
             ordersMap[orderId].total += lineTotal;
-            
-            // --- 🔥 FIX: โหมด 1 และ 2 ยึดค่าส่วนลดและเงินคืนแบบไม่บวกสะสม (ใช้ค่าสูงสุดเพื่อแก้ปัญหา Shopee ทำยอดซ้ำทุกบรรทัด) ---
             ordersMap[orderId].couponDiscount = Math.max(ordersMap[orderId].couponDiscount || 0, sellerDiscount);
             ordersMap[orderId].refundAmount = Math.max(ordersMap[orderId].refundAmount || 0, refundAmtRow); 
-            
-            // --- 🔥 FIX: 1 ออเดอร์ = 1 ค่าธรรมเนียม (ห้ามนำมาบวกสะสมรวมกันเด็ดขาด) ---
             ordersMap[orderId].transactionFee = Math.max(ordersMap[orderId].transactionFee || 0, transFee);
             ordersMap[orderId].commissionFee = Math.max(ordersMap[orderId].commissionFee || 0, comm);
             ordersMap[orderId].serviceFee = Math.max(ordersMap[orderId].serviceFee || 0, serv);
             ordersMap[orderId].infrastructureFee = Math.max(ordersMap[orderId].infrastructureFee || 0, infra); 
             
-            // คำนวณ platformFee ใหม่จากค่าที่ไม่ถูกสะสมซ้ำ
             ordersMap[orderId].platformFee = ordersMap[orderId].transactionFee + ordersMap[orderId].commissionFee + ordersMap[orderId].serviceFee + ordersMap[orderId].infrastructureFee;
             
-            // Order Level (ใช้ค่า Max ป้องกันการบวกเบิ้ล)
             ordersMap[orderId].shippingFee = Math.max(ordersMap[orderId].shippingFee || 0, shippingFeeByBuyer);
             ordersMap[orderId].shippingFeeSubsidy = Math.max(ordersMap[orderId].shippingFeeSubsidy || 0, shippingFeeSubsidy);
             ordersMap[orderId].estimatedShippingFee = Math.max(ordersMap[orderId].estimatedShippingFee || 0, estimatedShippingFee);
@@ -2706,7 +2684,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             
             ordersMap[orderId].items.push({ desc: itemDescStrPush, qty, amount: lineTotal, price, sellPrice: price, buyPrice: 0, sku: skuVal });
             totalAmt += lineTotal;
-            // ลบ totalFees += rowTotalFeesAcc ทิ้งไปเลย เพราะทำให้ยอดรวมบวม
           }
         });
         
@@ -2717,7 +2694,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         let currentDiffDetails = []; 
 
         final.forEach((t) => {
-            // --- FIX: ให้ grandTotal ใน Preview ตรงกับสูตรที่จะบันทึกลง Database จริง (Gross Sales + Buyer Shipping - Discount) ---
             const currentDiscount = t.newCouponDiscount !== undefined ? t.newCouponDiscount : (t.couponDiscount || 0);
             const currentBuyerShip = t.newShippingFee !== undefined ? t.newShippingFee : (t.shippingFee || 0);
             
@@ -2728,7 +2704,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             const currentFee = t.newPlatformFee !== undefined ? t.newPlatformFee : (t.platformFee || 0);
             finalTotalPlatformFee += currentFee;
 
-            // --- FIX: ดึงค่าธรรมเนียมของออเดอร์ยกเลิก/ตีคืน มาแสดงใน Simulator เพื่อสร้างบิลแยก ---
             if (t.isCancelled && currentFee > 0) {
                 currentDiffDetails.push({ 
                     orderId: t.orderId, 
@@ -2753,7 +2728,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             duplicates, 
             totalAmount: totalAmt, 
             totalActualSettled: exactExcelTotalSettled,
-            totalFees: finalTotalPlatformFee, // --- FIX: อัปเดตกล่องสีแดงให้โชว์ยอดค่าธรรมเนียมที่ไม่ซ้ำซ้อน ---
+            totalFees: finalTotalPlatformFee, 
             deliveryFailed: dfCount, 
             cancelled: cCount,
             skippedQty,
@@ -2770,7 +2745,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         showToast("ไม่สามารถอ่านไฟล์ได้ หรือรูปแบบตารางไม่ถูกต้อง", "error"); 
       }
     };
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
   };
 
   const checkAnomalies = async () => {
@@ -9584,8 +9559,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const histStats = useMemo(() => {
       let inc = 0, exp = 0;
       filteredHistory.forEach(t => {
-          const amt = Number(t.grandTotal) || Number(t.total) || 0;
-          if(t.type === 'income') inc += amt; else exp += amt;
+          if (t.type === 'income') {
+              inc += Number(t.total) || 0; // ใช้ยอดมูลค่าสินค้ารวมก่อนหักค่าธรรมเนียม (Gross Sales)
+          } else {
+              exp += Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+          }
       });
       return { inc, exp, count: filteredHistory.length };
   }, [filteredHistory]);
