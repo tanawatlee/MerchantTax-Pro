@@ -189,6 +189,24 @@ const sortOldestFirst = (a, b) => {
   return String(a.id || '').localeCompare(String(b.id || ''));
 };
 
+const sortClosestToDateThenOldest = (targetDateInput) => (a, b) => {
+  const targetTime = normalizeDate(targetDateInput)?.getTime() || 0;
+  const timeA = normalizeDate(a.date)?.getTime() || 0;
+  const timeB = normalizeDate(b.date)?.getTime() || 0;
+
+  const diffA = Math.abs(timeA - targetTime);
+  const diffB = Math.abs(timeB - targetTime);
+
+  if (diffA !== diffB) return diffA - diffB; // ค้นหาวันที่ใกล้เคียงที่สุดก่อน
+  
+  // หากวันใกล้เคียงเท่ากัน ให้ยึดรายการเก่าสุด (ค้างสต็อก)
+  const createdA = a.createdAt?.seconds || 0;
+  const createdB = b.createdAt?.seconds || 0;
+  if (createdA !== createdB) return createdA - createdB;
+
+  return String(a.id || '').localeCompare(String(b.id || ''));
+};
+
 const generateNextDocId = (items, prefix, field) => {
   const nums = items.reduce((acc, item) => {
     if (item[field] && String(item[field]).startsWith(prefix)) {
@@ -2834,7 +2852,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                           let needed = Number(lItem.qty);
                           const batches = stockBatches
                               .filter(b => matchItemToBatch(lItem.sku, lItem.desc, b.sku, b.productName))
-                              .sort(sortOldestFirst);
+                              .sort(sortClosestToDateThenOldest(item.date));
 
                           for (let i = 0; i < batches.length; i++) {
                               const b = batches[i];
@@ -3009,7 +3027,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 let needed = Number(item.qty);
                 const batches = stockSnap
                     .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
-                    .sort(sortOldestFirst);
+                    .sort(sortClosestToDateThenOldest(trans.date));
 
                 for (let i = 0; i < batches.length; i++) {
                     const b = batches[i];
@@ -4492,7 +4510,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [viewHistory, setViewHistory] = useState(null);
   const [showAddStockModal, setShowAddStockModal] = useState(false);
   const [deleteStockConfirm, setDeleteStockConfirm] = useState(null);
-  const [deleteBatchConfirm, setDeleteBatchConfirm] = useState(null);
+  const [deleteBatchConfirm, setDeleteBatchConfirm] = useState(null); // ยังเก็บ state นี้ไว้เผื่อจำเป็น แต่อาจไม่ได้ใช้ใน UI ใหม่
   const [isProcessing, setIsProcessing] = useState(false);
   const [aiInsights, setAiInsights] = useState(null);
   const [isAnalyzingStock, setIsAnalyzingStock] = useState(false);
@@ -4504,7 +4522,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   // --- NEW: Stock Sync Preview States ---
   const [showSyncPreviewModal, setShowSyncPreviewModal] = useState(false);
   const [syncPreviewData, setSyncPreviewData] = useState(null);
-  const [selectedSyncItems, setSelectedSyncItems] = useState([]); // 🔥 FIX: เพิ่มตัวแปรสำหรับเก็บบันทึกการติ๊กเลือกซิงค์
+  const [selectedSyncItems, setSelectedSyncItems] = useState([]);
 
   // --- NEW: Stock Audit States ---
   const [showStockAuditModal, setShowStockAuditModal] = useState(false);
@@ -4513,20 +4531,23 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   // --- NEW: Date Range Filter สำหรับดูยอดรับเข้า ---
   const [stockStartDate, setStockStartDate] = useState('');
   const [stockEndDate, setStockEndDate] = useState('');
-  const [stockSortType, setStockSortType] = useState('qty_desc'); // NEW: ตัวกรองการเรียงลำดับ Aging Stock
+  const [stockSortType, setStockSortType] = useState('qty_desc'); 
 
   const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
   const [targetProductEdit, setTargetProductEdit] = useState(null);
   const [tempCategory, setTempCategory] = useState('');
-  const [tempIsGiveaway, setTempIsGiveaway] = useState(false); // เพิ่ม State สำหรับจัดการของแจก
+  const [tempIsGiveaway, setTempIsGiveaway] = useState(false); 
 
-  // NEW: State สำหรับระบบปรับปรุงสต็อก (อัปเดตเพิ่ม targetKey สำหรับการโอนย้าย)
+  // NEW: State สำหรับระบบปรับปรุงสต็อก 
   const [adjustStockItem, setAdjustStockItem] = useState(null);
-  const [adjustData, setAdjustData] = useState({ type: 'add', qty: '', reason: 'บันทึกผิดรสชาติ/ผิดรุ่น', targetKey: '' });
+  const [adjustData, setAdjustData] = useState({ type: 'add', qty: '', reason: 'ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)', targetKey: '', date: formatDateISO(new Date()) });
   const [transferSearchTerm, setTransferSearchTerm] = useState('');
   const [showTransferList, setShowTransferList] = useState(false);
 
-  // NEW: State สำหรับเลือกสินค้าเดิมจากคลังเพื่อเพิ่มสต็อก
+  // NEW: State สำหรับอัปโหลดรูปหลักฐานการปรับปรุงสต็อก
+  const [adjustAttachmentUrl, setAdjustAttachmentUrl] = useState('');
+  const [isUploadingAdjustFile, setIsUploadingAdjustFile] = useState(false);
+
   const [showStockPicker, setShowStockPicker] = useState(false);
   const [stockPickerSearch, setStockPickerSearch] = useState('');
 
@@ -4545,7 +4566,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const openEditCategory = (item) => {
     setTargetProductEdit(item);
     setTempCategory(item.category || CONSTANTS.CATEGORIES.STOCK[0]);
-    setTempIsGiveaway(item.isGiveaway || false); // ดึงค่าสถานะแจกฟรีเดิมมาแสดง
+    setTempIsGiveaway(item.isGiveaway || false); 
     setShowEditCategoryModal(true);
   };
 
@@ -4557,7 +4578,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       targetProductEdit.batches.forEach(b => {
             const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
             const updates = { category: tempCategory, isGiveaway: tempIsGiveaway };
-            if (tempIsGiveaway) updates.sellPrice = 0; // บังคับให้ราคาขายเป็น 0 หากเป็นของแจก
+            if (tempIsGiveaway) updates.sellPrice = 0; 
             batchWriter.update(docRef, updates);
       });
 
@@ -4571,12 +4592,127 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     setIsProcessing(false);
   };
 
-  // NEW: ฟังก์ชันประมวลผลการปรับปรุงสต็อก (รองรับการ Transfer)
+  const handleClearDummyStocks = async () => {
+      if (!window.confirm("ยืนยันการล้าง 'สต็อกผี' ที่ระบบสร้างอัตโนมัติ (ยอดติดลบ/ไม่มีในคลัง) ทั้งหมดทิ้งหรือไม่?\n\n* หลังจากล้างแล้ว แนะนำให้กด 'ซิงค์ข้อมูลสต็อก' อีกครั้ง เพื่อให้ระบบจับคู่ยอดรับเข้ากับบิลขายใหม่ให้ถูกต้อง")) return;
+      
+      setIsProcessing(true);
+      try {
+          const dummies = stockBatches.filter(b => b.isAdjustment && b.adjustReason === 'สต็อกติดลบ (ไม่มีในคลัง)');
+          if (dummies.length === 0) {
+              showToast("ไม่พบสต็อกผีในระบบ คลังสินค้าของคุณสะอาดดีครับ", "success");
+              setIsProcessing(false);
+              return;
+          }
+
+          let batchWriter = writeBatch(dbInstance);
+          let ops = 0;
+          let count = 0;
+
+          for (const d of dummies) {
+              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', d.id));
+              ops++;
+              count++;
+              if (ops >= 400) {
+                  await batchWriter.commit();
+                  batchWriter = writeBatch(dbInstance);
+                  ops = 0;
+              }
+          }
+          if (ops > 0) await batchWriter.commit();
+          
+          showToast(`ล้างสต็อกผีสำเร็จ ${count} รายการ! คลังกลับมาสะอาดแล้ว`, "success");
+      } catch (e) {
+          console.error(e);
+          showToast("เกิดข้อผิดพลาดในการล้างสต็อกผี", "error");
+      }
+      setIsProcessing(false);
+  };
+
+  // --- 🔥 NEW: ฟังก์ชันอัปโหลดหลักฐานการปรับปรุงสต็อก ---
+  const handleUploadAdjustFile = async (e) => {
+      const file = e.target.files[0];
+      if (!file || !user) return;
+      
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (!webhookUrl) {
+          showToast('กรุณาตั้งค่าเชื่อมต่อ Google Drive ในเมนูเครื่องมือขั้นสูง (Admin) ก่อน', 'error');
+          return;
+      }
+
+      setIsUploadingAdjustFile(true);
+      try {
+          const base64Data = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result.split(',')[1]);
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+          });
+
+          const mimeType = file.type;
+          const fileExt = file.name.split('.').pop();
+          const d = new Date();
+          const year = String(d.getFullYear());
+          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
+          const month = monthNames[d.getMonth()];
+          const day = String(d.getDate()).padStart(2, '0');
+          
+          const fileName = `EVIDENCE_${adjustStockItem?.sku || 'STOCK'}_${Date.now()}.${fileExt}`;
+
+          const payload = { 
+              base64Data, fileName, mimeType, 
+              rootFolder: 'MerchantTax_DigitalFiling',
+              year: year, type: '3_Stock_Evidence', month: month, category: 'Stock_Adjustments', day: day
+          };
+
+          showToast(`กำลังส่งรูปหลักฐานไปที่ Google Drive...`, 'success');
+          
+          const res = await fetch(webhookUrl.trim(), {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(payload)
+          });
+
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          const data = await res.json();
+          
+          if (data.url) {
+              setAdjustAttachmentUrl(data.url);
+              showToast(`อัปโหลดหลักฐานสำเร็จ!`, 'success');
+          } else {
+              throw new Error(data.message || "Upload failed");
+          }
+      } catch (err) {
+          console.error("Drive Upload Error:", err);
+          showToast('อัปโหลดหลักฐานล้มเหลว (เกิดข้อผิดพลาดในการส่งข้อมูล)', 'error');
+      } finally {
+          setIsUploadingAdjustFile(false);
+          e.target.value = ''; 
+      }
+  };
+
+  const handleRemoveAdjustFile = async () => {
+      if(!window.confirm('ยืนยันการลบรูปหลักฐาน?')) return;
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (webhookUrl && adjustAttachmentUrl) {
+          showToast('กำลังลบไฟล์ออกจาก Google Drive...', 'success');
+          try {
+              await fetch(webhookUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                  body: JSON.stringify({ action: 'delete', fileUrl: adjustAttachmentUrl })
+              });
+          } catch(e) { console.warn("Drive Delete Error:", e); }
+      }
+      setAdjustAttachmentUrl('');
+  };
+
   const handleAdjustStock = async (e) => {
       e.preventDefault();
       if (!adjustStockItem || !user) return;
       const qty = Number(adjustData.qty);
       if (qty <= 0) return showToast("กรุณาระบุจำนวนที่มากกว่า 0", "error");
+
+      const actionDate = normalizeDate(adjustData.date) || new Date();
 
       setIsProcessing(true);
       try {
@@ -4597,7 +4733,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               // 1. หักสต็อกออกจากตัวต้นทาง
               let needed = qty;
               let totalCostTransferred = 0;
-              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort(sortClosestToDateThenOldest(actionDate));
               for (const b of availableBatches) {
                   if (needed <= 0) break;
                   const take = Math.min(needed, b.remaining);
@@ -4617,21 +4753,21 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
               // 2. เพิ่มสต็อกไปให้ตัวปลายทาง (สร้างล็อตใหม่ด้วยต้นทุนเฉลี่ยที่ดึงมา)
               const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
-          batchWriter.set(newBatchRef, {
-              productName: adjustStockItem.name,
-              sku: adjustStockItem.sku,
-              category: adjustStockItem.category || 'อื่นๆ',
-              quantity: qty,
-              costPerUnit: 0, 
-              sellPrice: adjustStockItem.sellPrice || 0,
-              date: new Date(),
-              sold: 0,
-              userId: user.uid,
-              createdAt: serverTimestamp(),
-              paymentStatus: 'paid',
-              isAdjustment: true,
-              adjustReason: adjustData.reason
-          });
+              batchWriter.set(newBatchRef, {
+                  productName: adjustData.targetKey.split('::')[1] || adjustData.targetKey,
+                  sku: adjustData.targetKey.split('::')[0] !== '-' ? adjustData.targetKey.split('::')[0] : '',
+                  category: 'อื่นๆ',
+                  quantity: qty,
+                  costPerUnit: avgCostTransferred, 
+                  sellPrice: 0,
+                  date: actionDate,
+                  sold: 0,
+                  userId: user.uid,
+                  createdAt: serverTimestamp(),
+                  paymentStatus: 'paid',
+                  isAdjustment: true,
+                  adjustReason: adjustData.reason
+              });
 
           } else if (adjustData.type === 'add') {
               // --- โหมดเพิ่มสต็อกปกติ ---
@@ -4643,7 +4779,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   quantity: qty,
                   costPerUnit: 0, 
                   sellPrice: adjustStockItem.sellPrice || 0,
-                  date: new Date(),
+                  date: actionDate,
                   sold: 0,
                   userId: user.uid,
                   createdAt: serverTimestamp(),
@@ -4654,15 +4790,15 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           } else {
               // --- โหมดลดสต็อกปกติ ---
               let needed = qty;
-              let totalCostLost = 0; // --- 🔥 FIX: เพิ่มตัวแปรคำนวณต้นทุนที่สูญเสีย ---
-              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort(sortOldestFirst);
+              let totalCostLost = 0; 
+              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort(sortClosestToDateThenOldest(actionDate));
 
               for (const b of availableBatches) {
                   if (needed <= 0) break;
                   const take = Math.min(needed, b.remaining);
                   const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
                   batchWriter.update(batchRef, { sold: increment(take) });
-                  totalCostLost += take * (Number(b.costPerUnit) || 0); // --- 🔥 FIX: ดึงต้นทุน FIFO ของชิ้นที่เสีย ---
+                  totalCostLost += take * (Number(b.costPerUnit) || 0); 
                   needed -= take;
               }
               
@@ -4672,33 +4808,37 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   return;
               }
 
-              // --- 🔥 THE ULTIMATE FIX: สร้างบิลรายจ่ายอัตโนมัติ สำหรับบันทึกสินค้าชำรุด เพื่อให้ตัดกำไรสุทธิได้ถูกต้อง ---
-              if (adjustData.reason === 'สินค้าชำรุด/สูญหาย' && totalCostLost > 0) {
+              // รายชื่อเหตุผลที่ถือเป็นค่าใช้จ่าย (สูญเสีย) ของกิจการ
+              const expenseReasons = ['สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)', 'สินค้าหมดอายุ/เสื่อมสภาพ', 'เปลี่ยนสินค้าให้ลูกค้า (เคลม/ส่งผิด)', 'สูญเสียจากการขนส่ง (เคลมไม่ได้)'];
+
+              // สร้างบิลรายจ่ายอัตโนมัติ สำหรับบันทึกสินค้าชำรุด/สูญเสีย เพื่อให้ตัดกำไรสุทธิได้ถูกต้อง
+              if (expenseReasons.includes(adjustData.reason) && totalCostLost > 0) {
                   const prefix = getExpensePrefix('สินค้าเสียหาย/หมดอายุ');
-                  const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), prefix, new Date(), 'sysDocId');
+                  const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), prefix, actionDate, 'sysDocId');
                   
                   const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
                   batchWriter.set(expRef, {
                       sysDocId: expSysDocId,
                       type: 'expense',
                       category: 'สินค้าเสียหาย/หมดอายุ',
-                      description: `บันทึกตัดจำหน่ายสินค้าชำรุด: ${adjustStockItem.name}`,
+                      description: `บันทึกตัดจำหน่ายสต็อก (${adjustData.reason}): ${adjustStockItem.name}`,
                       items: [{ 
-                          desc: `ตัดสต็อกชำรุด: ${adjustStockItem.name}`, 
+                          desc: `ตัดสต็อก (${adjustData.reason}): ${adjustStockItem.name}`, 
                           qty: qty, 
                           buyPrice: totalCostLost / qty, 
                           sellPrice: 0, 
                           sku: adjustStockItem.sku || '-' 
                       }],
                       total: totalCostLost,
-                      date: new Date(),
+                      date: actionDate,
                       userId: user.uid,
                       createdAt: serverTimestamp(),
                       status: 'paid',
-                      partnerName: 'Internal (ตัดจำหน่าย)',
+                      partnerName: 'Internal (ตัดจำหน่าย/เคลม)',
                       partnerBranch: '00000',
                       isFromReconciliation: true,
-                      isTaxOnly: false // เปิดให้บิลนี้โชว์ใน Dashboard เพื่อตัดกำไรสุทธิ
+                      isTaxOnly: false, // เปิดให้บิลนี้โชว์ใน Dashboard เพื่อตัดกำไรสุทธิ
+                      attachmentUrl: adjustAttachmentUrl 
                   });
               }
           }
@@ -4706,7 +4846,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           await batchWriter.commit();
           showToast(adjustData.type === 'transfer' ? `โอนย้ายสต็อกสำเร็จ!` : `ปรับปรุงสต็อก ${adjustStockItem.name} สำเร็จ`, "success");
           setAdjustStockItem(null);
-          setAdjustData({ type: 'add', qty: '', reason: 'บันทึกผิดรสชาติ/ผิดรุ่น', targetKey: '' });
+          setAdjustData({ type: 'add', qty: '', reason: 'ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)', targetKey: '', date: formatDateISO(new Date()) });
+          setAdjustAttachmentUrl(''); 
           setTransferSearchTerm('');
           setShowTransferList(false);
       } catch (err) {
@@ -4716,38 +4857,30 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       setIsProcessing(false);
   };
 
-  // --- 🔥 NEW: ฟังก์ชันจำลองการซิงค์สต็อก (Preview Mode) ---
   const handleRecalculateStock = async () => {
     setIsProcessing(true);
     try {
       showToast('กำลังจำลองการประมวลผล FIFO...', 'success');
       
-      // 1. จำลองข้อมูลล็อตทั้งหมด โดยรีเซ็ต sold เป็น 0 เพื่อคำนวณใหม่
-      // 🔥 THE REAL FIX: ล็อกเป้าชัดเจน! ถ้าเป็นล็อตปรับปรุง (ชำรุด/โอนย้าย) ห้ามแตะยอด sold เดิมเด็ดขาด
       let localBatches = stockBatches.map(b => {
-          // หากเป็นล็อตที่เกิดจากการตัดชำรุด, โอนย้าย หรือล็อต Dummy ให้คงยอดเดิมไว้ 100%
           if (b.isAdjustment === true) {
               return { ...b, simulatedSold: Number(b.sold || 0), originalSold: Number(b.sold || 0) };
           }
-          // ส่วนล็อตรับเข้าปกติ (ซื้อมาขาย) รีเซ็ต sold เป็น 0 เพื่อให้บิลขายมาไล่ตัดใหม่
           return { ...b, simulatedSold: 0, originalSold: Number(b.sold || 0) };
       });
       
-      // 2. ดึงประวัติรายรับทั้งหมด เฉพาะรายการที่ "ไม่ถูกยกเลิก (!t.isCancelled)" และเรียงจากเก่าไปใหม่
       const incomeTrans = transactions.filter(t => t.type === 'income' && !t.isCancelled).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
 
       const newDummies = [];
 
-      // 3. จำลองการตัดสต็อก (Simulation)
       incomeTrans.forEach(trans => {
         (trans.items || []).forEach(item => {
           let needed = Number(item.qty);
           if (needed <= 0) return;
           
-          // 🔥 FIX: ให้บิลขายไล่ตัดเฉพาะล็อตที่ "ไม่ใช่" ล็อต Dummy หรือล็อตชำรุด (ป้องกันการตัดซ้อนทับ)
           const targetBatches = localBatches
             .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && b.isAdjustment !== true)
-            .sort(sortOldestFirst);
+            .sort(sortClosestToDateThenOldest(trans.date));
 
           for (let i = 0; i < targetBatches.length; i++) {
             if (needed <= 0) break;
@@ -4755,7 +4888,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             const remaining = Number(b.quantity) - b.simulatedSold;
             
             let take = 0;
-            // ล็อตสุดท้ายอนุญาตให้ตัดจนติดลบ
             if (i === targetBatches.length - 1) {
                 take = needed;
             } else {
@@ -4768,7 +4900,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             }
           }
           
-          // ถ้าไม่มีล็อตเหลือเลย ให้สร้าง Dummy จำลองเพื่อไม่ให้ข้อมูลหายระหว่าง Recalculate
           if (needed > 0) {
               newDummies.push({
                   productName: item.desc,
@@ -4778,8 +4909,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   costPerUnit: 0,
                   sellPrice: item.sellPrice || item.price || 0,
                   date: trans.date,
-                  sold: needed, // ยอดที่จำลองว่าขาย
-                  originalSold: 0, // ไม่มีในของเดิม
+                  sold: needed, 
+                  originalSold: 0, 
                   isAdjustment: true,
                   adjustReason: 'สต็อกติดลบ (ซิงค์ออโต้)'
               });
@@ -4787,42 +4918,36 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
         });
       });
 
-      // 4. สรุปผลส่วนต่าง (Diff Calculation) เทียบกับสต็อกปัจจุบัน
       const diffMap = {};
       const getMapKey = (sku, name) => `${sku || '-'}::${name}`;
 
-      // รวมยอดเดิมจากฐานข้อมูล
       stockBatches.forEach(b => {
           const key = getMapKey(b.sku, b.productName);
           if (!diffMap[key]) diffMap[key] = { sku: b.sku || '-', name: b.productName, oldQty: 0, newQty: 0, batchesToUpdate: [], newDummiesToCreate: [] };
           diffMap[key].oldQty += (Number(b.quantity) - Number(b.sold || 0));
       });
 
-      // รวมยอดใหม่ที่จำลองขึ้น
       localBatches.forEach(b => {
           const key = getMapKey(b.sku, b.productName);
           if (!diffMap[key]) diffMap[key] = { sku: b.sku || '-', name: b.productName, oldQty: 0, newQty: 0, batchesToUpdate: [], newDummiesToCreate: [] };
           diffMap[key].newQty += (Number(b.quantity) - b.simulatedSold);
 
-          // เช็คว่าล็อตนี้มีการเปลี่ยนแปลงไหม ถ้ามีให้เตรียม Update
           if (b.simulatedSold !== b.originalSold) {
               diffMap[key].batchesToUpdate.push({ id: b.id, newSold: b.simulatedSold });
           }
       });
 
-      // รวมยอดจาก Dummy ที่ถูกสร้างขึ้นใหม่
       newDummies.forEach(d => {
           const key = getMapKey(d.sku, d.productName);
           if (!diffMap[key]) diffMap[key] = { sku: d.sku || '-', name: d.productName, oldQty: 0, newQty: 0, batchesToUpdate: [], newDummiesToCreate: [] };
-          diffMap[key].newQty -= d.sold; // dummy quantity คือ 0 ดังนั้น ลบยอด sold เลย
+          diffMap[key].newQty -= d.sold; 
           diffMap[key].newDummiesToCreate.push(d);
       });
 
-      // กรองเอาเฉพาะรายการที่มีการเปลี่ยนแปลง (Diff !== 0 หรือ มีการอัปเดตระดับล็อต)
       const previewData = Object.values(diffMap)
           .map(item => ({ ...item, diff: item.newQty - item.oldQty }))
           .filter(item => item.diff !== 0 || item.batchesToUpdate.length > 0 || item.newDummiesToCreate.length > 0)
-          .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)); // เรียงลำดับตัวที่ดิฟเยอะสุดขึ้นก่อน
+          .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)); 
 
       setSyncPreviewData(previewData);
       setShowSyncPreviewModal(true);
@@ -4834,7 +4959,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     setIsProcessing(false);
   };
 
-  // --- 🔥 NEW: ฟังก์ชันยืนยันการเขียนข้อมูลลงฐานข้อมูลจริง ---
   const executeSyncStock = async () => {
       if (!syncPreviewData || !user || selectedSyncItems.length === 0) return;
       setIsProcessing(true);
@@ -4843,21 +4967,17 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           let opsCount = 0;
           let processedSKUs = 0;
 
-          // ดึงข้อมูล Dummy เดิมทั้งหมดมารอไว้ก่อน เพื่อหาว่าตัวไหนต้องลบ
           const allDummies = stockBatches.filter(b => b.isAdjustment && b.adjustReason === 'สต็อกติดลบ (ไม่มีในคลัง)');
 
-          // คัดกรองเฉพาะสินค้าที่ User ติ๊กเลือกให้ซิงก์
           const itemsToSync = syncPreviewData.filter(item => selectedSyncItems.includes(item.sku));
 
           for (const item of itemsToSync) {
-              // 1. ลบ Dummy เก่าทิ้ง **เฉพาะของสินค้านี้เท่านั้น**
               const dummiesForThisSKU = allDummies.filter(d => (d.sku || '-') === item.sku && d.productName === item.name);
               for (const dummy of dummiesForThisSKU) {
                   batch.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', dummy.id));
                   opsCount++;
               }
 
-              // 2. อัปเดตยอด Sold ของล็อตรับเข้าปกติ **เฉพาะของสินค้านี้**
               for (const b of item.batchesToUpdate) {
                   const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
                   batch.update(docRef, { sold: b.newSold });
@@ -4870,7 +4990,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   }
               }
 
-              // 3. สร้าง Dummy ใหม่ (ถ้ามี) **เฉพาะของสินค้านี้**
               for (const d of item.newDummiesToCreate) {
                   const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
                   batch.set(dummyRef, {
@@ -4914,7 +5033,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       }
       setIsProcessing(false);
   };
-
   const handleStockImport = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -4937,7 +5055,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   const keys = Object.keys(row);
                   const cleanKeys = keys.map(k => ({ original: k, clean: cleanForSearch(k) }));
                   
-                  // 1. Exact match - หาให้เจอและต้องมีข้อมูล!
                   for (let i = 0; i < keywords.length; i++) {
                       const ckw = cleanForSearch(keywords[i]);
                       const matches = cleanKeys.filter(k => k.clean === ckw);
@@ -4947,7 +5064,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                       }
                   }
                   
-                  // 2. Includes match - หาให้เจอและต้องมีข้อมูล!
                   for (let i = 0; i < keywords.length; i++) {
                       const ckw = cleanForSearch(keywords[i]);
                       const matches = cleanKeys.filter(k => {
@@ -4963,7 +5079,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
                 jsonData.forEach((row) => {
                     const name = findInRow(row, ['ชื่อสินค้า', 'productname', 'name']);
-                    // --- FIX: ลำดับความสำคัญ เอา "เลข SKU" ขึ้นก่อน ---
                     const skuInput = findInRow(row, ['เลข SKU', 'SKU ตัวเลือกสินค้า', 'Variation SKU', 'หมายเลขอ้างอิง SKU', 'SKU', 'Seller SKU', 'Product SKU', 'รหัสตัวเลือกสินค้า', 'รหัสสินค้าในร้าน', 'รหัสสินค้า']);
                     const priceVal = findInRow(row, ['ราคาขาย', 'ราคา']);
                     const qtyVal = findInRow(row, ['จำนวน', 'คงเหลือ', 'quantity', 'qty']);
@@ -4971,7 +5086,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                     const qty = (qtyVal !== undefined && qtyVal !== "") ? Number(qtyVal) : 0; 
                     const sellPrice = (priceVal !== undefined && priceVal !== "") ? Number(priceVal) : 0;
                     
-                    // --- FIX: ตัดเครื่องหมายพิเศษออกจาก SKU ---
                     const finalSku = (skuInput && skuInput.toString().trim() !== "") ? String(skuInput).replace(/^['"=]+|['"=]+$/g, '').trim() : "0";
 
                     const dateVal = findInRow(row, ['วันที่', 'date']);
@@ -5058,7 +5172,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       const stockRef = await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'), batchData);
       
       if (totalCost > 0) {
-        // --- Generate System Doc ID for Stock Expense ---
         const prefix = getExpensePrefix('ต้นทุนสินค้า');
         const sysDocId = generateNextDocId(transactions.filter(t => t.type === 'expense'), prefix, 'sysDocId');
 
@@ -5134,10 +5247,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       showToast("ลบรายการ Lot and ข้อมูลรายจ่ายที่เกี่ยวข้องสำเร็จ", "success");
       setDeleteBatchConfirm(null);
       
-      // If we deleted the only batch we were looking at, close history view
       if (viewHistory && viewHistory.batches.length <= 1) setViewHistory(null);
       else if (viewHistory) {
-          // Update viewHistory local state to reflect deletion
           setViewHistory({
               ...viewHistory,
               batches: viewHistory.batches.filter(b => b.id !== deleteBatchConfirm.id)
@@ -5148,7 +5259,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   };
 
   const inventory = useMemo(() => {
-    // --- NEW: หาประวัติการขายล่าสุดของแต่ละ SKU ---
     const lastSoldMap = {};
     transactions.forEach(t => {
        if (t.type !== 'income' || t.isCancelled || t.isFromReconciliation) return;
@@ -5166,7 +5276,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
     const map = {};
     
-    // ตั้งค่าวัดช่วงเวลา
     const start = stockStartDate ? new Date(stockStartDate) : null;
     if (start) start.setHours(0,0,0,0);
     const end = stockEndDate ? new Date(stockEndDate) : null;
@@ -5203,18 +5312,15 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       const sellPrice = Number(batch.sellPrice || 0);
       const profitPerUnit = sellPrice - costPerUnit;
 
-      // ตรวจสอบว่า Lot นี้นำเข้าในช่วงเวลาที่เลือกหรือไม่
       const bDate = normalizeDate(batch.date);
       if ((!start || bDate >= start) && (!end || bDate <= end)) {
           map[groupKey].periodInbound += Number(batch.quantity);
       }
 
-      // --- 🔥 THE FIX: เอา Math.max(0) ออก เพื่อให้ยอดคงเหลือรวมคำนวณถูกต้อง 100% ---
       map[groupKey].totalQty += remaining; 
       
       map[groupKey].totalSold += sold; 
       
-      // การคำนวณมูลค่าคงคลัง ให้ตีความว่าของติดลบคือ 0 บาท (เพื่อไม่ให้เงินในพอร์ตติดลบ)
       map[groupKey].totalValue += (Math.max(0, remaining) * costPerUnit);
       map[groupKey].totalPotentialProfit += (Math.max(0, remaining) * profitPerUnit);
       map[groupKey].batches.push({ ...batch, remaining });
@@ -5226,7 +5332,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           item.sku.toLowerCase().includes(searchTerm.toLowerCase())
       );
 
-    // NEW: การเรียงลำดับตามตัวเลือก (Aging vs Qty)
     if (stockSortType === 'aging') {
         return result.sort((a, b) => {
             if (a.totalQty <= 0 && b.totalQty > 0) return 1;
@@ -5238,16 +5343,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     return result.sort((a,b) => b.totalQty - a.totalQty);
   }, [stockBatches, searchTerm, stockStartDate, stockEndDate, transactions, stockSortType]);
 
-  // --- 🔥 NEW: Pagination Data สำหรับคลังสินค้า ---
   const stockTotalPages = Math.max(1, Math.ceil(inventory.length / stockItemsPerPage));
   const currentStockData = useMemo(() => {
       return inventory.slice((stockPage - 1) * stockItemsPerPage, stockPage * stockItemsPerPage);
   }, [inventory, stockPage]);
 
-  // Reset page when filters change
   useEffect(() => { setStockPage(1); }, [searchTerm, stockStartDate, stockEndDate, stockSortType]);
 
-  // NEW: ตัวกรองสำหรับหน้าต่างเลือกสินค้าเดิม
   const filteredPickerStock = useMemo(() => {
       if (!stockPickerSearch) return inventory;
       return inventory.filter(item => 
@@ -5256,105 +5358,58 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       );
   }, [inventory, stockPickerSearch]);
 
-  // --- NEW: Outbound History Data ---
-  const outboundHistory = useMemo(() => {
+  const stockLedger = useMemo(() => {
       if (!viewHistory) return [];
-      return transactions.filter(t => {
-          if (t.type !== 'income' || t.isCancelled) return false;
-          return (t.items || []).some(item => matchItemToBatch(item.sku, item.desc, viewHistory.sku, viewHistory.name));
-      }).map(t => {
-          const matchedItem = (t.items || []).find(item => matchItemToBatch(item.sku, item.desc, viewHistory.sku, viewHistory.name));
-          return {
-              ...t,
-              matchedQty: Number(matchedItem?.qty || 0),
-              matchedPrice: Number(matchedItem?.sellPrice || matchedItem?.price || 0)
-          };
-      }).sort(sortNewestFirst);
-  }, [transactions, viewHistory]);
-
-  // --- 🔥 NEW: Mapped Batches (Combine Inbound + Outbound + Returns based on FIFO) 🔥 ---
-  const mappedBatches = useMemo(() => {
-      if (!viewHistory) return [];
-
-      // 1. แยกล็อตรับเข้าปกติ (quantity > 0) และเรียงจากเก่าไปใหม่
-      const positiveBatches = [...viewHistory.batches].filter(b => Number(b.quantity) > 0).sort(sortOldestFirst).map((b, index) => ({
-          ...b,
-          lotNum: index + 1,
-          consumedBy: [],
-          tempSold: 0,
-          tempReturned: 0 // NEW: จำนวนที่ถูกหักคืน/ลดสต็อก
-      }));
-
-      // 2. ดึงล็อตที่ติดลบ (ใบลดหนี้ฝั่งซื้อ / ปรับสต็อกติดลบ)
-      const returnBatches = [...viewHistory.batches].filter(b => Number(b.quantity) < 0).sort(sortOldestFirst);
-
-      // 3. จำลองการหักคืนสต็อก (Returns) จากล็อตที่มีอยู่ (FIFO)
-      returnBatches.forEach(rtn => {
-          let neededToReturn = Math.abs(Number(rtn.quantity));
-          if (neededToReturn <= 0) return;
-
-          for (let i = 0; i < positiveBatches.length; i++) {
-              if (neededToReturn <= 0) break;
-              const batch = positiveBatches[i];
-              // ยอดที่สามารถคืนได้ คือ ยอดที่ยังไม่โดนขาย และยังไม่โดนคืน
-              const availableToReturn = Number(batch.quantity) - batch.tempSold - batch.tempReturned;
-
-              if (availableToReturn > 0) {
-                  const take = Math.min(neededToReturn, availableToReturn);
-                  batch.tempReturned += take;
-                  neededToReturn -= take;
-              }
-          }
-      });
-
-      // 4. เรียงรายการขายออก (Outbound) จากเก่าไปใหม่
-      const sortedOutbounds = [...outboundHistory].sort(sortOldestFirst);
-
-      // 5. จำลองการตัด FIFO ใน Memory เพื่อจับคู่ว่าบิลไหนตัดสต็อกจาก Lot ไหน
-      sortedOutbounds.forEach(outbound => {
-          let needed = Number(outbound.matchedQty);
-          if (needed <= 0) return;
-          
-          const txDate = normalizeDate(outbound.date)?.getTime() || 0;
-
-          for (let i = 0; i < positiveBatches.length; i++) {
-              if (needed <= 0) break;
-              const batch = positiveBatches[i];
-              const available = Number(batch.quantity) - batch.tempSold - batch.tempReturned;
-              const bDate = normalizeDate(batch.date)?.getTime() || 0;
-
-              if (available > 0) {
-                  const take = Math.min(needed, available);
-                  batch.consumedBy.push({
-                      tx: outbound,
-                      qtyTaken: take,
-                      isFutureBorrow: bDate > txDate // 🔥 NEW: ตรวจจับการยืมสต็อกล่วงหน้า
+      const ledger = [];
+      
+      stockBatches.forEach(b => {
+          if (matchItemToBatch(b.sku, b.productName, viewHistory.sku, viewHistory.name)) {
+              if (Number(b.quantity) !== 0) {
+                  ledger.push({
+                      id: b.id,
+                      date: normalizeDate(b.date),
+                      ref: b.isOpeningBalance ? 'ยอดยกมา' : (b.parentExpenseId ? `อ้างอิงบิล: ${b.parentExpenseId.substring(0,6)}...` : (b.isAdjustment ? 'ปรับปรุง/โอนย้าย' : 'รับเข้าคลัง')),
+                      type: Number(b.quantity) > 0 ? 'IN' : 'ADJUST_OUT',
+                      qty: Number(b.quantity),
+                      cost: b.costPerUnit,
+                      note: b.adjustReason || 'รับสินค้าเข้า'
                   });
-                  batch.tempSold += take;
-                  needed -= take;
               }
           }
+      });
+
+      transactions.filter(t => t.type === 'income' && !t.isCancelled).forEach(t => {
+          (t.items || []).forEach(item => {
+              if (matchItemToBatch(item.sku, item.desc, viewHistory.sku, viewHistory.name)) {
+                  ledger.push({
+                      id: t.id,
+                      date: normalizeDate(t.date),
+                      ref: t.orderId || t.sysDocId || '-',
+                      type: 'SALE_OUT',
+                      qty: -Math.abs(Number(item.qty)), 
+                      sellPrice: item.sellPrice || item.price,
+                      note: `ออเดอร์: ${t.partnerName || t.channel || 'ลูกค้า'}`
+                  });
+              }
+          });
+      });
+
+      ledger.sort((a, b) => {
+          const timeA = a.date?.getTime() || 0;
+          const timeB = b.date?.getTime() || 0;
+          if (timeA !== timeB) return timeA - timeB; 
           
-          // ถ้ายอดขายมีมากกว่าสต็อก (ติดลบ) ยัดยอดที่เกินไปไว้ที่ Lot สุดท้าย
-          if (needed > 0 && positiveBatches.length > 0) {
-               const lastBatch = positiveBatches[positiveBatches.length - 1];
-               lastBatch.consumedBy.push({
-                   tx: outbound,
-                   qtyTaken: needed,
-                   isNegative: true
-               });
-               lastBatch.tempSold += needed;
-          }
+          if (a.type === 'IN' && b.type !== 'IN') return -1;
+          if (a.type !== 'IN' && b.type === 'IN') return 1;
+          return 0;
       });
 
-      // 6. คำนวณ remaining จริงๆ ที่จะแสดงบนหน้าจอ
-      positiveBatches.forEach(b => {
-          b.displayRemaining = Number(b.quantity) - b.tempSold - b.tempReturned;
+      let runningBalance = 0;
+      return ledger.map(item => {
+          runningBalance += item.qty;
+          return { ...item, balance: runningBalance };
       });
-
-      // 7. คืนค่าโดยเรียงจาก Lot ใหม่ล่าสุดไปเก่า
-      return positiveBatches.sort(sortNewestFirst);
-  }, [viewHistory, outboundHistory]);
+  }, [viewHistory, stockBatches, transactions]);
 
   const handleAiStockAnalysis = async () => {
       setIsAnalyzingStock(true);
@@ -5382,25 +5437,21 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       setIsAnalyzingStock(false);
   };
 
-  // --- NEW: ฟังก์ชันวิเคราะห์ยอดจัดซื้อ (Stock Audit) ---
   const handleRunStockAudit = () => {
       const discrepancies = [];
       
-      // 1. ดึงบิลรายจ่ายทั้งหมด ที่เป็นหมวด 'ต้นทุนสินค้า' และยังไม่ถูกยกเลิก
       const expenseTrans = transactions.filter(t => t.type === 'expense' && (t.category === 'ต้นทุนสินค้า' || t.isFromInventory) && !t.isCancelled);
 
       expenseTrans.forEach(trans => {
           const itemMap = {};
           
-          // นำยอดซื้อจากบิลมาตั้งเป็นฐาน (Purchased)
           (trans.items || []).forEach(item => {
-              if (String(item.desc).startsWith('[ของแจก/โปรโมท]')) return; // ข้ามของแจกที่ไม่ต้องเข้าคลัง
+              if (String(item.desc).startsWith('[ของแจก/โปรโมท]')) return; 
               const key = item.sku && item.sku !== '-' ? item.sku : item.desc;
               if (!itemMap[key]) itemMap[key] = { name: item.desc, sku: item.sku || '-', purchased: 0, received: 0 };
               itemMap[key].purchased += Number(item.qty) || 0;
           });
 
-          // ดึงยอดรับเข้าจากคลัง (Received) ที่ผูกกับบิลนี้ (parentExpenseId หรือ linkedLotId)
           const relatedBatches = stockBatches.filter(b => 
               b.parentExpenseId === trans.id || 
               trans.linkedLotId === b.id
@@ -5412,15 +5463,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               itemMap[key].received += Number(batch.quantity) || 0;
           });
 
-          // หาผลต่าง
           Object.values(itemMap).forEach(data => {
               const diff = data.received - data.purchased;
               if (diff !== 0) {
-                  // --- FIX: ดึงข้อมูลต้นทุนและรายละเอียดจากบิลเดิม เพื่อเตรียมสำหรับปุ่ม "ดึงเข้าคลัง" ---
                   const originalItem = (trans.items || []).find(i => (i.sku === data.sku || i.desc === data.name));
                   
                   discrepancies.push({
-                      transId: trans.id, // เก็บ ID บิลตั้งต้น
+                      transId: trans.id, 
                       sysDocId: trans.sysDocId || '-',
                       taxInvoiceNo: trans.taxInvoiceNo || trans.orderId || '-',
                       date: trans.date,
@@ -5437,7 +5486,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           });
       });
 
-      // เรียงจากใหม่ไปเก่า
       discrepancies.sort((a, b) => {
           const tA = normalizeDate(a.date)?.getTime() || 0;
           const tB = normalizeDate(b.date)?.getTime() || 0;
@@ -5448,9 +5496,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       setShowStockAuditModal(true);
   };
 
-  // --- NEW: ฟังก์ชันดึงสต็อกที่หายไปกลับเข้าคลังอัตโนมัติ ---
   const handleSyncMissingStock = async (auditItem) => {
-      if (!user || auditItem.diff >= 0) return; // ทำงานเฉพาะส่วนที่ขาด (diff ติดลบ)
+      if (!user || auditItem.diff >= 0) return; 
       
       const missingQty = Math.abs(auditItem.diff);
       setIsProcessing(true);
@@ -5469,14 +5516,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
           const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
 
-          // สร้าง Lot สต็อกใหม่ โดยอ้างอิงข้อมูลจากบิลรายจ่ายเดิม
           const newBatchData = {
               productName: auditItem.name,
               sku: auditItem.sku,
               category: auditItem.category,
               quantity: missingQty,
               costPerUnit: auditItem.buyPrice,
-              sellPrice: 0, // ทิ้งไว้ให้ไปตั้งราคาตอนขายทีหลัง
+              sellPrice: 0, 
               date: normalizeDate(auditItem.date),
               sold: 0,
               userId: user.uid,
@@ -5491,37 +5537,31 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           opsCount++;
           await checkCommit();
 
-          // --- Mini-FIFO Logic for this specific SKU ---
-          // 1. ดึง Batch เดิมทั้งหมดของสินค้านี้มา (แก้ไขการ Filter ให้ตรงเป๊ะ)
           let skuBatches = stockBatches.filter(b => (b.sku || '-') === auditItem.sku && b.productName === auditItem.name);
           
-          // แยกล็อต Dummy (ที่เกิดจากของขาด) ออกมาเพื่อเตรียมลบทิ้ง
           const dummiesToDelete = skuBatches.filter(b => b.isAdjustment && b.adjustReason === 'สต็อกติดลบ (ไม่มีในคลัง)');
           const normalBatches = skuBatches.filter(b => !(b.isAdjustment && b.adjustReason === 'สต็อกติดลบ (ไม่มีในคลัง)')).map(b => ({ ...b, sold: 0 }));
           
-          // นำล็อตใหม่ที่กำลังจะเซฟ เข้าไปรวมในกองปกติ
           normalBatches.push({ id: newBatchRef.id, ...newBatchData, sold: 0 });
           normalBatches.sort(sortOldestFirst);
 
-          // 2. สั่งลบ Dummy เดิมออกให้หมด
           for (const dummy of dummiesToDelete) {
               batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', dummy.id));
               opsCount++;
               await checkCommit();
           }
 
-          // 3. ดึงประวัติการขาย (Income) มาเพื่อไล่ตัด FIFO ใหม่
           const incomeTrans = transactions.filter(t => t.type === 'income' && !t.isCancelled).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
 
           const newDummies = [];
           
-          // 4. เริ่มลูปจำลองการตัดสต็อก
           incomeTrans.forEach(trans => {
               (trans.items || []).forEach(item => {
-                  // 🔥 FIX IS HERE: สลับ Argument ให้ถูกต้อง (item.sku ต้องอยู่ฝั่งซ้าย, auditItem.sku อยู่ฝั่งขวา)
                   if (matchItemToBatch(item.sku, item.desc, auditItem.sku, auditItem.name)) {
                       let needed = Number(item.qty);
                       if (needed <= 0) return;
+
+                      normalBatches.sort(sortClosestToDateThenOldest(trans.date));
 
                       for (let i = 0; i < normalBatches.length; i++) {
                           if (needed <= 0) break;
@@ -5541,7 +5581,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                           }
                       }
 
-                      // ถ้าไล่ตัดแล้วยังของไม่พอ ให้จดทดไว้ไปสร้าง Dummy กลับคืนมา
                       if (needed > 0) {
                           newDummies.push({
                               productName: item.desc,
@@ -5563,7 +5602,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               });
           });
 
-          // 5. นำยอด Sold ที่คำนวณใหม่กลับไปอัปเดตใน Batch
           for (const b of normalBatches) {
               if (b.id !== newBatchRef.id) { 
                   batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id), { sold: b.sold });
@@ -5576,7 +5614,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               }
           }
 
-          // 6. สร้าง Dummy ใหม่กลับเข้าไป
           for (const dummy of newDummies) {
               const dRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
               batchWriter.set(dRef, { ...dummy, createdAt: serverTimestamp() });
@@ -5590,7 +5627,6 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
           showToast(`ดึง "${auditItem.name}" เข้าคลังสำเร็จ พร้อมปรับสมดุล FIFO ทันที`, "success");
 
-          // อัปเดตตารางให้แถวนี้หายไป หรือรีเฟรชตาราง
           const newResults = auditResults.filter(item => item !== auditItem);
           setAuditResults(newResults);
           
@@ -5609,11 +5645,16 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       <div className="flex justify-between items-center flex-wrap gap-4 text-left">
         <h3 className="text-2xl font-bold flex items-center gap-2 text-left text-slate-800"><Box className="text-indigo-600"/> คลังสินค้า & มาร์จิ้น (Performance)</h3>
         <div className="flex items-center gap-2 text-left flex-wrap">
+          
+          {/* --- 🔥 NEW: ปุ่มล้างสต็อกผี (Dummy Stocks) --- */}
+          <button onClick={handleClearDummyStocks} disabled={isProcessing} className="bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-sm" title="กวาดล้างสต็อกขยะที่ระบบเคยสร้างอัตโนมัติเมื่อหาของไม่เจอ">
+            {isProcessing ? <Loader className="animate-spin" size={16}/> : <Trash2 size={16}/>} ล้างสต็อกผี
+          </button>
+
           <button onClick={handleAiStockAnalysis} disabled={isAnalyzingStock} className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50">
             {isAnalyzingStock ? <Loader className="animate-spin" size={16}/> : <Sparkles size={16}/>} AI Smart Inventory
           </button>
 
-          {/* NEW: ปุ่มเรียกใช้งานระบบ Stock Audit */}
           <button onClick={handleRunStockAudit} disabled={isProcessing} className="bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-sm" title="ตรวจสอบยอดจัดซื้อเทียบกับยอดรับเข้าคลัง">
             <ClipboardList size={16}/> ตรวจสอบยอดรับเข้า (Audit)
           </button>
@@ -5672,7 +5713,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   </div>
               </div>
               <div className="flex-1 bg-rose-50/50 p-5 rounded-2xl border border-rose-100">
-                  <h4 className="font-black text-rose-700 mb-3 flex items-center gap-2"><ArrowDown size={18}/> Dead Stock Detection (สต็อกจม)</h4>
+                  <h4 className="font-bold text-rose-700 mb-3 flex items-center gap-2"><ArrowDown size={18}/> Dead Stock Detection (สต็อกจม)</h4>
                   <div className="space-y-3">
                       {aiInsights.deadstock?.map((it, idx) => (
                           <div key={idx} className="bg-white p-3 rounded-xl border border-rose-50 shadow-sm text-sm">
@@ -5976,6 +6017,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
         </div>
       )}
       
+      {/* --- 🔥 THE ULTIMATE FIX: เปลี่ยนหน้าตาประวัติให้เป็นแบบสมุดบัญชี (Stock Ledger) --- */}
       {viewHistory && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[500] flex items-center justify-center p-4 text-left">
           <div className="bg-white rounded-[40px] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl animate-in zoom-in-95 text-left overflow-hidden">
@@ -5988,147 +6030,52 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                         <h3 className="text-xl md:text-2xl font-black text-slate-800 text-left line-clamp-1">{viewHistory.name}</h3>
                         <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                             <p className="text-xs text-slate-500 font-mono bg-white px-2 py-0.5 rounded border border-slate-200 shadow-sm">SKU: {viewHistory.sku || '-'}</p>
-                            <p className="text-xs text-slate-500 font-bold">คลังรวมทั้งหมด: <span className="text-indigo-600 font-black">{viewHistory.totalQty}</span> ชิ้น</p>
+                            <p className="text-xs text-slate-500 font-bold">คลังคงเหลือปัจจุบัน: <span className={`font-black ${viewHistory.totalQty < 0 ? 'text-rose-600' : 'text-indigo-600'}`}>{viewHistory.totalQty}</span> ชิ้น</p>
                         </div>
                     </div>
                 </div>
                 <button onClick={() => setViewHistory(null)} className="p-2.5 bg-white hover:bg-slate-200 rounded-full text-slate-400 hover:text-slate-600 transition-colors shadow-sm shrink-0"><X size={20}/></button>
             </div>
 
-            <div className="flex-1 overflow-auto p-4 md:p-6 space-y-4 text-left bg-slate-50/50 custom-scrollbar">
-                {mappedBatches.map((b, i) => {
-                    const isLowest = b.costPerUnit === Math.min(...viewHistory.batches.filter(v=>v.quantity > 0).map(v => v.costPerUnit));
-                    const margin = b.sellPrice > 0 ? ((b.sellPrice - b.costPerUnit) / b.sellPrice) * 100 : 0;
-                    
-                    return (
-                        <div key={i} className={`relative rounded-[24px] border transition-all flex flex-col bg-white overflow-hidden shadow-sm ${isLowest && !b.isAdjustment ? 'border-emerald-300' : 'border-slate-200 hover:border-indigo-200'}`}>
-                            
-                            {/* --- INBOUND INFO (รับเข้า) --- */}
-                            <div className={`p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${isLowest && !b.isAdjustment ? 'bg-emerald-50/80' : ''}`}>
-                                <div className="flex flex-col gap-1 w-full md:w-auto">
-                                    <div className="flex items-center gap-2">
-                                        <span className={`px-2 py-0.5 rounded-lg font-black text-[10px] ${isLowest && !b.isAdjustment ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600'}`}>LOT {b.lotNum}</span>
-                                        <span className="text-sm font-black text-slate-700 flex items-center gap-1.5"><Calendar size={14} className="text-slate-400"/> {formatDate(b.date)}</span>
-                                    </div>
-                                    
-                                    {(!b.isAdjustment || b.parentExpenseId) && (() => {
-                                        const parentTx = transactions.find(t => t.type === 'expense' && (t.id === b.parentExpenseId || t.linkedLotId === b.id));
-                                        if (b.isAdjustment && !parentTx) return null;
-                                        const taxInv = parentTx?.taxInvoiceNo;
-                                        const sysId = parentTx?.sysDocId;
-                                        const refDisplay = (taxInv && String(taxInv).trim() !== '' && taxInv !== '-') ? `ใบกำกับ: ${taxInv}` : (sysId ? `อ้างอิงระบบ: ${sysId}` : 'ไม่พบบิลอ้างอิง');
-                                        return (
-                                            <div className="text-[10px] font-mono text-indigo-600 bg-indigo-50 px-2 py-1.5 rounded-md border border-indigo-100 w-fit flex items-center gap-1.5 mt-1 shadow-sm" title="เลขที่ใบกำกับภาษี / เอกสารอ้างอิงฝั่งซื้อ">
-                                                <FileText size={12}/> {refDisplay}
-                                            </div>
-                                        );
-                                    })()}
-
-                                    <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-                                        {b.isGiveaway && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5"><Gift size={10}/> แจกฟรี</span>}
-                                        {isLowest && !b.isAdjustment && <span className="bg-emerald-600 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5"><TrendingUp size={10}/> Best Cost</span>}
-                                        {b.paymentStatus === 'credit' && <span className="bg-amber-500 text-white px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5"><Clock size={10}/> Credit</span>}
-                                        {b.isAdjustment && b.adjustReason && (
-                                            <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[9px] font-black truncate max-w-[200px] flex items-center gap-0.5" title={b.adjustReason}>
-                                                <ArrowRightLeft size={10}/> {b.adjustReason}
-                                            </span>
-                                        )}
-                                        {/* --- NEW: Badge แจ้งสถานะโดนหักคืนสต็อก (ใบลดหนี้) --- */}
-                                        {b.tempReturned > 0 && (
-                                            <span className="bg-pink-100 text-pink-700 px-2 py-0.5 rounded text-[9px] font-black uppercase flex items-center gap-0.5 border border-pink-200" title="ถูกหักสต็อกเพื่อส่งคืนซัพพลายเออร์">
-                                                <ArrowRightLeft size={10}/> คืนสินค้า(ลดหนี้) {b.tempReturned} ชิ้น
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-
-                                <div className="flex items-center gap-6 bg-slate-50 md:bg-transparent p-3 md:p-0 rounded-xl border border-slate-100 md:border-none w-full md:w-auto">
-                                    <div>
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ทุน/หน่วย</p>
-                                        <p className="text-base font-black text-slate-800">{formatCurrency(b.costPerUnit)} <span className="text-[10px]">฿</span></p>
-                                    </div>
-                                    
-                                    {b.sellPrice > 0 && (
-                                        <div className="border-l border-slate-200 pl-6">
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase">ขาย / กำไร</p>
-                                            <div className="flex items-center gap-2">
-                                                <p className="text-base font-black text-indigo-600">{formatCurrency(b.sellPrice)} <span className="text-[10px]">฿</span></p>
-                                                {!b.isAdjustment && (
-                                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-black ${margin > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                                                        {margin > 0 ? '+' : ''}{margin.toFixed(0)}%
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="flex items-center justify-between w-full md:w-auto md:justify-end gap-6 border-t md:border-none border-slate-100 pt-3 md:pt-0">
-                                    <div className="text-right flex flex-col md:items-end">
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase">คงเหลือ</p>
-                                        <p className={`text-base font-black ${b.displayRemaining <= 0 ? 'text-rose-500' : 'text-slate-700'}`}>
-                                            {b.displayRemaining} <span className="text-xs text-slate-400 font-medium">/ {b.quantity}</span>
-                                        </p>
-                                    </div>
-                                    <button onClick={() => setDeleteBatchConfirm(b)} className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-400 hover:bg-rose-500 hover:text-white rounded-xl transition-all shrink-0" title="ลบล็อตนี้">
-                                        <Trash2 size={14}/>
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* --- OUTBOUND INFO (ขายออก) --- */}
-                            <div className="bg-slate-50 border-t border-slate-100 p-4 md:px-6">
-                                <div className="flex justify-between items-center mb-3">
-                                    <p className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1.5">
-                                        <ArrowUp size={12} className="text-rose-500"/> 
-                                        รายการที่ตัดสต็อกจาก Lot นี้
-                                    </p>
-                                    <span className="text-[10px] font-black bg-rose-100 text-rose-600 px-2 py-0.5 rounded-md">ถูกขาย/ตัดไปแล้ว: {b.tempSold}</span>
-                                </div>
-                                
-                                {b.consumedBy && b.consumedBy.length > 0 ? (
-                                    <div className="space-y-2">
-                                        {b.consumedBy.map((consume, cIdx) => (
-                                            <div key={cIdx} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white border border-slate-100 p-3 rounded-xl hover:border-indigo-200 transition-colors gap-2">
-                                                <div className="flex items-start sm:items-center gap-3">
-                                                    <span className="text-slate-400 font-mono text-[10px] sm:text-xs shrink-0 bg-slate-50 px-2 py-1 rounded-md">{formatDate(consume.tx.date)}</span>
-                                                    <div className="flex flex-col">
-                                                        <span className="font-bold text-slate-700 text-xs sm:text-sm flex items-center gap-2 flex-wrap">
-                                                            {consume.tx.orderId ? `Order: ${consume.tx.orderId}` : `Ref: ${consume.tx.sysDocId || consume.tx.id}`}
-                                                            {consume.isFutureBorrow && <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded text-[8px] font-black uppercase border border-amber-200" title="ออเดอร์นี้เกิดก่อนวันที่รับของเข้า ล็อตนี้จึงถูกดึงไปตัดล่วงหน้า">ยืมสต็อกล่วงหน้า</span>}
-                                                        </span>
-                                                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                                            <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 rounded">{consume.tx.channel || 'หน้าร้าน'}</span>
-                                                            <span className="text-[9px] text-slate-500 truncate max-w-[150px]">{consume.tx.partnerName || 'ลูกค้าทั่วไป'}</span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto border-t sm:border-t-0 border-slate-100 pt-2 sm:pt-0">
-                                                    <div className="flex flex-col items-start sm:items-end">
-                                                        <span className="text-[9px] text-slate-400 uppercase font-bold">ราคาขาย</span>
-                                                        <span className="font-bold text-slate-700 text-xs sm:text-sm">{formatCurrency(consume.tx.matchedPrice)} ฿</span>
-                                                    </div>
-                                                    <div className="flex flex-col items-end border-l border-slate-200 pl-4">
-                                                        <span className="text-[9px] text-slate-400 uppercase font-bold">ตัดไป (ชิ้น)</span>
-                                                        <span className={`font-black text-sm sm:text-base ${consume.isNegative ? 'text-rose-600' : 'text-rose-500'}`}>
-                                                            -{consume.qtyTaken}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="bg-white border border-slate-100 rounded-xl p-4 text-center">
-                                        <span className="text-xs text-slate-400 font-bold">ยังไม่มีการตัดสต็อกถูกขายจาก Lot นี้</span>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    );
-                })}
+            <div className="flex-1 overflow-auto p-4 md:p-6 text-left bg-slate-50/50 custom-scrollbar">
+               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm h-full flex flex-col">
+                   <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                       <h4 className="font-bold text-slate-700 text-sm flex items-center gap-2"><List size={16} className="text-indigo-500"/> สมุดบัญชีคุมสินค้า (Stock Ledger)</h4>
+                       <span className="text-[10px] text-slate-400 font-bold">แสดงประวัติเข้า-ออกแบบเรียงตามวันที่</span>
+                   </div>
+                   <div className="flex-1 overflow-auto custom-scrollbar">
+                       <table className="w-full text-xs text-left">
+                           <thead className="bg-slate-100 text-slate-500 uppercase font-bold sticky top-0 border-b border-slate-200 shadow-sm">
+                               <tr>
+                                   <th className="p-3 pl-4">วันที่ (Date)</th>
+                                   <th className="p-3">อ้างอิง (Reference)</th>
+                                   <th className="p-3">รายละเอียด (Note)</th>
+                                   <th className="p-3 text-right text-emerald-600">เข้า (IN)</th>
+                                   <th className="p-3 text-right text-rose-600">ออก (OUT)</th>
+                                   <th className="p-3 text-right text-indigo-600 pr-4">คงเหลือ (Balance)</th>
+                               </tr>
+                           </thead>
+                           <tbody className="divide-y divide-slate-100">
+                               {stockLedger.length > 0 ? stockLedger.map((item, idx) => (
+                                   <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                       <td className="p-3 pl-4 text-slate-500 whitespace-nowrap">{formatDate(item.date)}</td>
+                                       <td className="p-3 font-mono font-bold text-indigo-600">{item.ref}</td>
+                                       <td className="p-3 text-slate-600 line-clamp-2 max-w-[200px]" title={item.note}>{item.note}</td>
+                                       <td className="p-3 text-right font-black text-emerald-600 bg-emerald-50/20">{item.type === 'IN' ? `+${item.qty}` : '-'}</td>
+                                       <td className="p-3 text-right font-black text-rose-500 bg-rose-50/20">{['SALE_OUT', 'ADJUST_OUT'].includes(item.type) ? item.qty : '-'}</td>
+                                       <td className={`p-3 text-right pr-4 font-black ${item.balance < 0 ? 'text-rose-600' : 'text-slate-800'}`}>{item.balance}</td>
+                                   </tr>
+                               )) : (
+                                   <tr>
+                                       <td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่พบความเคลื่อนไหวของสินค้านี้</td>
+                                   </tr>
+                               )}
+                           </tbody>
+                       </table>
+                   </div>
+               </div>
             </div>
-            <div className="p-6 border-t border-slate-100 bg-white flex justify-center text-center">
+            <div className="p-6 border-t border-slate-100 bg-white flex justify-center text-center shrink-0">
                 <button onClick={()=>setViewHistory(null)} className="px-10 py-3.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-2xl font-black text-slate-600 transition-colors shadow-sm">ปิดหน้าต่าง</button>
             </div>
           </div>
@@ -6220,13 +6167,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       {/* Modal ปรับปรุงสต็อก (Stock Adjustment) */}
       {adjustStockItem && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-left">
-            <div className="flex justify-between items-center mb-6 text-left">
+          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-left max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center mb-6 text-left shrink-0">
               <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><ArrowRightLeft className="text-blue-600"/> ปรับปรุง/โอนย้ายสต็อก</h3>
-              <button onClick={()=>{setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false);}} className="text-center text-slate-400 hover:text-slate-600"><X/></button>
+              <button onClick={()=>{setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false); setAdjustAttachmentUrl('');}} className="text-center text-slate-400 hover:text-slate-600"><X/></button>
             </div>
             
-            <div className="space-y-4 text-left">
+            <div className="space-y-4 text-left overflow-y-auto custom-scrollbar flex-1 pr-2 pb-2">
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">สินค้าต้นทาง (กำลังเลือก)</p>
                   <p className="font-bold text-slate-800 text-sm leading-tight">{adjustStockItem.name}</p>
@@ -6237,14 +6184,20 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               </div>
               
               <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
-                  <button onClick={()=>setAdjustData({...adjustData, type: 'add', reason: 'นับสต็อกจริงไม่ตรง (ยอดเกิน)'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'add' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>+ เพิ่ม</button>
-                  <button onClick={()=>setAdjustData({...adjustData, type: 'remove', reason: 'สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'remove' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>- ลบ</button>
-                  <button onClick={()=>{setAdjustData({...adjustData, type: 'transfer', targetKey: '', reason: 'แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อขายลดราคา)'}); setTransferSearchTerm(''); setShowTransferList(false);}} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'transfer' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>⇄ สลับ/โอนย้าย</button>
+                  <button onClick={()=>setAdjustData({...adjustData, type: 'add', reason: 'ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'add' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>+ เพิ่ม</button>
+                  <button onClick={()=>setAdjustData({...adjustData, type: 'remove', reason: 'สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)'})} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'remove' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>- ลบ/เคลม</button>
+                  <button onClick={()=>{setAdjustData({...adjustData, type: 'transfer', targetKey: '', reason: 'บันทึกผิดรสชาติ/ผิดรุ่น (ปรับแก้)'}); setTransferSearchTerm(''); setShowTransferList(false);}} className={`flex-1 py-2.5 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${adjustData.type === 'transfer' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>⇄ สลับ/โอนย้าย</button>
               </div>
 
-              <div>
-                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">จำนวนที่ต้องการ {adjustData.type === 'add' ? 'เพิ่ม' : adjustData.type === 'remove' ? 'ลบ' : 'โอนย้าย'}</label>
-                  <input type="number" min="1" value={adjustData.qty} onChange={e=>setAdjustData({...adjustData, qty: e.target.value})} className="w-full bg-white border-2 border-slate-100 p-4 rounded-2xl text-xl font-black outline-none focus:border-blue-300 text-center text-slate-800" placeholder="ระบุจำนวนชิ้น..." />
+              <div className="grid grid-cols-2 gap-3">
+                  <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">วันที่ปรับปรุง</label>
+                      <input type="date" value={adjustData.date} onChange={e=>setAdjustData({...adjustData, date: e.target.value})} className="w-full bg-white border border-slate-200 p-3 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100 text-slate-700" />
+                  </div>
+                  <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">จำนวนชิ้น</label>
+                      <input type="number" min="1" value={adjustData.qty} onChange={e=>setAdjustData({...adjustData, qty: e.target.value})} className="w-full bg-white border-2 border-slate-100 p-3 rounded-xl text-lg font-black outline-none focus:border-blue-300 text-center text-slate-800" placeholder="0" />
+                  </div>
               </div>
 
               {adjustData.type === 'transfer' && (
@@ -6300,39 +6253,75 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   <select value={adjustData.reason} onChange={e=>setAdjustData({...adjustData, reason: e.target.value})} className="w-full bg-slate-50 p-3.5 rounded-xl border border-slate-100 text-sm font-bold outline-none text-slate-700 cursor-pointer focus:ring-2 focus:ring-blue-100">
                       {adjustData.type === 'remove' && (
                           <>
-                              <option value="สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)">สินค้าชำรุด/สูญหาย (ตัดทิ้งเป็นค่าใช้จ่าย)</option>
-                              <option value="สินค้าหมดอายุ (ตัดจำหน่าย)">สินค้าหมดอายุ (ตัดทิ้งเป็นค่าใช้จ่าย)</option>
-                              <option value="สูญเสียจากการขนส่ง (เคลมไม่ได้)">สูญเสียจากการขนส่ง เคลมไม่ได้ (ตัดทิ้งเป็นค่าใช้จ่าย)</option>
-                              <option value="นับสต็อกจริงไม่ตรง (ยอดขาด)">นับสต็อกจริงไม่ตรง (ยอดขาด)</option>
-                              <option value="นำไปใช้ในกิจการ/แจก">นำไปใช้ในกิจการ/แจก</option>
+                              <option value="สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)">สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)</option>
+                              <option value="สินค้าหมดอายุ/เสื่อมสภาพ">สินค้าหมดอายุ/เสื่อมสภาพ</option>
+                              <option value="เปลี่ยนสินค้าให้ลูกค้า (เคลม/ส่งผิด)">เปลี่ยนสินค้าให้ลูกค้า (เคลม/ส่งผิด)</option>
+                              <option value="สูญเสียจากการขนส่ง (เคลมไม่ได้)">สูญเสียจากการขนส่ง (เคลมไม่ได้)</option>
+                              <option value="ยอดตรวจนับจริงต่ำกว่าระบบ (ยอดขาด)">ยอดตรวจนับจริงต่ำกว่าระบบ (ยอดขาด)</option>
+                              <option value="นำไปใช้ในกิจการ/เป็นตัวอย่างสินค้า">นำไปใช้ในกิจการ/เป็นตัวอย่างสินค้า</option>
+                              <option value="แจกฟรี/โปรโมชั่น (จัดกิจกรรม)">แจกฟรี/โปรโมชั่น (จัดกิจกรรม)</option>
                               <option value="อื่นๆ">อื่นๆ</option>
                           </>
                       )}
                       {adjustData.type === 'add' && (
                           <>
-                              <option value="นับสต็อกจริงไม่ตรง (ยอดเกิน)">นับสต็อกจริงไม่ตรง (ยอดเกิน)</option>
-                              <option value="ได้ของแถมจาก Supplier">ได้ของแถมจาก Supplier</option>
-                              <option value="ลูกค้ารับสินค้านี้ทดแทน">ลูกค้ารับสินค้านี้ทดแทน</option>
+                              <option value="ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)">ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)</option>
+                              <option value="ลูกค้าส่งคืนสินค้า (เคลม/รับของเดิมคืน)">ลูกค้าส่งคืนสินค้า (เคลม/รับของเดิมคืน)</option>
+                              <option value="ได้รับสินค้าแถม/ชดเชยจาก Supplier">ได้รับสินค้าแถม/ชดเชยจาก Supplier</option>
+                              <option value="รับคืนสินค้าจากการยืม/นำไปใช้">รับคืนสินค้าจากการยืม/นำไปใช้</option>
                               <option value="อื่นๆ">อื่นๆ</option>
                           </>
                       )}
                       {adjustData.type === 'transfer' && (
                           <>
-                              <option value="แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อขายลดราคา)">แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อขายลดราคา)</option>
-                              <option value="บันทึกผิดรสชาติ/ผิดรุ่น (โอนแก้)">บันทึกผิดรสชาติ/ผิดรุ่น (โอนแก้)</option>
-                              <option value="แพ็คจัดเป็นชุด Bundle/เซ็ต">แพ็คจัดเป็นชุด Bundle/เซ็ต</option>
+                              <option value="บันทึกผิดรสชาติ/ผิดรุ่น (ปรับแก้)">บันทึกผิดรสชาติ/ผิดรุ่น (ปรับแก้)</option>
+                              <option value="แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อลดราคา)">แยกเป็นสินค้ามีตำหนิ/เกรด B (เพื่อลดราคา)</option>
+                              <option value="เปลี่ยนสินค้าให้ลูกค้า (จาก A เป็น B)">เปลี่ยนสินค้าให้ลูกค้า (จาก A เป็น B)</option>
+                              <option value="แพ็คจัดเป็นชุด (Bundle/เซ็ตสินค้า)">แพ็คจัดเป็นชุด (Bundle/เซ็ตสินค้า)</option>
                               <option value="อื่นๆ">อื่นๆ</option>
                           </>
                       )}
                   </select>
               </div>
 
-              <div className="flex gap-3 pt-4 text-center">
-                <button onClick={() => {setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false);}} className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+              {/* --- 🔥 NEW: ส่วนอัปโหลดรูปภาพหลักฐาน --- */}
+              <div className="animate-fadeIn pt-4 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-2">
+                      <label className="text-[10px] font-bold uppercase text-slate-500 block flex items-center gap-1"><Camera size={14}/> แนบรูปหลักฐาน (Evidence)</label>
+                      <span className="text-[9px] text-slate-400">* แนะนำสำหรับของชำรุด/เคลม</span>
+                  </div>
+                  
+                  {adjustAttachmentUrl ? (
+                      <div className="relative group inline-block w-full">
+                          <a href={adjustAttachmentUrl} target="_blank" rel="noopener noreferrer" className="block">
+                              <img src={adjustAttachmentUrl} alt="Evidence" className="h-32 w-full object-cover rounded-xl border border-slate-200 shadow-sm" />
+                          </a>
+                          <button type="button" onClick={handleRemoveAdjustFile} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
+                      </div>
+                  ) : (
+                      <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
+                          {isUploadingAdjustFile ? (
+                              <div className="flex flex-col items-center gap-1">
+                                  <Loader className="animate-spin text-blue-500" size={16}/>
+                                  <span className="text-[9px] font-bold text-blue-500">กำลังอัปโหลด...</span>
+                              </div>
+                          ) : (
+                              <>
+                                  <FileUp size={16} className="text-slate-400 mb-1"/>
+                                  <span className="text-[10px] font-bold text-slate-600">คลิกอัปโหลดรูปภาพ/แชทลูกค้า</span>
+                              </>
+                          )}
+                          <input type="file" className="hidden" accept="image/*" onChange={handleUploadAdjustFile} disabled={isUploadingAdjustFile} />
+                      </label>
+                  )}
+              </div>
+
+            </div>
+            <div className="flex gap-3 pt-4 border-t border-slate-100 mt-2 text-center shrink-0">
+                <button onClick={() => {setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false); setAdjustAttachmentUrl('');}} className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
                 <button onClick={handleAdjustStock} disabled={isProcessing} className={`flex-1 py-3.5 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 text-center transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50 ${adjustData.type === 'add' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200' : adjustData.type === 'transfer' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200' : 'bg-rose-600 hover:bg-rose-700 shadow-rose-200'}`}>
                   {isProcessing ? <Loader className="animate-spin" size={16}/> : <CheckCircle size={16}/>} ยืนยัน
                 </button>
-              </div>
             </div>
           </div>
         </div>
@@ -9310,7 +9299,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   let needed = Number(item.qty);
                   const lots = stockSnap
                     .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
-                    .sort(sortOldestFirst);
+                    .sort(sortClosestToDateThenOldest(formData.date));
 
                   for (let i = 0; i < lots.length; i++) {
                       const lot = lots[i];
@@ -9375,7 +9364,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       if (diff > 0) {
                           // ต้องตัดสต็อกเพิ่ม
                           let needed = diff;
-                          const lots = stockSnap.filter(b => matchItemToBatch(targetSku, targetDesc, b.sku, b.productName)).sort(sortOldestFirst);
+                          const lots = stockSnap.filter(b => matchItemToBatch(targetSku, targetDesc, b.sku, b.productName)).sort(sortClosestToDateThenOldest(formData.date));
                           for (let i = 0; i < lots.length; i++) {
                               const lot = lots[i];
                               if (needed <= 0) break;
