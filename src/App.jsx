@@ -2084,7 +2084,17 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         cancelReason: ['เหตุผลการยกเลิก', 'Cancel Reason'],
         orderDate: ['Order Creation Time', 'Created Time', 'เวลาที่สร้างคำสั่งซื้อ', 'เวลาที่สร้าง'],
         settleDate: ['Payment Time', 'วันที่ชำระเงิน', 'เวลาชำระเงิน', 'Settlement Time'],
-        price: ['SKU Unit Original Price', 'ราคาปกติของ SKU', 'Product Price', 'ราคาขาย', 'Unit Price', 'ราคาปกติ'],
+        price: [
+            'SKU Subtotal Before Discount',
+            'SKU Original Price',
+            'SKU Unit Original Price',
+            'ราคาปกติของ SKU',
+            'ยอดรวมสินค้าก่อนหักส่วนลด',
+            'Product Price',
+            'ราคาขาย',
+            'Unit Price',
+            'ราคาปกติ'
+        ],
         qty: ['Quantity', 'จำนวน', 'Qty'],
         sellerDiscount: ['Seller Discount', 'ส่วนลดจากผู้ขาย', 'ส่วนลดร้านค้า', 'Merchant Discount'],
         transFee: ['Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน', 'Fee'],
@@ -11559,10 +11569,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                 <div className={`inline-flex flex-col items-end px-3 py-2 rounded-2xl text-right shadow-sm border ${t.isCancelled ? 'bg-slate-50 text-slate-400 border-slate-200' : t.isPurchaseCreditNote ? 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' : (t.type==='income'?'bg-emerald-50 text-emerald-700 border-emerald-200':'bg-rose-50 text-rose-700 border-rose-200')}`}>
                                     <p className="text-[9px] font-black uppercase opacity-60 leading-none mb-1 text-right">{t.isPurchaseCreditNote ? 'ลดหนี้/รับเงินคืน' : t.type==='income'?'Gross Sales':'Expense'}</p>
                                     <p className={`text-base font-black leading-none text-right ${t.isCancelled ? 'line-through' : ''}`}>
-                                        {t.isPurchaseCreditNote && (t.grandTotal || t.total) !== 0 ? '-' : ''}{formatCurrency(Math.abs(t.grandTotal || t.total))}
+                                        {t.isPurchaseCreditNote && (t.grandTotal || t.total) !== 0 ? '-' : ''}
+                                        {formatCurrency(t.type === 'income' ? (t.total || 0) : Math.abs(t.grandTotal || t.total))}
                                     </p>
                                     
-                                    {t.type === 'income' && t.actualSettledAmt !== undefined && !t.isCancelled && (
+                                    {t.type === 'income' && (t.actualSettledAmt !== undefined || t.platformFee > 0 || t.grandTotal !== undefined) && !t.isCancelled && (
                                         <div className="mt-1.5 pt-1.5 border-t border-emerald-200/50 flex flex-col items-end gap-1 w-full min-w-[140px]">
                                             {t.platformFee > 0 && (
                                                 <div className="text-[9px] text-rose-500 font-bold flex justify-between w-full gap-2">
@@ -11572,7 +11583,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                             )}
                                             <div className="text-[10px] text-emerald-700 font-black flex justify-between w-full gap-2 bg-emerald-100/50 px-1.5 py-1 rounded shadow-sm border border-emerald-200" title="ยอดเงินโอนเข้าบัญชีสุทธิ">
                                                 <span className="flex items-center gap-1"><Wallet size={10}/> โอนเข้าจริง:</span>
-                                                <span>{formatCurrency(t.actualSettledAmt)}</span>
+                                                <span>{formatCurrency(t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total))}</span>
                                             </div>
                                         </div>
                                     )}
@@ -12410,63 +12421,6 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const handleQuickAction = (filter) => {
       setHistoryFilter(filter);
       setMode('history');
-  };
-
-  const handleCallDocTeam = async () => {
-      setIsAnalyzingDocs(true);
-      setDocTeamAnalysis([]);
-
-      const promptText = `
-      คุณคือทีมผู้เชี่ยวชาญด้านบัญชีและเอกสารภาษี (Senior Accountant, Tax Auditor, Document Controller)
-      ข้อมูลสรุปเอกสารของร้านค้าปัจจุบัน:
-      - ใบกำกับภาษีเต็มรูป (Invoice): ${docStats.invoice.count} ฉบับ (มูลค่า ${docStats.invoice.total} บาท)
-      - ใบกำกับภาษีอย่างย่อ (ABB): ${docStats.abb.count} ฉบับ (มูลค่า ${docStats.abb.total} บาท)
-      - ใบเสร็จรับเงิน (Receipt): ${docStats.receipt.count} ฉบับ (มูลค่า ${docStats.receipt.total} บาท)
-      - ใบสำคัญจ่าย (Payment Voucher): ${docStats.payment_voucher.count} ฉบับ (มูลค่า ${docStats.payment_voucher.total} บาท)
-      - ใบลดหนี้ (Credit Note): ${docStats.credit_note.count} ฉบับ (มูลค่า ${docStats.credit_note.total} บาท)
-      - รายการขายที่ยังไม่ออกเอกสารภาษี: ${docStats.pending_transactions} รายการ
-      - เอกสารที่ถูกยกเลิก (Cancelled): ${docStats.cancelled.count} ฉบับ
-      - **ตรวจพบเลขที่เอกสารฟันหลอ/ขาดหาย (Missing Sequences):** ${sequenceAudit.length} รายการ (ได้แก่: ${sequenceAudit.map(s => s.missingNo).slice(0, 5).join(', ')}${sequenceAudit.length > 5 ? '...' : ''})
-
-      กรุณาวิเคราะห์และให้คำแนะนำเพื่ออุดรอยรั่วทางภาษี การจัดการเอกสาร ความเสี่ยงเรื่องเลขฟันหลอ (Missing Sequence) ตามสรรพากร และความเสี่ยงทางบัญชี
-      ตอบกลับมาในรูปแบบ JSON Array เท่านั้น ตามโครงสร้างนี้:
-      [
-        { "role": "Senior Accountant", "name": "สมศรี (บัญชีอาวุโส)", "text": "- วิเคราะห์ภาพรวมรายได้เทียบกับเอกสารที่ออก... \\n- ความเสี่ยงที่อาจเกิด..." },
-        { "role": "Tax Auditor", "name": "วิชัย (ผู้ตรวจสอบภาษี)", "text": "- ตรวจสอบสัดส่วนใบลดหนี้และเอกสารยกเลิก... \\n- แนะนำการเตรียมตัวรับสรรพากร..." },
-        { "role": "Document Controller", "name": "แอน (จัดการเอกสาร)", "text": "- คำแนะนำการจัดการรายการที่ยังไม่ออกบิล... \\n- การจัดเก็บและสำรองเอกสาร..." }
-      ]
-      
-      คำแนะนำพิเศษ: ในฟิลด์ "text" ของทุกคน ให้จัดรูปแบบเป็นข้อๆ (Bullet points) โดยใช้เครื่องหมาย - และต้องใส่ \\n เพื่อขึ้นบรรทัดใหม่เสมอ ให้อ่านง่ายที่สุด`;
-
-      try {
-          const parsedData = await callGeminiAPI(promptText, true);
-          if (Array.isArray(parsedData)) {
-              const mappedAnalysis = parsedData.map(item => {
-                  let icon = <ClipboardList size={24}/>;
-                  let color = 'text-indigo-400 bg-indigo-900/50 border-indigo-700/50';
-                  
-                  if (item.role === 'Senior Accountant') {
-                      icon = <Calculator size={24}/>;
-                      color = 'text-emerald-400 bg-emerald-900/50 border-emerald-700/50';
-                  } else if (item.role === 'Tax Auditor') {
-                      icon = <AlertTriangle size={24}/>;
-                      color = 'text-orange-400 bg-orange-900/50 border-orange-700/50';
-                  } else if (item.role === 'Document Controller') {
-                      icon = <FileText size={24}/>;
-                      color = 'text-blue-400 bg-blue-900/50 border-blue-700/50';
-                  }
-                  
-                  return { ...item, icon, color };
-              });
-              
-              setDocTeamAnalysis(mappedAnalysis);
-          }
-      } catch (error) {
-          console.error(error);
-          showToast('เกิดข้อผิดพลาดในการเรียก AI กรุณาลองใหม่อีกครั้ง (โปรดตรวจสอบ API Key)', 'error');
-      } finally {
-          setIsAnalyzingDocs(false);
-      }
   };
 
   const handleLoadTransaction = (data) => {
@@ -14007,57 +13961,6 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                     </div>
                 )}
             </div>
-
-            <div className="bg-slate-900 p-8 rounded-[40px] shadow-2xl text-white mt-4 relative overflow-hidden flex-1">
-                <FileCheck size={160} className="absolute -right-10 -bottom-10 opacity-5 text-white" />
-                <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 border-b border-white/10 pb-6 relative z-10 gap-4">
-                    <div className="flex items-center gap-4">
-                        <div className="bg-indigo-500 p-3 rounded-2xl"><ClipboardList size={28} className="text-white"/></div>
-                        <div>
-                            <h3 className="text-2xl font-black text-white">AI Document & Tax Advisor</h3>
-                            <p className="text-indigo-200 text-sm mt-1">ห้องประชุมวิเคราะห์เอกสารภาษี นำทีมโดยผู้สอบบัญชีและฝ่ายจัดการเอกสาร</p>
-                        </div>
-                    </div>
-                    <button onClick={handleCallDocTeam} disabled={isAnalyzingDocs} className="w-full md:w-auto bg-emerald-500 hover:bg-emerald-400 text-white px-6 py-3.5 rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-                        {isAnalyzingDocs ? <Loader className="animate-spin" size={18}/> : <Sparkles size={18}/>} เรียกประชุมทีมบัญชี (Analyze)
-                    </button>
-                </div>
-
-                <div className="relative min-h-[300px] z-10">
-                    {isAnalyzingDocs ? (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center text-indigo-400">
-                            <Loader size={48} className="animate-spin mb-4 opacity-50"/>
-                            <p className="font-bold animate-pulse">ทีมงานกำลังตรวจสอบเอกสารและประเมินความเสี่ยงทางภาษี...</p>
-                        </div>
-                    ) : docTeamAnalysis.length > 0 ? (
-                        <div className="space-y-5 animate-fadeIn pb-8">
-                            <h4 className="font-bold text-slate-300 mb-4 flex items-center gap-2"><CheckCircle size={16} className="text-emerald-400"/> รายงานการตรวจสอบ (Audit Report)</h4>
-                            {docTeamAnalysis.map((chat, idx) => (
-                                <div key={idx} className="bg-slate-800/60 p-6 rounded-[24px] border border-slate-700/60 flex flex-col md:flex-row gap-5 shadow-lg">
-                                    <div className={`w-14 h-14 shrink-0 rounded-[18px] border flex items-center justify-center shadow-inner ${chat.color}`}>
-                                        {chat.icon}
-                                    </div>
-                                    <div className="flex-1">
-                                        <div className="flex flex-wrap items-center gap-2 mb-3">
-                                            <p className="text-sm font-black uppercase tracking-widest text-slate-200">{chat.name}</p>
-                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-700/50 text-slate-400 border border-slate-600/50">{chat.role}</span>
-                                        </div>
-                                        <div className="text-sm text-indigo-50/90 leading-loose font-medium whitespace-pre-line break-words">
-                                            {chat.text}
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    ) : (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 border-2 border-dashed border-slate-700 rounded-3xl">
-                            <FileText size={64} className="mb-4 opacity-20"/>
-                            <p className="font-bold text-slate-400">ทีมงานบัญชีพร้อมตรวจสอบเอกสาร</p>
-                            <p className="text-xs mt-2">กดปุ่มเรียกประชุมทีมบัญชีเพื่อรับคำแนะนำการจัดการเอกสารและภาษี</p>
-                        </div>
-                    )}
-                </div>
-            </div>
         </div>
       ) : mode === 'history' ? (
         <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 animate-fadeIn h-full flex flex-col text-left">
@@ -14886,18 +14789,16 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
   const [aiTargetSales, setAiTargetSales] = useState(100000);
   const [aiDuration, setAiDuration] = useState(30);
   const [platformFeePercent, setPlatformFeePercent] = useState(12);
-  const [aiTrend, setAiTrend] = useState('normal'); // NEW: Market Trend
+  const [aiTrend, setAiTrend] = useState('normal'); // Market Trend
   const [aiHeroSku, setAiHeroSku] = useState('');
   
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isAutoBuilding, setIsAutoBuilding] = useState(false);
   const [teamAnalysis, setTeamAnalysis] = useState([]);
   
-  // NEW: A/B Testing & Content Generator State
+  // A/B Testing State
   const [aiOptions, setAiOptions] = useState([]);
   const [showAiOptions, setShowAiOptions] = useState(false);
-  const [aiContent, setAiContent] = useState(null);
-  const [isGeneratingContent, setIsGeneratingContent] = useState(false);
 
   // ประมวลผลข้อมูลสต็อกและยอดขายส่งให้ AI
   const aiContextData = useMemo(() => {
@@ -15124,47 +15025,9 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
           targetSku: '', freeSku: '', freeQty: '',
           isActive: true
       });
-      setAiContent(null); // Clear old content
       setShowAiOptions(false);
       setEditingId(null);
       setShowModal(true);
-  };
-
-  // 3. AI Content Generator
-  const handleGenerateContent = async () => {
-      setIsGeneratingContent(true);
-      
-      const promptText = `
-      ช่วยสร้างคอนเทนต์การตลาดสำหรับแคมเปญโซเชียลมีเดียต่อไปนี้:
-      ชื่อแคมเปญ: ${formData.name || 'โปรโมชั่นสุดพิเศษ'}
-      รายละเอียด/กลยุทธ์: ${formData.rationale || 'สินค้าราคาพิเศษ คุ้มค่าที่สุด'}
-      เทศกาล/เทรนด์ปัจจุบัน: ${aiTrend === 'normal' ? 'ช่วงเวลาปกติ' : aiTrend === 'payday' ? 'ช่วงสิ้นเดือน / เงินเดือนออก' : aiTrend === 'double_day' ? 'แคมเปญใหญ่ Double Day' : 'ล้างสต็อก'}
-      
-      กรุณาสร้าง 2 ส่วน:
-      1. โพสต์แคปชั่น (Caption) สำหรับ Facebook/TikTok ให้น่าสนใจ สไตล์กระตุ้นยอดขาย (Urgency) ใส่ Emoji และ Hashtag ให้ครบ พร้อมเว้นบรรทัดให้อ่านง่าย
-      2. สคริปต์พูดตอน Live สด (Live Script) แบบสั้นๆ กระชับ ทรงพลัง ปิดการขายง่าย
-      
-      ตอบกลับเป็น JSON Object เท่านั้น ห้ามมีข้อความอื่น:
-      {
-          "caption": "เนื้อหาแคปชั่น...",
-          "liveScript": "สคริปต์พูด Live..."
-      }
-      `;
-
-      try {
-          const parsedData = await callGeminiAPI(promptText, true);
-          if (parsedData && parsedData.caption) {
-              setAiContent(parsedData);
-              showToast("สร้างแคปชั่นและสคริปต์ Live สำเร็จ!", "success");
-          } else {
-              throw new Error("Invalid format");
-          }
-      } catch (error) {
-          console.error(error);
-          showToast('ไม่สามารถสร้างคอนเทนต์ได้ กรุณาลองใหม่ (โปรดตรวจสอบ API Key)', 'error');
-      } finally {
-          setIsGeneratingContent(false);
-      }
   };
 
   const createShopeeCampaign = (type) => {
@@ -15173,7 +15036,6 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
           targetSku: '', minQty: '', freeSku: '', freeQty: '', bundleType: 'percentage', 
           addonMainSku: '', addonSubSku: '', addonPrice: '', voucherCode: '', isActive: true, rationale: ''
       });
-      setAiContent(null);
       setEditingId(null);
       setShowModal(true);
   };
@@ -15193,7 +15055,6 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
         showToast("สร้างแคมเปญ Shopee/POS ใหม่สำเร็จ", "success");
       }
       setShowModal(false);
-      setAiContent(null);
       setEditingId(null);
     } catch (error) {
       showToast("บันทึกไม่สำเร็จ", "error");
@@ -15202,7 +15063,6 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
 
   const handleEdit = (promo) => {
     setFormData({...promo, rationale: ''});
-    setAiContent(null);
     setEditingId(promo.id);
     setShowModal(true);
   };
@@ -15632,35 +15492,6 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
                       </div>
                     </div>
                   )}
-              </div>
-
-              {/* AI Content Generator Section */}
-              <div className="bg-indigo-50/50 p-6 rounded-[24px] border border-indigo-100 shadow-sm flex flex-col items-center justify-center text-center relative overflow-hidden">
-                  <div className="relative z-10 w-full">
-                      {aiContent ? (
-                          <div className="text-left space-y-4">
-                              <h4 className="font-bold text-indigo-700 flex items-center gap-2 mb-2"><Edit size={18}/> AI Generated Content</h4>
-                              <div className="bg-white p-4 rounded-2xl border border-indigo-100 shadow-sm">
-                                  <p className="text-[10px] font-black uppercase text-slate-400 mb-2">Caption สำหรับ Social Media</p>
-                                  <p className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">{aiContent.caption}</p>
-                              </div>
-                              <div className="bg-white p-4 rounded-2xl border border-indigo-100 shadow-sm">
-                                  <p className="text-[10px] font-black uppercase text-slate-400 mb-2">สคริปต์สำหรับพูด Live สด</p>
-                                  <p className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">{aiContent.liveScript}</p>
-                              </div>
-                              <button type="button" onClick={() => setAiContent(null)} className="text-xs text-slate-500 hover:text-indigo-600 underline">สร้างใหม่ (Regenerate)</button>
-                          </div>
-                      ) : (
-                          <>
-                              <h4 className="font-bold text-slate-800 mb-2">ยังไม่มีแคปชั่นโปรโมทแคมเปญนี้ใช่ไหม?</h4>
-                              <p className="text-xs text-slate-500 mb-4">ให้ AI ช่วยเขียนแคปชั่นขายของ และสคริปต์พูด Live สด ให้เข้ากับแคมเปญนี้สิ</p>
-                              <button type="button" onClick={handleGenerateContent} disabled={isGeneratingContent || !formData.name} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 mx-auto disabled:opacity-50">
-                                  {isGeneratingContent ? <Loader size={16} className="animate-spin"/> : <Sparkles size={16}/>}
-                                  {isGeneratingContent ? 'AI กำลังแต่งประโยค...' : '✨ สร้างแคปชั่น & สคริปต์ Live'}
-                              </button>
-                          </>
-                      )}
-                  </div>
               </div>
 
               <div className="pt-4 flex gap-3">
@@ -16957,9 +16788,6 @@ function PricingCalculator({ stockBatches, transactions, showToast, appId, user 
     const [includeVat, setIncludeVat] = useState(false);
     const [aiSuggestion, setAiSuggestion] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [pricingHistory, setPricingHistory] = useState(() => {
-        try { return JSON.parse(localStorage.getItem('merchant_pricing_history') || '[]'); } catch (e) { return []; }
-    });
 
     // --- 🔥 NEW: Bulk / Mass Update States ---
     const [bulkProducts, setBulkProducts] = useState([]);
@@ -16967,8 +16795,6 @@ function PricingCalculator({ stockBatches, transactions, showToast, appId, user 
     const [isParsingBulk, setIsParsingBulk] = useState(false);
     const [isAnalyzingBulk, setIsAnalyzingBulk] = useState(false); // NEW: State สำหรับ AI วิเคราะห์ทั้งร้าน
     const bulkFileInputRef = useRef(null);
-
-    useEffect(() => { localStorage.setItem('merchant_pricing_history', JSON.stringify(pricingHistory)); }, [pricingHistory]);
 
     const uniqueItems = useMemo(() => {
         const map = {};
@@ -17136,44 +16962,6 @@ function PricingCalculator({ stockBatches, transactions, showToast, appId, user 
             showToast("AI ขัดข้อง กรุณาลองใหม่อีกครั้ง", "error");
         }
         setIsAnalyzing(false);
-    };
-
-    const handleSaveStrategy = () => {
-        if (!cost || !simulatedPrice) { showToast("กรุณาระบุต้นทุนและราคาขายก่อนบันทึก", "error"); return; }
-        const itemName = selectedItemKey ? uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey)?.name : 'สินค้าทั่วไป (ไม่ระบุชื่อ)';
-        const itemSku = selectedItemKey ? uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey)?.sku : '-';
-        const newEntry = {
-            id: Date.now().toString(), date: formatDateISO(new Date()), name: itemName, sku: itemSku, cost: Number(cost), sellPrice: Number(simulatedPrice),
-            competitorPrice: competitorPrice ? Number(competitorPrice) : null, targetProfit: Number(desiredProfit) || 0,
-            aiCharmPrice: aiSuggestion?.tiers?.[1]?.price || null, bundleIdea: aiSuggestion?.bundleIdea || '-', valueProp: aiSuggestion?.valueProp || '-',
-            simulations: simulator.map(s => ({ feePct: s.feePct, netProfit: s.netProfit, marginPct: s.marginPct }))
-        };
-        setPricingHistory(prev => [newEntry, ...prev]);
-        showToast("บันทึกกลยุทธ์ราคาสำเร็จ", "success");
-    };
-
-    const handleDeleteHistory = (id) => { setPricingHistory(prev => prev.filter(h => h.id !== id)); showToast("ลบประวัติสำเร็จ", "success"); };
-    
-    const handleExportPricingExcel = async () => {
-        if (pricingHistory.length === 0) { showToast("ไม่มีข้อมูลสำหรับส่งออก", "error"); return; }
-        showToast("กำลังเตรียมไฟล์ Excel...", "success");
-        if (!window.XLSX) {
-            const script = document.createElement('script'); script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-            await new Promise(res => { script.onload = res; document.body.appendChild(script); });
-        }
-        try {
-            const dataRows = [
-                ["รายงานฐานข้อมูลกลยุทธ์ราคา (Pricing Strategy Database)"], ["วันที่ดึงข้อมูล", formatDate(new Date())], [],
-                ["วันที่วิเคราะห์", "SKU", "ชื่อสินค้า", "ต้นทุน (Cost)", "ราคาตลาด (Competitor)", "ราคาที่ตั้ง (Sell Price)", "กำไรสุทธิ 0% (หน้าร้าน)", "กำไรสุทธิ 25%", "กำไรสุทธิ 27%", "กำไรสุทธิ 30%", "ไอเดียจัดเซ็ต (Bundle)", "จุดขายสู้คู่แข่ง (Value Prop)"]
-            ];
-            pricingHistory.forEach(h => {
-                const getSim = (pct) => { const sim = h.simulations?.find(s => s.feePct === pct); return sim ? Number(sim.netProfit).toFixed(2) : '-'; };
-                dataRows.push([ formatDate(h.date), h.sku, h.name, Number(h.cost).toFixed(2), h.competitorPrice ? Number(h.competitorPrice).toFixed(2) : '-', Number(h.sellPrice).toFixed(2), getSim(0), getSim(25), getSim(27), getSim(30), h.bundleIdea, h.valueProp ]);
-            });
-            const wb = window.XLSX.utils.book_new(); const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
-            window.XLSX.utils.book_append_sheet(wb, ws, "Pricing Strategy"); window.XLSX.writeFile(wb, `Pricing_Strategy_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
-            showToast("ดาวน์โหลดไฟล์ Excel สำเร็จ", "success");
-        } catch (e) { showToast("เกิดข้อผิดพลาดในการส่งออก Excel", "error"); }
     };
 
     // --- 🔥 NEW: ฟังก์ชันประมวลผลไฟล์ Shopee Mass Update ---
@@ -17615,15 +17403,10 @@ function PricingCalculator({ stockBatches, transactions, showToast, appId, user 
                                     <p className="text-xs text-indigo-600/70 mt-1">ให้ทีม AI ช่วยวางโครงสร้างราคา โปรจัดเซ็ต และจุดขายเพื่อสู้กับคู่แข่ง</p>
                                 </div>
                                 <div className="flex gap-2 w-full md:w-auto">
-                                    <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
+                                    <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
                                         {isAnalyzing ? <Loader className="animate-spin" size={16}/> : <Activity size={16}/>} 
                                         {isAnalyzing ? 'กำลังวิเคราะห์...' : 'ให้ AI แนะนำกลยุทธ์'}
                                     </button>
-                                    {simulatedPrice && cost && (
-                                        <button onClick={handleSaveStrategy} className="flex-1 md:flex-none bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2 shrink-0">
-                                            <Save size={16}/> บันทึกกลยุทธ์
-                                        </button>
-                                    )}
                                 </div>
                             </div>
                             
@@ -17811,85 +17594,6 @@ function PricingCalculator({ stockBatches, transactions, showToast, appId, user 
                 </div>
             )}
 
-            {/* --- Pricing History Database Table --- */}
-            <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm mt-6">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 border-b border-slate-100 pb-4 gap-4">
-                    <div>
-                        <h3 className="font-black text-slate-800 text-lg flex items-center gap-2"><Database className="text-indigo-500"/> คลังข้อมูลกลยุทธ์ราคา (Pricing Strategy Database)</h3>
-                        <p className="text-xs text-slate-400 mt-1">ประวัติการคำนวณและไอเดียการตั้งราคาที่บันทึกไว้ เพื่อเปรียบเทียบและนำไปใช้งานจริง</p>
-                    </div>
-                    <button onClick={handleExportPricingExcel} className="bg-emerald-50 text-emerald-600 px-4 py-2.5 rounded-xl text-xs font-bold border border-emerald-200 flex items-center gap-2 hover:bg-emerald-100 transition-colors shadow-sm shrink-0 whitespace-nowrap">
-                        <FileSpreadsheet size={16}/> ส่งออกเป็น Excel (Export)
-                    </button>
-                </div>
-                
-                <div className="overflow-x-auto custom-scrollbar">
-                    <table className="w-full text-sm text-left whitespace-nowrap">
-                        <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-500 sticky top-0">
-                            <tr>
-                                <th className="p-4 rounded-tl-xl border-b border-slate-100">วันที่ / สินค้า</th>
-                                <th className="p-4 text-right border-b border-slate-100">ต้นทุน (Cost)</th>
-                                <th className="p-4 text-right border-b border-slate-100">ราคาที่ตั้ง (Sell)</th>
-                                <th className="p-4 text-right border-b border-slate-100 bg-emerald-50/50 text-emerald-600" title="ขายหน้าร้าน (ช่องทางปกติ)">Net 0%</th>
-                                <th className="p-4 text-right border-b border-slate-100 bg-indigo-50/50 text-indigo-600" title="ขายบน Platform หัก 25%">Net 25%</th>
-                                <th className="p-4 text-right border-b border-slate-100 bg-rose-50/50 text-rose-600" title="ขายบน Platform หัก 30%">Net 30%</th>
-                                <th className="p-4 border-b border-slate-100 w-48">AI Strategy Idea</th>
-                                <th className="p-4 text-center rounded-tr-xl border-b border-slate-100">จัดการ</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                            {pricingHistory.map((item) => (
-                                <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
-                                    <td className="p-4">
-                                        <p className="text-[10px] text-slate-400 font-bold mb-1">{formatDate(item.date)}</p>
-                                        <p className="font-bold text-slate-700 line-clamp-1 max-w-[200px]" title={item.name}>{item.name}</p>
-                                        <p className="text-[10px] font-mono text-indigo-500 mt-0.5 bg-indigo-50 px-1.5 py-0.5 rounded w-fit">SKU: {item.sku}</p>
-                                    </td>
-                                    <td className="p-4 text-right font-bold text-slate-500">{formatCurrency(item.cost)}</td>
-                                    <td className="p-4 text-right">
-                                        <span className="font-black text-slate-800 text-lg">{formatCurrency(item.sellPrice)}</span>
-                                        {item.competitorPrice && (
-                                            <p className="text-[9px] text-amber-500 font-bold mt-1">คู่แข่ง: {formatCurrency(item.competitorPrice)}</p>
-                                        )}
-                                    </td>
-                                    
-                                    <td className="p-4 text-right font-black text-emerald-600 bg-emerald-50/20">
-                                        {formatCurrency(item.simulations?.find(s => s.feePct === 0)?.netProfit)}
-                                    </td>
-                                    <td className="p-4 text-right font-black text-indigo-600 bg-indigo-50/20">
-                                        {formatCurrency(item.simulations?.find(s => s.feePct === 25)?.netProfit)}
-                                    </td>
-                                    <td className="p-4 text-right font-black text-rose-600 bg-rose-50/20">
-                                        {formatCurrency(item.simulations?.find(s => s.feePct === 30)?.netProfit)}
-                                    </td>
-
-                                    <td className="p-4">
-                                        <p className="text-[10px] text-slate-600 line-clamp-2" title={item.bundleIdea}>
-                                            <LayersIcon size={10} className="inline mr-1 text-amber-500"/>{item.bundleIdea}
-                                        </p>
-                                        <p className="text-[10px] text-slate-600 line-clamp-2 mt-1" title={item.valueProp}>
-                                            <TrendingUp size={10} className="inline mr-1 text-rose-500"/>{item.valueProp}
-                                        </p>
-                                    </td>
-                                    <td className="p-4 text-center">
-                                        <button onClick={() => handleDeleteHistory(item.id)} className="p-2 text-rose-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100">
-                                            <Trash2 size={16}/>
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))}
-                            {pricingHistory.length === 0 && (
-                                <tr>
-                                    <td colSpan="8" className="p-10 text-center text-slate-400 font-bold">
-                                        ยังไม่มีประวัติการบันทึกกลยุทธ์ราคา<br/>
-                                        <span className="text-xs font-normal mt-1 block">กดปุ่ม "บันทึกกลยุทธ์" ด้านบน เพื่อจัดเก็บข้อมูลลงตาราง</span>
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
         </div>
     );
 }
