@@ -80,6 +80,11 @@ const authInstance = getAuth(fbaseApp);
 const dbInstance = getFirestore(fbaseApp);
 
 // --- Utilities ---
+const round2Dec = (val) => {
+  const num = Number(val);
+  return isNaN(num) ? 0 : Math.round((num + Number.EPSILON) * 100) / 100;
+};
+
 const normalizeDate = (dateInput) => {
   if (!dateInput || String(dateInput).trim() === '' || dateInput === "undefined" || dateInput === "null") return null;
   if (typeof dateInput === 'number') {
@@ -7842,10 +7847,14 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   const [settleConfirmId, setSettleConfirmId] = useState(null);
   const [settleDate, setSettleDate] = useState(formatDateISO(new Date()));
   const [settleActualAmt, setSettleActualAmt] = useState(0); 
-  const [settleDiffCategory, setSettleDiffCategory] = useState('ค่าขนส่งพัสดุ (ส่งลูกค้า)'); // แก้ไขค่าเริ่มต้นเป็น ค่าขนส่งพัสดุ
-  const [settleSurplusCategory, setSettleSurplusCategory] = useState('รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'); // NEW: หมวดหมู่รายรับส่วนเกิน
-  const [autoCreateSettleDiff, setAutoCreateSettleDiff] = useState(false); // NEW: ปิดการสร้างบิลส่วนต่างอัตโนมัติเป็นค่าเริ่มต้น
+  const [settleDiffCategory, setSettleDiffCategory] = useState('ค่าขนส่งพัสดุ (ส่งลูกค้า)'); 
+  const [settleSurplusCategory, setSettleSurplusCategory] = useState('รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'); 
+  const [autoCreateSettleDiff, setAutoCreateSettleDiff] = useState(false); 
   
+  // --- NEW: Pop-up Modal State for Filtered Records Export ---
+  const [showFilteredModal, setShowFilteredModal] = useState(false);
+  const [isExportingHistory, setIsExportingHistory] = useState(false);
+
   // --- NEW: State for showing generated ID ---
   const [generatedDocId, setGeneratedDocId] = useState(null);
 
@@ -9400,6 +9409,67 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
   // Pagination Logic
   const histTotalPages = Math.max(1, Math.ceil(filteredHistory.length / histItemsPerPage));
   const currentHistData = filteredHistory.slice((histPage - 1) * histItemsPerPage, histPage * histItemsPerPage);
+
+  // --- NEW: Function to Export Filtered History to Excel ---
+  const handleExportFilteredHistoryExcel = async () => {
+      const docsToExport = selectedDocIds.length > 0 
+          ? filteredHistory.filter(t => selectedDocIds.includes(t.id))
+          : filteredHistory;
+
+      if (docsToExport.length === 0) {
+          showToast("ไม่พบรายการข้อมูลตามเงื่อนไขเพื่อส่งออก", "error");
+          return;
+      }
+
+      setIsExportingHistory(true);
+      showToast("กำลังเตรียมไฟล์ Excel...", "success");
+
+      if (!window.XLSX) {
+          const script = document.createElement('script');
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+          await new Promise((resolve) => { script.onload = resolve; document.body.appendChild(script); });
+      }
+
+      try {
+          const dataRows = [
+              ["ลำดับ", "วันที่ทำรายการ", "เลขระบบ (Sys ID)", "Order ID / Ref", "ประเภท", "ร้านค้า", "ช่องทาง", "คู่ค้า/ลูกค้า", "ยอดขายรวม/ยอดจ่าย (฿)", "ส่วนลด (฿)", "ค่าส่ง (฿)", "ค่าธรรมเนียม (฿)", "โอนเข้าจริง (฿)", "สถานะชำระเงิน"]
+          ];
+
+          docsToExport.forEach((t, idx) => {
+              const isPaid = t.type === 'income' ? (t.paymentStatus === 'settled') : (t.status === 'paid');
+              const grandTotal = t.actualSettledAmt !== undefined ? Number(t.actualSettledAmt) : Number(t.grandTotal || t.total || 0);
+              
+              dataRows.push([
+                  idx + 1,
+                  formatDate(t.date),
+                  t.sysDocId || '-',
+                  t.orderId || t.linkedOrderNo || '-',
+                  t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
+                  t.shopName || 'ไม่ระบุ',
+                  t.channel || 'หน้าร้าน',
+                  t.partnerName || t.description || 'ทั่วไป',
+                  round2Dec(t.total || 0),
+                  round2Dec(t.couponDiscount || 0),
+                  round2Dec(t.shippingFee || 0),
+                  round2Dec(t.platformFee || 0),
+                  round2Dec(grandTotal),
+                  isPaid ? 'ชำระแล้ว' : 'ค้างชำระ'
+              ]);
+          });
+
+          const wb = window.XLSX.utils.book_new();
+          const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
+          window.XLSX.utils.book_append_sheet(wb, ws, "Filtered_Records");
+
+          const timestamp = formatDateISO(new Date()).replace(/-/g, '');
+          window.XLSX.writeFile(wb, `Filtered_Records_${timestamp}.xlsx`);
+          showToast(`ส่งออกข้อมูลสำเร็จ ${docsToExport.length} รายการ`, "success");
+      } catch (e) {
+          console.error(e);
+          showToast("เกิดข้อผิดพลาดในการส่งออก Excel", "error");
+      }
+      setIsExportingHistory(false);
+  };
 
   // --- 🔥 NEW: ฟังก์ชันเลือกรายการ และ ลบถาวรแบบกลุ่ม (Bulk Hard Delete) ---
   const toggleSelectAll = (e) => {
@@ -11239,20 +11309,41 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   </div>
                   <div className="p-2 bg-white rounded-lg text-rose-500 shadow-sm"><TrendingDown size={20}/></div>
               </div>
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex justify-between items-center text-white">
+
+              {/* --- 🔥 INTERACTIVE BLACK CARD: คลิกเพื่อเปิด Pop-up ดูพรีวิวและส่งออก Excel --- */}
+              <div 
+                  onClick={() => setShowFilteredModal(true)}
+                  className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex justify-between items-center text-white cursor-pointer hover:bg-slate-800 hover:border-indigo-500 hover:scale-[1.02] active:scale-95 transition-all shadow-md group relative"
+                  title="คลิกเพื่อดูรายละเอียดและดึงข้อมูลเป็น Excel"
+              >
                   <div>
-                      <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">จำนวนรายการ</p>
+                      <div className="flex items-center gap-1.5 mb-1">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">จำนวนรายการ</p>
+                          <span className="text-[9px] bg-indigo-500/30 text-indigo-300 px-1.5 py-0.5 rounded font-bold group-hover:bg-indigo-500 group-hover:text-white transition-colors">
+                              กดดู & Excel
+                          </span>
+                      </div>
                       <p className="text-xl font-black">{histStats.count.toLocaleString()} <span className="text-xs text-slate-400 font-medium">รายการ</span></p>
                   </div>
-                  <div className="p-2 bg-white/10 rounded-lg text-indigo-300"><List size={20}/></div>
+                  <div className="p-2 bg-white/10 group-hover:bg-indigo-600 rounded-lg text-indigo-300 group-hover:text-white transition-all shadow-sm">
+                      <List size={20}/>
+                  </div>
               </div>
           </div>
 
-          {/* --- 🔥 NEW: แถบเครื่องมือลบแบบกลุ่ม (จะโชว์เมื่อมีการติ๊กเลือกรายการ) --- */}
+          {/* --- 🔥 NEW: แถบเครื่องมือจัดการแบบกลุ่ม (แสดงปุ่มส่งออก Excel คู่กับปุ่มลบถาวร) --- */}
           {selectedDocIds.length > 0 && (
               <div className="bg-rose-50 border border-rose-100 p-3 rounded-2xl flex flex-wrap justify-between items-center animate-fadeIn gap-4">
                   <span className="text-sm font-bold text-rose-800 ml-2">เลือกแล้ว {selectedDocIds.length} รายการ</span>
                   <div className="flex flex-wrap gap-2">
+                      <button 
+                          onClick={handleExportFilteredHistoryExcel} 
+                          disabled={isExportingHistory} 
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                          {isExportingHistory ? <Loader size={14} className="animate-spin"/> : <FileSpreadsheet size={14}/>} 
+                          ส่งออก Excel ({selectedDocIds.length})
+                      </button>
                       <button onClick={() => setShowBulkHardDeleteConfirm(true)} disabled={isBulkProcessing} className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1 disabled:opacity-50">
                           <Trash2 size={14}/> ลบถาวรทั้งหมด
                       </button>
@@ -11901,6 +11992,117 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   <button onClick={() => setGeneratedDocId(null)} className="w-full py-4 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold shadow-lg transition-colors text-center text-lg">
                       ปิดหน้าต่าง
                   </button>
+              </div>
+          </div>
+      )}
+
+      {/* --- 🔥 NEW: Modal Pop-up แสดงพรีวิวรายการที่กรองแล้ว พร้อมปุ่มดึง Excel --- */}
+      {showFilteredModal && (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[2000] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+                  <div className="flex justify-between items-start mb-6 border-b border-slate-100 pb-4">
+                      <div>
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                              <FileSpreadsheet className="text-emerald-600"/> 
+                              สรุปและส่งออกข้อมูลประวัติรายการ (Excel Export)
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-1">
+                              รายการที่ผ่านการกรองทั้งหมด <span className="font-bold text-indigo-600">{filteredHistory.length.toLocaleString()}</span> รายการ 
+                              {selectedDocIds.length > 0 && <span className="ml-2 font-bold text-rose-600">(เลือกไว้เฉพาะ {selectedDocIds.length} รายการ)</span>}
+                          </p>
+                      </div>
+                      <button onClick={() => setShowFilteredModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={20}/></button>
+                  </div>
+
+                  {/* Quick Summary Cards Inside Modal */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 shrink-0">
+                      <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl flex justify-between items-center">
+                          <div>
+                              <p className="text-[10px] font-black uppercase text-emerald-600">รวมรายรับ (Filtered)</p>
+                              <p className="text-xl font-black text-emerald-700">{formatCurrency(histStats.inc)}</p>
+                          </div>
+                          <TrendingUp size={24} className="text-emerald-500"/>
+                      </div>
+                      <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl flex justify-between items-center">
+                          <div>
+                              <p className="text-[10px] font-black uppercase text-rose-600">รวมรายจ่าย (Filtered)</p>
+                              <p className="text-xl font-black text-rose-700">{formatCurrency(histStats.exp)}</p>
+                          </div>
+                          <TrendingDown size={24} className="text-rose-500"/>
+                      </div>
+                      <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex justify-between items-center text-white">
+                          <div>
+                              <p className="text-[10px] font-black uppercase text-indigo-400">จำนวนรายการที่จะดึงออก</p>
+                              <p className="text-xl font-black">
+                                  {(selectedDocIds.length > 0 ? selectedDocIds.length : filteredHistory.length).toLocaleString()} <span className="text-xs text-slate-400">รายการ</span>
+                              </p>
+                          </div>
+                          <List size={24} className="text-indigo-400"/>
+                      </div>
+                  </div>
+
+                  {/* Preview Table in Modal */}
+                  <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl mb-6 bg-slate-50">
+                      <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-100 text-slate-600 uppercase sticky top-0 border-b border-slate-200 z-10 font-bold">
+                              <tr>
+                                  <th className="p-3 pl-4">ลำดับ</th>
+                                  <th className="p-3">วันที่ / เลขระบบ</th>
+                                  <th className="p-3">Order ID / อ้างอิง</th>
+                                  <th className="p-3">ประเภท</th>
+                                  <th className="p-3">คู่ค้า / รายการ</th>
+                                  <th className="p-3 text-right pr-4">ยอดสุทธิ (฿)</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                              {(selectedDocIds.length > 0 ? filteredHistory.filter(t => selectedDocIds.includes(t.id)) : filteredHistory).slice(0, 100).map((t, idx) => (
+                                  <tr key={t.id || idx} className="hover:bg-slate-50 transition-colors">
+                                      <td className="p-3 pl-4 font-bold text-slate-400">{idx + 1}</td>
+                                      <td className="p-3">
+                                          <p className="font-bold text-slate-700">{formatDate(t.date)}</p>
+                                          <p className="text-[10px] font-mono text-indigo-600 font-bold">{t.sysDocId || '-'}</p>
+                                      </td>
+                                      <td className="p-3 font-mono font-bold text-slate-700">{t.orderId || t.linkedOrderNo || '-'}</td>
+                                      <td className="p-3">
+                                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${t.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                              {t.type === 'income' ? 'รายรับ' : 'รายจ่าย'}
+                                          </span>
+                                      </td>
+                                      <td className="p-3 truncate max-w-[200px]" title={t.partnerName || t.description}>{t.partnerName || t.description || '-'}</td>
+                                      <td className="p-3 text-right pr-4 font-black text-slate-800">
+                                          {formatCurrency(t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total || 0))}
+                                      </td>
+                                  </tr>
+                              ))}
+                          </tbody>
+                      </table>
+                      {(selectedDocIds.length > 0 ? selectedDocIds.length : filteredHistory.length) > 100 && (
+                          <div className="p-3 text-center text-xs font-bold text-slate-500 bg-white border-t border-slate-100">
+                              ... แสดงตัวอย่าง 100 รายการแรก จากทั้งหมด {(selectedDocIds.length > 0 ? selectedDocIds.length : filteredHistory.length).toLocaleString()} รายการ ...
+                          </div>
+                      )}
+                  </div>
+
+                  {/* Modal Actions */}
+                  <div className="flex gap-4 shrink-0">
+                      <button 
+                          onClick={() => setShowFilteredModal(false)} 
+                          className="flex-1 py-3.5 bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors rounded-2xl font-bold text-sm"
+                      >
+                          ปิดหน้าต่าง
+                      </button>
+                      <button 
+                          onClick={() => {
+                              handleExportFilteredHistoryExcel();
+                              setShowFilteredModal(false);
+                          }} 
+                          disabled={isExportingHistory} 
+                          className="flex-[2] py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm shadow-xl shadow-emerald-200 flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                      >
+                          {isExportingHistory ? <Loader className="animate-spin" size={18}/> : <FileSpreadsheet size={18}/>}
+                          {isExportingHistory ? 'กำลังสร้างไฟล์ Excel...' : 'ยืนยันดาวน์โหลดไฟล์ Excel'}
+                      </button>
+                  </div>
               </div>
           </div>
       )}
