@@ -9432,13 +9432,18 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
       try {
           const dataRows = [
-              ["ลำดับ", "วันที่ทำรายการ", "เลขระบบ (Sys ID)", "Order ID / Ref", "ประเภท", "ร้านค้า", "ช่องทาง", "คู่ค้า/ลูกค้า", "ยอดขายรวม/ยอดจ่าย (฿)", "ส่วนลด (฿)", "ค่าส่ง (฿)", "ค่าธรรมเนียม (฿)", "โอนเข้าจริง (฿)", "สถานะชำระเงิน"]
+              ["ลำดับ", "วันที่ทำรายการ", "เลขระบบ (Sys ID)", "Order ID / อ้างอิง", "ประเภทรายการ", "ร้านค้า", "ช่องทางขาย", "คู่ค้า/ลูกค้า", "รายการสินค้า/รายละเอียด", "ยอดขายรวม/ยอดจ่าย (฿)", "ส่วนลด (฿)", "ค่าส่ง (฿)", "ค่าธรรมเนียม (฿)", "โอนเข้าจริง/สุทธิ (฿)", "สถานะชำระเงิน"]
           ];
 
           docsToExport.forEach((t, idx) => {
               const isPaid = t.type === 'income' ? (t.paymentStatus === 'settled') : (t.status === 'paid');
               const grandTotal = t.actualSettledAmt !== undefined ? Number(t.actualSettledAmt) : Number(t.grandTotal || t.total || 0);
               
+              // สกัดรายการสินค้าแยกเป็นคอลัมน์อิสระ
+              const itemsDesc = (t.items && t.items.length > 0)
+                  ? t.items.map(i => `${i.desc || i.name || ''} (x${i.qty || 1})`).join(', ')
+                  : (t.description || '-');
+
               dataRows.push([
                   idx + 1,
                   formatDate(t.date),
@@ -9447,7 +9452,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
                   t.shopName || 'ไม่ระบุ',
                   t.channel || 'หน้าร้าน',
-                  t.partnerName || t.description || 'ทั่วไป',
+                  t.partnerName || '-',
+                  itemsDesc,
                   round2Dec(t.total || 0),
                   round2Dec(t.couponDiscount || 0),
                   round2Dec(t.shippingFee || 0),
@@ -12047,33 +12053,38 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                           <thead className="bg-slate-100 text-slate-600 uppercase sticky top-0 border-b border-slate-200 z-10 font-bold">
                               <tr>
                                   <th className="p-3 pl-4">ลำดับ</th>
-                                  <th className="p-3">วันที่ / เลขระบบ</th>
+                                  <th className="p-3">วันที่ทำรายการ</th>
+                                  <th className="p-3">เลขระบบ (Sys ID)</th>
                                   <th className="p-3">Order ID / อ้างอิง</th>
                                   <th className="p-3">ประเภท</th>
-                                  <th className="p-3">คู่ค้า / รายการ</th>
+                                  <th className="p-3">คู่ค้า/ลูกค้า</th>
+                                  <th className="p-3">รายการสินค้า/รายละเอียด</th>
                                   <th className="p-3 text-right pr-4">ยอดสุทธิ (฿)</th>
                               </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 bg-white">
-                              {(selectedDocIds.length > 0 ? filteredHistory.filter(t => selectedDocIds.includes(t.id)) : filteredHistory).slice(0, 100).map((t, idx) => (
+                              {(selectedDocIds.length > 0 ? filteredHistory.filter(t => selectedDocIds.includes(t.id)) : filteredHistory).slice(0, 100).map((t, idx) => {
+                                  const itemsDesc = (t.items && t.items.length > 0)
+                                      ? t.items.map(i => `${i.desc || i.name || ''} (x${i.qty || 1})`).join(', ')
+                                      : (t.description || '-');
+                                  return (
                                   <tr key={t.id || idx} className="hover:bg-slate-50 transition-colors">
                                       <td className="p-3 pl-4 font-bold text-slate-400">{idx + 1}</td>
-                                      <td className="p-3">
-                                          <p className="font-bold text-slate-700">{formatDate(t.date)}</p>
-                                          <p className="text-[10px] font-mono text-indigo-600 font-bold">{t.sysDocId || '-'}</p>
-                                      </td>
+                                      <td className="p-3 font-bold text-slate-700">{formatDate(t.date)}</td>
+                                      <td className="p-3 font-mono text-indigo-600 font-bold">{t.sysDocId || '-'}</td>
                                       <td className="p-3 font-mono font-bold text-slate-700">{t.orderId || t.linkedOrderNo || '-'}</td>
                                       <td className="p-3">
                                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${t.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
                                               {t.type === 'income' ? 'รายรับ' : 'รายจ่าย'}
                                           </span>
                                       </td>
-                                      <td className="p-3 truncate max-w-[200px]" title={t.partnerName || t.description}>{t.partnerName || t.description || '-'}</td>
+                                      <td className="p-3 font-bold text-slate-700 truncate max-w-[150px]" title={t.partnerName || '-'}>{t.partnerName || '-'}</td>
+                                      <td className="p-3 text-slate-600 truncate max-w-[220px]" title={itemsDesc}>{itemsDesc}</td>
                                       <td className="p-3 text-right pr-4 font-black text-slate-800">
                                           {formatCurrency(t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total || 0))}
                                       </td>
                                   </tr>
-                              ))}
+                              )})}
                           </tbody>
                       </table>
                       {(selectedDocIds.length > 0 ? selectedDocIds.length : filteredHistory.length) > 100 && (
