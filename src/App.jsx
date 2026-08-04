@@ -463,6 +463,60 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
     }
 };
 
+// --- 🔥 NEW: High-Speed OCR Cache & Client-Side Canvas Image Compressor ---
+const ocrCacheMap = new Map();
+
+const generateImageHashKey = (base64DataStr, fileSize, fileName) => {
+  let hash = 0;
+  const sampleStr = (base64DataStr || '').slice(-2000) + '_' + (fileSize || 0) + '_' + (fileName || '');
+  for (let i = 0; i < sampleStr.length; i++) {
+    const char = sampleStr.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash |= 0;
+  }
+  return 'ocr_hash_' + Math.abs(hash);
+};
+
+const compressImageForOcr = (file, maxDimension = 1000, quality = 0.78) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        // Draw image on white background
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const imgData = canvas.toDataURL('image/jpeg', quality);
+        resolve(imgData);
+      };
+      img.onerror = () => reject(new Error('ไม่สามารถประมวลผลไฟล์ภาพเพื่อย่อขนาดได้'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('อ่านไฟล์ล้มเหลว'));
+    reader.readAsDataURL(file);
+  });
+};
+
 const decryptPdfFallback = async (arrayBuffer, password) => {
     if (!window.pdfjsLib) {
         await new Promise((resolve) => {
@@ -794,7 +848,267 @@ function TaxGuide() {
     );
 }
 
-// --- Main Sub Components (Continued) ---
+function MonthlyReport({ transactions, stockBatches, showToast }) {
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
+  const [selectedShop, setSelectedShop] = useState('all');
+  const [selectedChannel, setSelectedChannel] = useState('all');
+
+  const monthlyData = useMemo(() => {
+    const year = parseInt(selectedYear, 10);
+    const months = Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      monthName: new Date(year, i, 1).toLocaleDateString('th-TH', { month: 'long' }),
+      sales: 0,
+      discounts: 0,
+      cogs: 0,
+      fees: 0,
+      shippingBalance: 0,
+      expenses: 0,
+      orderCount: 0
+    }));
+
+    transactions.forEach(t => {
+      if (t.isCancelled || t.isTaxOnly) return;
+      if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
+      if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
+
+      const d = normalizeDate(t.date);
+      if (!d || d.getFullYear() !== year) return;
+      const mIdx = d.getMonth();
+
+      if (t.type === 'income' && !t.isFromReconciliation) {
+        const fee = Number(t.platformFee) || 0;
+        const shipBuyer = Number(t.shippingFee) || 0;
+        const shipSubsidy = Number(t.shippingFeeSubsidy) || 0;
+        const shipActual = Number(t.estimatedShippingFee) || 0;
+        const shipReturn = Number(t.returnShippingFee) || 0;
+        const shipBal = (shipBuyer + shipSubsidy) - (shipActual + shipReturn);
+
+        const itemSubtotal = (t.items || []).reduce((sum, item) => sum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
+        const discount = Number(t.couponDiscount || 0) + Number(t.refundAmount || 0) + Number(t.cashCoupon || 0);
+        const trueNetSales = itemSubtotal - discount;
+
+        const cogs = (t.items || []).reduce((sum, item) => {
+          if (item.desc && (item.desc.includes('ส่วนต่างยอดรับเงิน') || item.desc.includes('ค่าจัดส่ง'))) return sum;
+          const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
+          return sum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
+        }, 0);
+
+        months[mIdx].sales += trueNetSales;
+        months[mIdx].discounts += discount;
+        months[mIdx].cogs += cogs;
+        months[mIdx].fees += fee;
+        months[mIdx].shippingBalance += shipBal;
+        months[mIdx].orderCount += 1;
+      } else if (t.type === 'expense') {
+        if (t.category === 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') return;
+        const amt = Number(t.total) || 0;
+        const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
+
+        if (t.category === 'ค่าธรรมเนียม Platform') {
+          if (t.isFromReconciliation) months[mIdx].fees += amt;
+        } else if (!isCogsBill && !t.isFromReconciliation) {
+          months[mIdx].expenses += amt;
+        }
+      }
+    });
+
+    return months.map(m => {
+      const totalExpense = m.fees + m.expenses - m.shippingBalance;
+      const netProfit = m.sales - m.cogs - totalExpense;
+      const margin = m.sales > 0 ? (netProfit / m.sales) * 100 : 0;
+      return {
+        ...m,
+        totalExpense,
+        netProfit,
+        margin
+      };
+    });
+  }, [transactions, stockBatches, selectedYear, selectedShop, selectedChannel]);
+
+  const totals = useMemo(() => {
+    return monthlyData.reduce((acc, m) => ({
+      sales: acc.sales + m.sales,
+      cogs: acc.cogs + m.cogs,
+      fees: acc.fees + m.fees,
+      expenses: acc.expenses + m.expenses,
+      shippingBalance: acc.shippingBalance + m.shippingBalance,
+      totalExpense: acc.totalExpense + m.totalExpense,
+      netProfit: acc.netProfit + m.netProfit,
+      orderCount: acc.orderCount + m.orderCount
+    }), { sales: 0, cogs: 0, fees: 0, expenses: 0, shippingBalance: 0, totalExpense: 0, netProfit: 0, orderCount: 0 });
+  }, [monthlyData]);
+
+  const avgMargin = totals.sales > 0 ? (totals.netProfit / totals.sales) * 100 : 0;
+
+  const handleExportMonthlyReport = async () => {
+    if (!window.XLSX) {
+      const script = document.createElement('script');
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      await new Promise((resolve) => { script.onload = resolve; document.body.appendChild(script); });
+    }
+
+    const dataRows = [
+      [`รายงานสรุปผลประกอบการรายเดือน (Performance Report) ประจำปี ${selectedYear}`],
+      [`ร้านค้า: ${selectedShop === 'all' ? 'ทุกร้าน' : selectedShop} | ช่องทาง: ${selectedChannel === 'all' ? 'ทุกช่องทาง' : selectedChannel}`],
+      [],
+      ["เดือน", "จำนวนออเดอร์", "ยอดขายสุทธิ (฿)", "ต้นทุนสินค้า (COGS)", "ค่าธรรมเนียม Platform", "ค่าใช้จ่ายอื่นๆ", "ส่วนต่างค่าส่ง", "รวมค่าใช้จ่ายดำเนินงาน", "กำไรสุทธิ (Net Profit)", "Margin (%)"]
+    ];
+
+    monthlyData.forEach(m => {
+      dataRows.push([
+        m.monthName,
+        m.orderCount,
+        round2Dec(m.sales),
+        round2Dec(m.cogs),
+        round2Dec(m.fees),
+        round2Dec(m.expenses),
+        round2Dec(m.shippingBalance),
+        round2Dec(m.totalExpense),
+        round2Dec(m.netProfit),
+        `${m.margin.toFixed(1)}%`
+      ]);
+    });
+
+    dataRows.push([
+      "รวมทั้งปี",
+      totals.orderCount,
+      round2Dec(totals.sales),
+      round2Dec(totals.cogs),
+      round2Dec(totals.fees),
+      round2Dec(totals.expenses),
+      round2Dec(totals.shippingBalance),
+      round2Dec(totals.totalExpense),
+      round2Dec(totals.netProfit),
+      `${avgMargin.toFixed(1)}%`
+    ]);
+
+    try {
+      const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
+      const wb = window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(wb, ws, "Monthly_Performance");
+      window.XLSX.writeFile(wb, `Monthly_Performance_${selectedYear}.xlsx`);
+      if (showToast) showToast("ส่งออกรายงานสรุปรายเดือนสำเร็จ", "success");
+    } catch (e) {
+      if (showToast) showToast("เกิดข้อผิดพลาดในการส่งออก Excel", "error");
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+        <div>
+          <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+            <BarChart2 className="text-indigo-600"/> สรุปยอดรายเดือน (Monthly Performance)
+          </h2>
+          <p className="text-sm text-slate-400 font-medium">สรุปผลการดำเนินงาน รายได้ ต้นทุน และกำไรสุทธิแยกตามเดือน</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+            <Calendar size={14} className="text-slate-400"/>
+            <select value={selectedYear} onChange={e=>setSelectedYear(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-indigo-700 cursor-pointer">
+              <option value="2024">2024</option>
+              <option value="2025">2025</option>
+              <option value="2026">2026</option>
+              <option value="2027">2027</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+            <Store size={14} className="text-slate-400"/>
+            <select value={selectedShop} onChange={e=>setSelectedShop(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer">
+              <option value="all">ทุกร้านค้า</option>
+              {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+            <Filter size={14} className="text-slate-400"/>
+            <select value={selectedChannel} onChange={e=>setSelectedChannel(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer">
+              <option value="all">ทุกช่องทาง</option>
+              {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <button onClick={handleExportMonthlyReport} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold border border-emerald-200 flex items-center gap-1.5 transition-colors shadow-sm">
+            <FileSpreadsheet size={16}/> Export Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <StatCard title={`ยอดขายรวมปี ${selectedYear}`} value={totals.sales} color="indigo" icon={<TrendingUp />} subtitle={`รวม ${totals.orderCount.toLocaleString()} ออเดอร์`} />
+        <StatCard title="ต้นทุนสินค้าขาย (COGS)" value={totals.cogs} color="amber" icon={<Box />} subtitle="ต้นทุนสินค้าตามระบบ FIFO" />
+        <StatCard title="ค่าใช้จ่ายดำเนินงานรวม" value={totals.totalExpense} color="rose" icon={<TrendingDown />} subtitle="ค่าธรรมเนียม + รายจ่ายอื่นๆ" />
+        <StatCard title="กำไรสุทธิรวม (Net Profit)" value={totals.netProfit} color="emerald" icon={<ProfitIcon />} subtitle={`Margin เฉลี่ย ${avgMargin.toFixed(1)}%`} />
+      </div>
+
+      <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6">
+        <div className="flex justify-between items-center border-b pb-4">
+          <h3 className="font-bold text-slate-800 text-base flex items-center gap-2">
+            <Calendar size={18} className="text-indigo-600"/> ตารางสรุปผลประกอบการรายเดือน ประจำปี {selectedYear}
+          </h3>
+        </div>
+
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full text-xs text-left">
+            <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-200">
+              <tr>
+                <th className="p-4">เดือน</th>
+                <th className="p-4 text-center">ออเดอร์</th>
+                <th className="p-4 text-right text-indigo-600">ยอดขายสุทธิ</th>
+                <th className="p-4 text-right text-amber-600">ต้นทุนสินค้า (COGS)</th>
+                <th className="p-4 text-right text-rose-500">ค่าธรรมเนียม</th>
+                <th className="p-4 text-right text-slate-600">รายจ่ายอื่นๆ</th>
+                <th className="p-4 text-right text-blue-600">ส่วนต่างค่าส่ง</th>
+                <th className="p-4 text-right text-rose-600">รวมค่าใช้จ่าย</th>
+                <th className="p-4 text-right text-emerald-600">กำไรสุทธิ</th>
+                <th className="p-4 text-center">Margin</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {monthlyData.map((m, idx) => (
+                <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                  <td className="p-4 font-bold text-slate-800">{m.monthName}</td>
+                  <td className="p-4 text-center font-bold text-slate-500">{m.orderCount.toLocaleString()}</td>
+                  <td className="p-4 text-right font-black text-indigo-600">{formatCurrency(m.sales)}</td>
+                  <td className="p-4 text-right font-bold text-amber-600">{formatCurrency(m.cogs)}</td>
+                  <td className="p-4 text-right font-bold text-rose-500">{formatCurrency(m.fees)}</td>
+                  <td className="p-4 text-right font-medium text-slate-600">{formatCurrency(m.expenses)}</td>
+                  <td className={`p-4 text-right font-bold ${m.shippingBalance >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                    {m.shippingBalance > 0 ? '+' : ''}{formatCurrency(m.shippingBalance)}
+                  </td>
+                  <td className="p-4 text-right font-bold text-rose-600">{formatCurrency(m.totalExpense)}</td>
+                  <td className="p-4 text-right font-black text-sm">
+                    <span className={m.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                      {m.netProfit > 0 ? '+' : ''}{formatCurrency(m.netProfit)}
+                    </span>
+                  </td>
+                  <td className="p-4 text-center">
+                    <span className={`px-2 py-1 rounded-md font-black text-[10px] ${m.margin >= 20 ? 'bg-emerald-100 text-emerald-700' : m.margin > 0 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'}`}>
+                      {m.margin.toFixed(1)}%
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-slate-900 text-white font-bold text-xs">
+              <tr>
+                <td className="p-4">รวมทั้งปี</td>
+                <td className="p-4 text-center">{totals.orderCount.toLocaleString()}</td>
+                <td className="p-4 text-right text-indigo-300">{formatCurrency(totals.sales)}</td>
+                <td className="p-4 text-right text-amber-300">{formatCurrency(totals.cogs)}</td>
+                <td className="p-4 text-right text-rose-300">{formatCurrency(totals.fees)}</td>
+                <td className="p-4 text-right text-slate-300">{formatCurrency(totals.expenses)}</td>
+                <td className="p-4 text-right text-blue-300">{formatCurrency(totals.shippingBalance)}</td>
+                <td className="p-4 text-right text-rose-300">{formatCurrency(totals.totalExpense)}</td>
+                <td className="p-4 text-right text-emerald-400 text-sm">{formatCurrency(totals.netProfit)}</td>
+                <td className="p-4 text-center text-amber-400">{avgMargin.toFixed(1)}%</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function Dashboard({ transactions, invoices, stockBatches, showToast }) {
   const [selectedChannel, setSelectedChannel] = useState('all');
@@ -4550,12 +4864,13 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
   const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
   const [targetProductEdit, setTargetProductEdit] = useState(null);
+  const [tempProductName, setTempProductName] = useState(''); // NEW: State สำหรับเก็บชื่อสินค้าที่ต้องการแก้
   const [tempCategory, setTempCategory] = useState('');
   const [tempIsGiveaway, setTempIsGiveaway] = useState(false); 
 
   // NEW: State สำหรับระบบปรับปรุงสต็อก 
   const [adjustStockItem, setAdjustStockItem] = useState(null);
-  const [adjustData, setAdjustData] = useState({ type: 'add', qty: '', reason: 'ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)', targetKey: '', date: formatDateISO(new Date()) });
+  const [adjustData, setAdjustData] = useState({ type: 'add', qty: '', reason: 'ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)', targetKey: '', date: formatDateISO(new Date()), note: '' });
   const [transferSearchTerm, setTransferSearchTerm] = useState('');
   const [showTransferList, setShowTransferList] = useState(false);
 
@@ -4580,6 +4895,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
   const openEditCategory = (item) => {
     setTargetProductEdit(item);
+    setTempProductName(item.name); // NEW: ดึงชื่อเดิมมาแสดง
     setTempCategory(item.category || CONSTANTS.CATEGORIES.STOCK[0]);
     setTempIsGiveaway(item.isGiveaway || false); 
     setShowEditCategoryModal(true);
@@ -4587,18 +4903,24 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
   const handleUpdateCategory = async () => {
     if (!targetProductEdit || !user) return;
+    if (!tempProductName.trim()) return showToast("กรุณาระบุชื่อสินค้า", "error"); // ป้องกันการตั้งชื่อว่าง
+    
     setIsProcessing(true);
     try {
       const batchWriter = writeBatch(dbInstance);
       targetProductEdit.batches.forEach(b => {
             const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
-            const updates = { category: tempCategory, isGiveaway: tempIsGiveaway };
+            const updates = { 
+                productName: tempProductName.trim(), // NEW: อัปเดตชื่อสินค้าใหม่ลงไปด้วย
+                category: tempCategory, 
+                isGiveaway: tempIsGiveaway 
+            };
             if (tempIsGiveaway) updates.sellPrice = 0; 
             batchWriter.update(docRef, updates);
       });
 
       await batchWriter.commit();
-      showToast(`อัปเดตข้อมูล "${targetProductEdit.name}" เรียบร้อย`, "success");
+      showToast(`อัปเดตข้อมูล "${tempProductName}" เรียบร้อย`, "success");
       setShowEditCategoryModal(false);
       setTargetProductEdit(null);
     } catch (e) {
@@ -4639,6 +4961,113 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       } catch (e) {
           console.error(e);
           showToast("เกิดข้อผิดพลาดในการล้างสต็อกผี", "error");
+      }
+      setIsProcessing(false);
+  };
+
+  // --- 🔥 NEW: ฟังก์ชันซ่อมแซมสต็อก 1-Click (Hard Reset) ---
+  const handleHardResetStock = async () => {
+      if (!window.confirm("⚡ ยืนยันการซ่อมแซมสต็อก (Hard Reset)?\n\nระบบจะทำการล้างค่าการขายเดิมทั้งหมด และประมวลผลคำนวณยอดขายจากบิลจริงใหม่ตั้งแต่ต้น (1-Click Auto Sync)\nการดำเนินการนี้จะใช้เวลาสักครู่ และไม่สามารถย้อนกลับได้")) return;
+
+      setIsProcessing(true);
+      try {
+          showToast('กำลังประมวลผลและปรับปรุงสต็อก (Hard Reset)...', 'success');
+
+          let localBatches = stockBatches.map(b => {
+              if (b.isAdjustment === true) {
+                  return { ...b, simulatedSold: Number(b.sold || 0), originalSold: Number(b.sold || 0) };
+              }
+              return { ...b, simulatedSold: 0, originalSold: Number(b.sold || 0) };
+          });
+
+          const incomeTrans = transactions.filter(t => t.type === 'income' && !t.isCancelled).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+
+          const newDummies = [];
+
+          incomeTrans.forEach(trans => {
+              (trans.items || []).forEach(item => {
+                  let needed = Number(item.qty);
+                  if (needed <= 0) return;
+
+                  const targetBatches = localBatches
+                      .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && b.isAdjustment !== true)
+                      .sort(sortClosestToDateThenOldest(trans.date));
+
+                  for (let i = 0; i < targetBatches.length; i++) {
+                      if (needed <= 0) break;
+                      const b = targetBatches[i];
+                      const remaining = Number(b.quantity) - b.simulatedSold;
+
+                      let take = 0;
+                      if (i === targetBatches.length - 1) {
+                          take = needed;
+                      } else {
+                          take = Math.min(needed, Math.max(0, remaining));
+                      }
+
+                      if (take > 0) {
+                          b.simulatedSold += take;
+                          needed -= take;
+                      }
+                  }
+
+                  if (needed > 0) {
+                      newDummies.push({
+                          productName: item.desc,
+                          sku: item.sku || '-',
+                          category: 'อื่นๆ',
+                          quantity: 0,
+                          costPerUnit: 0,
+                          sellPrice: item.sellPrice || item.price || 0,
+                          date: trans.date,
+                          sold: needed,
+                          userId: user.uid,
+                          paymentStatus: 'paid',
+                          isAdjustment: true,
+                          adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
+                      });
+                  }
+              });
+          });
+
+          const allOldDummies = stockBatches.filter(b => b.isAdjustment && b.adjustReason === 'สต็อกติดลบ (ไม่มีในคลัง)');
+
+          let batch = writeBatch(dbInstance);
+          let opsCount = 0;
+
+          // 1. ลบ Dummy เก่าทิ้งทั้งหมด
+          for (const dummy of allOldDummies) {
+              batch.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', dummy.id));
+              opsCount++;
+              if (opsCount >= 400) { await batch.commit(); batch = writeBatch(dbInstance); opsCount = 0; }
+          }
+
+          // 2. อัปเดตยอด Sold ใหม่ในสต็อกปกติ
+          for (const b of localBatches) {
+              if (b.isAdjustment !== true && b.simulatedSold !== b.originalSold) {
+                  batch.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id), { sold: b.simulatedSold });
+                  opsCount++;
+                  if (opsCount >= 400) { await batch.commit(); batch = writeBatch(dbInstance); opsCount = 0; }
+              }
+          }
+
+          // 3. สร้าง Dummy ใหม่จากที่คำนวณได้
+          for (const d of newDummies) {
+              const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+              batch.set(dummyRef, { ...d, createdAt: serverTimestamp() });
+              opsCount++;
+              if (opsCount >= 400) { await batch.commit(); batch = writeBatch(dbInstance); opsCount = 0; }
+          }
+
+          if (opsCount > 0) {
+              await batch.commit();
+          }
+
+          showToast('⚡ ซ่อมแซมและปรับปรุงสต็อกทั้งหมดเสร็จสมบูรณ์ ยอดตรง 100% แล้ว!', 'success');
+
+      } catch (error) {
+          console.error(error);
+          showToast('เกิดข้อผิดพลาดในการซ่อมแซมสต็อก', 'error');
       }
       setIsProcessing(false);
   };
@@ -4781,7 +5210,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   createdAt: serverTimestamp(),
                   paymentStatus: 'paid',
                   isAdjustment: true,
-                  adjustReason: adjustData.reason
+                  adjustReason: adjustData.note ? `${adjustData.reason} (หมายเหตุ: ${adjustData.note})` : adjustData.reason
               });
 
           } else if (adjustData.type === 'add') {
@@ -4800,7 +5229,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   createdAt: serverTimestamp(),
                   paymentStatus: 'paid',
                   isAdjustment: true,
-                  adjustReason: adjustData.reason
+                  adjustReason: adjustData.note ? `${adjustData.reason} (หมายเหตุ: ${adjustData.note})` : adjustData.reason
               });
           } else {
               // --- โหมดลดสต็อกปกติ ---
@@ -4824,7 +5253,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               }
 
               // รายชื่อเหตุผลที่ถือเป็นค่าใช้จ่าย (สูญเสีย) ของกิจการ
-              const expenseReasons = ['สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)', 'สินค้าหมดอายุ/เสื่อมสภาพ', 'เปลี่ยนสินค้าให้ลูกค้า (เคลม/ส่งผิด)', 'สูญเสียจากการขนส่ง (เคลมไม่ได้)'];
+              const expenseReasons = ['สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)', 'สินค้าหมดอายุ/เสื่อมสภาพ', 'เปลี่ยนสินค้าให้ลูกค้า (ส่งเคลมของเสีย)', 'สูญเสียจากการขนส่ง (เคลมไม่ได้)'];
 
               // สร้างบิลรายจ่ายอัตโนมัติ สำหรับบันทึกสินค้าชำรุด/สูญเสีย เพื่อให้ตัดกำไรสุทธิได้ถูกต้อง
               if (expenseReasons.includes(adjustData.reason) && totalCostLost > 0) {
@@ -4836,7 +5265,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                       sysDocId: expSysDocId,
                       type: 'expense',
                       category: 'สินค้าเสียหาย/หมดอายุ',
-                      description: `บันทึกตัดจำหน่ายสต็อก (${adjustData.reason}): ${adjustStockItem.name}`,
+                      description: `บันทึกตัดจำหน่ายสต็อก (${adjustData.reason}): ${adjustStockItem.name} ${adjustData.note ? `[${adjustData.note}]` : ''}`,
                       items: [{ 
                           desc: `ตัดสต็อก (${adjustData.reason}): ${adjustStockItem.name}`, 
                           qty: qty, 
@@ -4861,7 +5290,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           await batchWriter.commit();
           showToast(adjustData.type === 'transfer' ? `โอนย้ายสต็อกสำเร็จ!` : `ปรับปรุงสต็อก ${adjustStockItem.name} สำเร็จ`, "success");
           setAdjustStockItem(null);
-          setAdjustData({ type: 'add', qty: '', reason: 'ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)', targetKey: '', date: formatDateISO(new Date()) });
+          setAdjustData({ type: 'add', qty: '', reason: 'ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)', targetKey: '', date: formatDateISO(new Date()), note: '' });
           setAdjustAttachmentUrl(''); 
           setTransferSearchTerm('');
           setShowTransferList(false);
@@ -5661,6 +6090,11 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
         <h3 className="text-2xl font-bold flex items-center gap-2 text-left text-slate-800"><Box className="text-indigo-600"/> คลังสินค้า & มาร์จิ้น (Performance)</h3>
         <div className="flex items-center gap-2 text-left flex-wrap">
           
+          {/* --- 🔥 NEW: ปุ่มซ่อมแซมสต็อก 1-Click --- */}
+          <button onClick={handleHardResetStock} disabled={isProcessing} className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-md" title="คำนวณล้างยอดขายและจัดเรียง FIFO ใหม่อัตโนมัติในคลิกเดียว">
+            {isProcessing ? <Loader className="animate-spin" size={16}/> : <Zap size={16}/>} ⚡ ซ่อมแซมสต็อกทันที
+          </button>
+
           {/* --- 🔥 NEW: ปุ่มล้างสต็อกผี (Dummy Stocks) --- */}
           <button onClick={handleClearDummyStocks} disabled={isProcessing} className="bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-sm" title="กวาดล้างสต็อกขยะที่ระบบเคยสร้างอัตโนมัติเมื่อหาของไม่เจอ">
             {isProcessing ? <Loader className="animate-spin" size={16}/> : <Trash2 size={16}/>} ล้างสต็อกผี
@@ -6145,16 +6579,33 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           <div className="bg-white rounded-[32px] p-8 max-md w-full shadow-2xl animate-in zoom-in-95 text-left">
             <div className="flex justify-between items-center mb-6 text-left">
               <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 text-left"><Edit className="text-indigo-600"/> แก้ไขข้อมูลสินค้า</h3>
-              <button onClick={()=>setShowEditCategoryModal(false)} className="text-center"><X/></button>
+              <button onClick={()=>setShowEditCategoryModal(false)} className="text-center text-slate-400 hover:text-slate-600"><X/></button>
             </div>
             <div className="space-y-4 text-left">
-              <p className="text-xs text-slate-400 font-bold uppercase text-left">Product: {targetProductEdit?.name}</p>
+              
+              {/* NEW: ช่องแก้ไขชื่อสินค้า */}
+              <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">ชื่อสินค้า</label>
+                  <input 
+                    type="text"
+                    value={tempProductName} 
+                    onChange={e=>setTempProductName(e.target.value)}
+                    className="w-full bg-slate-50 p-3.5 rounded-2xl border border-slate-200 font-bold outline-none text-slate-800 text-left focus:ring-2 focus:ring-indigo-100 transition-all"
+                  />
+                  {(!targetProductEdit?.sku || targetProductEdit?.sku === '-') && (
+                      <p className="text-[10px] text-amber-600 mt-1.5 font-bold flex items-start gap-1">
+                          <AlertTriangle size={12} className="shrink-0 mt-0.5"/> 
+                          สินค้านี้ไม่มี SKU การเปลี่ยนชื่ออาจทำให้ประวัติการขายเดิม (ที่ใช้ชื่อเก่า) หลุดการเชื่อมโยงในหน้าประวัติ
+                      </p>
+                  )}
+              </div>
+
               <div>
                   <label className="text-[10px] font-bold uppercase text-slate-400 mb-1 block">หมวดหมู่สินค้า</label>
                   <select 
                     value={tempCategory} 
                     onChange={e=>setTempCategory(e.target.value)}
-                    className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold outline-none text-slate-800 text-left"
+                    className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold outline-none text-slate-800 text-left cursor-pointer focus:ring-2 focus:ring-indigo-100"
                   >
                     {CONSTANTS.CATEGORIES.STOCK.map(c => <option key={c} value={c}>{c}</option>)}
                     <option value="Imported">Imported</option>
@@ -6270,7 +6721,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                           <>
                               <option value="สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)">สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)</option>
                               <option value="สินค้าหมดอายุ/เสื่อมสภาพ">สินค้าหมดอายุ/เสื่อมสภาพ</option>
-                              <option value="เปลี่ยนสินค้าให้ลูกค้า (เคลม/ส่งผิด)">เปลี่ยนสินค้าให้ลูกค้า (เคลม/ส่งผิด)</option>
+                              <option value="เปลี่ยนสินค้าให้ลูกค้า (ส่งเคลมของเสีย)">เปลี่ยนสินค้าให้ลูกค้า (ส่งเคลมของเสีย)</option>
+                              <option value="ส่งสินค้าทดแทน (สลับไซส์/สลับรุ่น)">ส่งสินค้าทดแทน (สลับไซส์/สลับรุ่น)</option>
                               <option value="สูญเสียจากการขนส่ง (เคลมไม่ได้)">สูญเสียจากการขนส่ง (เคลมไม่ได้)</option>
                               <option value="ยอดตรวจนับจริงต่ำกว่าระบบ (ยอดขาด)">ยอดตรวจนับจริงต่ำกว่าระบบ (ยอดขาด)</option>
                               <option value="นำไปใช้ในกิจการ/เป็นตัวอย่างสินค้า">นำไปใช้ในกิจการ/เป็นตัวอย่างสินค้า</option>
@@ -6281,7 +6733,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                       {adjustData.type === 'add' && (
                           <>
                               <option value="ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)">ยอดตรวจนับจริงสูงกว่าระบบ (ยอดเกิน)</option>
-                              <option value="ลูกค้าส่งคืนสินค้า (เคลม/รับของเดิมคืน)">ลูกค้าส่งคืนสินค้า (เคลม/รับของเดิมคืน)</option>
+                              <option value="ลูกค้าส่งคืนสินค้า (รับของเดิมคืน)">ลูกค้าส่งคืนสินค้า (รับของเดิมคืน)</option>
+                              <option value="รับคืนจากการสลับไซส์/สลับรุ่น">รับคืนจากการสลับไซส์/สลับรุ่น</option>
                               <option value="ได้รับสินค้าแถม/ชดเชยจาก Supplier">ได้รับสินค้าแถม/ชดเชยจาก Supplier</option>
                               <option value="รับคืนสินค้าจากการยืม/นำไปใช้">รับคืนสินค้าจากการยืม/นำไปใช้</option>
                               <option value="อื่นๆ">อื่นๆ</option>
@@ -6297,6 +6750,11 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                           </>
                       )}
                   </select>
+              </div>
+
+              <div className="animate-fadeIn">
+                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">หมายเหตุ / อ้างอิง Order ID (ไม่บังคับ)</label>
+                  <input type="text" value={adjustData.note} onChange={e=>setAdjustData({...adjustData, note: e.target.value})} className="w-full bg-white border border-slate-200 p-3 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100 text-slate-700" placeholder="เช่น อ้างอิง Order: 230815ABCD..." />
               </div>
 
               {/* --- 🔥 NEW: ส่วนอัปโหลดรูปภาพหลักฐาน --- */}
@@ -6333,7 +6791,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
             </div>
             <div className="flex gap-3 pt-4 border-t border-slate-100 mt-2 text-center shrink-0">
-                <button onClick={() => {setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false); setAdjustAttachmentUrl('');}} className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+                <button onClick={() => {setAdjustStockItem(null); setTransferSearchTerm(''); setShowTransferList(false); setAdjustAttachmentUrl(''); setAdjustData(prev => ({...prev, note: ''}));}} className="flex-1 py-3.5 bg-slate-100 hover:bg-slate-200 transition-colors rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
                 <button onClick={handleAdjustStock} disabled={isProcessing} className={`flex-1 py-3.5 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 text-center transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50 ${adjustData.type === 'add' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200' : adjustData.type === 'transfer' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200' : 'bg-rose-600 hover:bg-rose-700 shadow-rose-200'}`}>
                   {isProcessing ? <Loader className="animate-spin" size={16}/> : <CheckCircle size={16}/>} ยืนยัน
                 </button>
@@ -8460,159 +8918,179 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           return;
       }
       setIsOcrProcessing(true);
-      
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-          try {
-              const base64Img = reader.result;
+
+      try {
+          let compressedBase64;
+          let cacheKey;
+
+          // --- 🔥 FIX: รองรับการสแกนไฟล์ PDF โดยตรง (ข้าม Canvas ย่อรูป) ---
+          if (file.type === 'application/pdf') {
+              showToast("กำลังประมวลผลไฟล์ PDF...", "info");
+              compressedBase64 = await new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result);
+                  reader.onerror = () => reject(new Error("อ่านไฟล์ PDF ล้มเหลว"));
+                  reader.readAsDataURL(file);
+              });
+              cacheKey = generateImageHashKey(compressedBase64, file.size, file.name);
+          } else if (file.type.startsWith('image/')) {
+              // 1. Client-Side Canvas Downscaling สำหรับรูปภาพ
+              showToast("กำลังบีบอัดรูปภาพเพื่อเพิ่มความเร็วและประหยัด API Quota...", "info");
+              compressedBase64 = await compressImageForOcr(file, 1000, 0.78);
+              cacheKey = generateImageHashKey(compressedBase64, file.size, file.name);
+          } else {
+              throw new Error("รองรับเฉพาะไฟล์รูปภาพ (JPG, PNG) และไฟล์ PDF เท่านั้น");
+          }
+
+          let res = null;
+
+          // 2. Image Hash Caching (สแกนรูปเดิมซ้ำ = 0 API Calls)
+          if (ocrCacheMap.has(cacheKey)) {
+              res = ocrCacheMap.get(cacheKey);
+              showToast("⚡ พบข้อมูลใน Cache! ดึงผลลัพธ์สำเร็จทันที (0.05s / ไม่เสีย Quota)", "success");
+          } else {
+              // 3. Compact & High-Accuracy Thai Tax Prompt
               const expenseCategories = CONSTANTS.CATEGORIES.EXPENSE.join(', ');
               const prompt = `
-              คุณคือผู้เชี่ยวชาญด้านบัญชีและระบบสกัดข้อมูล OCR ขั้นสูง (High Accuracy) ตรวจสอบรูปภาพใบเสร็จรับเงิน/ใบกำกับภาษีของไทย (เช่น Shopee, Lazada, ใบเสร็จทั่วไป)
-              คำสั่งสำคัญ: "ต้องสกัดรายการสินค้าและตัวเลขให้แม่นยำเป๊ะๆ 100% ตามตารางในเอกสาร ห้ามปัดเศษ ห้ามเดา และให้ลบลูกน้ำ (,) ออกก่อนคืนค่าตัวเลข"
-              
-              กรุณาสกัดเป็น JSON Object ตามโครงสร้างคีย์ดังนี้:
+              คุณคือผู้เชี่ยวชาญ AI OCR สกัดข้อมูลใบเสร็จ/ใบกำกับภาษีของไทย
+              คำสั่งสำคัญ: สกัดข้อมูลอย่างแม่นยำ 100% ห้ามเดา ห้ามปัดเศษ ลบลูกน้ำออกก่อนคืนค่าตัวเลข
+
+              กรุณาสกัดเป็น JSON Object ตามโครงสร้างนี้เท่านั้น:
               {
-                "partnerName": "ชื่อบริษัท/ร้านค้าผู้ขาย (เช่น Shopee (Thailand) Co., Ltd.)",
-                "taxId": "เลขประจำตัวผู้เสียภาษี (ดึงเฉพาะตัวเลข 13 หลัก)",
-                "branch": "รหัสสาขา 5 หลัก (ถ้ามี) หรือพิมพ์คำว่า สำนักงานใหญ่",
-                "taxInvoiceNo": "เลขที่ใบเสร็จ/ใบกำกับภาษี (เช่น TRSPEMKP00-00000-260404-0008880 ติดกัน)",
-                "date": "วันที่ในเอกสาร YYYY-MM-DD",
+                "partnerName": "ชื่อบริษัท/ร้านค้าผู้ขาย",
+                "taxId": "เลขผู้เสียภาษี 13 หลัก",
+                "branch": "รหัสสาขา 5 หลัก หรือ สำนักงานใหญ่",
+                "taxInvoiceNo": "เลขที่ใบเสร็จ/ใบกำกับภาษี",
+                "date": "YYYY-MM-DD",
                 "items": [
                   { 
-                    "desc": "ชื่อรายการแต่ละบรรทัด (เช่น Commission fee, Transaction fee)", 
-                    "qty": จำนวน (เป็นตัวเลข Number), 
-                    "price": ยอดจำนวนเงิน/ราคา ของรายการนั้น (เป็นตัวเลข Number ห้ามมีลูกน้ำ) 
+                    "desc": "ชื่อรายการ", 
+                    "qty": จำนวน, 
+                    "price": ราคา 
                   }
                 ],
-                "totalAmount": ยอดรวมสุทธิ หรือ Total amount (เป็นตัวเลข Number เช่น 1114.00),
-                "vatAmount": ยอดภาษีมูลค่าเพิ่ม หรือ VAT 7% (เป็นตัวเลข Number เช่น 72.88),
-                "isTaxInvoice": true หรือ false (เป็น true ถ้าหัวเอกสารมีคำว่า "ใบกำกับภาษี"),
-                "category": "เลือกจาก: [${expenseCategories}] (ถ้ามีรายการเกี่ยวกับ Shopee/Lazada หรือ Fee ให้เลือก 'ค่าธรรมเนียม Platform')"
+                "totalAmount": ยอดรวมสุทธิ,
+                "vatAmount": ยอดภาษี VAT 7%,
+                "isTaxInvoice": true หรือ false (เป็น true ถ้าหัวเอกสารเป็นใบกำกับภาษี),
+                "category": "เลือกจาก: [${expenseCategories}]"
               }
-              
-              ข้อกำหนดเพิ่มเติม:
-              - พยายามดึง items จากตารางรายการ (Item Description) ให้ครบทุกบรรทัด
-              - ห้ามมีข้อความอื่นนอกเหนือจาก JSON Object เด็ดขาด
               `;
-              
-              showToast("AI กำลังสกัดข้อมูลเชิงลึกจากใบเสร็จ (High Accuracy Mode)...", "success");
-              const res = await callGeminiAPI(prompt, true, base64Img);
-              
+
+              showToast("AI กำลังสกัดข้อมูลใบเสร็จ (Fast Mode)...", "success");
+              res = await callGeminiAPI(prompt, true, compressedBase64);
+
               if (res) {
-                  // --- 1. Auto-Categorization (จัดหมวดหมู่อัตโนมัติ) ---
-                  let finalCategory = res.category || CONSTANTS.CATEGORIES.EXPENSE[0];
-                  
-                  // รายชื่อขนส่งยอดนิยม & คีย์เวิร์ด
-                  const shippingKeywords = ["spx", "flash", "dhl", "j&t", "jt", "kerry", "ไปรษณีย์", "post", "ขนส่ง", "ค่าส่ง", "shipping", "delivery", "courier", "พัสดุ", "ค่าจัดส่ง"];
-                  const partnerNameLower = String(res.partnerName || '').toLowerCase();
-                  
-                  // ตรวจสอบว่ามีคีย์เวิร์ดขนส่งในข้อมูล OCR หรือไม่
-                  const hasShippingKeyword = shippingKeywords.some(keyword => {
-                      const matchPartner = partnerNameLower.includes(keyword);
-                      const matchItems = res.items && Array.isArray(res.items) && res.items.some(it => String(it.desc || '').toLowerCase().includes(keyword));
-                      const matchCategory = String(res.category || '').toLowerCase().includes(keyword);
-                      return matchPartner || matchItems || matchCategory;
-                  });
+                  ocrCacheMap.set(cacheKey, res); // เซฟลง Cache สำหรับครั้งต่อไป
+              }
+          }
 
-                  if (hasShippingKeyword) {
-                      finalCategory = "ค่าขนส่งพัสดุ (ส่งลูกค้า)";
-                  }
+          if (res) {
+              // --- Auto-Categorization ---
+              let finalCategory = res.category || CONSTANTS.CATEGORIES.EXPENSE[0];
+              const shippingKeywords = ["spx", "flash", "dhl", "j&t", "jt", "kerry", "ไปรษณีย์", "post", "ขนส่ง", "ค่าส่ง", "shipping", "delivery", "courier", "พัสดุ", "ค่าจัดส่ง"];
+              const partnerNameLower = String(res.partnerName || '').toLowerCase();
+              
+              const hasShippingKeyword = shippingKeywords.some(keyword => {
+                  const matchPartner = partnerNameLower.includes(keyword);
+                  const matchItems = res.items && Array.isArray(res.items) && res.items.some(it => String(it.desc || '').toLowerCase().includes(keyword));
+                  const matchCategory = String(res.category || '').toLowerCase().includes(keyword);
+                  return matchPartner || matchItems || matchCategory;
+              });
 
-                  // --- 2. Auto-Fetch Partner Info (ดึงข้อมูลคู่ค้าอัตโนมัติ) ---
-                  let partnerAddress = '';
-                  let partnerBranch = '00000';
-                  let partnerBranchName = '';
-                  let partnerNameFinal = res.partnerName || '';
-                  let partnerTaxIdFinal = res.taxId || '';
+              if (hasShippingKeyword) {
+                  finalCategory = "ค่าขนส่งพัสดุ (ส่งลูกค้า)";
+              }
 
-                  let matchedPartner = null;
-                  if (res.taxId) {
-                      matchedPartner = partners.find(p => p.taxId && String(p.taxId).replace(/[^0-9]/g, '') === String(res.taxId).replace(/[^0-9]/g, ''));
-                  }
-                  if (!matchedPartner && res.partnerName) {
-                      const cleanName = res.partnerName.toLowerCase().replace(/[^a-zA-Z0-9ก-๙]/g, '');
-                      matchedPartner = partners.find(p => p.name && p.name.toLowerCase().replace(/[^a-zA-Z0-9ก-๙]/g, '').includes(cleanName));
-                  }
+              // --- Auto-Fetch Partner Info ---
+              let partnerAddress = '';
+              let partnerBranch = '00000';
+              let partnerBranchName = '';
+              let partnerNameFinal = res.partnerName || '';
+              let partnerTaxIdFinal = res.taxId || '';
 
-                  if (matchedPartner) {
-                      partnerNameFinal = matchedPartner.name || partnerNameFinal;
-                      partnerTaxIdFinal = matchedPartner.taxId || partnerTaxIdFinal;
-                      partnerAddress = matchedPartner.address || '';
-                      partnerBranch = matchedPartner.branch || '00000';
-                      partnerBranchName = matchedPartner.branchName || '';
-                      showToast(`✨ ดึงประวัติคู่ค้า "${partnerNameFinal}" จากฐานข้อมูลอัตโนมัติสำเร็จ`, "success");
+              let matchedPartner = null;
+              if (res.taxId) {
+                  matchedPartner = partners.find(p => p.taxId && String(p.taxId).replace(/[^0-9]/g, '') === String(res.taxId).replace(/[^0-9]/g, ''));
+              }
+              if (!matchedPartner && res.partnerName) {
+                  const cleanName = res.partnerName.toLowerCase().replace(/[^a-zA-Z0-9ก-๙]/g, '');
+                  matchedPartner = partners.find(p => p.name && p.name.toLowerCase().replace(/[^a-zA-Z0-9ก-๙]/g, '').includes(cleanName));
+              }
+
+              if (matchedPartner) {
+                  partnerNameFinal = matchedPartner.name || partnerNameFinal;
+                  partnerTaxIdFinal = matchedPartner.taxId || partnerTaxIdFinal;
+                  partnerAddress = matchedPartner.address || '';
+                  partnerBranch = matchedPartner.branch || '00000';
+                  partnerBranchName = matchedPartner.branchName || '';
+                  showToast(`✨ ดึงประวัติคู่ค้า "${partnerNameFinal}" จากคลังเรียบร้อย`, "success");
+              } else if (res.branch) {
+                  if (res.branch.includes('สำนักงานใหญ่') || res.branch.includes('HQ') || res.branch.includes('Head')) {
+                      partnerBranch = '00000';
                   } else {
-                      // สกัดสาขาจาก OCR ปกติในกรณีไม่พบคู่ค้าเดิม
-                      if (res.branch) {
-                          if (res.branch.includes('สำนักงานใหญ่') || res.branch.includes('HQ') || res.branch.includes('Head')) {
-                              partnerBranch = '00000';
-                          } else {
-                              const numMatch = res.branch.match(/\d{5}/);
-                              if (numMatch) partnerBranch = numMatch[0];
-                          }
-                      }
-                  }
-
-                  // สร้าง items จาก AI หรือใช้ค่า Default โดยพ่วงหมวดหมู่ที่ตรวจจับได้
-                  let newItems = [];
-                  if (res.items && Array.isArray(res.items) && res.items.length > 0) {
-                      newItems = res.items.map(it => ({
-                          desc: it.desc || 'รายการสแกน',
-                          qty: Number(it.qty) || 1,
-                          unit: 'ชิ้น',
-                          buyPrice: Number(it.price) || 0,
-                          sellPrice: 0,
-                          sku: '',
-                          category: finalCategory
-                      }));
-                  } else {
-                      newItems = [{ 
-                          desc: 'ค่าใช้จ่ายตามใบเสร็จ', 
-                          qty: 1, 
-                          unit: 'ครั้ง', 
-                          buyPrice: res.totalAmount || 0, 
-                          sellPrice: 0, 
-                          sku: '', 
-                          category: finalCategory 
-                      }];
-                  }
-                  
-                  const isCashBillMode = res.isTaxInvoice === false;
-
-                  setFormData(prev => ({
-                      ...prev,
-                      partnerName: partnerNameFinal,
-                      partnerTaxId: partnerTaxIdFinal,
-                      partnerBranch: partnerBranch,
-                      partnerBranchName: partnerBranchName,
-                      partnerAddress: partnerAddress || prev.partnerAddress,
-                      taxInvoiceNo: res.taxInvoiceNo || prev.taxInvoiceNo,
-                      category: finalCategory,
-                      items: newItems,
-                      date: res.date || prev.date,
-                      isCashBill: isCashBillMode,
-                      vatType: isCashBillMode ? 'none' : (res.vatAmount > 0 ? 'included' : 'none'),
-                      manualVatAmount: res.vatAmount > 0 ? res.vatAmount : ''
-                  }));
-
-                  if (hasShippingKeyword) {
-                      showToast(`🚚 ตรวจพบสัญลักษณ์ขนส่ง: จัดกลุ่มเป็น "ค่าขนส่งพัสดุ" เรียบร้อย`, "success");
-                  }
-
-                  if (isCashBillMode) {
-                      showToast("AI สกัดข้อมูลสำเร็จ! ตรวจพบว่าเป็น 'ใบเสร็จรับเงิน/บิลเงินสด'", "success");
-                  } else {
-                      showToast("AI สกัดข้อมูลจาก 'ใบกำกับภาษี' สำเร็จ! โปรดตรวจสอบรายการและ VAT", "success");
+                      const numMatch = res.branch.match(/\d{5}/);
+                      if (numMatch) partnerBranch = numMatch[0];
                   }
               }
-          } catch (err) {
-              console.error(err);
-              showToast("ไม่สามารถสแกนใบเสร็จได้ กรุณากรอกข้อมูลเอง (หรือตรวจสอบ API Key)", "error");
+
+              let newItems = [];
+              if (res.items && Array.isArray(res.items) && res.items.length > 0) {
+                  newItems = res.items.map(it => ({
+                      desc: it.desc || 'รายการสแกน',
+                      qty: Number(it.qty) || 1,
+                      unit: 'ชิ้น',
+                      buyPrice: Number(it.price) || 0,
+                      sellPrice: 0,
+                      sku: '',
+                      category: finalCategory
+                  }));
+              } else {
+                  newItems = [{ 
+                      desc: 'ค่าใช้จ่ายตามใบเสร็จ', 
+                      qty: 1, 
+                      unit: 'ครั้ง', 
+                      buyPrice: res.totalAmount || 0, 
+                      sellPrice: 0, 
+                      sku: '', 
+                      category: finalCategory 
+                  }];
+              }
+              
+              const isCashBillMode = res.isTaxInvoice === false;
+
+              setFormData(prev => ({
+                  ...prev,
+                  partnerName: partnerNameFinal,
+                  partnerTaxId: partnerTaxIdFinal,
+                  partnerBranch: partnerBranch,
+                  partnerBranchName: partnerBranchName,
+                  partnerAddress: partnerAddress || prev.partnerAddress,
+                  taxInvoiceNo: res.taxInvoiceNo || prev.taxInvoiceNo,
+                  category: finalCategory,
+                  items: newItems,
+                  date: res.date || prev.date,
+                  isCashBill: isCashBillMode,
+                  vatType: isCashBillMode ? 'none' : (res.vatAmount > 0 ? 'included' : 'none'),
+                  manualVatAmount: res.vatAmount > 0 ? res.vatAmount : ''
+              }));
+
+              if (hasShippingKeyword) {
+                  showToast(`🚚 ตรวจพบสัญลักษณ์ขนส่ง: จัดกลุ่มเป็น "ค่าขนส่งพัสดุ" อัตโนมัติ`, "success");
+              }
+
+              if (isCashBillMode) {
+                  showToast("สกัดข้อมูลสำเร็จ! ตรวจพบว่าเป็น 'ใบเสร็จรับเงิน/บิลเงินสด'", "success");
+              } else {
+                  showToast("สกัดข้อมูลจาก 'ใบกำกับภาษี' สำเร็จ! โปรดตรวจสอบรายการและ VAT", "success");
+              }
           }
+      } catch (err) {
+          console.error("AI OCR Processing Error:", err);
+          showToast("ไม่สามารถสแกนใบเสร็จได้: " + (err.message || "โปรดตรวจสอบไฟล์ภาพหรือ API Key"), "error");
+      } finally {
           setIsOcrProcessing(false);
           if (ocrInputRef.current) ocrInputRef.current.value = '';
-      };
-      reader.readAsDataURL(file);
+      }
   };
 
   const setSummaryQuickRange = (range) => {
@@ -10292,7 +10770,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
                   {formData.type === 'expense' && (
                       <div className="w-full sm:w-auto">
-                          <input type="file" ref={ocrInputRef} hidden accept="image/*" onChange={handleOcrUpload} />
+                          <input type="file" ref={ocrInputRef} hidden accept="image/*,.pdf" onChange={handleOcrUpload} />
                           <button type="button" onClick={() => ocrInputRef.current?.click()} disabled={isOcrProcessing} className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md transition-all disabled:opacity-50">
                               {isOcrProcessing ? <Loader className="animate-spin" size={16}/> : <ScanText size={16}/>} 
                               {isOcrProcessing ? 'กำลังสแกน...' : 'AI สแกนบิล/ใบเสร็จ'}
@@ -15553,1268 +16031,948 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
   );
 }
 
-// --- NEW COMPONENT: Monthly Report ---
-function MonthlyReport({ transactions, stockBatches, showToast }) {
-    const [selectedMonth, setSelectedMonth] = useState(() => {
-        const now = new Date();
-        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+function InternalDocGenerator({ user, transactions, stockBatches, showToast, appId }) {
+  const [activeSubTab, setActiveSubTab] = useState('receipt_cert'); // 'receipt_cert', 'write_off', 'history'
+  const [isSaving, setIsSaving] = useState(false);
+  const [printDoc, setPrintDoc] = useState(null);
+  
+  // --- NEW: State สำหรับเปิด/ปิดกล่อง Tips ---
+  const [showTipsModal, setShowTipsModal] = useState(false);
+  const [tipsType, setTipsType] = useState('receipt'); // 'receipt' หรือ 'writeoff'
+
+  // --- NEW: State สำหรับอัปโหลดไฟล์หลักฐาน (Digital Filing) ---
+  const [attachmentUrl, setAttachmentUrl] = useState('');
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+
+  const savedSeller = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } catch (e) { return {}; }
+  }, []);
+
+  // --- Form State: ใบรับรองแทนใบเสร็จรับเงิน ---
+  const [certForm, setCertForm] = useState({
+    date: formatDateISO(new Date()),
+    recipientName: '',
+    recipientCitizenId: '',
+    recipientAddress: '',
+    category: 'ค่าใช้จ่ายทั่วไป',
+    noReceiptReason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
+    approverName: '',
+    notes: '',
+    items: [{ desc: '', qty: 1, unit: 'รายการ', price: 0 }]
+  });
+
+  // --- Form State: ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย ---
+  const [writeOffForm, setWriteOffForm] = useState({
+    date: formatDateISO(new Date()),
+    reason: 'สินค้าชำรุด/เสียหาย',
+    approverName: '',
+    inspectorName: '',
+    notes: '',
+    items: [{ sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]
+  });
+
+  const [showStockPickerModal, setShowStockPickerModal] = useState(null);
+  const [stockSearch, setStockSearch] = useState('');
+
+  // --- ดึงรายการสินค้าที่มีในคลัง FIFO ---
+  const uniqueInventory = useMemo(() => {
+    const map = {};
+    stockBatches.forEach(b => {
+      const name = b.productName; if (!name) return;
+      const remaining = Number(b.quantity) - Number(b.sold || 0);
+      const key = b.sku && b.sku !== '-' ? b.sku : name;
+      if (!map[key]) map[key] = { name, sku: b.sku || '-', qty: 0, cost: b.costPerUnit || 0, category: b.category || 'ทั่วไป' };
+      map[key].qty += Math.max(0, remaining);
+      if (b.costPerUnit > 0) map[key].cost = b.costPerUnit;
     });
-    const [selectedChannel, setSelectedChannel] = useState('all');
-    const [selectedShop, setSelectedShop] = useState('all');
-    const [isExporting, setIsExporting] = useState(false);
-
-    // --- NEW: Data Audit System ---
-    const auditFileRef = useRef(null);
-    const [isAuditing, setIsAuditing] = useState(false);
-    const [auditResults, setAuditResults] = useState(null);
-    const [showShippingDetailsModal, setShowShippingDetailsModal] = useState(false); // --- NEW: State สำหรับเปิดตารางดูค่าขนส่ง
-
-    const handleRunShopeeAudit = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        setIsAuditing(true);
-
-        if (!window.XLSX) {
-            const script = document.createElement('script');
-            script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-            await new Promise(res => { script.onload = res; document.body.appendChild(script); });
-        }
-
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-            try {
-                const bstr = evt.target.result;
-                const wb = window.XLSX.read(bstr, { type: 'binary' });
-                const ws = wb.Sheets[wb.SheetNames[0]];
-                const rawAoA = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-
-                let headerRowIdx = 0;
-                for (let i = 0; i < Math.min(rawAoA.length, 20); i++) {
-                    if (rawAoA[i].join('').replace(/\s/g, '').toLowerCase().includes('หมายเลขคำสั่งซื้อ')) {
-                        headerRowIdx = i; break;
-                    }
-                }
-
-                const headers = rawAoA[headerRowIdx] || [];
-                const raw = [];
-                for (let i = headerRowIdx + 1; i < rawAoA.length; i++) {
-                    const rowObj = {};
-                    let hasData = false;
-                    headers.forEach((h, colIdx) => {
-                        if (h && String(h).trim() !== '') {
-                            rowObj[String(h).trim()] = rawAoA[i][colIdx];
-                            if (rawAoA[i][colIdx] !== '' && rawAoA[i][colIdx] !== undefined) hasData = true;
-                        }
-                    });
-                    if (hasData) raw.push(rowObj);
-                }
-
-                const cleanForSearch = (str) => String(str).replace(/[^a-zA-Z0-9ก-๙]/g, '').toLowerCase();
-                const findVal = (row, kws) => {
-                    if (!kws) return undefined;
-                    const keys = Object.keys(row);
-                    const cleanKeys = keys.map(k => ({ original: k, clean: cleanForSearch(k) }));
-                    for (let i = 0; i < kws.length; i++) {
-                        const ckw = cleanForSearch(kws[i]);
-                        const matches = cleanKeys.filter(x => x.clean.includes(ckw));
-                        for (const match of matches) {
-                            const val = row[match.original];
-                            if (val !== undefined && val !== null && String(val).trim() !== '') return val;
-                        }
-                    }
-                    return undefined;
-                };
-
-                const cleanNum = (val) => { 
-                    if (typeof val === 'number') return val; 
-                    if (!val) return 0; 
-                    const parsed = parseFloat(String(val).replace(/[^0-9.-]+/g, ""));
-                    return isNaN(parsed) ? 0 : parsed;
-                };
-
-                const getRowValAbs = (row, kws) => {
-                    const val = findVal(row, kws);
-                    return val !== undefined && val !== null && String(val).trim() !== '' ? Math.abs(cleanNum(val)) : 0;
-                };
-
-                const getExactRowValAbs = (row, exactKeys) => {
-                    const keys = Object.keys(row);
-                    for (let k of exactKeys) {
-                        const cleanK = String(k).replace(/\s+/g, '').toLowerCase();
-                        const match = keys.find(rk => String(rk).replace(/\s+/g, '').toLowerCase() === cleanK);
-                        if (match) {
-                            const val = row[match];
-                            if (val !== undefined && val !== null && String(val).trim() !== '') {
-                                return Math.abs(cleanNum(val));
-                            }
-                        }
-                    }
-                    return 0;
-                };
-
-                const excelData = {};
-                raw.forEach(row => {
-                    const orderId = String(findVal(row, ['หมายเลขคำสั่งซื้อ', 'Order ID']) || '').replace(/^['"]|['"]$/g, '').trim();
-                    if (!orderId) return;
-
-                    const status = String(findVal(row, ['สถานะการสั่งซื้อ', 'Order Status']) || '').toLowerCase();
-                    let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || status.includes('unpaid') || status.includes('รอชำระเงิน') || (status.includes('ไม่สำเร็จ') && !status.includes('จัดส่งไม่สำเร็จ'));
-                    
-                    const refundAmtRow = getRowValAbs(row, ['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน']);
-                    if (status.includes('คืน') || status.includes('refund') || status.includes('return') || refundAmtRow > 0) {
-                        isCancelledOrUnpaid = false;
-                    }
-                    if (status.includes('สามารถยื่น') || status.includes('ได้รับสินค้าแล้ว')) {
-                        isCancelledOrUnpaid = false; 
-                    }
-
-                    const transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
-                    const comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']);
-                    const serv = getExactRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
-                    const baseInfra = getExactRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
-                    const shippingProgFee = getExactRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
-                    const affiliate = getExactRowValAbs(row, ['ค่าคอมมิชชั่น Affiliate', 'Affiliate Commission']);
-                    
-                    const infraRow = baseInfra + shippingProgFee;
-                    const rowTotalFees = transFee + comm + serv + infraRow + affiliate;
-
-                    if (isCancelledOrUnpaid && Math.abs(rowTotalFees) < 0.01) return;
-
-                    if (!excelData[orderId]) {
-                        excelData[orderId] = {
-                            orderId,
-                            productPrice: 0,
-                            discount: 0,
-                            refund: refundAmtRow,
-                            fees: 0,
-                            shipBuyer: 0,
-                            shipShopee: 0,
-                            shipActual: 0,
-                            shipReturn: 0,
-                            payout: 0,
-                            hasPayout: false,
-                            rawFees: { comm: 0, serv: 0, infra: 0, trans: 0, affiliate: 0 }
-                        };
-                    }
-
-                    excelData[orderId].productPrice += getRowValAbs(row, ['สินค้าราคาปกติ', 'Original Price', 'Product Price', 'ราคาเสนอ']);
-                    excelData[orderId].discount += getRowValAbs(row, ['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount']);
-                    excelData[orderId].fees += rowTotalFees;
-                    
-                    excelData[orderId].rawFees.comm += comm;
-                    excelData[orderId].rawFees.serv += serv;
-                    excelData[orderId].rawFees.infra += infraRow;
-                    excelData[orderId].rawFees.trans += transFee;
-                    excelData[orderId].rawFees.affiliate += affiliate;
-                    
-                    excelData[orderId].shipBuyer += getRowValAbs(row, ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ', 'Shipping Fee Paid by Buyer']);
-                    excelData[orderId].shipShopee += getRowValAbs(row, ['ค่าจัดส่งสินค้าที่ออกโดย Shopee', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง']);
-                    excelData[orderId].shipActual += getRowValAbs(row, ['ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee']);
-                    excelData[orderId].shipReturn += getRowValAbs(row, ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee']);
-
-                    const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'ยอดเงินที่ชำระทั้งหมด']);
-                    if (actualSettledAmtRaw !== undefined) {
-                        excelData[orderId].payout += cleanNum(actualSettledAmtRaw);
-                        excelData[orderId].hasPayout = true;
-                    }
-                });
-
-                const discrepancies = [];
-                let checkedCount = 0;
-                let matchCount = 0;
-
-                Object.values(excelData).forEach(ex => {
-                    const cleanRef = ex.orderId.toLowerCase();
-                    const dbMatch = transactions.find(t => t.type === 'income' && !t.isCancelled && (String(t.orderId || '').trim().toLowerCase() === cleanRef || String(t.sysDocId || '').trim().toLowerCase() === cleanRef));
-
-                    if (!dbMatch) {
-                        discrepancies.push({
-                            orderId: ex.orderId,
-                            issue: 'ไม่พบออเดอร์ในระบบ',
-                            desc: 'รายการนี้มีในไฟล์ Excel แต่ยังไม่ได้ Import เข้าระบบ (หรือถูกลบ/ยกเลิกไปแล้ว)',
-                            details: []
-                        });
-                        return;
-                    }
-
-                    checkedCount++;
-                    
-                    // คำนวณยอดดิบจาก DB ปัจจุบัน
-                    const dbProductPrice = (dbMatch.items || []).reduce((sum, i) => sum + (Number(i.qty)*Number(i.sellPrice || i.price || 0)), 0);
-                    const dbDiscount = Number(dbMatch.couponDiscount || 0);
-                    const dbRefund = Number(dbMatch.refundAmount || 0);
-                    const dbFees = Number(dbMatch.platformFee || 0);
-                    
-                    const dbShipBuyer = Number(dbMatch.shippingFee || 0);
-                    const dbShipShopee = Number(dbMatch.shippingFeeSubsidy || 0);
-                    const dbShipActual = Number(dbMatch.estimatedShippingFee || 0);
-                    const dbShipReturn = Number(dbMatch.returnShippingFee || 0);
-
-                    const dbPayout = dbMatch.actualSettledAmt !== undefined ? Number(dbMatch.actualSettledAmt) : (Number(dbMatch.grandTotal || dbMatch.total) || 0);
-
-                    const diffs = [];
-                    const tol = 0.05; // Tolerance 5 satang
-
-                    if (Math.abs(ex.productPrice - dbProductPrice) > tol) diffs.push({ label: 'ยอดขายสินค้า', db: dbProductPrice, excel: ex.productPrice, diff: ex.productPrice - dbProductPrice });
-                    if (Math.abs(ex.discount - dbDiscount) > tol) diffs.push({ label: 'ส่วนลดร้านค้า', db: dbDiscount, excel: ex.discount, diff: ex.discount - dbDiscount });
-                    if (Math.abs(ex.refund - dbRefund) > tol) diffs.push({ label: 'ยอดเงินคืนลูกค้า', db: dbRefund, excel: ex.refund, diff: ex.refund - dbRefund });
-                    if (Math.abs(ex.fees - dbFees) > tol) diffs.push({ label: 'ค่าธรรมเนียมรวม', db: dbFees, excel: ex.fees, diff: ex.fees - dbFees });
-                    
-                    if (Math.abs(ex.shipBuyer - dbShipBuyer) > tol) diffs.push({ label: 'ค่าจัดส่งชำระโดยผู้ซื้อ', db: dbShipBuyer, excel: ex.shipBuyer, diff: ex.shipBuyer - dbShipBuyer });
-                    if (Math.abs(ex.shipShopee - dbShipShopee) > tol) diffs.push({ label: 'ค่าจัดส่งที่แพลตฟอร์มออกให้', db: dbShipShopee, excel: ex.shipShopee, diff: ex.shipShopee - dbShipShopee });
-                    if (Math.abs(ex.shipActual - dbShipActual) > tol) diffs.push({ label: 'ค่าจัดส่งที่จ่ายจริง', db: dbShipActual, excel: ex.shipActual, diff: ex.shipActual - dbShipActual });
-                    if (Math.abs(ex.shipReturn - dbShipReturn) > tol) diffs.push({ label: 'ค่าจัดส่งสินค้าคืน', db: dbShipReturn, excel: ex.shipReturn, diff: ex.shipReturn - dbShipReturn });
-                    
-                    if (ex.hasPayout && Math.abs(ex.payout - dbPayout) > tol) diffs.push({ label: 'ยอดเงินโอนเข้าจริง', db: dbPayout, excel: ex.payout, diff: ex.payout - dbPayout });
-
-                    if (diffs.length > 0) {
-                        discrepancies.push({
-                            orderId: ex.orderId,
-                            issue: 'ข้อมูลคลาดเคลื่อน',
-                            desc: `พบยอดที่ไม่ตรงกัน ${diffs.length} จุด (ดิฟ)`,
-                            details: diffs,
-                            dbId: dbMatch.id,
-                            rawData: ex // เก็บข้อมูลดิบไว้สำหรับฟังก์ชัน Auto-Fix
-                        });
-                    } else {
-                        matchCount++;
-                    }
-                });
-
-                setAuditResults({
-                    totalExcel: Object.keys(excelData).length,
-                    checked: checkedCount,
-                    matched: matchCount,
-                    discrepancies: discrepancies
-                });
-
-            } catch (err) {
-                console.error(err);
-                if (showToast) showToast('เกิดข้อผิดพลาดในการตรวจสอบไฟล์ แนะนำให้ใช้ไฟล์ Income Report เต็ม', 'error');
-            }
-            setIsAuditing(false);
-            if (auditFileRef.current) auditFileRef.current.value = '';
-        };
-        reader.readAsBinaryString(file);
-    };
-
-    // --- 🪄 NEW: Auto-Fix Function (ซิงค์ยอดเข้าฐานข้อมูลอัตโนมัติ) ---
-    const handleAutoFixDiscrepancies = async () => {
-        if (!auditResults || auditResults.discrepancies.length === 0 || !user) return;
-        if (!window.confirm('ยืนยันการปรับปรุงยอดเงินในระบบให้ตรงกับไฟล์ Shopee 100%?\n(ระบบจะเขียนทับยอดขาย, ส่วนลด, ค่าจัดส่ง และค่าธรรมเนียมของออเดอร์ที่คลาดเคลื่อนให้ถูกต้องทั้งหมด)')) return;
-        
-        setIsAuditing(true);
-        try {
-            let batchWriter = writeBatch(dbInstance);
-            let opsCount = 0;
-
-            for (const item of auditResults.discrepancies) {
-                const ex = item.rawData; 
-                const dbMatchId = item.dbId;
-                if (!dbMatchId || !ex) continue;
-
-                const incRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', dbMatchId);
-                const existingDoc = transactions.find(t => t.id === dbMatchId);
-                
-                let newItems = existingDoc?.items ? [...existingDoc.items] : [];
-                
-                // Adjust items' sellPrice so their subtotal equals the EXCEL GMV (Product Price)
-                if (newItems.length > 0) {
-                    const currentSum = newItems.reduce((s, i) => s + (Number(i.qty)*Number(i.sellPrice || i.price || 0)), 0);
-                    // ป้องกันความคลาดเคลื่อนจากการปัดเศษทศนิยม โดยเช็คดิฟเกิน 0.05
-                    if (Math.abs(currentSum - ex.productPrice) > 0.05) {
-                         const diff = ex.productPrice - currentSum;
-                         // ดันส่วนต่างไปที่สินค้าชิ้นแรก เพื่อให้ยอดรวม (Subtotal) ตรงกับไฟล์ (ราคาหน้าเว็บ)
-                         newItems[0].sellPrice = Number(newItems[0].sellPrice || newItems[0].price || 0) + (diff / Number(newItems[0].qty || 1));
-                    }
-                }
-
-                // คำนวณ Grand Total ใหม่ตามสูตร Shopee
-                const netShip = ex.shipBuyer + ex.shipShopee - ex.shipActual - ex.shipReturn;
-                const newGrandTotal = ex.productPrice - ex.fees - ex.discount - ex.refund + netShip;
-
-                // 1. อัปเดตฝั่งรายรับ (Income)
-                batchWriter.update(incRef, {
-                    total: ex.productPrice,
-                    couponDiscount: ex.discount,
-                    refundAmount: ex.refund,
-                    shippingFee: ex.shipBuyer,
-                    shippingFeeSubsidy: ex.shipShopee,
-                    estimatedShippingFee: ex.shipActual,
-                    returnShippingFee: ex.shipReturn,
-                    actualSettledAmt: ex.payout,
-                    grandTotal: newGrandTotal,
-                    items: newItems,
-                    platformFee: ex.fees, 
-                    paymentStatus: 'settled',
-                    isAdjusted: true, // ติดแท็กให้รู้ว่าผ่านการ Sync มาแล้ว
-                    updatedAt: serverTimestamp()
-                });
-                opsCount++;
-
-                // 2. ค้นหาและอัปเดตฝั่งรายจ่าย (Expense - ค่าธรรมเนียม) ที่พ่วงอยู่
-                const feeExp = transactions.find(t => t.type === 'expense' && t.isFromReconciliation && t.category === 'ค่าธรรมเนียม Platform' && t.linkedOrderNo === ex.orderId);
-                
-                if (feeExp) {
-                    // มีบิลรายจ่ายอยู่แล้ว -> อัปเดตยอดและแยกไอเทมค่าธรรมเนียมใหม่
-                    const expRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', feeExp.id);
-                    batchWriter.update(expRef, {
-                        total: ex.fees,
-                        items: [
-                            { desc: 'ค่าคอมมิชชั่น', qty: 1, buyPrice: ex.rawFees.comm, sellPrice: 0, sku: '' },
-                            { desc: 'ค่าบริการ', qty: 1, buyPrice: ex.rawFees.serv, sellPrice: 0, sku: '' },
-                            { desc: 'ค่าธรรมเนียมโครงสร้างพื้นฐานฯ', qty: 1, buyPrice: ex.rawFees.infra, sellPrice: 0, sku: '' },
-                            { desc: 'ค่าธุรกรรมการชำระเงิน', qty: 1, buyPrice: ex.rawFees.trans, sellPrice: 0, sku: '' },
-                            { desc: 'ค่าคอมมิชชั่น Affiliate', qty: 1, buyPrice: ex.rawFees.affiliate, sellPrice: 0, sku: '' }
-                        ].filter(i => i.buyPrice > 0), // เซฟเฉพาะค่าธรรมเนียมที่มีตัวเลข
-                        updatedAt: serverTimestamp()
-                    });
-                    opsCount++;
-                } else if (ex.fees > 0) {
-                    // ไม่มีบิลรายจ่ายค่าธรรมเนียม -> สร้างใหม่ให้เลย
-                    const prefix = getExpensePrefix('ค่าธรรมเนียม Platform');
-                    const expSysDocId = generateDateBasedDocId(transactions.filter(tx => tx.type === 'expense'), prefix, new Date(), 'sysDocId');
-                    const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
-                    
-                    batchWriter.set(expRef, {
-                        sysDocId: expSysDocId,
-                        type: 'expense',
-                        category: 'ค่าธรรมเนียม Platform',
-                        description: `ค่าธรรมเนียม Platform: ออเดอร์ ${ex.orderId}`,
-                        items: [
-                            { desc: 'ค่าคอมมิชชั่น', qty: 1, buyPrice: ex.rawFees.comm, sellPrice: 0, sku: '' },
-                            { desc: 'ค่าบริการ', qty: 1, buyPrice: ex.rawFees.serv, sellPrice: 0, sku: '' },
-                            { desc: 'ค่าธรรมเนียมโครงสร้างพื้นฐานฯ', qty: 1, buyPrice: ex.rawFees.infra, sellPrice: 0, sku: '' },
-                            { desc: 'ค่าธุรกรรมการชำระเงิน', qty: 1, buyPrice: ex.rawFees.trans, sellPrice: 0, sku: '' },
-                            { desc: 'ค่าคอมมิชชั่น Affiliate', qty: 1, buyPrice: ex.rawFees.affiliate, sellPrice: 0, sku: '' }
-                        ].filter(i => i.buyPrice > 0),
-                        total: ex.fees,
-                        date: existingDoc?.settlementDate || existingDoc?.date || new Date(),
-                        userId: user.uid,
-                        createdAt: serverTimestamp(),
-                        status: 'paid',
-                        partnerName: 'Platform (Shopee)',
-                        partnerBranch: '00000',
-                        isFromReconciliation: true,
-                        linkedOrderId: dbMatchId,
-                        linkedOrderNo: ex.orderId,
-                        orderId: ex.orderId,
-                        channel: 'Shopee',
-                        shopName: existingDoc?.shopName || 'ไม่ระบุ'
-                    });
-                    opsCount++;
-                }
-
-                if (opsCount >= 300) {
-                    await batchWriter.commit();
-                    batchWriter = writeBatch(dbInstance);
-                    opsCount = 0;
-                }
-            }
-
-            if (opsCount > 0) {
-                await batchWriter.commit();
-            }
-
-            showToast('ปรับปรุงยอดเงินในระบบให้ตรงกับไฟล์ Shopee เรียบร้อยแล้ว!', 'success');
-            setAuditResults(null); 
-        } catch (e) {
-            console.error(e);
-            showToast('เกิดข้อผิดพลาดในการ Auto-Fix ขออภัยในความไม่สะดวก', 'error');
-        }
-        setIsAuditing(false);
-    };
-
-    const reportData = useMemo(() => {
-        // --- 1. กลุ่มข้อมูลผลประกอบการ (Performance) อิงตามวันที่ลูกค้าสั่งซื้อ (Order Date) ---
-        let perf = {
-            orders: 0, settledOrders: 0, pendingOrders: 0, gmv: 0, discounts: 0, refunds: 0, netSales: 0,
-            cogs: 0, grossProfit: 0, 
-            platformFees: 0, directExp: 0, shippingBalance: 0, totalOpEx: 0,
-            netProfit: 0, buyerShipping: 0, buyerShippingDetails: [],
-            lostGmv: 0, wastedFee: 0, actualShipping: 0
-        };
-
-        // --- 2. กลุ่มข้อมูลกระแสเงินสดรับ (Settlement) อิงตามวันที่เงินโอนเข้า (Settled Date) ---
-        let settle = {
-            income: { productPrice: 0, sellerDiscount: 0, refundAmount: 0, total: 0 },
-            shipping: { buyerPaid: 0, shopeeSubsidy: 0, actualShipping: 0, returnShipping: 0, total: 0 },
-            fees: { comm: 0, serv: 0, infra: 0, trans: 0, affiliate: 0, other: 0, total: 0 },
-            totalPlatformExpense: 0, 
-            totalTransferred: 0, 
-            directExpPaidInMonth: 0,
-            settledOrdersCount: 0 
-        };
-
-        const dailySales = {};
-        const productSales = {};
-        const channelSales = {};
-        const shopSales = {};
-
-        transactions.forEach(t => {
-            const orderD = normalizeDate(t.date);
-            
-            // --- 🔥 THE ULTIMATE FIX 3: ล็อกเป้าหมายสมการให้เป๊ะที่สุด ---
-            let settleD = null;
-            if (t.type === 'income' && t.paymentStatus === 'settled') {
-                settleD = t.settlementDate ? normalizeDate(t.settlementDate) : orderD;
-            } else if (t.type === 'expense' && t.status === 'paid') {
-                settleD = t.date ? normalizeDate(t.date) : null;
-            }
-            
-            if (!orderD) return;
-
-            const orderMonthStr = `${orderD.getFullYear()}-${String(orderD.getMonth() + 1).padStart(2, '0')}`;
-            const settleMonthStr = settleD ? `${settleD.getFullYear()}-${String(settleD.getMonth() + 1).padStart(2, '0')}` : null;
-
-            const ch = (t.channel || 'หน้าร้าน').toUpperCase();
-            const sh = t.shopName || 'ไม่ระบุ';
-            
-            const matchChannel = selectedChannel === 'all' || ch === selectedChannel.toUpperCase();
-            const matchShop = selectedShop === 'all' || String(sh).toLowerCase() === String(selectedShop).toLowerCase();
-
-            if (!matchChannel || !matchShop) return;
-
-            // ==========================================
-            // LOGIC 1: ผลประกอบการ (PERFORMANCE)
-            // ==========================================
-            if (orderMonthStr === selectedMonth && !t.isTaxOnly) {
-                if (t.type === 'income') {
-                    const itemSubtotal = (t.items || []).reduce((sum, it) => sum + (Number(it.qty) * Number(it.sellPrice || it.price || 0)), 0);
-                    const fee = Number(t.platformFee) || 0;
-
-                    if (!t.isCancelled && !t.isDeliveryFailed && !t.isFromReconciliation) {
-                        perf.orders++;
-                        if (t.paymentStatus === 'settled') {
-                            perf.settledOrders++;
-                        } else {
-                            perf.pendingOrders++;
-                        }
-                        
-                        perf.gmv += itemSubtotal;
-                        
-                        perf.discounts += (Number(t.couponDiscount || 0) + Number(t.cashCoupon || 0));
-                        perf.refunds += Number(t.refundAmount || 0);
-                        perf.platformFees += fee;
-                        
-                        perf.lostGmv += Number(t.refundAmount || 0); // NEW: คืนเงินบางส่วนนับเป็นยอดสูญเสีย
-                        
-                        const shipFeeAmt = Number(t.shippingFee || 0);
-                        perf.buyerShipping += shipFeeAmt; 
-                        perf.actualShipping += Number(t.estimatedShippingFee || 0);
-                        if (shipFeeAmt > 0) {
-                            perf.buyerShippingDetails.push({
-                                id: t.id,
-                                orderId: t.orderId || t.sysDocId,
-                                date: t.date,
-                                partnerName: t.partnerName || 'ลูกค้าทั่วไป',
-                                shippingFee: shipFeeAmt
-                            });
-                        }
-                        
-                        const shipBal = (Number(t.shippingFee || 0) + Number(t.shippingFeeSubsidy || 0)) - (Number(t.estimatedShippingFee || 0) + Number(t.returnShippingFee || 0));
-                        perf.shippingBalance += shipBal;
-
-                        const cogs = (t.items || []).reduce((sum, item) => {
-                            if (item.desc && (item.desc.includes('ส่วนต่างยอดรับเงิน') || item.desc.includes('ค่าจัดส่ง'))) return sum;
-                            const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
-                            return sum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
-                        }, 0);
-                        perf.cogs += cogs;
-
-                        const dayStr = String(orderD.getDate()).padStart(2, '0');
-                        if (!dailySales[dayStr]) dailySales[dayStr] = 0;
-                        dailySales[dayStr] += (itemSubtotal - Number(t.couponDiscount || 0)); 
-
-                        channelSales[ch] = (channelSales[ch] || 0) + itemSubtotal;
-                        shopSales[sh] = (shopSales[sh] || 0) + itemSubtotal;
-
-                        (t.items || []).forEach(item => {
-                            if (item.desc && (item.desc.includes('ส่วนต่าง') || item.desc.includes('ค่าจัดส่ง'))) return;
-                            const prodKey = (item.sku && item.sku !== '-') ? item.sku : item.desc;
-                            if (!productSales[prodKey]) productSales[prodKey] = { name: item.desc, sku: item.sku || '-', qty: 0, revenue: 0 };
-                            productSales[prodKey].qty += Number(item.qty);
-                            productSales[prodKey].revenue += (Number(item.qty) * Number(item.sellPrice || item.price || 0));
-                        });
-                    } else if ((t.isCancelled || t.isDeliveryFailed) && !t.isFromReconciliation) {
-                        // NEW: ถ้ายกเลิก/ตีกลับ นำยอดมาคำนวณเป็นยอดสูญเสีย
-                        perf.lostGmv += itemSubtotal;
-                        perf.wastedFee += fee;
-                    }
-                } else if (t.type === 'expense' && !t.isCancelled) {
-                    const isLinkedToValidIncome = t.linkedOrderNo && transactions.some(inc => 
-                        inc.type === 'income' && !inc.isCancelled && 
-                        (inc.orderId === t.linkedOrderNo || inc.sysDocId === t.linkedOrderNo)
-                    );
-                    
-                    if (t.category === 'ค่าธรรมเนียม Platform') {
-                        if (!isLinkedToValidIncome && t.isFromReconciliation) {
-                            perf.platformFees += Number(t.total || 0);
-                        }
-                    } else if (t.category !== 'ต้นทุนสินค้า' && !t.isFromInventory && !t.isFromReconciliation) {
-                        perf.directExp += Number(t.total || 0);
-                    }
-                }
-            }
-
-            // ==========================================
-            // LOGIC 2: กระแสเงินสดรับ (SETTLEMENT)
-            // ==========================================
-            if (settleMonthStr === selectedMonth) {
-                if (t.type === 'income' && !t.isCancelled && !t.isFromReconciliation && t.paymentStatus === 'settled') {
-                    settle.settledOrdersCount++;
-                    const itemSubtotal = (t.items || []).reduce((sum, it) => sum + (Number(it.qty) * Number(it.sellPrice || it.price || 0)), 0);
-                    
-                    settle.income.productPrice += itemSubtotal;
-                    settle.income.sellerDiscount += Number(t.couponDiscount || 0);
-                    settle.income.refundAmount += Number(t.refundAmount || 0);
-
-                    settle.shipping.buyerPaid += Number(t.shippingFee || 0);
-                    settle.shipping.shopeeSubsidy += Number(t.shippingFeeSubsidy || 0);
-                    settle.shipping.actualShipping += Number(t.estimatedShippingFee || 0);
-                    settle.shipping.returnShipping += Number(t.returnShippingFee || 0);
-
-                    settle.fees.comm += Number(t.commissionFee || 0);
-                    settle.fees.serv += Number(t.serviceFee || 0);
-                    settle.fees.infra += Number(t.infrastructureFee || 0);
-                    settle.fees.trans += Number(t.transactionFee || 0);
-                    settle.fees.affiliate += Number(t.affiliateFee || 0);
-                    settle.fees.total += Number(t.platformFee || 0);
-
-                    const expectedAmt = t.grandTotal !== undefined ? t.grandTotal : t.total;
-                    settle.totalTransferred += (t.actualSettledAmt !== undefined ? t.actualSettledAmt : expectedAmt);
-                } 
-                else if (t.type === 'expense' && t.category === 'ค่าธรรมเนียม Platform' && !t.isCancelled && !t.isTaxOnly && t.status === 'paid') {
-                    if (t.isFromReconciliation) {
-                        const isLinkedToValidIncome = t.linkedOrderNo && transactions.some(inc => 
-                            inc.type === 'income' && !inc.isCancelled && 
-                            (inc.orderId === t.linkedOrderNo || inc.sysDocId === t.linkedOrderNo)
-                        );
-                        
-                        if (!isLinkedToValidIncome) {
-                            const amt = Number(t.total) || 0;
-                            settle.fees.total += amt;
-
-                            let hasItemized = false;
-                            (t.items || []).forEach(item => {
-                                const desc = String(item.desc).toLowerCase();
-                                const itemAmt = Number(item.buyPrice || item.price || 0) * Number(item.qty || 1);
-                                
-                                if (desc.includes('commission') || desc.includes('คอมมิชชั่น')) {
-                                    settle.fees.comm += itemAmt;
-                                    hasItemized = true;
-                                } else if (desc.includes('service') || desc.includes('บริการ')) {
-                                    settle.fees.serv += itemAmt;
-                                    hasItemized = true;
-                                } else if (desc.includes('transaction') || desc.includes('ธุรกรรม')) {
-                                    settle.fees.trans += itemAmt;
-                                    hasItemized = true;
-                                } else if (desc.includes('infra') || desc.includes('โครงสร้าง')) {
-                                    settle.fees.infra += itemAmt;
-                                    hasItemized = true;
-                                } else if (desc.includes('affiliate')) {
-                                    settle.fees.affiliate += itemAmt;
-                                    hasItemized = true;
-                                } else if (itemAmt > 0) {
-                                    settle.fees.other += itemAmt;
-                                    hasItemized = true;
-                                }
-                            });
-
-                            if (!hasItemized) {
-                                settle.fees.other += amt;
-                            }
-                        }
-                    }
-                }
-                else if (t.type === 'income' && t.isFromReconciliation && t.category.includes('รายได้')) {
-                    // Ignore auto-generated income adjustment bills to avoid double counting payout
-                }
-                else if (t.type === 'expense' && !t.isCancelled && !t.isTaxOnly && t.category !== 'ค่าธรรมเนียม Platform' && t.category !== 'ต้นทุนสินค้า' && !t.isFromInventory && t.status === 'paid') {
-                    if (!t.isFromReconciliation) {
-                        settle.directExpPaidInMonth += Number(t.total || 0);
-                    }
-                }
-            }
-        });
-
-        perf.netSales = perf.gmv - perf.discounts - perf.refunds;
-        perf.grossProfit = perf.netSales - perf.cogs;
-        perf.totalOpEx = perf.platformFees + perf.directExp - perf.shippingBalance;
-        perf.netProfit = perf.grossProfit - perf.totalOpEx;
-        perf.buyerShippingDetails.sort((a, b) => normalizeDate(b.date) - normalizeDate(a.date));
-
-        settle.income.total = settle.income.productPrice - settle.income.sellerDiscount - settle.income.refundAmount;
-        settle.shipping.total = settle.shipping.buyerPaid + settle.shipping.shopeeSubsidy - settle.shipping.actualShipping - settle.shipping.returnShipping; 
-        settle.totalPlatformExpense = settle.shipping.total - settle.fees.total; 
-
-        const [year, month] = selectedMonth.split('-');
-        const daysInMonth = new Date(year, month, 0).getDate();
-        const chartData = [];
-        let maxDailySale = 0;
-        for (let i = 1; i <= daysInMonth; i++) {
-            const dayStr = String(i).padStart(2, '0');
-            const amount = dailySales[dayStr] || 0;
-            if (amount > maxDailySale) maxDailySale = amount;
-            chartData.push({ day: dayStr, amount });
-        }
-        const topProducts = Object.values(productSales).sort((a, b) => b.qty - a.qty).slice(0, 5);
-        const channelBreakdown = Object.entries(channelSales).map(([name, amount]) => ({ name, amount })).sort((a,b)=>b.amount-a.amount);
-        const shopBreakdown = Object.entries(shopSales).map(([name, amount]) => ({ name, amount })).sort((a,b)=>b.amount-a.amount);
-        const aov = perf.orders > 0 ? perf.netSales / perf.orders : 0;
-
-        return {
-            perf, settle, aov, chartData, maxDailySale, topProducts, channelBreakdown, shopBreakdown
-        };
-    }, [transactions, selectedMonth, stockBatches, selectedChannel, selectedShop]);
-
-    const monthlyStockData = useMemo(() => {
-        if (!selectedMonth) return [];
-        const [year, month] = selectedMonth.split('-').map(Number);
-        const startDate = new Date(year, month - 1, 1);
-        const endDate = new Date(year, month, 0, 23, 59, 59, 999);
-
-        const stockMap = {};
-
-        const initItem = (sku, rawName) => {
-            const name = rawName.replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').replace('[ของแจก/โปรโมท] ', '').replace('[ของแจก/โปรโมท]', '').trim();
-            const key = sku && sku !== '-' ? sku : name;
-            if (!stockMap[key]) {
-                stockMap[key] = { sku: sku || '-', name, beginQty: 0, inQty: 0, outQty: 0, endQty: 0 };
-            }
-            return key;
-        };
-
-        stockBatches.forEach(b => {
-            if (b.productName && (b.productName.includes('ส่วนต่างยอดรับเงิน') || b.productName.includes('ค่าธรรมเนียม') || b.productName.includes('ค่าจัดส่ง'))) return;
-            const bDate = normalizeDate(b.date);
-            if (!bDate) return;
-            const key = initItem(b.sku, b.productName);
-            if (bDate < startDate) stockMap[key].beginQty += (Number(b.quantity) || 0);
-            else if (bDate >= startDate && bDate <= endDate) stockMap[key].inQty += (Number(b.quantity) || 0);
-        });
-
-        transactions.forEach(t => {
-            if (t.type !== 'income' || t.isCancelled || t.isFromReconciliation) return;
-            if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
-            if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
-
-            const tDate = normalizeDate(t.date);
-            if (!tDate) return;
-
-            (t.items || []).forEach(item => {
-                if (item.desc && (item.desc.includes('ส่วนต่างยอดรับเงิน') || item.desc.includes('ค่าธรรมเนียม') || item.desc.includes('ค่าจัดส่ง'))) return;
-                const key = initItem(item.sku, item.desc);
-                if (tDate < startDate) stockMap[key].beginQty -= (Number(item.qty) || 0);
-                else if (tDate >= startDate && tDate <= endDate) stockMap[key].outQty += (Number(item.qty) || 0);
-            });
-        });
-
-        return Object.values(stockMap).map(item => {
-            item.endQty = item.beginQty + item.inQty - item.outQty;
-            return item;
-        }).filter(item => item.beginQty !== 0 || item.inQty !== 0 || item.outQty !== 0 || item.endQty !== 0).sort((a, b) => b.endQty - a.endQty);
-
-    }, [transactions, stockBatches, selectedMonth, selectedChannel, selectedShop]);
-
-    const handleExportMonthlyExcel = async () => {
-        setIsExporting(true);
-        if (showToast) showToast("กำลังเตรียมไฟล์ Excel...", "success");
-        if (!window.XLSX) { 
-            const script = document.createElement('script'); 
-            script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"; 
-            await new Promise((resolve) => { script.onload = resolve; document.body.appendChild(script); }); 
-        }
-
-        try {
-            const wb = window.XLSX.utils.book_new();
-
-            const summaryData = [
-                ["สรุปผลประกอบการและกระแสเงินสดประจำเดือน", selectedMonth],
-                ["ร้านค้า (Shop)", selectedShop === 'all' ? 'ทุกร้านค้า' : selectedShop],
-                ["ช่องทาง (Channel)", selectedChannel === 'all' ? 'ทุกช่องทาง' : selectedChannel],
-                [],
-                ["=== ผลประกอบการ (ตามวันที่สั่งซื้อ) ==="],
-                ["ยอดสั่งซื้อรวม (GMV)", reportData.perf.gmv],
-                ["สูญเสีย/ตีกลับ (Lost GMV)", reportData.perf.lostGmv], // <-- NEW
-                ["ค่าธรรมเนียมเสียฟรี (Wasted Fee)", reportData.perf.wastedFee], // <-- NEW
-                ["ส่วนลดร้านค้า/เงินคืน", reportData.perf.discounts + reportData.perf.refunds],
-                ["ยอดขายสุทธิ (Net Sales)", reportData.perf.netSales],
-                ["ต้นทุนสินค้า (COGS)", reportData.perf.cogs],
-                ["กำไรขั้นต้น (Gross Profit)", reportData.perf.grossProfit],
-                ["ค่าธรรมเนียมแพลตฟอร์ม", reportData.perf.platformFees],
-                ["รายจ่ายอื่นๆ", reportData.perf.directExp],
-                ["ส่วนต่างค่าจัดส่ง", reportData.perf.shippingBalance],
-                ["กำไรสุทธิ (Net Profit)", reportData.perf.netProfit],
-                [],
-                ["=== กระแสเงินสด (ตามรายงาน Shopee) ==="],
-                ["1. รายได้ทั้งหมด", reportData.settle.income.total],
-                ["2. ค่าใช้จ่ายทั้งหมด (ส่ง+ธรรมเนียม)", reportData.settle.totalPlatformExpense],
-                ["3. จำนวนเงินที่โอนแล้ว (Settled Cash)", reportData.settle.totalTransferred]
-            ];
-            const wsSummary = window.XLSX.utils.aoa_to_sheet(summaryData);
-            window.XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
-
-            // Sheet: Top Products
-            const topProdData = [ ["อันดับ", "ชื่อสินค้า", "SKU", "ขายแล้ว (ชิ้น)", "ยอดขาย (บาท)"] ];
-            reportData.topProducts.forEach((p, i) => { topProdData.push([i + 1, p.name, p.sku, p.qty, p.revenue]); });
-            const wsTopProd = window.XLSX.utils.aoa_to_sheet(topProdData);
-            window.XLSX.utils.book_append_sheet(wb, wsTopProd, "Top Products");
-
-            // Sheet: Stock Movement
-            const stockData = [ ["SKU", "ชื่อสินค้า", "ยอดยกมา (เริ่มต้น)", "รับเข้า (ชิ้น)", "ขายออก (ชิ้น)", "คงเหลือ (สิ้นเดือน)"] ];
-            monthlyStockData.forEach(s => { stockData.push([s.sku, s.name, s.beginQty, s.inQty, s.outQty, s.endQty]); });
-            const wsStock = window.XLSX.utils.aoa_to_sheet(stockData);
-            window.XLSX.utils.book_append_sheet(wb, wsStock, "Stock Movement");
-
-            window.XLSX.writeFile(wb, `Monthly_Report_${selectedMonth}.xlsx`);
-            if (showToast) showToast("ดาวน์โหลดไฟล์สำเร็จ", "success");
-        } catch (e) {
-            console.error(e);
-            if (showToast) showToast("เกิดข้อผิดพลาดในการส่งออกไฟล์", "error");
-        }
-        setIsExporting(false);
-    };
-
-    const changeMonth = (offset) => {
-        const [year, month] = selectedMonth.split('-').map(Number);
-        const newDate = new Date(year, month - 1 + offset, 1);
-        setSelectedMonth(`${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, '0')}`);
-    };
-
-    return (
-        <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full h-full pb-20">
-            {/* Header & Month Picker */}
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-5 rounded-3xl border border-slate-100 shadow-sm">
-                <div>
-                    <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2"><BarChart2 className="text-indigo-600"/> สรุปยอดธุรกิจรายเดือน</h2>
-                    <p className="text-sm text-slate-400 font-medium">รายงานประสิทธิภาพการขาย และตรวจสอบกระแสเงินสดเทียบแพลตฟอร์ม</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-2xl border border-slate-200">
-                        <Store size={14} className="text-slate-500 shrink-0"/>
-                        <select value={selectedShop} onChange={e => setSelectedShop(e.target.value)} className="bg-transparent border-0 text-xs font-bold text-slate-700 outline-none cursor-pointer focus:ring-0 p-0">
-                            <option value="all">ทุกร้านค้า</option>
-                            {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                    </div>
-                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-2xl border border-slate-200">
-                        <Filter size={14} className="text-slate-500 shrink-0"/>
-                        <select value={selectedChannel} onChange={e => setSelectedChannel(e.target.value)} className="bg-transparent border-0 text-xs font-bold text-slate-700 outline-none cursor-pointer focus:ring-0 p-0">
-                            <option value="all">ทุกช่องทาง</option>
-                            {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
-                            <option value="IMPORTED">IMPORTED</option>
-                        </select>
-                    </div>
-                    <div className="flex items-center gap-3 bg-slate-50 p-1.5 rounded-2xl border border-slate-200">
-                        <button onClick={() => changeMonth(-1)} className="p-2 bg-white rounded-xl hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronDown className="rotate-90" size={18}/></button>
-                        <input type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="bg-transparent border-0 text-sm font-black text-slate-700 outline-none cursor-pointer focus:ring-0 px-2"/>
-                        <button onClick={() => changeMonth(1)} className="p-2 bg-white rounded-xl hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronUp className="rotate-90" size={18}/></button>
-                    </div>
-                    <button onClick={handleExportMonthlyExcel} disabled={isExporting} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-3 rounded-2xl text-xs font-bold transition-all border border-emerald-200 flex items-center gap-2 disabled:opacity-50 shadow-sm whitespace-nowrap">
-                        {isExporting ? <Loader size={16} className="animate-spin" /> : <FileSpreadsheet size={16}/>} Export Excel
-                    </button>
-                    {/* --- NEW: ปุ่มเรียก Audit ยอดเงินกับไฟล์ Shopee --- */}
-                    <input type="file" ref={auditFileRef} hidden accept=".xlsx, .xls" onChange={handleRunShopeeAudit} />
-                    <button onClick={() => auditFileRef.current?.click()} disabled={isAuditing} className="bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-3 rounded-2xl text-xs font-bold transition-all border border-blue-200 flex items-center gap-2 disabled:opacity-50 shadow-sm whitespace-nowrap">
-                        {isAuditing ? <Loader size={16} className="animate-spin" /> : <Search size={16}/>} Audit ตรวจสอบยอด (Shopee)
-                    </button>
-                </div>
-            </div>
-
-            {/* KPI Cards: Performance (อิงวันที่สั่งซื้อ) */}
-            <div>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 gap-2">
-                    <h3 className="font-bold text-slate-700 flex items-center gap-2"><TrendingUp size={18} className="text-indigo-600"/> 1. ผลประกอบการ (Performance: อิงตามวันที่ลูกค้าสั่งซื้อ)</h3>
-                    <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[10px] font-bold bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-full shadow-sm">
-                            ออเดอร์ปกติ: <span className="text-indigo-600 text-xs">{reportData.perf.orders}</span> บิล
-                        </span>
-                        <span className="text-[10px] font-bold bg-emerald-50 border border-emerald-100 text-emerald-700 px-3 py-1.5 rounded-full shadow-sm">
-                            รับเงินแล้ว: <span className="text-emerald-600 text-xs">{reportData.perf.settledOrders}</span> บิล
-                        </span>
-                        <span className="text-[10px] font-bold bg-amber-50 border border-amber-100 text-amber-700 px-3 py-1.5 rounded-full shadow-sm">
-                            รอเงินโอน: <span className="text-amber-600 text-xs">{reportData.perf.pendingOrders}</span> บิล
-                        </span>
-                    </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                    {/* GMV */}
-                    <div className="relative group cursor-help z-10 hover:z-50">
-                        <div className="bg-slate-900 p-6 rounded-3xl text-white shadow-lg relative overflow-hidden h-full">
-                            <ShoppingCart size={80} className="absolute -bottom-4 -right-4 opacity-10"/>
-                            <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1 text-indigo-300">ยอดสั่งซื้อรวม (GMV)</p>
-                            <h3 className="text-3xl font-black">{formatCurrency(reportData.perf.gmv)}</h3>
-                            <p className="text-xs font-medium opacity-80 mt-2">ยอดเต็มก่อนหักส่วนลด</p>
-                        </div>
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-48 p-4 bg-slate-800 border border-slate-600 text-white text-[10px] rounded-2xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none">
-                            <p className="font-bold border-b border-slate-600 pb-1.5 mb-1.5 text-indigo-300">สูตร: ยอดสั่งซื้อรวม</p>
-                            <p className="text-slate-300 leading-relaxed text-xs">ผลรวมราคาสินค้า x จำนวนชิ้นทั้งหมด (ยังไม่หักค่าธรรมเนียมและส่วนลดใดๆ)</p>
-                        </div>
-                    </div>
-
-                    {/* NEW: LOST GMV */}
-                    <div className="relative group cursor-help z-10 hover:z-50">
-                        <div className="bg-amber-50 p-6 rounded-3xl border border-amber-100 shadow-sm flex flex-col justify-center h-full">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-1">สูญเสีย/ตีกลับ (Lost GMV)</p>
-                            <h3 className="text-3xl font-black text-amber-600">{formatCurrency(reportData.perf.lostGmv)}</h3>
-                            <p className="text-xs font-bold text-amber-600/70 mt-2">เสียค่าธรรมเนียมฟรี {formatCurrency(reportData.perf.wastedFee)} ฿</p>
-                        </div>
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 p-4 bg-slate-800 border border-slate-600 text-white text-[10px] rounded-2xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none">
-                            <p className="font-bold border-b border-slate-600 pb-1.5 mb-1.5 text-amber-400">รายละเอียดที่สูญเสีย</p>
-                            <div className="flex justify-between mb-1"><span>ยอดขายที่ถูกยกเลิก/ตีกลับ</span><span>{formatCurrency(reportData.perf.lostGmv)}</span></div>
-                            <div className="flex justify-between text-rose-300"><span>ค่าธรรมเนียมที่เสียฟรี</span><span>{formatCurrency(reportData.perf.wastedFee)}</span></div>
-                        </div>
-                    </div>
-
-                    {/* NET SALES */}
-                    <div className="relative group cursor-help z-10 hover:z-50">
-                        <div className="bg-gradient-to-br from-indigo-500 to-indigo-700 p-6 rounded-3xl text-white shadow-lg shadow-indigo-200 relative overflow-hidden h-full">
-                            <TrendingUp size={80} className="absolute -bottom-4 -right-4 opacity-20"/>
-                            <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">ยอดขายสุทธิ (Net Sales)</p>
-                            <h3 className="text-3xl font-black">{formatCurrency(reportData.perf.netSales)}</h3>
-                            <p className="text-xs font-medium opacity-90 mt-2"><Package size={12} className="inline mr-1"/> AOV: {formatCurrency(reportData.aov)}/บิล</p>
-                        </div>
-                        {/* --- 🔥 FIX: อัปเดต Popup ของยอดขายสุทธิ ให้โชว์การเชื่อมโยงไปถึงฐานภาษีตามที่ลูกค้าต้องการตรวจสอบ --- */}
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-64 p-4 bg-slate-800 border border-slate-600 text-white text-[10px] rounded-2xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none">
-                            <p className="font-bold border-b border-slate-600 pb-1.5 mb-1.5 text-indigo-300">สูตร: ยอดขายสุทธิ & ฐานภาษี</p>
-                            <div className="flex justify-between mb-1"><span>ยอดสั่งซื้อรวม (GMV)</span><span>{formatCurrency(reportData.perf.gmv)}</span></div>
-                            <div className="flex justify-between text-rose-300 mb-1"><span>หัก ส่วนลดให้ลูกค้า</span><span>-{formatCurrency(reportData.perf.discounts)}</span></div>
-                            <div className="flex justify-between text-rose-300 mb-1"><span>หัก คืนเงินลูกค้า</span><span>-{formatCurrency(reportData.perf.refunds)}</span></div>
-                            <div className="flex justify-between font-bold border-y border-slate-600 py-1.5 my-1.5 text-indigo-200"><span>= ยอดขายสุทธิ (Net Sales)</span><span>{formatCurrency(reportData.perf.netSales)}</span></div>
-                            <div className="flex justify-between text-emerald-300 mb-1"><span>บวก ค่าจัดส่ง (ลูกค้าจ่าย)</span><span>+{formatCurrency(reportData.perf.buyerShipping)}</span></div>
-                            <div className="flex justify-between font-bold text-emerald-400 text-xs mt-1.5"><span>= ฐานภาษี (Tax Base)</span><span>{formatCurrency(reportData.perf.netSales + reportData.perf.buyerShipping)}</span></div>
-                        </div>
-                    </div>
-
-                    {/* TOTAL EXPENSES */}
-                    <div className="relative group cursor-help z-10 hover:z-50">
-                        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-center h-full">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">รวมรายจ่าย (Total Expenses)</p>
-                            <h3 className="text-3xl font-black text-orange-500">{formatCurrency(reportData.perf.cogs + reportData.perf.totalOpEx)}</h3>
-                            <p className="text-xs font-bold text-slate-400 mt-2">ต้นทุน + ค่าธรรมเนียม + อื่นๆ</p>
-                        </div>
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-60 p-4 bg-slate-800 border border-slate-600 text-white text-[10px] rounded-2xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none">
-                            <p className="font-bold border-b border-slate-600 pb-1.5 mb-1.5 text-orange-400">โครงสร้างรายจ่ายประจำเดือน</p>
-                            <div className="flex justify-between mb-1"><span>ต้นทุนสินค้า (COGS)</span><span>{formatCurrency(reportData.perf.cogs)}</span></div>
-                            <div className="flex justify-between mb-1"><span>ค่าธรรมเนียม Platform</span><span>{formatCurrency(reportData.perf.platformFees)}</span></div>
-                            <div className="flex justify-between mb-1"><span>รายจ่ายอื่นๆ (หน้าร้าน)</span><span>{formatCurrency(reportData.perf.directExp)}</span></div>
-                            <div className="flex justify-between text-emerald-300"><span>บวก/หัก ส่วนต่างค่าจัดส่ง</span><span>{reportData.perf.shippingBalance >= 0 ? '+' : ''}{formatCurrency(reportData.perf.shippingBalance)}</span></div>
-                            <div className="flex justify-between font-bold border-t border-slate-600 mt-1.5 pt-1.5 text-orange-400 text-xs"><span>= รวมรายจ่ายทั้งหมด</span><span>{formatCurrency(reportData.perf.cogs + reportData.perf.totalOpEx)}</span></div>
-                        </div>
-                    </div>
-
-                    {/* NET PROFIT */}
-                    <div className="relative group cursor-help z-10 hover:z-50">
-                        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-center h-full">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">กำไรสุทธิ (Net Profit)</p>
-                            <h3 className={`text-3xl font-black ${reportData.perf.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                {reportData.perf.netProfit >= 0 ? '+' : ''}{formatCurrency(reportData.perf.netProfit)}
-                            </h3>
-                            <p className="text-xs font-bold text-slate-400 mt-2">ยอดขายสุทธิ - รวมรายจ่าย</p>
-                        </div>
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 p-4 bg-slate-800 border border-slate-600 text-white text-[10px] rounded-2xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none">
-                            <p className="font-bold border-b border-slate-600 pb-1.5 mb-1.5 text-emerald-400">สูตร: กำไรสุทธิ</p>
-                            <div className="flex justify-between mb-1"><span>ยอดขายสุทธิ</span><span>{formatCurrency(reportData.perf.netSales)}</span></div>
-                            <div className="flex justify-between text-rose-300"><span>หัก รวมรายจ่ายทั้งหมด</span><span>-{formatCurrency(reportData.perf.cogs + reportData.perf.totalOpEx)}</span></div>
-                            <div className="flex justify-between font-bold border-t border-slate-600 mt-1.5 pt-1.5 text-emerald-400 text-xs"><span>= กำไรสุทธิ</span><span>{formatCurrency(reportData.perf.netProfit)}</span></div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* --- 🔥 NEW: แถบกระทบยอดภาษีขาย (Tax Base Reconciliation) ใส่ไว้ถูกหน้าแล้วครับ --- */}
-                <div className="mt-6 bg-indigo-50/80 border border-indigo-200 rounded-[24px] p-5 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 shadow-sm animate-fadeIn">
-                    <div className="flex items-center gap-3">
-                        <div className="p-3 bg-indigo-600 rounded-xl text-white shadow-md">
-                            <FileCheck size={20} />
-                        </div>
-                        <div>
-                            <p className="text-sm font-black text-indigo-900 uppercase tracking-wide">ยอดกระทบฐานภาษีขาย (Sales Tax Base)</p>
-                            <p className="text-xs text-indigo-700/80 mt-1 font-medium">สมการตรวจสอบ: <span className="font-bold">ยอดขายสุทธิ + ค่าจัดส่ง(ผู้ซื้อจ่าย) = ฐานภาษีขาย</span> (เทียบกับหน้า ภ.พ.30)</p>
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 sm:gap-4 bg-white px-5 py-3 rounded-2xl shadow-sm border border-indigo-100 w-full xl:w-auto">
-                        <div className="text-right">
-                            <p className="text-[10px] text-slate-400 font-bold uppercase">ยอดขายสุทธิ (Net Sales)</p>
-                            <p className="font-black text-slate-700 text-base">{formatCurrency(reportData.perf.netSales)}</p>
-                        </div>
-                        <div className="text-indigo-300 font-black text-lg">+</div>
-                        {/* --- 🔥 FIX: กดปุ่มเพื่อเปิดดูรายการออเดอร์ที่มีค่าจัดส่ง --- */}
-                        <div className="text-right cursor-pointer group" onClick={() => setShowShippingDetailsModal(true)} title="คลิกเพื่อดูรายการที่ลูกค้าจ่ายค่าส่ง">
-                            <p className="text-[10px] text-emerald-500 font-bold uppercase flex items-center justify-end gap-1 group-hover:text-emerald-600 transition-colors">ค่าส่งที่เรียกเก็บ (Shipping) <Search size={10}/></p>
-                            <p className="font-black text-emerald-600 text-base group-hover:text-emerald-700 transition-colors border-b border-dashed border-emerald-300">{formatCurrency(reportData.perf.buyerShipping)}</p>
-                        </div>
-                        <div className="text-indigo-300 font-black text-lg">=</div>
-                        <div className="text-right pl-3 border-l-2 border-indigo-50">
-                            <p className="text-[10px] text-indigo-600 font-black uppercase">ฐานภาษีรวม (Tax Base)</p>
-                            <p className="font-black text-indigo-700 text-xl">{formatCurrency(reportData.perf.netSales + reportData.perf.buyerShipping)}</p>
-                        </div>
-                    </div>
-                </div>
-
-                {/* --- 🔥 NEW: แถบประเมินภาษีซื้อจากค่าจัดส่ง (Shipping Input VAT Estimate) --- */}
-                <div className="mt-4 bg-rose-50/80 border border-rose-200 rounded-[24px] p-5 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 shadow-sm animate-fadeIn">
-                    <div className="flex items-center gap-3">
-                        <div className="p-3 bg-rose-500 rounded-xl text-white shadow-md">
-                            <ShoppingCart size={20} />
-                        </div>
-                        <div>
-                            <p className="text-sm font-black text-rose-900 uppercase tracking-wide">ประเมินภาษีซื้อจากขนส่ง (Input VAT Estimate)</p>
-                            <p className="text-xs text-rose-700/80 mt-1 font-medium">ใบเสร็จค่าส่งที่ Platform ออกให้ ถือเป็น <span className="font-bold">"รายจ่าย" (เคลมภาษีซื้อได้)</span> ห้ามนำไปรวมกับภาษีขาย</p>
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 sm:gap-4 bg-white px-5 py-3 rounded-2xl shadow-sm border border-rose-100 w-full xl:w-auto">
-                        <div className="text-right cursor-help" title="ค่าจัดส่งที่แพลตฟอร์มหักจากเราไป">
-                            <p className="text-[10px] text-slate-400 font-bold uppercase">ค่าส่งที่ถูกหัก (Actual)</p>
-                            <p className="font-black text-slate-700 text-base">{formatCurrency(reportData.perf.actualShipping || 0)}</p>
-                        </div>
-                        <div className="text-rose-300 font-black text-lg">x</div>
-                        <div className="text-right">
-                            <p className="text-[10px] text-rose-500 font-bold uppercase">VAT</p>
-                            <p className="font-black text-rose-600 text-base">7/107</p>
-                        </div>
-                        <div className="text-rose-300 font-black text-lg">=</div>
-                        <div className="text-right pl-3 border-l-2 border-rose-50">
-                            <p className="text-[10px] text-rose-600 font-black uppercase">คาดการณ์ภาษีซื้อที่เคลมได้</p>
-                            <p className="font-black text-rose-700 text-xl">{formatCurrency((reportData.perf.actualShipping || 0) * 7 / 107)}</p>
-                        </div>
-                    </div>
-                </div>
-
-            </div>
-
-            {/* KPI Cards: Settlement (อิงวันที่รับเงิน แบบ Shopee Report) */}
-            <div className="mt-8">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-3 gap-2">
-                    <h3 className="font-bold text-slate-700 flex items-center gap-2"><Wallet size={18} className="text-emerald-600"/> 2. รายงานเงินโอนเข้าจริง (Settled Cash: โครงสร้างแบบ Shopee)</h3>
-                    <span className="text-xs font-bold text-slate-400 bg-white px-3 py-1.5 rounded-full shadow-sm border border-slate-100 flex items-center gap-1">
-                        รวมออเดอร์ที่ "เงินเข้าแล้ว" เดือน {selectedMonth} 
-                        <span className="text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 rounded-md ml-1">{reportData.settle.settledOrdersCount} บิล</span>
-                    </span>
-                </div>
-                
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    {/* --- 🔥 FIX: SHOPEE STYLE BREAKDOWN CARD (อัปเดตหน้าตาให้เหมือนในไฟล์เป๊ะ) --- */}
-                    <div className="lg:col-span-2 bg-white rounded-[32px] border border-slate-200 shadow-sm overflow-hidden font-sarabun text-left">
-                        <div className="bg-[#ff5722] text-white px-6 py-4 flex justify-between items-center border-b-4 border-[#e64a19] text-left">
-                            <h4 className="font-bold text-lg text-left">รายงานรายรับของฉัน (อ้างอิงไฟล์ Payout)</h4>
-                            <span className="font-bold">฿</span>
-                        </div>
-                        
-                        <div className="bg-white text-left">
-                            {/* 1. รายได้ทั้งหมด */}
-                            <div className="flex justify-between bg-orange-100/50 text-slate-800 px-6 py-3 font-black text-base border-b border-orange-200 text-left">
-                                <span className="text-left">1. รายได้ทั้งหมด</span>
-                                <span className="text-right">{formatCurrency(reportData.settle.income.total)}</span>
-                            </div>
-                            <div className="px-6 py-4 space-y-2 text-left">
-                                <div className="flex justify-between font-bold text-slate-700 mb-2 text-left">
-                                    <span className="text-left">ยอดขายสินค้า</span>
-                                    <span className="text-right">{formatCurrency(reportData.settle.income.total)}</span>
-                                </div>
-                                <div className="space-y-1.5 pl-6 text-sm text-slate-600 text-left">
-                                    <div className="flex justify-between text-left"><span className="text-left">สินค้าราคาปกติ</span><span className="font-mono text-right">{formatCurrency(reportData.settle.income.productPrice)}</span></div>
-                                    <div className="flex justify-between text-left"><span className="text-left">ส่วนลดสินค้าจากผู้ขาย</span><span className="font-mono text-right">{reportData.settle.income.sellerDiscount > 0 ? '-' : ''}{formatCurrency(reportData.settle.income.sellerDiscount)}</span></div>
-                                    <div className="flex justify-between text-left"><span className="text-left">จำนวนเงินที่ทำการคืนให้ผู้ซื้อ</span><span className="font-mono text-right">{reportData.settle.income.refundAmount > 0 ? '-' : ''}{formatCurrency(reportData.settle.income.refundAmount)}</span></div>
-                                </div>
-                                <div className="flex justify-between text-slate-700 mt-2 mb-1 text-left">
-                                    <span className="text-left">ส่วนลดและโค้ดของผู้ขาย</span>
-                                    <span className="text-right">0.00</span>
-                                </div>
-                                <div className="space-y-1 pl-6 text-sm text-slate-600 text-left">
-                                    <div className="flex justify-between text-left"><span className="text-left">ส่วนลดสินค้าที่ออกโดย Shopee</span><span className="font-mono text-right">0.00</span></div>
-                                    <div className="flex justify-between text-left"><span className="text-left">โค้ดส่วนลดที่ออกโดยผู้ขาย</span><span className="font-mono text-right">0.00</span></div>
-                                </div>
-                            </div>
-
-                            {/* 2. ค่าใช้จ่ายทั้งหมด */}
-                            <div className="flex justify-between bg-slate-200 text-slate-800 px-6 py-3 font-black text-base border-y border-slate-300 text-left">
-                                <span className="text-left">2. ค่าใช้จ่ายทั้งหมด</span>
-                                <span className={`text-right ${reportData.settle.totalPlatformExpense < 0 ? 'text-rose-600' : ''}`}>{reportData.settle.totalPlatformExpense < 0 ? '' : '+'}{formatCurrency(reportData.settle.totalPlatformExpense)}</span>
-                            </div>
-                            <div className="px-6 py-4 space-y-6 text-left">
-                                {/* หมวดค่าส่ง */}
-                                <div className="text-left">
-                                    <div className="flex justify-between font-bold text-slate-700 mb-2 text-left">
-                                        <span className="text-left">ค่าจัดส่ง</span>
-                                        <span className="text-right">{formatCurrency(reportData.settle.shipping.total)}</span>
-                                    </div>
-                                    <div className="space-y-1.5 pl-6 text-sm text-slate-600 text-left">
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าจัดส่งที่ชำระโดยผู้ซื้อ</span><span className="font-mono text-right">{formatCurrency(reportData.settle.shipping.buyerPaid)}</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ส่วนลดค่าจัดส่งจากผู้ให้บริการขนส่ง</span><span className="font-mono text-right">0.00</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าจัดส่งสินค้าที่ออกโดย Shopee</span><span className="font-mono text-right">{formatCurrency(reportData.settle.shipping.shopeeSubsidy)}</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ</span><span className="font-mono text-rose-500 text-right">{reportData.settle.shipping.actualShipping > 0 ? '-' : ''}{formatCurrency(reportData.settle.shipping.actualShipping)}</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าจัดส่งสินค้าคืน</span><span className="font-mono text-rose-500 text-right">{reportData.settle.shipping.returnShipping > 0 ? '-' : ''}{formatCurrency(reportData.settle.shipping.returnShipping)}</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">โปรแกรมประหยัดค่าจัดส่งคืนสินค้า</span><span className="font-mono text-right">0.00</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าจัดส่งสินค้าคืนผู้ขาย</span><span className="font-mono text-right">0.00</span></div>
-                                    </div>
-                                </div>
-                                
-                                {/* หมวดค่าธรรมเนียม */}
-                                <div className="text-left">
-                                    <div className="flex justify-between font-bold text-slate-700 mb-2 text-left">
-                                        <span className="text-left">ค่าธรรมเนียม</span>
-                                        <span className="text-rose-600 text-right">-{formatCurrency(reportData.settle.fees.total)}</span>
-                                    </div>
-                                    <div className="space-y-1.5 pl-6 text-sm text-slate-600 text-left">
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าคอมมิชชั่น AMS</span><span className="font-mono text-right">0.00</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าคอมมิชชั่น</span><span className="font-mono text-rose-500 text-right">{reportData.settle.fees.comm > 0 ? '-' : ''}{formatCurrency(reportData.settle.fees.comm)}</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าบริการ</span><span className="font-mono text-rose-500 text-right">{reportData.settle.fees.serv > 0 ? '-' : ''}{formatCurrency(reportData.settle.fees.serv)}</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม</span><span className="font-mono text-rose-500 text-right">{reportData.settle.fees.infra > 0 ? '-' : ''}{formatCurrency(reportData.settle.fees.infra)}</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าธรรมเนียม ของโปรแกรมประหยัดค่าจัดส่ง</span><span className="font-mono text-right">0.00</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าธุรกรรมการชำระเงิน</span><span className="font-mono text-rose-500 text-right">{reportData.settle.fees.trans > 0 ? '-' : ''}{formatCurrency(reportData.settle.fees.trans)}</span></div>
-                                        <div className="flex justify-between text-left"><span className="text-left">ค่าธรรมเนียมเติมเงินโฆษณาจากเงิน Escrow</span><span className="font-mono text-right">0.00</span></div>
-                                        {reportData.settle.fees.affiliate > 0 && <div className="flex justify-between text-left"><span className="text-left">ค่าคอมมิชชั่น Affiliate</span><span className="font-mono text-rose-500 text-right">-{formatCurrency(reportData.settle.fees.affiliate)}</span></div>}
-                                        {reportData.settle.fees.other > 0 && <div className="flex justify-between text-left"><span className="text-left">ค่าธรรมเนียมอื่นๆ</span><span className="font-mono text-rose-500 text-right">-{formatCurrency(reportData.settle.fees.other)}</span></div>}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* 3. จำนวนเงินทั้งหมดที่โอนแล้ว */}
-                            <div className="bg-slate-400 text-slate-900 px-6 py-4 flex justify-between items-center border-t-2 border-white text-left">
-                                <span className="font-black text-lg text-left">3. จำนวนเงินทั้งหมดที่โอนแล้ว</span>
-                                <span className="font-black text-2xl tracking-tight text-right">{formatCurrency(reportData.settle.totalTransferred)}</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Right Side Info Cards */}
-                    <div className="space-y-4">
-                        <div className="bg-emerald-50 border border-emerald-200 p-6 rounded-3xl flex flex-col justify-center shadow-sm">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600 mb-1">รวมเงินเข้าบัญชี (Settled Cash)</p>
-                            <h3 className="text-4xl font-black text-emerald-700">{formatCurrency(reportData.settle.totalTransferred)}</h3>
-                            <p className="text-xs font-bold text-emerald-600/70 mt-3">ตรงกับรายงานหน้า Shopee และ Bank Statement ของเดือนนี้</p>
-                        </div>
-                        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                            <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Filter size={16} className="text-indigo-500"/> ยอดขายแยกตามช่องทาง</h4>
-                            <div className="space-y-3">
-                                {reportData.channelBreakdown.map((c, i) => (
-                                    <div key={i} className="flex justify-between items-center text-sm border-b border-dashed border-slate-100 pb-2">
-                                        <span className="text-slate-600">{c.name}</span>
-                                        <span className="font-black text-slate-800">{formatCurrency(c.amount)}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Daily Chart & Top Products Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
-                {/* Daily Sales Chart */}
-                <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm flex flex-col h-fit">
-                    <div className="flex justify-between items-end mb-6">
-                        <div>
-                            <h3 className="font-black text-slate-800 text-lg flex items-center gap-2"><Activity className="text-indigo-600"/> กราฟยอดขายรายวัน</h3>
-                            <p className="text-xs text-slate-400 mt-1">Daily Net Sales Trend ({selectedMonth})</p>
-                        </div>
-                        <div className="text-right">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">ยอดขายสูงสุดใน 1 วัน</p>
-                            <p className="text-xl font-black text-indigo-600">{formatCurrency(reportData.maxDailySale)}</p>
-                        </div>
-                    </div>
-
-                    <div className="flex-1 w-full min-h-[250px] relative mt-4 pt-4 border-t border-slate-50">
-                        {/* Y-Axis lines */}
-                        <div className="absolute inset-0 flex flex-col justify-between opacity-10 pointer-events-none">
-                            <div className="border-b border-slate-900 w-full h-0"></div>
-                            <div className="border-b border-slate-900 w-full h-0"></div>
-                            <div className="border-b border-slate-900 w-full h-0"></div>
-                            <div className="border-b border-slate-900 w-full h-0"></div>
-                        </div>
-                        
-                        <div className="flex h-48 items-end gap-1 sm:gap-2 w-full relative z-10">
-                            {reportData.chartData.map((d, i) => {
-                                const barHeight = reportData.maxDailySale > 0 ? (d.amount / reportData.maxDailySale) * 100 : 0;
-                                const isWeekend = new Date(selectedMonth.split('-')[0], Number(selectedMonth.split('-')[1]) - 1, Number(d.day)).getDay() === 0 || new Date(selectedMonth.split('-')[0], Number(selectedMonth.split('-')[1]) - 1, Number(d.day)).getDay() === 6;
-                                
-                                return (
-                                    <div key={i} className="flex flex-col items-center flex-1 group relative h-full">
-                                        <div className="w-full flex items-end justify-center h-full">
-                                            <div 
-                                                className={`w-full max-w-[24px] rounded-t-md transition-all duration-500 cursor-pointer relative shadow-sm ${isWeekend ? 'bg-amber-300 group-hover:bg-amber-400' : 'bg-indigo-400 group-hover:bg-indigo-600'}`}
-                                                style={{ height: `${barHeight}%`, minHeight: d.amount > 0 ? '4px' : '0px' }}
-                                            >
-                                                {/* Tooltip */}
-                                                <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] font-bold py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
-                                                    วันที่ {d.day}: {formatCurrency(d.amount)}
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <span className={`text-[8px] sm:text-[10px] font-bold mt-2 ${isWeekend ? 'text-amber-500' : 'text-slate-400'}`}>{Number(d.day) % 2 !== 0 ? d.day : ''}</span>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                </div>
-
-                {/* Top Products Table */}
-                <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm">
-                    <div className="flex justify-between items-center mb-6">
-                        <h3 className="font-black text-slate-800 text-lg flex items-center gap-2"><Star className="text-amber-500 fill-amber-500"/> 5 อันดับสินค้าขายดีประจำเดือน</h3>
-                    </div>
-                    <div className="overflow-x-auto custom-scrollbar">
-                        <table className="w-full text-sm text-left">
-                            <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-400">
-                                <tr>
-                                    <th className="p-3 rounded-tl-xl border-b border-slate-100 w-10 text-left">No.</th>
-                                    <th className="p-3 border-b border-slate-100 text-left">ชื่อสินค้า (Product)</th>
-                                    <th className="p-3 border-b border-slate-100 text-right">ขายแล้ว</th>
-                                    <th className="p-3 text-right rounded-tr-xl border-b border-slate-100 text-indigo-600">ยอดขายรวม (฿)</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-50">
-                                {reportData.topProducts.map((prod, idx) => (
-                                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                                        <td className="p-3 text-left font-black text-slate-400">{idx + 1}</td>
-                                        <td className="p-3 text-left">
-                                            <p className="font-bold text-slate-700 line-clamp-1">{prod.name}</p>
-                                            <p className="text-[10px] font-mono text-slate-400">SKU: {prod.sku}</p>
-                                        </td>
-                                        <td className="p-3 text-right font-black text-slate-800">{prod.qty.toLocaleString()}</td>
-                                        <td className="p-3 text-right font-black text-indigo-600">{formatCurrency(prod.revenue)}</td>
-                                    </tr>
-                                ))}
-                                {reportData.topProducts.length === 0 && (
-                                    <tr><td colSpan="4" className="p-10 text-left pl-6 text-slate-400 font-bold">ยังไม่มีข้อมูลการขายในเดือนนี้</td></tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            {/* Stock Movement Table (Full Width) */}
-            <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm mt-6">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 border-b border-slate-100 pb-4 gap-4">
-                    <div>
-                        <h3 className="font-black text-slate-800 text-lg flex items-center gap-2"><ArrowRightLeft className="text-teal-500"/> รายละเอียดการเคลื่อนไหวสต็อกสินค้า</h3>
-                        <p className="text-xs text-slate-400 mt-1">Stock Movement & Balance ({selectedMonth})</p>
-                    </div>
-                    <div className="text-right">
-                        <span className="bg-teal-50 text-teal-600 px-3 py-1.5 rounded-full text-xs font-bold border border-teal-100">{monthlyStockData.length} รายการที่มีความเคลื่อนไหว</span>
-                    </div>
-                </div>
-                <div className="overflow-x-auto custom-scrollbar">
-                    <table className="w-full text-sm text-left">
-                        <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-500 sticky top-0">
-                            <tr>
-                                <th className="p-3 rounded-tl-xl border-b border-slate-100 text-left">Product / SKU</th>
-                                <th className="p-3 text-right border-b border-slate-100 bg-slate-100/50">ยอดยกมา<br/><span className="text-[8px] font-normal">(Beginning)</span></th>
-                                <th className="p-3 text-right border-b border-slate-100 bg-emerald-50/50 text-emerald-600">รับเข้า<br/><span className="text-[8px] font-normal">(In)</span></th>
-                                <th className="p-3 text-right border-b border-slate-100 bg-rose-50/50 text-rose-600">ขาย/จ่ายออก<br/><span className="text-[8px] font-normal">(Out)</span></th>
-                                <th className="p-3 text-right rounded-tr-xl border-b border-slate-100 text-indigo-600">คงเหลือสิ้นเดือน<br/><span className="text-[8px] font-normal">(Ending Balance)</span></th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                            {monthlyStockData.map((item, idx) => (
-                                <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                                    <td className="p-3 text-left">
-                                        <p className="font-bold text-slate-700 line-clamp-1">{item.name}</p>
-                                        <p className="text-[10px] font-mono text-slate-400">SKU: {item.sku}</p>
-                                    </td>
-                                    <td className="p-3 text-right font-bold text-slate-500 bg-slate-50/30">{item.beginQty.toLocaleString()}</td>
-                                    <td className="p-3 text-right font-black text-emerald-500 bg-emerald-50/20">{item.inQty > 0 ? `+${item.inQty.toLocaleString()}` : '-'}</td>
-                                    <td className="p-3 text-right font-black text-rose-500 bg-rose-50/20">{item.outQty > 0 ? `-${item.outQty.toLocaleString()}` : '-'}</td>
-                                    <td className="p-3 text-right font-black text-indigo-600">{item.endQty.toLocaleString()}</td>
-                                </tr>
-                            ))}
-                            {monthlyStockData.length === 0 && (
-                                <tr><td colSpan="5" className="p-10 text-left pl-6 text-slate-400 font-bold">ไม่มีความเคลื่อนไหวของสต็อกในเดือนนี้</td></tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            {/* --- NEW: Audit Results Modal --- */}
-            {auditResults && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-                    <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-5xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
-                        <div className="flex justify-between items-center mb-6">
-                            <div>
-                                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Search className="text-blue-600"/> สรุปผลการตรวจสอบ (Audit Report)</h3>
-                                <p className="text-xs text-slate-500 mt-1">เปรียบเทียบข้อมูลในระบบ กับ รายงานจากไฟล์ Shopee</p>
-                            </div>
-                            <button onClick={() => setAuditResults(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
-                        </div>
-                        
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl">
-                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">จำนวนออเดอร์ในไฟล์</p>
-                                <p className="text-xl font-black text-slate-700">{auditResults.totalExcel}</p>
-                            </div>
-                            <div className="bg-blue-50 border border-blue-200 p-4 rounded-2xl">
-                                <p className="text-[10px] font-bold text-blue-600 uppercase mb-1">ตรวจสอบแล้ว</p>
-                                <p className="text-xl font-black text-blue-700">{auditResults.checked}</p>
-                            </div>
-                            <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
-                                <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">ข้อมูลตรงกัน</p>
-                                <p className="text-xl font-black text-emerald-700">{auditResults.matched}</p>
-                            </div>
-                            <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl">
-                                <p className="text-[10px] font-bold text-rose-600 uppercase mb-1">พบความคลาดเคลื่อน</p>
-                                <p className="text-xl font-black text-rose-700">{auditResults.discrepancies.length}</p>
-                            </div>
-                        </div>
-
-                        <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl">
-                            <table className="w-full text-xs text-left">
-                                <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 border-b border-slate-200">
-                                    <tr>
-                                        <th className="p-3 pl-4">Order ID</th>
-                                        <th className="p-3">ปัญหาที่พบ</th>
-                                        <th className="p-3">รายละเอียด (ระบบ vs Shopee)</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    {auditResults.discrepancies.map((item, idx) => (
-                                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                                            <td className="p-3 pl-4 font-mono font-bold text-slate-700">{item.orderId}</td>
-                                            <td className="p-3">
-                                                <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[10px] font-bold">{item.issue}</span>
-                                                <p className="text-[10px] text-slate-500 mt-1">{item.desc}</p>
-                                            </td>
-                                            <td className="p-3">
-                                                {item.details.length > 0 ? (
-                                                    <div className="space-y-1">
-                                                        {item.details.map((d, i) => (
-                                                            <div key={i} className="flex items-center gap-2 text-[10px]">
-                                                                <span className="font-bold text-slate-600 w-24">{d.label}:</span>
-                                                                <span className="text-slate-400 line-through">{formatCurrency(d.db)}</span>
-                                                                <ArrowRight size={10} className="text-slate-300"/>
-                                                                <span className="font-bold text-indigo-600">{formatCurrency(d.excel)}</span>
-                                                                <span className="text-rose-500 font-bold ml-2">(ดิฟ {formatCurrency(d.diff)})</span>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                ) : <span className="text-slate-400">-</span>}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                    {auditResults.discrepancies.length === 0 && (
-                                        <tr><td colSpan="3" className="p-10 text-center text-slate-400 font-bold">ข้อมูลตรงกัน 100% ไม่มีจุดคลาดเคลื่อน</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div className="flex justify-end gap-3 pt-6 border-t border-slate-100 mt-4">
-                            <button onClick={() => setAuditResults(null)} disabled={isAuditing} className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
-                            {auditResults.discrepancies.length > 0 && (
-                                <button onClick={handleAutoFixDiscrepancies} disabled={isAuditing} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg transition-colors flex items-center gap-2 disabled:opacity-50">
-                                    {isAuditing ? <Loader size={16} className="animate-spin"/> : <Wand2 size={16}/>} 
-                                    {isAuditing ? 'กำลังปรับปรุง...' : 'Auto-Fix (ยึดตามยอด Shopee)'}
-                                </button>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
+    return Object.values(map);
+  }, [stockBatches]);
+
+  const filteredStockPicker = useMemo(() => {
+    if (!stockSearch) return uniqueInventory;
+    return uniqueInventory.filter(i => 
+      i.name.toLowerCase().includes(stockSearch.toLowerCase()) || 
+      i.sku.toLowerCase().includes(stockSearch.toLowerCase())
     );
+  }, [uniqueInventory, stockSearch]);
+
+  // --- ฟังก์ชันอัปโหลดไฟล์แนบหลักฐาน ---
+  const handleAttachFile = async (e) => {
+      const file = e.target.files[0];
+      if (!file || !user) return;
+      
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (!webhookUrl) {
+          showToast('กรุณาตั้งค่าเชื่อมต่อ Google Drive ในเมนูเครื่องมือขั้นสูงก่อน', 'error');
+          return;
+      }
+
+      setIsUploadingFile(true);
+      try {
+          const base64Data = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result.split(',')[1]);
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+          });
+
+          const mimeType = file.type;
+          const fileExt = file.name.split('.').pop();
+          const d = new Date();
+          const year = String(d.getFullYear());
+          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
+          const month = monthNames[d.getMonth()];
+          const day = String(d.getDate()).padStart(2, '0');
+          
+          const fileName = `EVIDENCE_${Date.now()}.${fileExt}`;
+
+          const payload = { 
+              base64Data, fileName, mimeType, 
+              rootFolder: 'MerchantTax_DigitalFiling',
+              year: year, type: '2_Expense', month: month, category: 'Internal_Docs', day: day
+          };
+
+          showToast(`กำลังส่งไฟล์หลักฐานไปที่ Google Drive...`, 'success');
+          
+          const res = await fetch(webhookUrl.trim(), {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(payload)
+          });
+
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          const data = await res.json();
+          
+          if (data.url) {
+              setAttachmentUrl(data.url);
+              showToast(`อัปโหลดหลักฐานสำเร็จ!`, 'success');
+          } else {
+              throw new Error(data.message || "Upload failed");
+          }
+      } catch (err) {
+          console.error("Drive Upload Error:", err);
+          showToast('อัปโหลดหลักฐานล้มเหลว', 'error');
+      } finally {
+          setIsUploadingFile(false);
+          e.target.value = '';
+      }
+  };
+
+  // --- บันทึก: ใบรับรองแทนใบเสร็จรับเงิน ---
+  const handleSaveReceiptCert = async (e) => {
+    if (e) e.preventDefault();
+    if (!user) return;
+
+    if (!certForm.recipientName.trim()) {
+      showToast("กรุณาระบุชื่อ-นามสกุลของผู้รับเงิน", "error");
+      return;
+    }
+
+    const validItems = certForm.items.filter(i => i.desc.trim() && Number(i.price) > 0);
+    if (validItems.length === 0) {
+      showToast("กรุณาระบุรายการและจำนวนเงินอย่างน้อย 1 รายการ", "error");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const subTotal = validItems.reduce((sum, item) => sum + (Number(item.qty || 1) * Number(item.price || 0)), 0);
+      const prefix = getExpensePrefix(certForm.category);
+      const sysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), prefix, certForm.date, 'sysDocId');
+
+      const payload = {
+        sysDocId,
+        type: 'expense',
+        category: certForm.category || 'ค่าใช้จ่ายทั่วไป',
+        description: `[ใบรับรองแทนใบเสร็จ] ${validItems.map(i => i.desc).join(', ')}`,
+        items: validItems.map(i => ({
+          desc: i.desc,
+          qty: Number(i.qty) || 1,
+          unit: i.unit || 'รายการ',
+          buyPrice: Number(i.price) || 0,
+          sellPrice: 0,
+          sku: '',
+          category: certForm.category
+        })),
+        total: subTotal,
+        grandTotal: subTotal,
+        date: normalizeDate(certForm.date),
+        userId: user.uid,
+        createdAt: serverTimestamp(),
+        status: 'paid',
+        partnerName: certForm.recipientName,
+        partnerTaxId: certForm.recipientCitizenId,
+        partnerAddress: certForm.recipientAddress,
+        partnerBranch: '00000',
+        isCashBill: true,
+        vatType: 'none',
+        isInternalCert: true,
+        noReceiptReason: certForm.noReceiptReason,
+        approverName: certForm.approverName,
+        notes: certForm.notes,
+        attachmentUrl: attachmentUrl // แนบลิงก์หลักฐานลงไปในบิล
+      };
+
+      const docRef = await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), payload);
+      showToast("บันทึกใบรับรองแทนใบเสร็จรับเงินสำเร็จ", "success");
+
+      setPrintDoc({ ...payload, docType: 'receipt_cert', id: docRef.id });
+      setCertForm({
+        date: formatDateISO(new Date()),
+        recipientName: '', recipientCitizenId: '', recipientAddress: '',
+        category: 'ค่าใช้จ่ายทั่วไป', noReceiptReason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
+        approverName: '', notes: '',
+        items: [{ desc: '', qty: 1, unit: 'รายการ', price: 0 }]
+      });
+      setAttachmentUrl('');
+    } catch (err) {
+      console.error(err);
+      showToast("เกิดข้อผิดพลาดในการบันทึก: " + err.message, "error");
+    }
+    setIsSaving(false);
+  };
+
+  // --- บันทึก: ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย ---
+  const handleSaveWriteOff = async (e) => {
+    if (e) e.preventDefault();
+    if (!user) return;
+
+    const validItems = writeOffForm.items.filter(i => i.desc.trim() && Number(i.qty) > 0);
+    if (validItems.length === 0) {
+      showToast("กรุณาเลือกรายการสินค้าที่ต้องการตัดจำหน่าย", "error");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const batchWriter = writeBatch(dbInstance);
+      const actionDate = normalizeDate(writeOffForm.date) || new Date();
+      let totalCostLost = 0;
+      const processedItems = [];
+      const stockSnap = [...stockBatches];
+
+      for (const item of validItems) {
+        let needed = Number(item.qty || 1);
+        let itemCostLost = 0;
+
+        const batches = stockSnap
+          .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
+          .sort(sortClosestToDateThenOldest(actionDate));
+
+        for (let i = 0; i < batches.length; i++) {
+          const b = batches[i];
+          if (needed <= 0) break;
+          const remaining = Number(b.quantity) - Number(b.sold || 0);
+          let take = (i === batches.length - 1) ? needed : Math.min(needed, Math.max(0, remaining));
+
+          if (take > 0) {
+            const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+            batchWriter.update(batchRef, { sold: increment(take) });
+            itemCostLost += take * (Number(b.costPerUnit) || 0);
+            needed -= take;
+          }
+        }
+
+        const unitCost = item.qty > 0 ? (itemCostLost / item.qty) : (Number(item.costPrice) || 0);
+        const finalCost = itemCostLost > 0 ? itemCostLost : (Number(item.costPrice || 0) * Number(item.qty));
+        totalCostLost += finalCost;
+
+        processedItems.push({
+          desc: `ตัดจำหน่าย (${writeOffForm.reason}): ${item.desc}`,
+          qty: Number(item.qty) || 1,
+          unit: item.unit || 'ชิ้น',
+          buyPrice: unitCost,
+          sellPrice: 0,
+          sku: item.sku || ''
+        });
+      }
+
+      const prefix = 'DMG-';
+      const sysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), prefix, writeOffForm.date, 'sysDocId');
+      const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+
+      const payload = {
+        sysDocId,
+        type: 'expense',
+        category: 'สินค้าเสียหาย/หมดอายุ',
+        description: `[ใบตัดจำหน่ายสินค้า] (${writeOffForm.reason}): ${validItems.map(i => i.desc).join(', ')}`,
+        items: processedItems,
+        total: totalCostLost,
+        grandTotal: totalCostLost,
+        date: actionDate,
+        userId: user.uid,
+        createdAt: serverTimestamp(),
+        status: 'paid',
+        partnerName: 'Internal (ตัดจำหน่าย)',
+        partnerBranch: '00000',
+        isFromReconciliation: true,
+        isTaxOnly: false,
+        isWriteOffVoucher: true,
+        writeOffReason: writeOffForm.reason,
+        approverName: writeOffForm.approverName,
+        inspectorName: writeOffForm.inspectorName,
+        notes: writeOffForm.notes,
+        attachmentUrl: attachmentUrl // แนบหลักฐานรูปถ่ายความเสียหาย
+      };
+
+      batchWriter.set(expRef, payload);
+      await batchWriter.commit();
+
+      showToast("บันทึกใบตัดจำหน่ายและตัดสต็อก FIFO สำเร็จ!", "success");
+      setPrintDoc({ ...payload, docType: 'write_off', id: expRef.id, originalItems: validItems });
+      setWriteOffForm({
+        date: formatDateISO(new Date()),
+        reason: 'สินค้าชำรุด/เสียหาย',
+        approverName: '',
+        inspectorName: '',
+        notes: '',
+        items: [{ sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]
+      });
+      setAttachmentUrl('');
+    } catch (err) {
+      console.error(err);
+      showToast("เกิดข้อผิดพลาดในการบันทึก: " + err.message, "error");
+    }
+    setIsSaving(false);
+  };
+
+  const internalDocsHistory = useMemo(() => {
+    return transactions.filter(t => t.type === 'expense' && (t.isInternalCert || t.isWriteOffVoucher || (t.sysDocId && String(t.sysDocId).startsWith('DMG-')))).sort(sortNewestFirst);
+  }, [transactions]);
+
+  return (
+    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-20">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+        <div>
+          <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+            <FileCheck className="text-indigo-600"/> เอกสารภายใน & ตัดจำหน่ายสินค้า
+          </h2>
+          <p className="text-sm text-slate-400 font-medium">สร้างใบรับรองแทนใบเสร็จรับเงิน และใบตัดจำหน่ายสินค้าชำรุด/สูญหาย พร้อมระบบแนบหลักฐานและคำแนะนำสรรพากร</p>
+        </div>
+      </div>
+
+      {/* Sub Tabs */}
+      <div className="flex justify-between items-center flex-wrap gap-4">
+        <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit overflow-x-auto shadow-inner border border-slate-200/50">
+          <button onClick={() => setActiveSubTab('receipt_cert')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'receipt_cert' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+            <FileText size={16}/> ใบรับรองแทนใบเสร็จรับเงิน
+          </button>
+          <button onClick={() => setActiveSubTab('write_off')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'write_off' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+            <Trash2 size={16}/> ใบตัดจำหน่ายสินค้า (ชำรุด/สูญหาย)
+          </button>
+          <button onClick={() => setActiveSubTab('history')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'history' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+            <History size={16}/> ประวัติเอกสารภายใน
+          </button>
+        </div>
+
+        {/* --- 🔥 NEW: ปุ่ม Tips สรรพากร --- */}
+        {activeSubTab !== 'history' && (
+          <button onClick={() => { setTipsType(activeSubTab === 'receipt_cert' ? 'receipt' : 'writeoff'); setShowTipsModal(true); }} className="bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2.5 rounded-xl text-xs font-bold border border-amber-200 flex items-center gap-2 transition-all shadow-sm">
+            <Lightbulb size={16}/> เช็กลิสต์หลักฐาน (Tips สรรพากร)
+          </button>
+        )}
+      </div>
+
+      {/* TAB 1: ใบรับรองแทนใบเสร็จรับเงิน */}
+      {activeSubTab === 'receipt_cert' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
+          <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6">
+            <div className="border-b pb-4 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><FileText className="text-indigo-600"/> ออกใบรับรองแทนใบเสร็จรับเงิน</h3>
+                <p className="text-xs text-slate-400 mt-0.5">สำหรับบันทึกรายจ่ายที่ผู้ขายไม่ออกบิลให้</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveReceiptCert} className="space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">วันที่จ่ายเงิน</label>
+                  <input type="date" required value={certForm.date} onChange={e=>setCertForm({...certForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">หมวดหมู่รายจ่าย</label>
+                  <select value={certForm.category} onChange={e=>setCertForm({...certForm, category: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100">
+                    {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* ข้อมูลผู้รับเงิน */}
+              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                <p className="text-xs font-black text-indigo-700 uppercase tracking-wide flex items-center gap-1"><User size={14}/> ข้อมูลผู้รับเงิน (Recipient Details)</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">ชื่อ - นามสกุล ผู้รับเงิน *</label>
+                    <input type="text" required value={certForm.recipientName} onChange={e=>setCertForm({...certForm, recipientName: e.target.value})} placeholder="นาย / นาง / นางสาว..." className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">เลขประจำตัวประชาชน (13 หลัก)</label>
+                    <input type="text" value={certForm.recipientCitizenId} onChange={e=>setCertForm({...certForm, recipientCitizenId: e.target.value})} placeholder="x-xxxx-xxxxx-xx-x" className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-100" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">ที่อยู่ผู้รับเงิน</label>
+                    <input type="text" value={certForm.recipientAddress} onChange={e=>setCertForm({...certForm, recipientAddress: e.target.value})} placeholder="บ้านเลขที่, ถนน, ตำบล, อำเภอ, จังหวัด..." className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-100" />
+                  </div>
+                </div>
+              </div>
+
+              {/* รายการจ่ายเงิน */}
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-600 uppercase">รายการสินค้า/บริการที่จ่าย</label>
+                  <button type="button" onClick={() => setCertForm({...certForm, items: [...certForm.items, { desc: '', qty: 1, unit: 'รายการ', price: 0 }]})} className="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1">
+                    <Plus size={14}/> เพิ่มรายการ
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {certForm.items.map((it, idx) => (
+                    <div key={idx} className="flex flex-col sm:flex-row gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 items-center">
+                      <input type="text" required value={it.desc} onChange={e=>{
+                        const newItems = [...certForm.items]; newItems[idx].desc = e.target.value; setCertForm({...certForm, items: newItems});
+                      }} placeholder="รายละเอียดรายการจ่าย..." className="flex-1 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none" />
+                      <div className="flex gap-2 w-full sm:w-auto">
+                        <input type="number" min="1" value={it.qty} onChange={e=>{
+                          const newItems = [...certForm.items]; newItems[idx].qty = Number(e.target.value); setCertForm({...certForm, items: newItems});
+                        }} placeholder="จำนวน" className="w-20 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold text-center outline-none" />
+                        <input type="number" step="0.01" value={it.price} onChange={e=>{
+                          const newItems = [...certForm.items]; newItems[idx].price = Number(e.target.value); setCertForm({...certForm, items: newItems});
+                        }} placeholder="จำนวนเงิน" className="w-28 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold text-right outline-none text-indigo-600" />
+                        <button type="button" onClick={()=>{
+                          if (certForm.items.length === 1) return;
+                          setCertForm({...certForm, items: certForm.items.filter((_, i) => i !== idx)});
+                        }} className="p-2 text-rose-400 hover:text-rose-600 transition-colors" disabled={certForm.items.length === 1}><Trash2 size={16}/></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* --- 🔥 NEW: ส่วนแนบไฟล์หลักฐานสลิป/รูปถ่าย --- */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <div className="flex justify-between items-center mb-2">
+                      <label className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1"><Cloud size={16} className="text-blue-500"/> แนบไฟล์หลักฐาน (สลิปโอนเงิน / แชทตกลงซื้อขาย)</label>
+                      <span className="text-[9px] text-slate-400">* สำคัญมากตามหลักสรรพากร</span>
+                  </div>
+                  {attachmentUrl ? (
+                      <div className="relative group inline-block">
+                          <a href={attachmentUrl} target="_blank" rel="noopener noreferrer">
+                              <img src={attachmentUrl} alt="Evidence" className="h-20 w-auto rounded-xl border border-slate-200 shadow-sm object-cover" />
+                          </a>
+                          <button type="button" onClick={() => setAttachmentUrl('')} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md"><X size={12}/></button>
+                      </div>
+                  ) : (
+                      <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-white transition-colors bg-white/50">
+                          {isUploadingFile ? (
+                              <div className="flex flex-col items-center gap-1">
+                                  <Loader className="animate-spin text-blue-500" size={16}/>
+                                  <span className="text-[10px] font-bold text-blue-500">กำลังส่งไป Drive...</span>
+                              </div>
+                          ) : (
+                              <>
+                                  <FileUp size={16} className="text-slate-400 mb-1"/>
+                                  <span className="text-[10px] font-bold text-slate-600">คลิกอัปโหลดสลิปหรือหลักฐาน</span>
+                              </>
+                          )}
+                          <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFile} disabled={isUploadingFile} />
+                      </label>
+                  )}
+              </div>
+
+              {/* เหตุผลและผู้อนุมัติ */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">เหตุผลที่ไม่ได้รับใบเสร็จ</label>
+                  <input type="text" value={certForm.noReceiptReason} onChange={e=>setCertForm({...certForm, noReceiptReason: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-medium outline-none" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ชื่อผู้ตรวจรับ / ผู้จ่ายเงิน</label>
+                  <input type="text" value={certForm.approverName} onChange={e=>setCertForm({...certForm, approverName: e.target.value})} placeholder="ระบุชื่อผู้เบิก/ผู้จ่ายเงิน..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
+                </div>
+              </div>
+
+              <div className="pt-4 border-t flex gap-3">
+                <button type="submit" disabled={isSaving} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3.5 rounded-2xl font-black text-base shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
+                  {isSaving ? <Loader className="animate-spin" size={18}/> : <Save size={18}/>}
+                  {isSaving ? 'กำลังบันทึก...' : 'บันทึกใบรับรองแทนใบเสร็จรับเงิน'}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Side Info */}
+          <div className="space-y-6">
+            <div className="bg-gradient-to-br from-indigo-900 to-slate-800 p-6 rounded-[32px] text-white shadow-xl">
+              <h4 className="font-bold text-base text-indigo-300 mb-2 flex items-center gap-2"><Lightbulb size={18}/> ข้อแนะนำทางภาษี</h4>
+              <p className="text-xs leading-relaxed text-indigo-100 font-medium">
+                ทุกครั้งที่ออกใบรับรองแทนใบเสร็จ แนะนำให้อัปโหลด <b>"สลิปการโอนเงิน"</b> แนบไว้คู่กันในระบบเสมอ เพื่อให้สรรพากรตรวจสอบและยอมรับเป็นรายจ่ายทางภาษีได้ 100% ครับ
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: ใบตัดจำหน่ายสินค้า (ชำรุด/สูญหาย) */}
+      {activeSubTab === 'write_off' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
+          <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6">
+            <div className="border-b pb-4 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Trash2 className="text-rose-600"/> ออกใบตัดจำหน่ายสินค้า (Write-Off)</h3>
+                <p className="text-xs text-slate-400 mt-0.5">หักสต็อกสินค้าออกจากคลัง FIFO พร้อมลงบันทึกเป็นรายจ่ายธุรกิจ</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveWriteOff} className="space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">วันที่ทำรายการ</label>
+                  <input type="date" required value={writeOffForm.date} onChange={e=>setWriteOffForm({...writeOffForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-100" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">สาเหตุการตัดจำหน่าย *</label>
+                  <select value={writeOffForm.reason} onChange={e=>setWriteOffForm({...writeOffForm, reason: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-100 text-rose-700">
+                    <option value="สินค้าชำรุด/เสียหาย">สินค้าชำรุด/เสียหาย</option>
+                    <option value="สินค้าหมดอายุ/เสื่อมสภาพ">สินค้าหมดอายุ/เสื่อมสภาพ</option>
+                    <option value="สินค้าสูญหาย/ตรวจนับขาด">สินค้าสูญหาย/ตรวจนับขาด</option>
+                    <option value="สินค้าเสียหายจากการขนส่ง">สินค้าเสียหายจากการขนส่ง</option>
+                    <option value="ใช้เป็นสินค้าตัวอย่าง/สาธิต">ใช้เป็นสินค้าตัวอย่าง/สาธิต</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* เลือกสินค้าจากคลัง */}
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-600 uppercase">เลือกสินค้าจากคลัง FIFO ที่จะตัดทิ้ง</label>
+                  <button type="button" onClick={() => setWriteOffForm({...writeOffForm, items: [...writeOffForm.items, { sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]})} className="text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1">
+                    <Plus size={14}/> เพิ่มแถวสินค้า
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {writeOffForm.items.map((it, idx) => (
+                    <div key={idx} className="flex flex-col sm:flex-row gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 items-center">
+                      <div className="flex-1 w-full relative">
+                        <input type="text" required value={it.desc} onChange={e=>{
+                          const newItems = [...writeOffForm.items]; newItems[idx].desc = e.target.value; setWriteOffForm({...writeOffForm, items: newItems});
+                        }} placeholder="ชื่อสินค้า หรือ SKU..." className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none pr-24" />
+                        <button type="button" onClick={() => setShowStockPickerModal(idx)} className="absolute right-1 top-1 text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-1 rounded-md hover:bg-indigo-100 transition-colors">
+                          <Search size={12} className="inline mr-0.5"/> เลือกคลัง
+                        </button>
+                      </div>
+
+                      <div className="flex gap-2 w-full sm:w-auto">
+                        <input type="number" min="1" value={it.qty} onChange={e=>{
+                          const newItems = [...writeOffForm.items]; newItems[idx].qty = Number(e.target.value); setWriteOffForm({...writeOffForm, items: newItems});
+                        }} placeholder="จำนวน" className="w-24 bg-white border border-slate-200 rounded-lg p-2 text-sm font-black text-center outline-none text-rose-600" />
+                        <button type="button" onClick={()=>{
+                          if (writeOffForm.items.length === 1) return;
+                          setWriteOffForm({...writeOffForm, items: writeOffForm.items.filter((_, i) => i !== idx)});
+                        }} className="p-2 text-rose-400 hover:text-rose-600 transition-colors" disabled={writeOffForm.items.length === 1}><Trash2 size={16}/></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* --- 🔥 NEW: ส่วนแนบรูปถ่ายความเสียหาย --- */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <div className="flex justify-between items-center mb-2">
+                      <label className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1"><Cloud size={16} className="text-rose-500"/> แนบรูปถ่ายความเสียหาย / หลักฐาน (Evidence)</label>
+                      <span className="text-[9px] text-slate-400">* แนะนำให้ถ่ายรูปสินค้าพังแนบไว้</span>
+                  </div>
+                  {attachmentUrl ? (
+                      <div className="relative group inline-block">
+                          <a href={attachmentUrl} target="_blank" rel="noopener noreferrer">
+                              <img src={attachmentUrl} alt="Evidence" className="h-20 w-auto rounded-xl border border-slate-200 shadow-sm object-cover" />
+                          </a>
+                          <button type="button" onClick={() => setAttachmentUrl('')} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md"><X size={12}/></button>
+                      </div>
+                  ) : (
+                      <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-white transition-colors bg-white/50">
+                          {isUploadingFile ? (
+                              <div className="flex flex-col items-center gap-1">
+                                  <Loader className="animate-spin text-rose-500" size={16}/>
+                                  <span className="text-[10px] font-bold text-rose-500">กำลังส่งไป Drive...</span>
+                              </div>
+                          ) : (
+                              <>
+                                  <FileUp size={16} className="text-slate-400 mb-1"/>
+                                  <span className="text-[10px] font-bold text-slate-600">คลิกอัปโหลดรูปความเสียหาย</span>
+                              </>
+                          )}
+                          <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFile} disabled={isUploadingFile} />
+                      </label>
+                  )}
+              </div>
+
+              {/* ผู้รับผิดชอบ/อนุมัติ */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ผู้ตรวจนับ/เสนอตัดจำหน่าย</label>
+                  <input type="text" value={writeOffForm.inspectorName} onChange={e=>setWriteOffForm({...writeOffForm, inspectorName: e.target.value})} placeholder="ชื่อพนักงานคลัง/ผู้ตรวจสอบ..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ผู้อนุมัติการตัดจำหน่าย</label>
+                  <input type="text" value={writeOffForm.approverName} onChange={e=>setWriteOffForm({...writeOffForm, approverName: e.target.value})} placeholder="ชื่อเจ้าของร้าน/ผู้จัดการ..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">หมายเหตุเพิ่มเติม</label>
+                <textarea rows="2" value={writeOffForm.notes} onChange={e=>setWriteOffForm({...writeOffForm, notes: e.target.value})} placeholder="รายละเอียดความเสียหายเพิ่มเติม..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs outline-none resize-none" />
+              </div>
+
+              <div className="pt-4 border-t flex gap-3">
+                <button type="submit" disabled={isSaving} className="w-full bg-rose-600 hover:bg-rose-700 text-white py-3.5 rounded-2xl font-black text-base shadow-lg shadow-rose-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
+                  {isSaving ? <Loader className="animate-spin" size={18}/> : <Trash2 size={18}/>}
+                  {isSaving ? 'กำลังตัดจำหน่าย...' : 'บันทึกและหักสต็อกออกจากคลัง'}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Side Info */}
+          <div className="space-y-6">
+            <div className="bg-gradient-to-br from-rose-900 to-slate-900 p-6 rounded-[32px] text-white shadow-xl">
+              <h4 className="font-bold text-base text-rose-300 mb-2 flex items-center gap-2"><AlertTriangle size={18}/> คำแนะนำการตัดจำหน่ายสินค้า</h4>
+              <p className="text-xs leading-relaxed text-rose-100 font-medium">
+                การแนบรูปถ่ายสินค้าเสียหายไว้คู่กับใบตัดจำหน่าย จะช่วยยืนยันกับผู้ตรวจสอบบัญชีและสรรพากรได้อย่างสมบูรณ์แบบ
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: ประวัติเอกสารภายใน */}
+      {activeSubTab === 'history' && (
+        <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm animate-fadeIn">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><History size={20} className="text-indigo-600"/> ประวัติเอกสารภายในและใบตัดจำหน่าย</h3>
+            <span className="text-xs font-bold text-slate-400">พบทั้งหมด {internalDocsHistory.length} รายการ</span>
+          </div>
+
+          <div className="overflow-x-auto custom-scrollbar border border-slate-100 rounded-2xl">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b">
+                <tr>
+                  <th className="p-4">วันที่ / SYS ID</th>
+                  <th className="p-4">ประเภทเอกสาร</th>
+                  <th className="p-4">รายละเอียด / ผู้รับเงิน</th>
+                  <th className="p-4 text-right">ยอดเงินรวม (฿)</th>
+                  <th className="p-4 text-center">หลักฐาน</th>
+                  <th className="p-4 text-center">จัดการ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {internalDocsHistory.map((docItem, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="p-4">
+                      <p className="font-bold text-slate-800">{formatDate(docItem.date)}</p>
+                      <p className="font-mono text-indigo-600 font-bold text-[10px] mt-0.5">{docItem.sysDocId}</p>
+                    </td>
+                    <td className="p-4">
+                      {docItem.isWriteOffVoucher || String(docItem.sysDocId).startsWith('DMG-') ? (
+                        <span className="bg-rose-100 text-rose-700 px-2.5 py-1 rounded-md font-bold text-[10px] border border-rose-200">
+                          ใบตัดจำหน่ายสินค้า
+                        </span>
+                      ) : (
+                        <span className="bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-md font-bold text-[10px] border border-indigo-200">
+                          ใบรับรองแทนใบเสร็จ
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-4">
+                      <p className="font-bold text-slate-700">{docItem.description}</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">ผู้รับเงิน/ตัดโดย: {docItem.partnerName || '-'}</p>
+                    </td>
+                    <td className="p-4 text-right font-black text-slate-800 text-sm">
+                      {formatCurrency(docItem.total || docItem.grandTotal)}
+                    </td>
+                    <td className="p-4 text-center">
+                      {docItem.attachmentUrl ? (
+                          <a href={docItem.attachmentUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[10px] bg-blue-50 text-blue-600 px-2.5 py-1 rounded-md font-bold border border-blue-100 hover:bg-blue-100">
+                              <Eye size={12}/> ดูไฟล์
+                          </a>
+                      ) : (
+                          <span className="text-[10px] text-slate-300">-</span>
+                      )}
+                    </td>
+                    <td className="p-4 text-center">
+                      <button onClick={() => setPrintDoc({
+                        ...docItem,
+                        docType: docItem.isWriteOffVoucher || String(docItem.sysDocId).startsWith('DMG-') ? 'write_off' : 'receipt_cert'
+                      })} className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg font-bold transition-colors flex items-center gap-1 mx-auto">
+                        <Printer size={14}/> พิมพ์เอกสาร
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {internalDocsHistory.length === 0 && (
+                  <tr><td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่พบประวัติเอกสารภายใน</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* --- 🔥 NEW: Tips Modal (เช็กลิสต์หลักฐานสรรพากร) --- */}
+      {showTipsModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4">
+            <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-lg w-full shadow-2xl animate-in zoom-in-95 flex flex-col">
+                <div className="flex justify-between items-center mb-4 border-b pb-3">
+                    <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Lightbulb className="text-amber-500"/> เช็กลิสต์หลักฐาน (ตามระเบียบสรรพากร)</h3>
+                    <button onClick={() => setShowTipsModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+                </div>
+                
+                <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
+                    {tipsType === 'receipt' ? (
+                        <>
+                            <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100">
+                                <p className="font-bold text-amber-800 mb-1">💡 ใบรับรองแทนใบเสร็จรับเงิน ต้องมีหลักฐานอะไรบ้าง?</p>
+                                <ul className="list-disc pl-4 space-y-1 mt-2 font-medium">
+                                    <li><b>สลิปโอนเงิน (e-Slip):</b> ยอดเงินต้องตรงกับใบรับรองฯ และชื่อบัญชีปลายทางต้องตรงกับชื่อผู้รับเงิน</li>
+                                    <li><b>สำเนาบัตรประชาชน:</b> ของผู้รับเงิน (กรณีเป็นบุคคลธรรมดาและยอดเงินสูง)</li>
+                                    <li><b>หลักฐานการติดต่อ:</b> หน้าจอแชทสั่งซื้อ, บิลเงินสดชั่วคราว หรือใบเสนอราคา (ถ้ามี)</li>
+                                </ul>
+                            </div>
+                            <p className="text-slate-500">* แนะนำให้อัปโหลดไฟล์สลิปเก็บไว้ในช่อง <b>"แนบไฟล์หลักฐาน"</b> ด้านล่างฟอร์มทุกครั้งก่อนกดบันทึก</p>
+                        </>
+                    ) : (
+                        <>
+                            <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100">
+                                <p className="font-bold text-rose-800 mb-1">💡 ใบตัดจำหน่ายสินค้า ต้องมีหลักฐานอะไรบ้าง?</p>
+                                <ul className="list-disc pl-4 space-y-1 mt-2 font-medium">
+                                    <li><b>รูปถ่ายความเสียหาย:</b> ถ่ายสภาพสินค้าที่พัง/หมดอายุเห็นชัดเจน</li>
+                                    <li><b>ใบแจ้งความ (กรณีสูญหายจากขโมย):</b> รายงานประจำวันรับแจ้งจากสถานีตำรวจ</li>
+                                    <li><b>เอกสารขนส่ง (กรณีเสียหายระหว่างส่ง):</b> ใบเคลม หรือหลักฐานปฏิเสธการรับจากขนส่ง</li>
+                                </ul>
+                            </div>
+                            <p className="text-slate-500">* แนะนำให้อัปโหลดรูปถ่ายความเสียหายเก็บไว้ในช่อง <b>"แนบรูปถ่ายความเสียหาย"</b> เพื่อใช้ยันกับผู้ตรวจสอบบัญชี</p>
+                        </>
+                    )}
+                </div>
+
+                <div className="pt-6 mt-4 border-t text-center">
+                    <button onClick={() => setShowTipsModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors w-full">
+                        รับทราบและปิดหน้าต่าง
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* Stock Picker Modal */}
+      {showStockPickerModal !== null && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4">
+          <div className="bg-white rounded-[32px] p-6 max-w-lg w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[80vh]">
+            <div className="flex justify-between items-center mb-4 border-b pb-3">
+              <h4 className="font-bold text-slate-800 text-base flex items-center gap-2"><Box size={18} className="text-indigo-600"/> เลือกสินค้าในคลัง FIFO</h4>
+              <button onClick={() => setShowStockPickerModal(null)} className="text-slate-400 hover:text-slate-600"><X size={18}/></button>
+            </div>
+            <div className="mb-3">
+              <input type="text" autoFocus value={stockSearch} onChange={e=>setStockSearch(e.target.value)} placeholder="พิมพ์ค้นหาชื่อสินค้า หรือ SKU..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar pr-1">
+              {filteredStockPicker.map((item, i) => (
+                <div key={i} onClick={() => {
+                  const newItems = [...writeOffForm.items];
+                  newItems[showStockPickerModal] = {
+                    sku: item.sku !== '-' ? item.sku : '',
+                    desc: item.name,
+                    qty: 1,
+                    unit: 'ชิ้น',
+                    costPrice: item.cost
+                  };
+                  setWriteOffForm({ ...writeOffForm, items: newItems });
+                  setShowStockPickerModal(null);
+                  setStockSearch('');
+                }} className="p-3 bg-slate-50 hover:bg-indigo-50 border border-slate-100 rounded-xl cursor-pointer transition-colors flex justify-between items-center">
+                  <div>
+                    <p className="font-bold text-slate-800 text-xs">{item.name}</p>
+                    <p className="text-[10px] font-mono text-indigo-500">SKU: {item.sku}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-black text-emerald-600">มีอยู่ {item.qty} ชิ้น</p>
+                    <p className="text-[10px] text-slate-400">ทุน: {formatCurrency(item.cost)} ฿</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PRINT PREVIEW MODAL */}
+      {printDoc && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[3000] flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-[32px] w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden my-auto">
+            <div className="p-5 bg-slate-900 text-white flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2">
+                <Printer size={18} className="text-indigo-400"/>
+                <span className="font-bold text-sm">ตัวอย่างแบบพิมพ์เอกสาร</span>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => window.print()} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md">
+                  <Printer size={14}/> พิมพ์เอกสาร
+                </button>
+                <button onClick={() => setPrintDoc(null)} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white"><X size={18}/></button>
+              </div>
+            </div>
+
+            {/* Print Container */}
+            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-100 flex justify-center">
+              <div id="invoice-preview-area" className="bg-white p-10 w-[210mm] min-h-[297mm] text-xs font-sarabun text-slate-900 leading-relaxed shadow-xl border relative box-border">
+                
+                {/* Header */}
+                <div className="border-b-2 border-slate-800 pb-4 mb-6 flex justify-between items-start">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">{savedSeller.sellerName || 'บริษัท / ร้านค้า'}</h2>
+                    <p className="text-[10px] text-slate-600">{[savedSeller.sellerAddress, fmtAddr.sub(savedSeller.sellerSubDistrict), fmtAddr.dist(savedSeller.sellerDistrict), fmtAddr.prov(savedSeller.sellerProvince), savedSeller.sellerZipCode].filter(Boolean).join(' ')}</p>
+                    <p className="text-[10px] text-slate-600">เลขประจำตัวผู้เสียภาษี: {savedSeller.sellerTaxId || '-'}</p>
+                  </div>
+                  <div className="text-right">
+                    <h1 className="text-base font-black text-slate-900 uppercase">
+                      {printDoc.docType === 'write_off' ? 'ใบสำคัญการตัดจำหน่ายสินค้า' : 'ใบรับรองแทนใบเสร็จรับเงิน'}
+                    </h1>
+                    <p className="font-mono font-bold text-indigo-600 text-sm mt-1">{printDoc.sysDocId}</p>
+                    <p className="text-[10px] text-slate-500">วันที่: {formatDate(printDoc.date)}</p>
+                  </div>
+                </div>
+
+                {/* Doc Type 1: ใบรับรองแทนใบเสร็จรับเงิน */}
+                {printDoc.docType === 'receipt_cert' && (
+                  <div className="space-y-6">
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs space-y-1">
+                      <p><b>ข้าพเจ้า:</b> {savedSeller.sellerName || 'ผู้ประกอบการ'}</p>
+                      <p><b>ขอรับรองว่า:</b> ได้จ่ายเงินจำนวนดังกล่าวข้างต้น ให้แก่ผู้รับเงินตามรายละเอียดด้านล่างนี้ โดยไม่อาจเรียกใบเสร็จรับเงินจากผู้รับได้</p>
+                      <p className="text-slate-500"><b>เหตุผล:</b> {printDoc.noReceiptReason || 'ผู้รับเงินไม่ออกใบเสร็จรับเงินให้'}</p>
+                    </div>
+
+                    <div className="border border-slate-300 p-4 rounded-xl space-y-1 text-xs">
+                      <p className="font-bold text-slate-800 border-b pb-1 mb-2">รายละเอียดผู้รับเงิน (Recipient)</p>
+                      <p><b>ชื่อ-นามสกุล:</b> {printDoc.partnerName}</p>
+                      <p><b>เลขบัตรประจำตัวประชาชน:</b> {printDoc.partnerTaxId || '-'}</p>
+                      <p><b>ที่อยู่:</b> {printDoc.partnerAddress || '-'}</p>
+                    </div>
+
+                    <table className="w-full border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-800 font-bold border-y border-slate-300">
+                          <th className="py-2 text-center w-10">ลำดับ</th>
+                          <th className="py-2 text-left pl-2">รายละเอียดรายการที่จ่าย</th>
+                          <th className="py-2 text-center w-16">จำนวน</th>
+                          <th className="py-2 text-right pr-2 w-28">จำนวนเงิน (บาท)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {(printDoc.items || []).map((it, i) => (
+                          <tr key={i}>
+                            <td className="py-2 text-center">{i+1}</td>
+                            <td className="py-2 pl-2">{it.desc}</td>
+                            <td className="py-2 text-center">{it.qty} {it.unit || 'รายการ'}</td>
+                            <td className="py-2 text-right pr-2 font-bold">{formatCurrency(it.buyPrice * it.qty)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-800 font-bold bg-slate-50">
+                          <td colSpan="3" className="py-2 text-right pr-4">รวมจำนวนเงินทั้งสิ้น (บาท):</td>
+                          <td className="py-2 text-right pr-2 text-sm">{formatCurrency(printDoc.total || printDoc.grandTotal)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+
+                    <p className="text-center font-bold text-xs bg-slate-100 py-1.5 border rounded">
+                      ({THBText(printDoc.total || printDoc.grandTotal)})
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
+                      <div className="space-y-2">
+                        <p>ลงชื่อ ........................................................... ผู้รับเงิน</p>
+                        <p>({printDoc.partnerName || '...........................................................'})</p>
+                        <p>วันที่ .......... / .......... / .............</p>
+                      </div>
+                      <div className="space-y-2">
+                        <p>ลงชื่อ ........................................................... ผู้จ่ายเงิน/ผู้จัดทำ</p>
+                        <p>({printDoc.approverName || savedSeller.sellerName || '...........................................................'})</p>
+                        <p>วันที่ {formatDate(printDoc.date)}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Doc Type 2: ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย */}
+                {printDoc.docType === 'write_off' && (
+                  <div className="space-y-6">
+                    <div className="bg-rose-50/60 p-4 rounded-xl border border-rose-200 text-xs space-y-1">
+                      <p className="font-bold text-rose-800">วัตถุประสงค์: ตัดจำหน่ายสินค้าออกจากคลังและลงบันทึกเป็นรายจ่ายธุรกิจ</p>
+                      <p><b>สาเหตุที่ทำการตัดจำหน่าย:</b> <span className="font-bold text-rose-700">{printDoc.writeOffReason || 'สินค้าชำรุด/เสียหาย'}</span></p>
+                      {printDoc.notes && <p><b>หมายเหตุเพิ่มเติม:</b> {printDoc.notes}</p>}
+                    </div>
+
+                    <table className="w-full border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-800 font-bold border-y border-slate-300">
+                          <th className="py-2 text-center w-10">ลำดับ</th>
+                          <th className="py-2 text-left pl-2">รายการสินค้า / SKU</th>
+                          <th className="py-2 text-center w-20">จำนวนที่ตัด</th>
+                          <th className="py-2 text-right w-24">ต้นทุน/หน่วย</th>
+                          <th className="py-2 text-right pr-2 w-28">มูลค่ารวม (บาท)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {(printDoc.items || []).map((it, i) => (
+                          <tr key={i}>
+                            <td className="py-2 text-center">{i+1}</td>
+                            <td className="py-2 pl-2">
+                              <p className="font-bold">{it.desc}</p>
+                              {it.sku && <p className="text-[9px] font-mono text-slate-400">SKU: {it.sku}</p>}
+                            </td>
+                            <td className="py-2 text-center font-bold text-rose-600">{it.qty} {it.unit || 'ชิ้น'}</td>
+                            <td className="py-2 text-right">{formatCurrency(it.buyPrice)}</td>
+                            <td className="py-2 text-right pr-2 font-bold">{formatCurrency(it.buyPrice * it.qty)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-800 font-bold bg-slate-50">
+                          <td colSpan="4" className="py-2 text-right pr-4">รวมมูลค่าสินค้าที่ตัดจำหน่ายทั้งสิ้น (บาท):</td>
+                          <td className="py-2 text-right pr-2 text-sm text-rose-700">{formatCurrency(printDoc.total || printDoc.grandTotal)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+
+                    <p className="text-center font-bold text-xs bg-slate-100 py-1.5 border rounded">
+                      ({THBText(printDoc.total || printDoc.grandTotal)})
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
+                      <div className="space-y-2">
+                        <p>ลงชื่อ ........................................................... ผู้ตรวจนับ/ผู้เสนอตัดจำหน่าย</p>
+                        <p>({printDoc.inspectorName || '...........................................................'})</p>
+                        <p>วันที่ {formatDate(printDoc.date)}</p>
+                      </div>
+                      <div className="space-y-2">
+                        <p>ลงชื่อ ........................................................... ผู้อนุมัติการตัดจำหน่าย</p>
+                        <p>({printDoc.approverName || savedSeller.sellerName || '...........................................................'})</p>
+                        <p>วันที่ {formatDate(printDoc.date)}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function PricingCalculator({ stockBatches, transactions, showToast, appId, user }) { 
@@ -18742,6 +18900,7 @@ export default function App() {
       case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} importLogs={importLogs} />;
       case 'stock': return <StockManager appId={currentAppId} stockBatches={stockBatches} showToast={addToast} user={user} transactions={transactions} />;
       case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} transactions={transactions} appId={currentAppId} showToast={addToast} preFillData={preFillInvoice} promotions={promotions} />;
+      case 'internal_docs': return <InternalDocGenerator user={user} transactions={transactions} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} />;
       case 'reports': return <TaxReports transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} user={user} />;
       case 'pricing': return <PricingCalculator stockBatches={stockBatches} transactions={transactions} showToast={addToast} appId={currentAppId} user={user} />;
       case 'guide': return <TaxGuide />;
@@ -18776,6 +18935,7 @@ export default function App() {
             <NavButton active={activeTab === 'import'} onClick={()=>{setActiveTab('import');}} icon={<FileUp size={18} />} label="Bulk Import" />
             <NavButton active={activeTab === 'stock'} onClick={()=>{setActiveTab('stock');}} icon={<Box size={18} />} label="คลังสินค้า FIFO" />
             <NavButton active={activeTab === 'invoice'} onClick={()=>{setActiveTab('invoice'); setPreFillInvoice(null);}} icon={<Printer size={18} />} label="ใบกำกับภาษี Pro" />
+            <NavButton active={activeTab === 'internal_docs'} onClick={()=>{setActiveTab('internal_docs');}} icon={<FileCheck size={18} />} label="เอกสารภายใน/ตัดชำรุด" />
             
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Help & Support</p>
             <NavButton active={activeTab === 'guide'} onClick={()=>{setActiveTab('guide');}} icon={<BookOpen size={18} />} label="คู่มือ & เคล็ดลับภาษี" />
