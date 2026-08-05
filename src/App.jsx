@@ -852,7 +852,6 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
   const [selectedShop, setSelectedShop] = useState('all');
   const [selectedChannel, setSelectedChannel] = useState('all');
-  const [selectedFilterMonth, setSelectedFilterMonth] = useState('all'); // UX/UI: State สำหรับ Filter รายเดือน
 
   const monthlyData = useMemo(() => {
     const year = parseInt(selectedYear, 10);
@@ -945,14 +944,8 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     });
   }, [transactions, stockBatches, selectedYear, selectedShop, selectedChannel]);
 
-  // --- UX/UI: กรองข้อมูลตามเดือนที่เลือก ---
-  const filteredMonthlyData = useMemo(() => {
-      if (selectedFilterMonth === 'all') return monthlyData;
-      return monthlyData.filter(m => m.month === parseInt(selectedFilterMonth, 10));
-  }, [monthlyData, selectedFilterMonth]);
-
   const totals = useMemo(() => {
-    return filteredMonthlyData.reduce((acc, m) => ({
+    return monthlyData.reduce((acc, m) => ({
       grossSales: acc.grossSales + m.grossSales,
       discounts: acc.discounts + m.discounts,
       refunds: acc.refunds + m.refunds,
@@ -966,7 +959,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
       netProfit: acc.netProfit + m.netProfit,
       orderCount: acc.orderCount + m.orderCount
     }), { grossSales: 0, discounts: 0, refunds: 0, sales: 0, cogs: 0, fees: 0, expenses: 0, shippingBalance: 0, wht: 0, totalExpense: 0, netProfit: 0, orderCount: 0 });
-  }, [filteredMonthlyData]);
+  }, [monthlyData]);
 
   const prevTotals = useMemo(() => {
     const prevYear = parseInt(selectedYear, 10) - 1;
@@ -979,9 +972,6 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
 
       const d = normalizeDate(t.date);
       if (!d || d.getFullYear() !== prevYear) return;
-
-      // UX/UI: เช็คว่ากรองดูเฉพาะเดือนหรือไม่ (เพื่อเทียบคู่เดือนเดียวกันของปีที่แล้ว)
-      if (selectedFilterMonth !== 'all' && (d.getMonth() + 1) !== parseInt(selectedFilterMonth, 10)) return;
 
       if (t.type === 'income' && !t.isFromReconciliation) {
         if (!t.isCancelled && !t.isDeliveryFailed) {
@@ -1024,7 +1014,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     const netProfit = sales - cogs - totalExpense;
 
     return { sales, cogs, totalExpense, netProfit };
-  }, [transactions, stockBatches, selectedYear, selectedShop, selectedChannel, selectedFilterMonth]);
+  }, [transactions, stockBatches, selectedYear, selectedShop, selectedChannel]);
 
   const getTrend = (current, prev, invertLogic = false) => {
     if (prev === 0) {
@@ -1122,88 +1112,24 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
               <option value="2027">2027</option>
             </select>
           </div>
-          <button onClick={handleExportMonthlyReport} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold border border-emerald-200 flex items-center gap-1.5 transition-colors shadow-sm ml-auto">
+          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+            <Store size={14} className="text-slate-400"/>
+            <select value={selectedShop} onChange={e=>setSelectedShop(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer">
+              <option value="all">ทุกร้านค้า</option>
+              {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+            <Filter size={14} className="text-slate-400"/>
+            <select value={selectedChannel} onChange={e=>setSelectedChannel(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer">
+              <option value="all">ทุกช่องทาง</option>
+              {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <button onClick={handleExportMonthlyReport} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold border border-emerald-200 flex items-center gap-1.5 transition-colors shadow-sm">
             <FileSpreadsheet size={16}/> Export Excel
           </button>
         </div>
-      </div>
-
-      {/* --- UX/UI: Filter Stack (Shop, Channel, Month) --- */}
-      <div className="flex flex-col gap-3 w-full">
-          {/* 1. Shop Filter */}
-          <div className="flex items-center gap-3 w-full">
-             <div className="hidden md:flex p-2.5 bg-indigo-50 text-indigo-600 rounded-xl shrink-0 items-center justify-center shadow-sm border border-indigo-100" title="เลือกร้านค้า">
-                 <Store size={18}/>
-             </div>
-             <div className="flex bg-white p-1.5 rounded-2xl w-full overflow-x-auto shadow-sm border border-slate-100 custom-scrollbar gap-1.5 snap-x">
-                  <button 
-                      onClick={() => setSelectedShop('all')} 
-                      className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start flex items-center gap-1.5 ${selectedShop === 'all' ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
-                  >
-                      <Store size={14} className={selectedShop === 'all' ? 'text-indigo-200' : 'text-slate-400'}/> ทุกร้านค้า
-                  </button>
-                  <div className="w-px h-6 bg-slate-200 my-auto mx-1 shrink-0"></div>
-                  {CONSTANTS.SHOPS.map((s, i) => (
-                      <button 
-                          key={i} 
-                          onClick={() => setSelectedShop(s)} 
-                          className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start ${selectedShop === s ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
-                      >
-                          {s}
-                      </button>
-                  ))}
-             </div>
-          </div>
-
-          {/* 2. Channel Filter */}
-          <div className="flex items-center gap-3 w-full">
-             <div className="hidden md:flex p-2.5 bg-rose-50 text-rose-600 rounded-xl shrink-0 items-center justify-center shadow-sm border border-rose-100" title="เลือกช่องทาง">
-                 <Filter size={18}/>
-             </div>
-             <div className="flex bg-white p-1.5 rounded-2xl w-full overflow-x-auto shadow-sm border border-slate-100 custom-scrollbar gap-1.5 snap-x">
-                  <button 
-                      onClick={() => setSelectedChannel('all')} 
-                      className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start flex items-center gap-1.5 ${selectedChannel === 'all' ? 'bg-rose-500 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-rose-500'}`}
-                  >
-                      <Filter size={14} className={selectedChannel === 'all' ? 'text-rose-200' : 'text-slate-400'}/> ทุกช่องทาง
-                  </button>
-                  <div className="w-px h-6 bg-slate-200 my-auto mx-1 shrink-0"></div>
-                  {CONSTANTS.CHANNELS.map((c, i) => (
-                      <button 
-                          key={i} 
-                          onClick={() => setSelectedChannel(c)} 
-                          className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start ${selectedChannel === c ? 'bg-rose-500 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-rose-500'}`}
-                      >
-                          {c}
-                      </button>
-                  ))}
-             </div>
-          </div>
-
-          {/* 3. Month Filter */}
-          <div className="flex items-center gap-3 w-full">
-             <div className="hidden md:flex p-2.5 bg-emerald-50 text-emerald-600 rounded-xl shrink-0 items-center justify-center shadow-sm border border-emerald-100" title="เลือกเดือน">
-                 <Calendar size={18}/>
-             </div>
-             <div className="flex bg-white p-1.5 rounded-2xl w-full overflow-x-auto shadow-sm border border-slate-100 custom-scrollbar gap-1.5 snap-x">
-                  <button 
-                      onClick={() => setSelectedFilterMonth('all')} 
-                      className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start flex items-center gap-1.5 ${selectedFilterMonth === 'all' ? 'bg-emerald-500 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-emerald-600'}`}
-                  >
-                      <Calendar size={14} className={selectedFilterMonth === 'all' ? 'text-emerald-200' : 'text-slate-400'}/> รวมทั้งปี
-                  </button>
-                  <div className="w-px h-6 bg-slate-200 my-auto mx-1 shrink-0"></div>
-                  {['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'].map((m, i) => (
-                      <button 
-                          key={i} 
-                          onClick={() => setSelectedFilterMonth(String(i + 1))} 
-                          className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start ${selectedFilterMonth === String(i + 1) ? 'bg-emerald-500 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-emerald-600'}`}
-                      >
-                          {m}
-                      </button>
-                  ))}
-             </div>
-          </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -1237,7 +1163,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredMonthlyData.map((m, idx) => (
+              {monthlyData.map((m, idx) => (
                 <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
                   <td className="p-4 font-bold text-slate-800">{m.monthName}</td>
                   <td className="p-4 text-center">
@@ -1275,7 +1201,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
             </tbody>
             <tfoot className="bg-slate-900 text-white font-bold text-xs">
               <tr>
-                <td className="p-4">{selectedFilterMonth === 'all' ? 'รวมทั้งปี' : 'รวมยอดเดือนนี้'}</td>
+                <td className="p-4">รวมทั้งปี</td>
                 <td className="p-4 text-center">
                     <p>{totals.orderCount.toLocaleString()}</p>
                     <p className="text-[9px] text-slate-400 mt-1">AOV: {formatCurrency(avgAov)}</p>
@@ -16534,6 +16460,9 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
 
   const [showStockPickerModal, setShowStockPickerModal] = useState(null);
   const [stockSearch, setStockSearch] = useState('');
+  
+  // --- 🔥 NEW: State สำหรับยกเลิกเอกสารภายใน ---
+  const [voidConfirmId, setVoidConfirmId] = useState(null);
 
   // --- ดึงรายการสินค้าที่มีในคลัง FIFO ---
   const uniqueInventory = useMemo(() => {
@@ -16735,6 +16664,61 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
   const internalDocsHistory = useMemo(() => {
     return transactions.filter(t => t.type === 'expense' && (t.isInternalCert || t.isWriteOffVoucher || (t.sysDocId && String(t.sysDocId).startsWith('DMG-')))).sort(sortNewestFirst);
   }, [transactions]);
+
+  // --- 🔥 NEW: ฟังก์ชันยกเลิกเอกสารภายใน & ตัดจำหน่าย ---
+  const handleVoidInternalDoc = async () => {
+    if (!voidConfirmId || !user) return;
+    setIsSaving(true);
+    try {
+        const batchWriter = writeBatch(dbInstance);
+        const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', voidConfirmId.id);
+
+        // 1. อัปเดตสถานะเอกสารเป็นยกเลิก (Void)
+        batchWriter.set(docRef, {
+            isCancelled: true,
+            cancelledAt: serverTimestamp(),
+            cancelReason: 'ยกเลิกรายการและดึงสต็อกกลับโดยผู้ใช้'
+        }, { merge: true });
+
+        // 2. หากเป็นใบตัดจำหน่าย (DMG) ต้องคืนสต็อก FIFO
+        if (voidConfirmId.isWriteOffVoucher || String(voidConfirmId.sysDocId).startsWith('DMG-')) {
+            if (voidConfirmId.items && voidConfirmId.items.length > 0) {
+                // กรองล็อตที่มีการหักสต็อกออกไปจากบิลนี้โดยตรง (ถ้ามีเก็บอ้างอิงไว้) หรือ คืนย้อนหลังแบบ LIFO
+                for (const item of voidConfirmId.items) {
+                    let toReturn = Number(item.qty);
+                    if (isNaN(toReturn) || toReturn <= 0) continue;
+
+                    // ค้นหาล็อตสินค้าที่ตรงกับ SKU/ชื่อ และถูกตัดยอด (sold > 0) เรียงจากใหม่ไปเก่า (เพื่อคืนล็อตที่เพิ่งตัดไปล่าสุดก่อน)
+                    const affectedLots = stockBatches
+                        .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
+                        .sort(sortNewestFirst);
+
+                    for (const lot of affectedLots) {
+                        if (toReturn <= 0) break;
+                        if (!lot?.id) continue;
+                        
+                        const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                        const lotRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id);
+                        
+                        // คืนยอด (ลดค่า sold ลง)
+                        batchWriter.set(lotRef, { sold: increment(-canTakeBack) }, { merge: true });
+                        toReturn -= canTakeBack;
+                    }
+                    
+                    // หากคืนไม่หมด (เช่น โดนลบล็อตต้นทางไปแล้ว) ระบบจะละเว้นส่วนที่เหลือเพื่อไม่ให้แอปแครช
+                }
+            }
+        }
+
+        await batchWriter.commit();
+        showToast("ยกเลิกเอกสารและดึงยอดสต็อกกลับคืนสำเร็จ", "success");
+        setVoidConfirmId(null);
+    } catch (error) {
+        console.error("Void Internal Doc Error:", error);
+        showToast(`เกิดข้อผิดพลาดในการยกเลิก: ${error.message}`, "error");
+    }
+    setIsSaving(false);
+  };
 
   return (
     <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-20">
@@ -17026,12 +17010,23 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                       {formatCurrency(docItem.total || docItem.grandTotal)}
                     </td>
                     <td className="p-4 text-center">
-                      <button onClick={() => setPrintDoc({
-                        ...docItem,
-                        docType: docItem.isWriteOffVoucher || String(docItem.sysDocId).startsWith('DMG-') ? 'write_off' : 'receipt_cert'
-                      })} className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg font-bold transition-colors flex items-center gap-1 mx-auto">
-                        <Printer size={14}/> พิมพ์เอกสาร
-                      </button>
+                        <div className="flex justify-center items-center gap-2">
+                            <button onClick={() => setPrintDoc({
+                                ...docItem,
+                                docType: docItem.isWriteOffVoucher || String(docItem.sysDocId).startsWith('DMG-') ? 'write_off' : 'receipt_cert'
+                            })} className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg font-bold transition-colors flex items-center gap-1 shadow-sm">
+                                <Printer size={14}/> พิมพ์
+                            </button>
+                            {/* --- 🔥 NEW: ปุ่มยกเลิกเอกสาร --- */}
+                            {!docItem.isCancelled && (
+                                <button onClick={() => setVoidConfirmId(docItem)} className="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg font-bold transition-colors shadow-sm" title="ยกเลิกและคืนสต็อก">
+                                    <XCircle size={16}/>
+                                </button>
+                            )}
+                            {docItem.isCancelled && (
+                                <span className="px-2 py-1 bg-slate-100 text-slate-400 rounded-lg text-[10px] font-bold">Void</span>
+                            )}
+                        </div>
                     </td>
                   </tr>
                 ))}
@@ -17247,6 +17242,33 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* --- 🔥 NEW: Modal ยืนยันการยกเลิกเอกสารภายใน --- */}
+      {voidConfirmId && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 text-left">
+            <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
+                <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
+                    <XCircle size={32}/>
+                </div>
+                <h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันการยกเลิกเอกสาร?</h3>
+                <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
+                    ระบบจะทำเครื่องหมายเอกสาร <b className="text-slate-600">{voidConfirmId.sysDocId}</b> เป็น "ยกเลิกแล้ว"<br/>
+                    {voidConfirmId.isWriteOffVoucher || String(voidConfirmId.sysDocId).startsWith('DMG-') ? (
+                        <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-2 inline-block">พร้อมดึงยอดสต็อกสินค้ากลับเข้าคลังอัตโนมัติ</span>
+                    ) : (
+                        <span className="font-bold text-rose-600">*เลขเอกสารจะยังคงอยู่เพื่อการตรวจสอบบัญชี</span>
+                    )}
+                </p>
+                <div className="flex gap-3 text-center">
+                    <button onClick={() => setVoidConfirmId(null)} disabled={isSaving} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ปิด</button>
+                    <button onClick={handleVoidInternalDoc} disabled={isSaving} className="flex-[2] py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center hover:bg-rose-700 transition-colors flex justify-center items-center gap-2">
+                        {isSaving ? <Loader size={16} className="animate-spin"/> : <Trash2 size={16}/>}
+                        {isSaving ? 'กำลังยกเลิก...' : 'ยืนยันยกเลิกรายการ'}
+                    </button>
+                </div>
+            </div>
         </div>
       )}
     </div>
