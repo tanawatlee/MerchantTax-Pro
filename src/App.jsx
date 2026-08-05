@@ -4839,7 +4839,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [viewHistory, setViewHistory] = useState(null);
   const [showAddStockModal, setShowAddStockModal] = useState(false);
   const [deleteStockConfirm, setDeleteStockConfirm] = useState(null);
-  const [deleteBatchConfirm, setDeleteBatchConfirm] = useState(null); // ยังเก็บ state นี้ไว้เผื่อจำเป็น แต่อาจไม่ได้ใช้ใน UI ใหม่
+  const [deleteBatchConfirm, setDeleteBatchConfirm] = useState(null); 
   const [isProcessing, setIsProcessing] = useState(false);
   const [aiInsights, setAiInsights] = useState(null);
   const [isAnalyzingStock, setIsAnalyzingStock] = useState(false);
@@ -4847,6 +4847,12 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   // --- 🔥 NEW: Pagination State สำหรับคลังสินค้า ---
   const [stockPage, setStockPage] = useState(1);
   const stockItemsPerPage = 20;
+
+  // --- 🔥 NEW: Bulk Actions State (จัดการทีละหลายรายการ) ---
+  const [selectedStockKeys, setSelectedStockKeys] = useState([]);
+  const [showBulkEditStockModal, setShowBulkEditStockModal] = useState(false);
+  const [showBulkDeleteStockConfirm, setShowBulkDeleteStockConfirm] = useState(false);
+  const [bulkEditData, setBulkEditData] = useState({ category: CONSTANTS.CATEGORIES.STOCK[0], isGiveaway: false });
 
   // --- NEW: Stock Sync Preview States ---
   const [showSyncPreviewModal, setShowSyncPreviewModal] = useState(false);
@@ -4861,6 +4867,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [stockStartDate, setStockStartDate] = useState('');
   const [stockEndDate, setStockEndDate] = useState('');
   const [stockSortType, setStockSortType] = useState('qty_desc'); 
+
+  // --- 🔥 NEW: Quick Filter State (ตัวกรองด่วน) ---
+  const [stockQuickFilter, setStockQuickFilter] = useState('all');
 
   const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
   const [targetProductEdit, setTargetProductEdit] = useState(null);
@@ -4880,6 +4889,9 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
   const [showStockPicker, setShowStockPicker] = useState(false);
   const [stockPickerSearch, setStockPickerSearch] = useState('');
+  
+  // --- 🔥 NEW: State สำหรับซ่อน/แสดงเครื่องมือขั้นสูง ---
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
 
   const fileInputRef = useRef(null);
   const importFileInputRef = useRef(null);
@@ -4927,6 +4939,106 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       showToast("เกิดข้อผิดพลาดในการอัปเดต", "error");
     }
     setIsProcessing(false);
+  };
+
+  // --- 🔥 NEW: ฟังก์ชันประมวลผล Bulk Actions ---
+  const toggleSelectAllStock = (e, currentList) => {
+      if (e.target.checked) {
+          setSelectedStockKeys(currentList.map(i => i.groupKey));
+      } else {
+          setSelectedStockKeys([]);
+      }
+  };
+
+  const toggleSelectStock = (key) => {
+      setSelectedStockKeys(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  };
+
+  const executeBulkEditStock = async () => {
+      if (!user || selectedStockKeys.length === 0) return;
+      setIsProcessing(true);
+      try {
+          let batchWriter = writeBatch(dbInstance);
+          let opsCount = 0;
+
+          const batchesToEdit = stockBatches.filter(b => {
+              const skuKey = (b.sku && b.sku !== '-') ? b.sku : '';
+              const groupKey = skuKey ? `${skuKey}::${b.productName}` : b.productName;
+              return selectedStockKeys.includes(groupKey);
+          });
+
+          for (const b of batchesToEdit) {
+              const updates = { category: bulkEditData.category, isGiveaway: bulkEditData.isGiveaway };
+              if (bulkEditData.isGiveaway) updates.sellPrice = 0;
+              
+              batchWriter.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id), updates);
+              opsCount++;
+
+              if (opsCount >= 400) {
+                  await batchWriter.commit();
+                  batchWriter = writeBatch(dbInstance);
+                  opsCount = 0;
+              }
+          }
+
+          if (opsCount > 0) await batchWriter.commit();
+
+          showToast(`อัปเดตหมวดหมู่สำเร็จ ${selectedStockKeys.length} รายการ`, "success");
+          setSelectedStockKeys([]);
+          setShowBulkEditStockModal(false);
+      } catch (e) {
+          console.error(e);
+          showToast("แก้ไขข้อมูลไม่สำเร็จ", "error");
+      }
+      setIsProcessing(false);
+  };
+
+  const executeBulkDeleteStock = async () => {
+      if (!user || selectedStockKeys.length === 0) return;
+      setIsProcessing(true);
+      try {
+          let batchWriter = writeBatch(dbInstance);
+          let opsCount = 0;
+          let expenseIdsToConsider = new Set();
+
+          const batchesToDelete = stockBatches.filter(b => {
+              const skuKey = (b.sku && b.sku !== '-') ? b.sku : '';
+              const groupKey = skuKey ? `${skuKey}::${b.productName}` : b.productName;
+              return selectedStockKeys.includes(groupKey);
+          });
+
+          for (const b of batchesToDelete) {
+              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id));
+              opsCount++;
+              if (b.parentExpenseId) expenseIdsToConsider.add(b.parentExpenseId);
+
+              if (opsCount >= 400) {
+                  await batchWriter.commit();
+                  batchWriter = writeBatch(dbInstance);
+                  opsCount = 0;
+              }
+          }
+
+          for (const expId of expenseIdsToConsider) {
+              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', expId));
+              opsCount++;
+              if (opsCount >= 400) {
+                  await batchWriter.commit();
+                  batchWriter = writeBatch(dbInstance);
+                  opsCount = 0;
+              }
+          }
+
+          if (opsCount > 0) await batchWriter.commit();
+
+          showToast(`ลบข้อมูลสินค้าสำเร็จ ${selectedStockKeys.length} รายการ`, "success");
+          setSelectedStockKeys([]);
+          setShowBulkDeleteStockConfirm(false);
+      } catch (e) {
+          console.error(e);
+          showToast("ลบข้อมูลไม่สำเร็จ", "error");
+      }
+      setIsProcessing(false);
   };
 
   const handleClearDummyStocks = async () => {
@@ -5776,23 +5888,34 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           item.sku.toLowerCase().includes(searchTerm.toLowerCase())
       );
 
+    // --- 🔥 NEW: Apply Quick Filters (กรองข้อมูลด่วน) ---
+    let filteredResult = result;
+    if (stockQuickFilter === 'low_stock') {
+        filteredResult = filteredResult.filter(i => i.totalQty > 0 && i.totalQty <= 5);
+    } else if (stockQuickFilter === 'negative') {
+        filteredResult = filteredResult.filter(i => i.totalQty < 0);
+    } else if (stockQuickFilter === 'giveaway') {
+        filteredResult = filteredResult.filter(i => i.isGiveaway);
+    }
+
     if (stockSortType === 'aging') {
-        return result.sort((a, b) => {
+        return filteredResult.sort((a, b) => {
             if (a.totalQty <= 0 && b.totalQty > 0) return 1;
             if (a.totalQty > 0 && b.totalQty <= 0) return -1;
             return b.daysSinceLastSold - a.daysSinceLastSold;
         });
     }
     
-    return result.sort((a,b) => b.totalQty - a.totalQty);
-  }, [stockBatches, searchTerm, stockStartDate, stockEndDate, transactions, stockSortType]);
+    return filteredResult.sort((a,b) => b.totalQty - a.totalQty);
+  }, [stockBatches, searchTerm, stockStartDate, stockEndDate, transactions, stockSortType, stockQuickFilter]);
 
   const stockTotalPages = Math.max(1, Math.ceil(inventory.length / stockItemsPerPage));
   const currentStockData = useMemo(() => {
       return inventory.slice((stockPage - 1) * stockItemsPerPage, stockPage * stockItemsPerPage);
   }, [inventory, stockPage]);
 
-  useEffect(() => { setStockPage(1); }, [searchTerm, stockStartDate, stockEndDate, stockSortType]);
+  // --- 🔥 FIX: เพิ่มตัวแปร stockQuickFilter เข้าไปเพื่อให้รีเซ็ตหน้า Pagination ตอนกดกรอง ---
+  useEffect(() => { setStockPage(1); setSelectedStockKeys([]); }, [searchTerm, stockStartDate, stockEndDate, stockSortType, stockQuickFilter]);
 
   const filteredPickerStock = useMemo(() => {
       if (!stockPickerSearch) return inventory;
@@ -5805,43 +5928,93 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const stockLedger = useMemo(() => {
       if (!viewHistory) return [];
       const ledger = [];
+      let totalIn = 0;
+      let totalOut = 0;
       
+      // 1. ดึงยอดรับเข้าทั้งหมด (IN) จาก stockBatches
       stockBatches.forEach(b => {
           if (matchItemToBatch(b.sku, b.productName, viewHistory.sku, viewHistory.name)) {
               if (Number(b.quantity) !== 0) {
+                  const inQty = Number(b.quantity);
                   ledger.push({
                       id: b.id,
                       date: normalizeDate(b.date),
                       ref: b.isOpeningBalance ? 'ยอดยกมา' : (b.parentExpenseId ? `อ้างอิงบิล: ${b.parentExpenseId.substring(0,6)}...` : (b.isAdjustment ? 'ปรับปรุง/โอนย้าย' : 'รับเข้าคลัง')),
-                      type: Number(b.quantity) > 0 ? 'IN' : 'ADJUST_OUT',
-                      qty: Number(b.quantity),
+                      type: inQty > 0 ? 'IN' : 'ADJUST_OUT',
+                      qty: inQty,
                       cost: b.costPerUnit,
                       note: b.adjustReason || 'รับสินค้าเข้า'
                   });
+                  if (inQty > 0) totalIn += inQty;
+                  else totalOut += Math.abs(inQty);
               }
           }
       });
 
+      // 2. ดึงยอดขายออก (OUT) จาก transactions ฝั่งรายรับ
       transactions.filter(t => t.type === 'income' && !t.isCancelled).forEach(t => {
           (t.items || []).forEach(item => {
               if (matchItemToBatch(item.sku, item.desc, viewHistory.sku, viewHistory.name)) {
+                  const outQty = Math.abs(Number(item.qty));
                   ledger.push({
                       id: t.id,
                       date: normalizeDate(t.date),
                       ref: t.orderId || t.sysDocId || '-',
                       type: 'SALE_OUT',
-                      qty: -Math.abs(Number(item.qty)), 
+                      qty: -outQty, 
                       sellPrice: item.sellPrice || item.price,
                       note: `ออเดอร์: ${t.partnerName || t.channel || 'ลูกค้า'}`
                   });
+                  totalOut += outQty;
               }
           });
       });
 
+      // 3. ดึงยอดตัดชำรุด/สูญหาย (OUT) จาก transactions ฝั่งรายจ่าย
+      transactions.filter(t => t.type === 'expense' && !t.isCancelled && t.category === 'สินค้าเสียหาย/หมดอายุ').forEach(t => {
+          (t.items || []).forEach(item => {
+              if (matchItemToBatch(item.sku, item.desc, viewHistory.sku, viewHistory.name)) {
+                  const outQty = Math.abs(Number(item.qty));
+                  ledger.push({
+                      id: t.id,
+                      date: normalizeDate(t.date),
+                      ref: t.sysDocId || t.orderId || '-',
+                      type: 'ADJUST_OUT',
+                      qty: -outQty,
+                      cost: item.buyPrice,
+                      note: `ตัดชำรุด/สูญหาย`
+                  });
+                  totalOut += outQty;
+              }
+          });
+      });
+
+      // 4. คำนวณหา "ส่วนต่างล่องหน" (Drift) เพื่อรับประกันว่ายอดบัญชีจะตรงกับคลัง 100% เสมอ
+      const dbActualBalance = viewHistory.totalQty;
+      const ledgerCalculatedBalance = totalIn - totalOut;
+      const drift = dbActualBalance - ledgerCalculatedBalance;
+
+      if (drift !== 0) {
+          ledger.push({
+              id: 'DRIFT_ADJUST',
+              date: new Date(), // ยึดเป็นวันที่ปัจจุบัน
+              ref: 'SYSTEM-SYNC',
+              type: drift > 0 ? 'IN' : 'ADJUST_OUT',
+              qty: drift,
+              cost: 0,
+              note: drift > 0 ? 'ยอดปรับสมดุล (สินค้ามีเกินจากบิล)' : 'ยอดปรับสมดุล (สินค้าหายจากบิล)'
+          });
+      }
+
+      // 5. เรียงวันที่และคำนวณยอดยกไป
       ledger.sort((a, b) => {
           const timeA = a.date?.getTime() || 0;
           const timeB = b.date?.getTime() || 0;
           if (timeA !== timeB) return timeA - timeB; 
+          
+          // บังคับให้ยอดปรับสมดุล (ถ้ามี) ไปอยู่บรรทัดสุดท้ายของวันนั้นๆ เสมอ
+          if (a.id === 'DRIFT_ADJUST') return 1;
+          if (b.id === 'DRIFT_ADJUST') return -1;
           
           if (a.type === 'IN' && b.type !== 'IN') return -1;
           if (a.type !== 'IN' && b.type === 'IN') return 1;
@@ -6086,64 +6259,109 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
   return (
     <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-20">
-      <div className="flex justify-between items-center flex-wrap gap-4 text-left">
-        <h3 className="text-2xl font-bold flex items-center gap-2 text-left text-slate-800"><Box className="text-indigo-600"/> คลังสินค้า & มาร์จิ้น (Performance)</h3>
-        <div className="flex items-center gap-2 text-left flex-wrap">
-          
-          {/* --- 🔥 NEW: ปุ่มซ่อมแซมสต็อก 1-Click --- */}
-          <button onClick={handleHardResetStock} disabled={isProcessing} className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-md" title="คำนวณล้างยอดขายและจัดเรียง FIFO ใหม่อัตโนมัติในคลิกเดียว">
-            {isProcessing ? <Loader className="animate-spin" size={16}/> : <Zap size={16}/>} ⚡ ซ่อมแซมสต็อกทันที
-          </button>
-
-          {/* --- 🔥 NEW: ปุ่มล้างสต็อกผี (Dummy Stocks) --- */}
-          <button onClick={handleClearDummyStocks} disabled={isProcessing} className="bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-sm" title="กวาดล้างสต็อกขยะที่ระบบเคยสร้างอัตโนมัติเมื่อหาของไม่เจอ">
-            {isProcessing ? <Loader className="animate-spin" size={16}/> : <Trash2 size={16}/>} ล้างสต็อกผี
-          </button>
-
-          <button onClick={handleAiStockAnalysis} disabled={isAnalyzingStock} className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50">
-            {isAnalyzingStock ? <Loader className="animate-spin" size={16}/> : <Sparkles size={16}/>} AI Smart Inventory
-          </button>
-
-          <button onClick={handleRunStockAudit} disabled={isProcessing} className="bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-sm" title="ตรวจสอบยอดจัดซื้อเทียบกับยอดรับเข้าคลัง">
-            <ClipboardList size={16}/> ตรวจสอบยอดรับเข้า (Audit)
-          </button>
-          
-          {/* NEW: Filter วันที่สำหรับเช็คสินค้ารับเข้า */}
-          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shrink-0 shadow-sm">
-              <Calendar size={14} className="text-slate-400 shrink-0"/>
-              <input type="date" value={stockStartDate} onChange={e=>setStockStartDate(e.target.value)} title="ตั้งแต่วันที่" className="bg-transparent border-0 text-xs font-bold outline-none text-indigo-700 w-[100px] cursor-pointer focus:ring-0"/>
-              <span className="text-slate-300"><ArrowRight size={12}/></span>
-              <input type="date" value={stockEndDate} onChange={e=>setStockEndDate(e.target.value)} title="ถึงวันที่" className="bg-transparent border-0 text-xs font-bold outline-none text-indigo-700 w-[100px] cursor-pointer focus:ring-0"/>
-              {(stockStartDate || stockEndDate) && (
-                  <button onClick={()=>{setStockStartDate(''); setStockEndDate('');}} className="p-1 text-slate-400 hover:text-rose-500 transition-colors" title="ล้างตัวกรองวันที่"><X size={14}/></button>
-              )}
-          </div>
-
-          <div className="relative w-48 lg:w-64 text-left">
-            <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
-            <input className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 outline-none text-slate-800 shadow-sm" placeholder="ค้นชื่อสินค้า หรือ SKU..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
-          </div>
-          
-          {/* --- NEW: Dropdown เรียงลำดับ Aging Stock --- */}
-          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shrink-0 shadow-sm">
-              <Filter size={14} className="text-slate-400 shrink-0"/>
-              <select value={stockSortType} onChange={e=>setStockSortType(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-indigo-700 cursor-pointer focus:ring-0 p-0">
-                  <option value="qty_desc">เรียงตาม คงเหลือ (มากไปน้อย)</option>
-                  <option value="aging">เรียงตาม สินค้าค้างสต็อก (นิ่งนานสุด)</option>
-              </select>
-          </div>
-
-          <button onClick={handleRecalculateStock} disabled={isProcessing} className="bg-amber-50 border border-amber-200 text-amber-600 hover:bg-amber-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all text-center shadow-sm" title="ดึงข้อมูลประวัติการขายมาคำนวณยอดคงเหลือใหม่">
-            {isProcessing ? <Loader className="animate-spin" size={18}/> : <RefreshCw size={18}/>} ซิงค์ข้อมูลสต็อก
-          </button>
-          <input type="file" ref={importFileInputRef} hidden accept=".xlsx, .xls" onChange={handleStockImport} />
-          <button onClick={() => importFileInputRef.current.click()} disabled={isProcessing} className="bg-white border border-indigo-200 text-indigo-600 hover:bg-indigo-50 px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all text-center">
-            {isProcessing ? <Loader className="animate-spin" size={18}/> : <FileSpreadsheet size={18}/>} Import Excel
-          </button>
-          <button onClick={() => setShowAddStockModal(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-indigo-100 transition-all text-center">
-            <Plus size={18}/> เพิ่มล็อตซื้อเข้า
-          </button>
+      
+      {/* --- 🔥 NEW: จัดระเบียบ Header & Action Buttons --- */}
+      <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-2">
+        <div>
+           <h3 className="text-2xl font-bold flex items-center gap-2 text-left text-slate-800"><Box className="text-indigo-600"/> คลังสินค้า & มาร์จิ้น (Performance)</h3>
+           <p className="text-sm text-slate-500 mt-1">จัดการคลังสินค้าแบบ FIFO และวิเคราะห์ต้นทุน/กำไร</p>
         </div>
+        
+        <div className="flex flex-wrap items-center gap-2">
+            {/* Primary Actions (ปุ่มใช้งานประจำวัน) */}
+            <button onClick={() => setShowAddStockModal(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-indigo-100 transition-all text-center">
+                <Plus size={16}/> เพิ่มล็อตซื้อเข้า
+            </button>
+            <input type="file" ref={importFileInputRef} hidden accept=".xlsx, .xls" onChange={handleStockImport} />
+            <button onClick={() => importFileInputRef.current.click()} disabled={isProcessing} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all text-center shadow-sm">
+                {isProcessing ? <Loader className="animate-spin" size={16}/> : <FileSpreadsheet size={16}/>} Import
+            </button>
+            
+            <div className="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
+            
+            {/* Analysis Tools (เครื่องมือวิเคราะห์) */}
+            <button onClick={handleAiStockAnalysis} disabled={isAnalyzingStock} className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-lg disabled:opacity-50">
+                {isAnalyzingStock ? <Loader className="animate-spin" size={16}/> : <Sparkles size={16}/>} AI Smart Inventory
+            </button>
+            <button onClick={handleRunStockAudit} disabled={isProcessing} className="bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all shadow-sm">
+                <ClipboardList size={16}/> ตรวจสอบยอดรับเข้า (Audit)
+            </button>
+
+            <div className="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
+
+            {/* Advanced Tools Dropdown (เครื่องมือขั้นสูง ซ่อนไว้กันกดพลาด) */}
+            <div className="relative">
+                <button onClick={() => setShowAdvancedTools(!showAdvancedTools)} className={`bg-white border text-sm font-bold flex items-center gap-2 px-4 py-2 rounded-xl transition-all shadow-sm ${showAdvancedTools ? 'border-rose-400 text-rose-600 ring-2 ring-rose-100' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                    <Settings size={16}/> ขั้นสูง {showAdvancedTools ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+                </button>
+                
+                {showAdvancedTools && (
+                    <div className="absolute right-0 top-full mt-2 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 overflow-hidden flex flex-col p-1 animate-fadeIn">
+                        <div className="px-3 py-2 border-b border-slate-100 bg-slate-50">
+                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">เครื่องมือซ่อมแซมฐานข้อมูล</p>
+                        </div>
+                        <button onClick={() => { handleHardResetStock(); setShowAdvancedTools(false); }} disabled={isProcessing} className="w-full text-left px-4 py-3 text-xs font-bold text-emerald-700 hover:bg-emerald-50 flex items-center gap-2 transition-colors">
+                            <Zap size={14}/> ⚡ ซ่อมแซมสต็อก (Hard Reset)
+                        </button>
+                        <button onClick={() => { handleClearDummyStocks(); setShowAdvancedTools(false); }} disabled={isProcessing} className="w-full text-left px-4 py-3 text-xs font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 transition-colors">
+                            <Trash2 size={14}/> ล้างสต็อกผี (Clear Dummy)
+                        </button>
+                        <button onClick={() => { handleRecalculateStock(); setShowAdvancedTools(false); }} disabled={isProcessing} className="w-full text-left px-4 py-3 text-xs font-bold text-amber-600 hover:bg-amber-50 flex items-center gap-2 transition-colors">
+                            <RefreshCw size={14}/> ตรวจสอบจำลองการซิงค์ (Preview)
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
+      </div>
+      
+      {/* --- 🔥 NEW: จัดระเบียบ Filter Bar พร้อม Quick Filters --- */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-4 mb-6">
+          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+              <div className="flex items-center gap-3 w-full lg:w-1/2">
+                  <div className="relative w-full text-left">
+                    <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
+                    <input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 outline-none text-slate-800 shadow-inner transition-all" placeholder="ค้นชื่อสินค้า หรือ SKU..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+                  </div>
+              </div>
+              
+              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                  <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200 shrink-0 shadow-sm">
+                      <Filter size={14} className="text-slate-400 shrink-0"/>
+                      <select value={stockSortType} onChange={e=>setStockSortType(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-indigo-700 cursor-pointer focus:ring-0 p-0">
+                          <option value="qty_desc">เรียงตาม คงเหลือ (มากไปน้อย)</option>
+                          <option value="aging">เรียงตาม สินค้าค้างสต็อก (นิ่งนานสุด)</option>
+                      </select>
+                  </div>
+
+                  <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shrink-0 shadow-sm">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">รับเข้า:</span>
+                      <input type="date" value={stockStartDate} onChange={e=>setStockStartDate(e.target.value)} title="ตั้งแต่วันที่" className="bg-transparent border-0 text-xs font-bold outline-none text-indigo-700 w-24 cursor-pointer focus:ring-0 p-0"/>
+                      <span className="text-slate-300"><ArrowRight size={10}/></span>
+                      <input type="date" value={stockEndDate} onChange={e=>setStockEndDate(e.target.value)} title="ถึงวันที่" className="bg-transparent border-0 text-xs font-bold outline-none text-indigo-700 w-24 cursor-pointer focus:ring-0 p-0"/>
+                      {(stockStartDate || stockEndDate) && (
+                          <button onClick={()=>{setStockStartDate(''); setStockEndDate('');}} className="p-1 text-slate-400 hover:text-rose-500 transition-colors ml-1" title="ล้างตัวกรองวันที่"><X size={14}/></button>
+                      )}
+                  </div>
+              </div>
+          </div>
+
+          {/* --- 🔥 NEW: Quick Filter Pills (ปุ่มกรองด่วน) --- */}
+          <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
+              <span className="text-[10px] font-bold text-slate-400 uppercase mr-1">ตัวกรองด่วน:</span>
+              <button onClick={() => setStockQuickFilter('all')} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all shadow-sm ${stockQuickFilter === 'all' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                  ทั้งหมด
+              </button>
+              <button onClick={() => setStockQuickFilter('low_stock')} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 ${stockQuickFilter === 'low_stock' ? 'bg-amber-500 text-white border-transparent' : 'bg-white border border-amber-200 text-amber-600 hover:bg-amber-50'}`}>
+                  <AlertTriangle size={12}/> ใกล้หมด (≤ 5 ชิ้น)
+              </button>
+              <button onClick={() => setStockQuickFilter('negative')} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 ${stockQuickFilter === 'negative' ? 'bg-rose-500 text-white border-transparent' : 'bg-white border border-rose-200 text-rose-600 hover:bg-rose-50'}`}>
+                  <AlertTriangle size={12}/> สต็อกติดลบ
+              </button>
+              <button onClick={() => setStockQuickFilter('giveaway')} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 ${stockQuickFilter === 'giveaway' ? 'bg-emerald-500 text-white border-transparent' : 'bg-white border border-emerald-200 text-emerald-600 hover:bg-emerald-50'}`}>
+                  <Gift size={12}/> ของแจกฟรี
+              </button>
+          </div>
       </div>
 
       {/* AI Insights Banner */}
@@ -6176,6 +6394,29 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           </div>
       )}
 
+      {/* --- 🔥 NEW: แถบ Bulk Action Bar จะแสดงเมื่อมีการเลือกสินค้า --- */}
+      {selectedStockKeys.length > 0 && (
+          <div className="bg-indigo-50 border border-indigo-200 p-3 mb-4 rounded-2xl flex flex-wrap justify-between items-center animate-fadeIn gap-4 shadow-sm">
+              <span className="text-sm font-bold text-indigo-800 ml-2">เลือกแล้ว {selectedStockKeys.length} รายการ</span>
+              <div className="flex flex-wrap gap-2">
+                  <button 
+                      onClick={() => setShowBulkEditStockModal(true)} 
+                      disabled={isProcessing} 
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                      <Edit size={14}/> เปลี่ยนหมวดหมู่ / ของแจก
+                  </button>
+                  <button 
+                      onClick={() => setShowBulkDeleteStockConfirm(true)} 
+                      disabled={isProcessing} 
+                      className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1 disabled:opacity-50"
+                  >
+                      <Trash2 size={14}/> ลบทิ้งทั้งหมด
+                  </button>
+              </div>
+          </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
         <div className="col-span-2 bg-white rounded-[40px] border shadow-sm overflow-hidden flex flex-col h-[650px] text-left">
           <div className="p-5 border-b bg-slate-50/50 flex justify-between items-center text-left">
@@ -6189,6 +6430,14 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
             <table className="w-full text-sm text-left">
               <thead className="bg-white text-slate-400 text-[10px] font-bold uppercase sticky top-0 border-b z-10 text-left shadow-sm">
                 <tr>
+                    <th className="p-5 w-12 text-center border-b">
+                        <input 
+                            type="checkbox" 
+                            className="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                            onChange={(e) => toggleSelectAllStock(e, inventory)} 
+                            checked={selectedStockKeys.length > 0 && selectedStockKeys.length === inventory.length} 
+                        />
+                    </th>
                     <th className="p-5 text-left">Product / SKU</th>
                     <th className="p-5 text-right">Avg Cost</th>
                     <th className="p-5 text-right">Sell Price</th>
@@ -6204,9 +6453,18 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                     const avgCost = item.totalQty > 0 ? item.totalValue / item.totalQty : 0;
                     const currentSellPrice = item.batches[item.batches.length - 1]?.sellPrice || 0;
                     const margin = currentSellPrice > 0 ? ((currentSellPrice - avgCost) / currentSellPrice) * 100 : 0;
+                    const isSelected = selectedStockKeys.includes(item.groupKey);
                     
                     return (
-                        <tr key={idx} className="hover:bg-slate-50/80 transition-colors cursor-pointer group text-left">
+                        <tr key={idx} className={`transition-colors cursor-pointer group text-left ${isSelected ? 'bg-indigo-50/50' : 'hover:bg-slate-50/80'}`}>
+                            <td className="p-5 text-center" onClick={(e) => e.stopPropagation()}>
+                                <input 
+                                    type="checkbox" 
+                                    className="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                                    checked={isSelected} 
+                                    onChange={() => toggleSelectStock(item.groupKey)} 
+                                />
+                            </td>
                             <td className="p-5 text-left" onClick={() => { setViewHistory(item); }}>
                                 <div className="flex items-center gap-2">
                                     {margin > 30 && <Star size={14} className="text-amber-400 fill-amber-400"/>}
@@ -6408,172 +6666,69 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
         </div>
       )}
 
-      {/* Stock Picker Modal สำหรับหน้าเพิ่มล็อตซื้อเข้า */}
-      {showStockPicker && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[700] flex items-center justify-center p-4 text-left">
-          <div className="bg-white rounded-[40px] w-full max-w-lg flex flex-col shadow-2xl animate-in zoom-in-95 max-h-[85vh] text-left">
-            <div className="p-6 border-b flex justify-between items-center bg-slate-50/50 text-left">
-                <div className="text-left">
-                    <h3 className="font-bold text-lg flex items-center gap-2 text-slate-800 text-left"><Box size={20} className="text-indigo-600"/> เลือกจากคลังสินค้า</h3>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase text-left">ดึงข้อมูลเดิมเพื่อความรวดเร็ว</p>
-                </div>
-                <button onClick={()=>setShowStockPicker(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors text-center"><X/></button>
+      {/* --- 🔥 NEW: Modal แก้ไขข้อมูลสินค้าแบบกลุ่ม (Bulk Edit) --- */}
+      {showBulkEditStockModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
+          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 text-left">
+            <div className="flex justify-between items-center mb-6 text-left">
+              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 text-left"><LayersIcon className="text-indigo-600"/> แก้ไขสินค้า ({selectedStockKeys.length} รายการ)</h3>
+              <button onClick={()=>setShowBulkEditStockModal(false)} className="text-center text-slate-400 hover:text-slate-600"><X/></button>
             </div>
-            <div className="p-4 bg-white border-b sticky top-0 z-10 text-left">
-                <div className="relative group text-left">
-                    <Search className="absolute left-4 top-3 text-slate-300 group-focus-within:text-indigo-500 transition-colors text-center" size={20}/>
-                    <input autoFocus value={stockPickerSearch} onChange={e=>setStockPickerSearch(e.target.value)} className="w-full bg-slate-50 p-3 pl-12 rounded-2xl border-0 font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all text-left" placeholder="ค้นหาชื่อสินค้า หรือ SKU..." />
-                </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar text-left">
-                {filteredPickerStock.length > 0 ? filteredPickerStock.map((item, idx) => (
-                    <div key={idx} onClick={() => {
-                        setNewStock(prev => ({
-                            ...prev,
-                            productName: item.name,
-                            skuManual: item.sku !== '-' ? item.sku : '',
-                            category: item.category || CONSTANTS.CATEGORIES.STOCK[0],
-                            sellPrice: item.sellPrice || 0,
-                            isGiveaway: item.isGiveaway || false
-                        }));
-                        setShowStockPicker(false);
-                        setStockPickerSearch('');
-                    }} className="p-4 rounded-2xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/50 cursor-pointer transition-all group flex justify-between items-center bg-white shadow-sm text-left">
-                        <div className="space-y-1 text-left">
-                            <p className="font-black text-slate-800 group-hover:text-indigo-700 text-sm transition-colors text-left">{item.name}</p>
-                            <div className="flex items-center gap-2 text-left">
-                                <span className="text-[9px] font-mono font-bold text-indigo-500 mb-0.5 bg-indigo-50 w-fit px-1.5 rounded">SKU: {item.sku}</span>
-                                <span className="text-[9px] font-black text-indigo-500 text-left">฿ {formatCurrency(item.sellPrice)}</span>
-                            </div>
-                        </div>
-                        <div className="text-right shrink-0 text-right">
-                            <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase text-center ${item.totalQty > 10 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                                คงเหลือ: {item.totalQty}
-                            </div>
-                        </div>
-                    </div>
-                )) : (
-                    <div className="flex flex-col items-center justify-center py-20 text-slate-300 text-center">
-                        <Search size={48} className="opacity-10 mb-2 text-center"/>
-                        <p className="text-sm font-bold text-center">ไม่พบข้อมูลสินค้าที่มีในคลัง</p>
-                    </div>
-                )}
-            </div>
-            <div className="p-4 border-t bg-slate-50/50 rounded-b-[40px] text-center">
-                <p className="text-[9px] text-slate-400 font-bold uppercase text-center">Showing {filteredPickerStock.length} of {inventory.length} products</p>
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* --- 🔥 THE ULTIMATE FIX: เปลี่ยนหน้าตาประวัติให้เป็นแบบสมุดบัญชี (Stock Ledger) --- */}
-      {viewHistory && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[500] flex items-center justify-center p-4 text-left">
-          <div className="bg-white rounded-[40px] w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl animate-in zoom-in-95 text-left overflow-hidden">
-            <div className="p-6 md:p-8 border-b border-slate-100 flex justify-between items-start bg-slate-50 text-left">
-                <div className="flex gap-4 items-center">
-                    <div className="w-14 h-14 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner shrink-0">
-                        <History size={28}/>
-                    </div>
-                    <div>
-                        <h3 className="text-xl md:text-2xl font-black text-slate-800 text-left line-clamp-1">{viewHistory.name}</h3>
-                        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                            <p className="text-xs text-slate-500 font-mono bg-white px-2 py-0.5 rounded border border-slate-200 shadow-sm">SKU: {viewHistory.sku || '-'}</p>
-                            <p className="text-xs text-slate-500 font-bold">คลังคงเหลือปัจจุบัน: <span className={`font-black ${viewHistory.totalQty < 0 ? 'text-rose-600' : 'text-indigo-600'}`}>{viewHistory.totalQty}</span> ชิ้น</p>
-                        </div>
-                    </div>
-                </div>
-                <button onClick={() => setViewHistory(null)} className="p-2.5 bg-white hover:bg-slate-200 rounded-full text-slate-400 hover:text-slate-600 transition-colors shadow-sm shrink-0"><X size={20}/></button>
-            </div>
-
-            <div className="flex-1 overflow-auto p-4 md:p-6 text-left bg-slate-50/50 custom-scrollbar">
-               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm h-full flex flex-col">
-                   <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                       <h4 className="font-bold text-slate-700 text-sm flex items-center gap-2"><List size={16} className="text-indigo-500"/> สมุดบัญชีคุมสินค้า (Stock Ledger)</h4>
-                       <span className="text-[10px] text-slate-400 font-bold">แสดงประวัติเข้า-ออกแบบเรียงตามวันที่</span>
-                   </div>
-                   <div className="flex-1 overflow-auto custom-scrollbar">
-                       <table className="w-full text-xs text-left">
-                           <thead className="bg-slate-100 text-slate-500 uppercase font-bold sticky top-0 border-b border-slate-200 shadow-sm">
-                               <tr>
-                                   <th className="p-3 pl-4">วันที่ (Date)</th>
-                                   <th className="p-3">อ้างอิง (Reference)</th>
-                                   <th className="p-3">รายละเอียด (Note)</th>
-                                   <th className="p-3 text-right text-emerald-600">เข้า (IN)</th>
-                                   <th className="p-3 text-right text-rose-600">ออก (OUT)</th>
-                                   <th className="p-3 text-right text-indigo-600 pr-4">คงเหลือ (Balance)</th>
-                               </tr>
-                           </thead>
-                           <tbody className="divide-y divide-slate-100">
-                               {stockLedger.length > 0 ? stockLedger.map((item, idx) => (
-                                   <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                                       <td className="p-3 pl-4 text-slate-500 whitespace-nowrap">{formatDate(item.date)}</td>
-                                       <td className="p-3 font-mono font-bold text-indigo-600">{item.ref}</td>
-                                       <td className="p-3 text-slate-600 line-clamp-2 max-w-[200px]" title={item.note}>{item.note}</td>
-                                       <td className="p-3 text-right font-black text-emerald-600 bg-emerald-50/20">{item.type === 'IN' ? `+${item.qty}` : '-'}</td>
-                                       <td className="p-3 text-right font-black text-rose-500 bg-rose-50/20">{['SALE_OUT', 'ADJUST_OUT'].includes(item.type) ? item.qty : '-'}</td>
-                                       <td className={`p-3 text-right pr-4 font-black ${item.balance < 0 ? 'text-rose-600' : 'text-slate-800'}`}>{item.balance}</td>
-                                   </tr>
-                               )) : (
-                                   <tr>
-                                       <td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่พบความเคลื่อนไหวของสินค้านี้</td>
-                                   </tr>
-                               )}
-                           </tbody>
-                       </table>
-                   </div>
-               </div>
-            </div>
-            <div className="p-6 border-t border-slate-100 bg-white flex justify-center text-center shrink-0">
-                <button onClick={()=>setViewHistory(null)} className="px-10 py-3.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-2xl font-black text-slate-600 transition-colors shadow-sm">ปิดหน้าต่าง</button>
+            <div className="space-y-4 text-left">
+              <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-400 mb-1 block">เปลี่ยนหมวดหมู่สินค้าเป็น:</label>
+                  <select 
+                    value={bulkEditData.category} 
+                    onChange={e=>setBulkEditData({...bulkEditData, category: e.target.value})}
+                    className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold outline-none text-slate-800 text-left cursor-pointer focus:ring-2 focus:ring-indigo-100"
+                  >
+                    {CONSTANTS.CATEGORIES.STOCK.map(c => <option key={c} value={c}>{c}</option>)}
+                    <option value="Imported">Imported</option>
+                    <option value="อื่นๆ">อื่นๆ</option>
+                  </select>
+              </div>
+              <label className="flex items-center gap-3 cursor-pointer bg-emerald-50/50 p-4 rounded-2xl hover:bg-emerald-50 transition-colors border border-emerald-100">
+                  <input type="checkbox" checked={bulkEditData.isGiveaway} onChange={e=>setBulkEditData({...bulkEditData, isGiveaway: e.target.checked})} className="w-5 h-5 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer" />
+                  <div>
+                      <span className="text-sm font-bold text-emerald-700 flex items-center gap-1"><Gift size={16}/> ตั้งเป็นสินค้าสำหรับแจกฟรีทั้งหมด</span>
+                      <span className="text-[10px] text-emerald-600/70">ราคาขายของสินค้าเหล่านี้จะถูกปรับเป็น 0 บาทเสมอ</span>
+                  </div>
+              </label>
+              <div className="flex gap-3 pt-4 text-center">
+                <button onClick={() => setShowBulkEditStockModal(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+                <button onClick={executeBulkEditStock} disabled={isProcessing} className="flex-[2] py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 text-center disabled:opacity-50">
+                  {isProcessing ? <Loader className="animate-spin" size={16}/> : <Save size={16}/>} ยืนยันการเปลี่ยนแปลง
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Popup ยืนยันการลบทั้งสินค้า (Inventory level) */}
-      {deleteStockConfirm && (
+      {/* --- 🔥 NEW: Modal ยืนยันการลบแบบกลุ่ม (Bulk Delete Confirm) --- */}
+      {showBulkDeleteStockConfirm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
           <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
             <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
               <Trash2 size={32}/>
             </div>
-            <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ลบข้อมูลสินค้าทั้งหมด?</h3>
+            <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ลบข้อมูลสินค้า {selectedStockKeys.length} รายการ?</h3>
             <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
-              ระบบจะลบข้อมูล <b>"{deleteStockConfirm.name}"</b> ออกจากคลังสินค้าทุกล็อต<br/>
+              ระบบจะลบข้อมูลสินค้าที่เลือกออกจากคลังทุกล็อต<br/>
               และลบรายการต้นทางที่เชื่อมโยงกันทั้งหมด (รายจ่ายสต็อก)<br/>
               <span className="text-rose-600 font-bold underline">การกระทำนี้ไม่สามารถกู้คืนได้</span>
             </p>
             <div className="flex gap-3 text-center">
-              <button onClick={() => setDeleteStockConfirm(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
-              <button onClick={handleDeleteInventory} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center">ยืนยันลบ</button>
+              <button onClick={() => setShowBulkDeleteStockConfirm(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
+              <button onClick={executeBulkDeleteStock} disabled={isProcessing} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center flex items-center justify-center gap-2 disabled:opacity-50">
+                  {isProcessing && <Loader className="animate-spin" size={16}/>} ยืนยันลบ
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Popup ยืนยันการลบล็อตสินค้า (Batch level - Cost Tracking view) */}
-      {deleteBatchConfirm && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
-          <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
-            <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
-              <Trash2 size={32}/>
-            </div>
-            <h3 className="text-xl font-bold mb-2 text-slate-800 text-center">ลบล็อตสินค้า (Batch)?</h3>
-            <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
-              ยืนยันการลบล็อตสินค้าวันที่ <b>{formatDate(deleteBatchConfirm.date)}</b><br/>
-              จำนวนคงเหลือ: <b>{deleteBatchConfirm.remaining}</b> หน่วย<br/>
-              <span className="text-rose-600 font-bold underline">รายการรายจ่ายที่เชื่อมโยงจะถูกลบออกด้วย</span>
-            </p>
-            <div className="flex gap-3 text-center">
-              <button onClick={() => setDeleteBatchConfirm(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center">ยกเลิก</button>
-              <button onClick={handleDeleteBatch} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg text-center">ยืนยันลบ</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal แก้ไขข้อมูลสินค้า (หมวดหมู่ & สถานะของแจก) */}
+      {/* Modal แก้ไขข้อมูลสินค้า (หมวดหมู่ & สถานะของแจก) (รายการเดียว) */}
       {showEditCategoryModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 text-left">
           <div className="bg-white rounded-[32px] p-8 max-md w-full shadow-2xl animate-in zoom-in-95 text-left">
@@ -16035,14 +16190,6 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
   const [activeSubTab, setActiveSubTab] = useState('receipt_cert'); // 'receipt_cert', 'write_off', 'history'
   const [isSaving, setIsSaving] = useState(false);
   const [printDoc, setPrintDoc] = useState(null);
-  
-  // --- NEW: State สำหรับเปิด/ปิดกล่อง Tips ---
-  const [showTipsModal, setShowTipsModal] = useState(false);
-  const [tipsType, setTipsType] = useState('receipt'); // 'receipt' หรือ 'writeoff'
-
-  // --- NEW: State สำหรับอัปโหลดไฟล์หลักฐาน (Digital Filing) ---
-  const [attachmentUrl, setAttachmentUrl] = useState('');
-  const [isUploadingFile, setIsUploadingFile] = useState(false);
 
   const savedSeller = useMemo(() => {
     try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } catch (e) { return {}; }
@@ -16096,68 +16243,6 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
     );
   }, [uniqueInventory, stockSearch]);
 
-  // --- ฟังก์ชันอัปโหลดไฟล์แนบหลักฐาน ---
-  const handleAttachFile = async (e) => {
-      const file = e.target.files[0];
-      if (!file || !user) return;
-      
-      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
-      if (!webhookUrl) {
-          showToast('กรุณาตั้งค่าเชื่อมต่อ Google Drive ในเมนูเครื่องมือขั้นสูงก่อน', 'error');
-          return;
-      }
-
-      setIsUploadingFile(true);
-      try {
-          const base64Data = await new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result.split(',')[1]);
-              reader.onerror = reject;
-              reader.readAsDataURL(file);
-          });
-
-          const mimeType = file.type;
-          const fileExt = file.name.split('.').pop();
-          const d = new Date();
-          const year = String(d.getFullYear());
-          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
-          const month = monthNames[d.getMonth()];
-          const day = String(d.getDate()).padStart(2, '0');
-          
-          const fileName = `EVIDENCE_${Date.now()}.${fileExt}`;
-
-          const payload = { 
-              base64Data, fileName, mimeType, 
-              rootFolder: 'MerchantTax_DigitalFiling',
-              year: year, type: '2_Expense', month: month, category: 'Internal_Docs', day: day
-          };
-
-          showToast(`กำลังส่งไฟล์หลักฐานไปที่ Google Drive...`, 'success');
-          
-          const res = await fetch(webhookUrl.trim(), {
-              method: 'POST',
-              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: JSON.stringify(payload)
-          });
-
-          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-          const data = await res.json();
-          
-          if (data.url) {
-              setAttachmentUrl(data.url);
-              showToast(`อัปโหลดหลักฐานสำเร็จ!`, 'success');
-          } else {
-              throw new Error(data.message || "Upload failed");
-          }
-      } catch (err) {
-          console.error("Drive Upload Error:", err);
-          showToast('อัปโหลดหลักฐานล้มเหลว', 'error');
-      } finally {
-          setIsUploadingFile(false);
-          e.target.value = '';
-      }
-  };
-
   // --- บันทึก: ใบรับรองแทนใบเสร็จรับเงิน ---
   const handleSaveReceiptCert = async (e) => {
     if (e) e.preventDefault();
@@ -16209,8 +16294,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         isInternalCert: true,
         noReceiptReason: certForm.noReceiptReason,
         approverName: certForm.approverName,
-        notes: certForm.notes,
-        attachmentUrl: attachmentUrl // แนบลิงก์หลักฐานลงไปในบิล
+        notes: certForm.notes
       };
 
       const docRef = await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), payload);
@@ -16224,7 +16308,6 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         approverName: '', notes: '',
         items: [{ desc: '', qty: 1, unit: 'รายการ', price: 0 }]
       });
-      setAttachmentUrl('');
     } catch (err) {
       console.error(err);
       showToast("เกิดข้อผิดพลาดในการบันทึก: " + err.message, "error");
@@ -16311,8 +16394,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         writeOffReason: writeOffForm.reason,
         approverName: writeOffForm.approverName,
         inspectorName: writeOffForm.inspectorName,
-        notes: writeOffForm.notes,
-        attachmentUrl: attachmentUrl // แนบหลักฐานรูปถ่ายความเสียหาย
+        notes: writeOffForm.notes
       };
 
       batchWriter.set(expRef, payload);
@@ -16328,7 +16410,6 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         notes: '',
         items: [{ sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]
       });
-      setAttachmentUrl('');
     } catch (err) {
       console.error(err);
       showToast("เกิดข้อผิดพลาดในการบันทึก: " + err.message, "error");
@@ -16336,6 +16417,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
     setIsSaving(false);
   };
 
+  // --- ประวัติเอกสารภายใน ---
   const internalDocsHistory = useMemo(() => {
     return transactions.filter(t => t.type === 'expense' && (t.isInternalCert || t.isWriteOffVoucher || (t.sysDocId && String(t.sysDocId).startsWith('DMG-')))).sort(sortNewestFirst);
   }, [transactions]);
@@ -16348,30 +16430,21 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
           <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
             <FileCheck className="text-indigo-600"/> เอกสารภายใน & ตัดจำหน่ายสินค้า
           </h2>
-          <p className="text-sm text-slate-400 font-medium">สร้างใบรับรองแทนใบเสร็จรับเงิน และใบตัดจำหน่ายสินค้าชำรุด/สูญหาย พร้อมระบบแนบหลักฐานและคำแนะนำสรรพากร</p>
+          <p className="text-sm text-slate-400 font-medium">สร้างใบรับรองแทนใบเสร็จรับเงิน และใบตัดจำหน่ายสินค้าชำรุด/สูญหาย ตามมาตรฐานกรมสรรพากร</p>
         </div>
       </div>
 
       {/* Sub Tabs */}
-      <div className="flex justify-between items-center flex-wrap gap-4">
-        <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit overflow-x-auto shadow-inner border border-slate-200/50">
-          <button onClick={() => setActiveSubTab('receipt_cert')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'receipt_cert' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-            <FileText size={16}/> ใบรับรองแทนใบเสร็จรับเงิน
-          </button>
-          <button onClick={() => setActiveSubTab('write_off')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'write_off' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-            <Trash2 size={16}/> ใบตัดจำหน่ายสินค้า (ชำรุด/สูญหาย)
-          </button>
-          <button onClick={() => setActiveSubTab('history')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'history' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-            <History size={16}/> ประวัติเอกสารภายใน
-          </button>
-        </div>
-
-        {/* --- 🔥 NEW: ปุ่ม Tips สรรพากร --- */}
-        {activeSubTab !== 'history' && (
-          <button onClick={() => { setTipsType(activeSubTab === 'receipt_cert' ? 'receipt' : 'writeoff'); setShowTipsModal(true); }} className="bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2.5 rounded-xl text-xs font-bold border border-amber-200 flex items-center gap-2 transition-all shadow-sm">
-            <Lightbulb size={16}/> เช็กลิสต์หลักฐาน (Tips สรรพากร)
-          </button>
-        )}
+      <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit overflow-x-auto shadow-inner border border-slate-200/50">
+        <button onClick={() => setActiveSubTab('receipt_cert')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'receipt_cert' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+          <FileText size={16}/> ใบรับรองแทนใบเสร็จรับเงิน
+        </button>
+        <button onClick={() => setActiveSubTab('write_off')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'write_off' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+          <Trash2 size={16}/> ใบตัดจำหน่ายสินค้า (ชำรุด/สูญหาย)
+        </button>
+        <button onClick={() => setActiveSubTab('history')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'history' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+          <History size={16}/> ประวัติเอกสารภายใน
+        </button>
       </div>
 
       {/* TAB 1: ใบรับรองแทนใบเสร็จรับเงิน */}
@@ -16381,7 +16454,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
             <div className="border-b pb-4 flex justify-between items-center">
               <div>
                 <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><FileText className="text-indigo-600"/> ออกใบรับรองแทนใบเสร็จรับเงิน</h3>
-                <p className="text-xs text-slate-400 mt-0.5">สำหรับบันทึกรายจ่ายที่ผู้ขายไม่ออกบิลให้</p>
+                <p className="text-xs text-slate-400 mt-0.5">สำหรับบันทึกรายจ่ายที่ผู้ขายไม่ออกบิลให้ (สรรพากรยอมรับเมื่อมีเอกสารนี้พร้อมบัตรประชาชนผู้รับเงิน)</p>
               </div>
             </div>
 
@@ -16450,37 +16523,6 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                 </div>
               </div>
 
-              {/* --- 🔥 NEW: ส่วนแนบไฟล์หลักฐานสลิป/รูปถ่าย --- */}
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <div className="flex justify-between items-center mb-2">
-                      <label className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1"><Cloud size={16} className="text-blue-500"/> แนบไฟล์หลักฐาน (สลิปโอนเงิน / แชทตกลงซื้อขาย)</label>
-                      <span className="text-[9px] text-slate-400">* สำคัญมากตามหลักสรรพากร</span>
-                  </div>
-                  {attachmentUrl ? (
-                      <div className="relative group inline-block">
-                          <a href={attachmentUrl} target="_blank" rel="noopener noreferrer">
-                              <img src={attachmentUrl} alt="Evidence" className="h-20 w-auto rounded-xl border border-slate-200 shadow-sm object-cover" />
-                          </a>
-                          <button type="button" onClick={() => setAttachmentUrl('')} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md"><X size={12}/></button>
-                      </div>
-                  ) : (
-                      <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-white transition-colors bg-white/50">
-                          {isUploadingFile ? (
-                              <div className="flex flex-col items-center gap-1">
-                                  <Loader className="animate-spin text-blue-500" size={16}/>
-                                  <span className="text-[10px] font-bold text-blue-500">กำลังส่งไป Drive...</span>
-                              </div>
-                          ) : (
-                              <>
-                                  <FileUp size={16} className="text-slate-400 mb-1"/>
-                                  <span className="text-[10px] font-bold text-slate-600">คลิกอัปโหลดสลิปหรือหลักฐาน</span>
-                              </>
-                          )}
-                          <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFile} disabled={isUploadingFile} />
-                      </label>
-                  )}
-              </div>
-
               {/* เหตุผลและผู้อนุมัติ */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -16506,8 +16548,13 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
           <div className="space-y-6">
             <div className="bg-gradient-to-br from-indigo-900 to-slate-800 p-6 rounded-[32px] text-white shadow-xl">
               <h4 className="font-bold text-base text-indigo-300 mb-2 flex items-center gap-2"><Lightbulb size={18}/> ข้อแนะนำทางภาษี</h4>
-              <p className="text-xs leading-relaxed text-indigo-100 font-medium">
-                ทุกครั้งที่ออกใบรับรองแทนใบเสร็จ แนะนำให้อัปโหลด <b>"สลิปการโอนเงิน"</b> แนบไว้คู่กันในระบบเสมอ เพื่อให้สรรพากรตรวจสอบและยอมรับเป็นรายจ่ายทางภาษีได้ 100% ครับ
+              <p className="text-xs leading-relaxed text-indigo-100 font-medium whitespace-pre-line">
+                "ใบรับรองแทนใบเสร็จรับเงิน" ตามมาตรา 65 ตรี (18) แห่งประมวลรัษฎากร 
+                {"\n\n"}ใช้สำหรับกรณีพนักงาน/เจ้าของกิจการไปจ่ายเงินซื้อสินค้าหรือบริการแล้วผู้ขายไม่ออกใบเสร็จให้
+                {"\n\n"}<b>เงื่อนไขสำคัญ:</b>
+                {"\n"}1. ต้องมีชื่อ-นามสกุล และเลขบัตรประชาชนของผู้รับเงิน
+                {"\n"}2. แนบสลิปโอนเงิน (ถ้ามี)
+                {"\n"}3. ผู้จ่ายเงินต้องลงลายมือชื่อรับรองการจ่ายเงินจริง
               </p>
             </div>
           </div>
@@ -16521,7 +16568,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
             <div className="border-b pb-4 flex justify-between items-center">
               <div>
                 <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Trash2 className="text-rose-600"/> ออกใบตัดจำหน่ายสินค้า (Write-Off)</h3>
-                <p className="text-xs text-slate-400 mt-0.5">หักสต็อกสินค้าออกจากคลัง FIFO พร้อมลงบันทึกเป็นรายจ่ายธุรกิจ</p>
+                <p className="text-xs text-slate-400 mt-0.5">หักสต็อกสินค้าออกจากคลัง FIFO พร้อมลงบันทึกเป็นรายจ่ายธุรกิจอย่างถูกต้อง</p>
               </div>
             </div>
 
@@ -16578,37 +16625,6 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                 </div>
               </div>
 
-              {/* --- 🔥 NEW: ส่วนแนบรูปถ่ายความเสียหาย --- */}
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <div className="flex justify-between items-center mb-2">
-                      <label className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1"><Cloud size={16} className="text-rose-500"/> แนบรูปถ่ายความเสียหาย / หลักฐาน (Evidence)</label>
-                      <span className="text-[9px] text-slate-400">* แนะนำให้ถ่ายรูปสินค้าพังแนบไว้</span>
-                  </div>
-                  {attachmentUrl ? (
-                      <div className="relative group inline-block">
-                          <a href={attachmentUrl} target="_blank" rel="noopener noreferrer">
-                              <img src={attachmentUrl} alt="Evidence" className="h-20 w-auto rounded-xl border border-slate-200 shadow-sm object-cover" />
-                          </a>
-                          <button type="button" onClick={() => setAttachmentUrl('')} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md"><X size={12}/></button>
-                      </div>
-                  ) : (
-                      <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-white transition-colors bg-white/50">
-                          {isUploadingFile ? (
-                              <div className="flex flex-col items-center gap-1">
-                                  <Loader className="animate-spin text-rose-500" size={16}/>
-                                  <span className="text-[10px] font-bold text-rose-500">กำลังส่งไป Drive...</span>
-                              </div>
-                          ) : (
-                              <>
-                                  <FileUp size={16} className="text-slate-400 mb-1"/>
-                                  <span className="text-[10px] font-bold text-slate-600">คลิกอัปโหลดรูปความเสียหาย</span>
-                              </>
-                          )}
-                          <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFile} disabled={isUploadingFile} />
-                      </label>
-                  )}
-              </div>
-
               {/* ผู้รับผิดชอบ/อนุมัติ */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -16639,8 +16655,12 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
           <div className="space-y-6">
             <div className="bg-gradient-to-br from-rose-900 to-slate-900 p-6 rounded-[32px] text-white shadow-xl">
               <h4 className="font-bold text-base text-rose-300 mb-2 flex items-center gap-2"><AlertTriangle size={18}/> คำแนะนำการตัดจำหน่ายสินค้า</h4>
-              <p className="text-xs leading-relaxed text-rose-100 font-medium">
-                การแนบรูปถ่ายสินค้าเสียหายไว้คู่กับใบตัดจำหน่าย จะช่วยยืนยันกับผู้ตรวจสอบบัญชีและสรรพากรได้อย่างสมบูรณ์แบบ
+              <p className="text-xs leading-relaxed text-rose-100 font-medium whitespace-pre-line">
+                เมื่อสินค้าชำรุด หมดอายุ หรือสูญหาย การตัดออกจากระบบเป็นเรื่องสำคัญมาก
+                {"\n\n"}<b>ประโยชน์ที่ได้:</b>
+                {"\n"}1. ระบบจะหักสต็อก FIFO จริง ทำให้ยอดคงเหลือแม่นยำ 100%
+                {"\n"}2. มูลค่าต้นทุนของสินค้าที่ตัดทิ้ง จะถูกบันทึกเป็น <b>"รายจ่ายของกิจการ" (หมวดสินค้าเสียหาย/หมดอายุ)</b> อัตโนมัติ เพื่อนำไปลดหย่อนภาษีเงินได้สิ้นปี
+                {"\n"}3. มีใบสำคัญการตัดจำหน่ายเก็บเข้าแฟ้มเป็นหลักฐานยันสรรพากร
               </p>
             </div>
           </div>
@@ -16663,7 +16683,6 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                   <th className="p-4">ประเภทเอกสาร</th>
                   <th className="p-4">รายละเอียด / ผู้รับเงิน</th>
                   <th className="p-4 text-right">ยอดเงินรวม (฿)</th>
-                  <th className="p-4 text-center">หลักฐาน</th>
                   <th className="p-4 text-center">จัดการ</th>
                 </tr>
               </thead>
@@ -16693,15 +16712,6 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                       {formatCurrency(docItem.total || docItem.grandTotal)}
                     </td>
                     <td className="p-4 text-center">
-                      {docItem.attachmentUrl ? (
-                          <a href={docItem.attachmentUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[10px] bg-blue-50 text-blue-600 px-2.5 py-1 rounded-md font-bold border border-blue-100 hover:bg-blue-100">
-                              <Eye size={12}/> ดูไฟล์
-                          </a>
-                      ) : (
-                          <span className="text-[10px] text-slate-300">-</span>
-                      )}
-                    </td>
-                    <td className="p-4 text-center">
                       <button onClick={() => setPrintDoc({
                         ...docItem,
                         docType: docItem.isWriteOffVoucher || String(docItem.sysDocId).startsWith('DMG-') ? 'write_off' : 'receipt_cert'
@@ -16712,57 +16722,11 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                   </tr>
                 ))}
                 {internalDocsHistory.length === 0 && (
-                  <tr><td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่พบประวัติเอกสารภายใน</td></tr>
+                  <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ไม่พบประวัติเอกสารภายใน</td></tr>
                 )}
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {/* --- 🔥 NEW: Tips Modal (เช็กลิสต์หลักฐานสรรพากร) --- */}
-      {showTipsModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4">
-            <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-lg w-full shadow-2xl animate-in zoom-in-95 flex flex-col">
-                <div className="flex justify-between items-center mb-4 border-b pb-3">
-                    <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Lightbulb className="text-amber-500"/> เช็กลิสต์หลักฐาน (ตามระเบียบสรรพากร)</h3>
-                    <button onClick={() => setShowTipsModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
-                </div>
-                
-                <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
-                    {tipsType === 'receipt' ? (
-                        <>
-                            <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100">
-                                <p className="font-bold text-amber-800 mb-1">💡 ใบรับรองแทนใบเสร็จรับเงิน ต้องมีหลักฐานอะไรบ้าง?</p>
-                                <ul className="list-disc pl-4 space-y-1 mt-2 font-medium">
-                                    <li><b>สลิปโอนเงิน (e-Slip):</b> ยอดเงินต้องตรงกับใบรับรองฯ และชื่อบัญชีปลายทางต้องตรงกับชื่อผู้รับเงิน</li>
-                                    <li><b>สำเนาบัตรประชาชน:</b> ของผู้รับเงิน (กรณีเป็นบุคคลธรรมดาและยอดเงินสูง)</li>
-                                    <li><b>หลักฐานการติดต่อ:</b> หน้าจอแชทสั่งซื้อ, บิลเงินสดชั่วคราว หรือใบเสนอราคา (ถ้ามี)</li>
-                                </ul>
-                            </div>
-                            <p className="text-slate-500">* แนะนำให้อัปโหลดไฟล์สลิปเก็บไว้ในช่อง <b>"แนบไฟล์หลักฐาน"</b> ด้านล่างฟอร์มทุกครั้งก่อนกดบันทึก</p>
-                        </>
-                    ) : (
-                        <>
-                            <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100">
-                                <p className="font-bold text-rose-800 mb-1">💡 ใบตัดจำหน่ายสินค้า ต้องมีหลักฐานอะไรบ้าง?</p>
-                                <ul className="list-disc pl-4 space-y-1 mt-2 font-medium">
-                                    <li><b>รูปถ่ายความเสียหาย:</b> ถ่ายสภาพสินค้าที่พัง/หมดอายุเห็นชัดเจน</li>
-                                    <li><b>ใบแจ้งความ (กรณีสูญหายจากขโมย):</b> รายงานประจำวันรับแจ้งจากสถานีตำรวจ</li>
-                                    <li><b>เอกสารขนส่ง (กรณีเสียหายระหว่างส่ง):</b> ใบเคลม หรือหลักฐานปฏิเสธการรับจากขนส่ง</li>
-                                </ul>
-                            </div>
-                            <p className="text-slate-500">* แนะนำให้อัปโหลดรูปถ่ายความเสียหายเก็บไว้ในช่อง <b>"แนบรูปถ่ายความเสียหาย"</b> เพื่อใช้ยันกับผู้ตรวจสอบบัญชี</p>
-                        </>
-                    )}
-                </div>
-
-                <div className="pt-6 mt-4 border-t text-center">
-                    <button onClick={() => setShowTipsModal(false)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors w-full">
-                        รับทราบและปิดหน้าต่าง
-                    </button>
-                </div>
-            </div>
         </div>
       )}
 
