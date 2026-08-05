@@ -5077,7 +5077,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       setIsProcessing(false);
   };
 
-  // --- 🔥 NEW: ฟังก์ชันซ่อมแซมสต็อก 1-Click (Hard Reset) ---
+  // --- 🔥 REBUILT: ฟังก์ชันซ่อมแซมสต็อก 1-Click (Hard Reset) ล้างและรีเซ็ตใหม่ 100% ---
   const handleHardResetStock = async () => {
       if (!window.confirm("⚡ ยืนยันการซ่อมแซมสต็อก (Hard Reset)?\n\nระบบจะทำการล้างค่าการขายเดิมทั้งหมด และประมวลผลคำนวณยอดขายจากบิลจริงใหม่ตั้งแต่ต้น (1-Click Auto Sync)\nการดำเนินการนี้จะใช้เวลาสักครู่ และไม่สามารถย้อนกลับได้")) return;
 
@@ -5085,49 +5085,65 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       try {
           showToast('กำลังประมวลผลและปรับปรุงสต็อก (Hard Reset)...', 'success');
 
-          let localBatches = stockBatches.map(b => {
-              if (b.isAdjustment === true) {
-                  return { ...b, simulatedSold: Number(b.sold || 0), originalSold: Number(b.sold || 0) };
-              }
-              return { ...b, simulatedSold: 0, originalSold: Number(b.sold || 0) };
-          });
+          // 1. กรอง Dummy เก่าทิ้ง และรีเซ็ต sold = 0 ให้ล็อตของจริงทั้งหมด
+          const validBatches = stockBatches.filter(b => !(b.isAdjustment && String(b.adjustReason || '').includes('สต็อกติดลบ')));
+          const oldDummies = stockBatches.filter(b => (b.isAdjustment && String(b.adjustReason || '').includes('สต็อกติดลบ')));
 
-          const incomeTrans = transactions.filter(t => t.type === 'income' && !t.isCancelled).sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
+          let localBatches = validBatches.map(b => ({
+              ...b,
+              simulatedSold: 0,
+              originalSold: Number(b.sold || 0)
+          }));
+
+          // 2. ดึงรายการจ่ายออกทั้งหมด (รายรับขายออก + รายจ่ายตัดชำรุด) เรียงจากเก่าไปใหม่
+          const outTrans = [];
+          transactions.forEach(t => {
+              if (t.isCancelled) return;
+              if (t.type === 'income') {
+                  outTrans.push(t);
+              } else if (t.type === 'expense' && t.category === 'สินค้าเสียหาย/หมดอายุ') {
+                  outTrans.push(t);
+              }
+          });
+          outTrans.sort((a, b) => normalizeDate(a.date) - normalizeDate(b.date));
 
           const newDummies = [];
 
-          incomeTrans.forEach(trans => {
+          // 3. จำลองการตัด FIFO ใหม่ทั้งหมด
+          outTrans.forEach(trans => {
               (trans.items || []).forEach(item => {
-                  let needed = Number(item.qty);
+                  let cleanName = String(item.desc || '').replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]/gi, '').trim();
+                  if (cleanName.includes('ส่วนต่างยอดรับ') || cleanName.includes('ค่าจัดส่ง')) return;
+                  if (trans.type === 'expense' && cleanName.includes(':')) {
+                      cleanName = cleanName.split(':').pop().trim();
+                  }
+
+                  let needed = Math.abs(Number(item.qty) || 0);
                   if (needed <= 0) return;
 
                   const targetBatches = localBatches
-                      .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && b.isAdjustment !== true)
+                      .filter(b => matchItemToBatch(item.sku, cleanName, b.sku, b.productName))
                       .sort(sortClosestToDateThenOldest(trans.date));
 
                   for (let i = 0; i < targetBatches.length; i++) {
                       if (needed <= 0) break;
                       const b = targetBatches[i];
                       const remaining = Number(b.quantity) - b.simulatedSold;
-
-                      let take = 0;
-                      if (i === targetBatches.length - 1) {
-                          take = needed;
-                      } else {
-                          take = Math.min(needed, Math.max(0, remaining));
-                      }
-
-                      if (take > 0) {
+                      
+                      // ถ้ายอดในล็อตนั้นเหลือให้ตัด
+                      if (remaining > 0) {
+                          const take = Math.min(needed, remaining);
                           b.simulatedSold += take;
                           needed -= take;
                       }
                   }
 
+                  // ถ้าสต็อกไม่พอจริงๆ สร้าง Dummy ติดลบทิ้งไว้เพื่อให้บัญชีตรง
                   if (needed > 0) {
                       newDummies.push({
-                          productName: item.desc,
+                          productName: cleanName,
                           sku: item.sku || '-',
-                          category: 'อื่นๆ',
+                          category: item.category || 'อื่นๆ',
                           quantity: 0,
                           costPerUnit: 0,
                           sellPrice: item.sellPrice || item.price || 0,
@@ -5136,44 +5152,50 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                           userId: user.uid,
                           paymentStatus: 'paid',
                           isAdjustment: true,
-                          adjustReason: 'สต็อกติดลบ (ไม่มีในคลัง)'
+                          adjustReason: 'สต็อกติดลบ (ซิงค์ออโต้)'
                       });
                   }
               });
           });
 
-          const allOldDummies = stockBatches.filter(b => b.isAdjustment && b.adjustReason === 'สต็อกติดลบ (ไม่มีในคลัง)');
-
+          // 4. บันทึกลง Firestore กลับไป
           let batch = writeBatch(dbInstance);
           let opsCount = 0;
 
-          // 1. ลบ Dummy เก่าทิ้งทั้งหมด
-          for (const dummy of allOldDummies) {
+          const commitBatch = async () => {
+              if (opsCount > 0) {
+                  await batch.commit();
+                  batch = writeBatch(dbInstance);
+                  opsCount = 0;
+                  await new Promise(r => setTimeout(r, 50));
+              }
+          };
+
+          // ลบ Dummies ขยะเก่า
+          for (const dummy of oldDummies) {
               batch.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', dummy.id));
               opsCount++;
-              if (opsCount >= 400) { await batch.commit(); batch = writeBatch(dbInstance); opsCount = 0; }
+              if (opsCount >= 300) await commitBatch();
           }
 
-          // 2. อัปเดตยอด Sold ใหม่ในสต็อกปกติ
+          // อัปเดตยอด Sold ใหม่ที่ถูกต้อง 100%
           for (const b of localBatches) {
-              if (b.isAdjustment !== true && b.simulatedSold !== b.originalSold) {
+              if (b.simulatedSold !== b.originalSold) {
                   batch.update(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id), { sold: b.simulatedSold });
                   opsCount++;
-                  if (opsCount >= 400) { await batch.commit(); batch = writeBatch(dbInstance); opsCount = 0; }
+                  if (opsCount >= 300) await commitBatch();
               }
           }
 
-          // 3. สร้าง Dummy ใหม่จากที่คำนวณได้
+          // ยัด Dummies ใหม่ลงไปแทน
           for (const d of newDummies) {
               const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
               batch.set(dummyRef, { ...d, createdAt: serverTimestamp() });
               opsCount++;
-              if (opsCount >= 400) { await batch.commit(); batch = writeBatch(dbInstance); opsCount = 0; }
+              if (opsCount >= 300) await commitBatch();
           }
 
-          if (opsCount > 0) {
-              await batch.commit();
-          }
+          await commitBatch(); // Final commit
 
           showToast('⚡ ซ่อมแซมและปรับปรุงสต็อกทั้งหมดเสร็จสมบูรณ์ ยอดตรง 100% แล้ว!', 'success');
 
@@ -5814,99 +5836,146 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     setIsProcessing(false);
   };
 
+  // --- 🔥 REBUILT: คำนวณ Inventory ใหม่แบบ Real-time (การันตีว่ายอดตรงกัน 100% เสมอ) ---
   const inventory = useMemo(() => {
-    const lastSoldMap = {};
-    transactions.forEach(t => {
-       if (t.type !== 'income' || t.isCancelled || t.isFromReconciliation) return;
-       const tDate = normalizeDate(t.date);
-       if (!tDate) return;
-       (t.items || []).forEach(item => {
-           const nameKey = String(item.desc || '').replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').trim();
-           const skuKey = (item.sku && item.sku !== '-') ? item.sku : '';
-           const groupKey = skuKey ? `${skuKey}::${nameKey}` : nameKey;
-           if (!lastSoldMap[groupKey] || tDate > lastSoldMap[groupKey]) {
-               lastSoldMap[groupKey] = tDate;
-           }
-       });
-    });
-
-    const map = {};
-    
-    const start = stockStartDate ? new Date(stockStartDate) : null;
-    if (start) start.setHours(0,0,0,0);
-    const end = stockEndDate ? new Date(stockEndDate) : null;
-    if (end) end.setHours(23,59,59,999);
-
-    stockBatches.forEach(batch => {
-      const nameKey = batch.productName || 'ไม่ระบุชื่อสินค้า';
-      const skuKey = (batch.sku && batch.sku !== '-') ? batch.sku : '';
-      const groupKey = skuKey ? `${skuKey}::${nameKey}` : nameKey;
-
-      if (!map[groupKey]) { 
-          map[groupKey] = { 
-              groupKey: groupKey, 
-              name: nameKey, 
-              sku: batch.sku || '-', 
-              totalQty: 0, 
-              totalSold: 0, 
-              totalValue: 0, 
-              totalPotentialProfit: 0,
-              periodInbound: 0,
-              batches: [], 
-              category: batch.category || 'ทั่วไป',
-              isGiveaway: false,
-              lastSoldDate: lastSoldMap[groupKey] || null, 
-              daysSinceLastSold: lastSoldMap[groupKey] ? Math.floor((new Date() - lastSoldMap[groupKey]) / (1000 * 60 * 60 * 24)) : Infinity 
-          }; 
-      }
+      const map = {};
       
-      if (batch.isGiveaway) map[groupKey].isGiveaway = true;
-      
-      const sold = Number(batch.sold || 0); 
-      const remaining = Number(batch.quantity) - sold;
-      const costPerUnit = Number(batch.costPerUnit || 0);
-      const sellPrice = Number(batch.sellPrice || 0);
-      const profitPerUnit = sellPrice - costPerUnit;
+      const start = stockStartDate ? new Date(stockStartDate) : null;
+      if (start) start.setHours(0,0,0,0);
+      const end = stockEndDate ? new Date(stockEndDate) : null;
+      if (end) end.setHours(23,59,59,999);
 
-      const bDate = normalizeDate(batch.date);
-      if ((!start || bDate >= start) && (!end || bDate <= end)) {
-          map[groupKey].periodInbound += Number(batch.quantity);
-      }
+      // 1. ดึงยอด "รับเข้า" (IN) ทั้งหมดจากคลัง
+      stockBatches.forEach(batch => {
+          const nameKey = batch.productName || 'ไม่ระบุชื่อสินค้า';
+          const skuKey = (batch.sku && batch.sku !== '-') ? batch.sku : '';
+          const groupKey = skuKey ? `${skuKey}::${nameKey}` : nameKey;
 
-      map[groupKey].totalQty += remaining; 
-      
-      map[groupKey].totalSold += sold; 
-      
-      map[groupKey].totalValue += (Math.max(0, remaining) * costPerUnit);
-      map[groupKey].totalPotentialProfit += (Math.max(0, remaining) * profitPerUnit);
-      map[groupKey].batches.push({ ...batch, remaining });
-    });
+          if (!map[groupKey]) { 
+              map[groupKey] = { 
+                  groupKey, name: nameKey, sku: batch.sku || '-', 
+                  totalIn: 0, totalOut: 0, totalQty: 0, totalSold: 0, 
+                  totalValue: 0, totalPotentialProfit: 0, periodInbound: 0, 
+                  batches: [], category: batch.category || 'ทั่วไป', 
+                  isGiveaway: false, lastSoldDate: null, daysSinceLastSold: Infinity 
+              }; 
+          }
+          
+          if (batch.isGiveaway) map[groupKey].isGiveaway = true;
+          
+          const qty = Number(batch.quantity) || 0;
+          
+          // นับยอดรับเข้า (ข้าม Dummy Batch ที่ระบบสร้างเพื่อแก้ติดลบ)
+          if (qty > 0 || (batch.isAdjustment && !String(batch.adjustReason || '').includes('สต็อกติดลบ'))) {
+              map[groupKey].totalIn += qty;
+          }
 
-    const result = Object.values(map)
-      .filter(item => 
+          const bDate = normalizeDate(batch.date);
+          if ((!start || bDate >= start) && (!end || bDate <= end)) {
+              if (qty > 0) map[groupKey].periodInbound += qty;
+          }
+
+          map[groupKey].batches.push(batch);
+      });
+
+      // 2. ดึงยอด "ขายออก/ตัดทิ้ง" (OUT) แบบ Real-time จากบิล
+      const now = new Date();
+      transactions.forEach(t => {
+         if (t.isCancelled) return;
+         const tDate = normalizeDate(t.date);
+
+         if (t.type === 'income') {
+             (t.items || []).forEach(item => {
+                 const cleanName = String(item.desc || '').replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]/gi, '').trim();
+                 if (cleanName.includes('ส่วนต่างยอดรับ') || cleanName.includes('ค่าจัดส่ง')) return;
+
+                 const matchingGroupKeys = Object.keys(map).filter(gKey => 
+                     matchItemToBatch(item.sku, cleanName, map[gKey].sku, map[gKey].name)
+                 );
+
+                 matchingGroupKeys.forEach(gKey => {
+                     const outQty = Math.abs(Number(item.qty) || 0);
+                     map[gKey].totalOut += outQty;
+                     
+                     if (tDate) {
+                         if (!map[gKey].lastSoldDate || tDate > map[gKey].lastSoldDate) {
+                             map[gKey].lastSoldDate = tDate;
+                             map[gKey].daysSinceLastSold = Math.floor((now - tDate) / 86400000);
+                         }
+                     }
+                 });
+             });
+         } else if (t.type === 'expense' && t.category === 'สินค้าเสียหาย/หมดอายุ') {
+             (t.items || []).forEach(item => {
+                 let cleanName = String(item.desc || '');
+                 if (cleanName.includes(':')) cleanName = cleanName.split(':').pop().trim();
+                 
+                 const matchingGroupKeys = Object.keys(map).filter(gKey => 
+                     matchItemToBatch(item.sku, cleanName, map[gKey].sku, map[gKey].name) ||
+                     matchItemToBatch(item.sku, item.desc, map[gKey].sku, map[gKey].name)
+                 );
+
+                 matchingGroupKeys.forEach(gKey => {
+                     map[gKey].totalOut += Math.abs(Number(item.qty) || 0);
+                 });
+             });
+         }
+      });
+
+      // 3. หักลบเพื่อหามูลค่าสุทธิ (IN - OUT = BALANCE เสมอ!)
+      Object.values(map).forEach(item => {
+          item.totalQty = item.totalIn - item.totalOut; // นี่คือความจริงแท้ 100%
+          item.totalSold = item.totalOut;
+          
+          let remainingToValue = item.totalQty;
+          item.totalValue = 0;
+          item.totalPotentialProfit = 0;
+          
+          // เรียงล็อกเพื่อจำลองหามูลค่าคงเหลือ (Cost Value)
+          const sortedBatches = [...item.batches].sort((a,b) => normalizeDate(a.date) - normalizeDate(b.date));
+          const currentSellPrice = sortedBatches.length > 0 ? (Number(sortedBatches[sortedBatches.length - 1].sellPrice) || 0) : 0;
+          
+          if (remainingToValue > 0) {
+              for (let i = sortedBatches.length - 1; i >= 0; i--) {
+                  if (remainingToValue <= 0) break;
+                  const b = sortedBatches[i];
+                  const bQty = Number(b.quantity) || 0;
+                  if (bQty > 0) {
+                      const take = Math.min(bQty, remainingToValue);
+                      const cost = Number(b.costPerUnit) || 0;
+                      item.totalValue += (take * cost);
+                      item.totalPotentialProfit += (take * (currentSellPrice - cost));
+                      remainingToValue -= take;
+                  }
+              }
+          }
+          item.batches = sortedBatches;
+      });
+
+      const result = Object.values(map).filter(item => 
           item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
           item.sku.toLowerCase().includes(searchTerm.toLowerCase())
       );
 
-    // --- 🔥 NEW: Apply Quick Filters (กรองข้อมูลด่วน) ---
-    let filteredResult = result;
-    if (stockQuickFilter === 'low_stock') {
-        filteredResult = filteredResult.filter(i => i.totalQty > 0 && i.totalQty <= 5);
-    } else if (stockQuickFilter === 'negative') {
-        filteredResult = filteredResult.filter(i => i.totalQty < 0);
-    } else if (stockQuickFilter === 'giveaway') {
-        filteredResult = filteredResult.filter(i => i.isGiveaway);
-    }
+      // Apply Quick Filters (กรองข้อมูลด่วน)
+      let filteredResult = result;
+      if (stockQuickFilter === 'low_stock') {
+          filteredResult = filteredResult.filter(i => i.totalQty > 0 && i.totalQty <= 5);
+      } else if (stockQuickFilter === 'negative') {
+          filteredResult = filteredResult.filter(i => i.totalQty < 0);
+      } else if (stockQuickFilter === 'giveaway') {
+          filteredResult = filteredResult.filter(i => i.isGiveaway);
+      }
 
-    if (stockSortType === 'aging') {
-        return filteredResult.sort((a, b) => {
-            if (a.totalQty <= 0 && b.totalQty > 0) return 1;
-            if (a.totalQty > 0 && b.totalQty <= 0) return -1;
-            return b.daysSinceLastSold - a.daysSinceLastSold;
-        });
-    }
-    
-    return filteredResult.sort((a,b) => b.totalQty - a.totalQty);
+      if (stockSortType === 'aging') {
+          return filteredResult.sort((a, b) => {
+              if (a.totalQty <= 0 && b.totalQty > 0) return 1;
+              if (a.totalQty > 0 && b.totalQty <= 0) return -1;
+              return b.daysSinceLastSold - a.daysSinceLastSold;
+          });
+      }
+      
+      return filteredResult.sort((a,b) => b.totalQty - a.totalQty);
   }, [stockBatches, searchTerm, stockStartDate, stockEndDate, transactions, stockSortType, stockQuickFilter]);
 
   const stockTotalPages = Math.max(1, Math.ceil(inventory.length / stockItemsPerPage));
