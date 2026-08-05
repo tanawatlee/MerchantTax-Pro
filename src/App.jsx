@@ -852,23 +852,28 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
   const [selectedShop, setSelectedShop] = useState('all');
   const [selectedChannel, setSelectedChannel] = useState('all');
+  const [selectedFilterMonth, setSelectedFilterMonth] = useState('all'); // UX/UI: State สำหรับ Filter รายเดือน
 
   const monthlyData = useMemo(() => {
     const year = parseInt(selectedYear, 10);
     const months = Array.from({ length: 12 }, (_, i) => ({
       month: i + 1,
-      monthName: new Date(year, i, 1).toLocaleDateString('th-TH', { month: 'long' }),
-      sales: 0,
+      monthName: new Date(year, i, 1).toLocaleDateString('th-TH', { month: 'short' }),
+      grossSales: 0,
       discounts: 0,
+      refunds: 0,
+      sales: 0,
       cogs: 0,
       fees: 0,
       shippingBalance: 0,
       expenses: 0,
+      wht: 0,
       orderCount: 0
     }));
 
     transactions.forEach(t => {
-      if (t.isCancelled || t.isTaxOnly) return;
+      // --- FIX: นำ isCancelled ออกจากการ Return บรรทัดแรก เพื่อให้ระบบดึงยอด Cancel ไปใส่ใน Refund (ตีกลับ/ยกเลิก) ---
+      if (t.isTaxOnly) return;
       if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
       if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
 
@@ -877,30 +882,42 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
       const mIdx = d.getMonth();
 
       if (t.type === 'income' && !t.isFromReconciliation) {
-        const fee = Number(t.platformFee) || 0;
-        const shipBuyer = Number(t.shippingFee) || 0;
-        const shipSubsidy = Number(t.shippingFeeSubsidy) || 0;
-        const shipActual = Number(t.estimatedShippingFee) || 0;
-        const shipReturn = Number(t.returnShippingFee) || 0;
-        const shipBal = (shipBuyer + shipSubsidy) - (shipActual + shipReturn);
-
         const itemSubtotal = (t.items || []).reduce((sum, item) => sum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
-        const discount = Number(t.couponDiscount || 0) + Number(t.refundAmount || 0) + Number(t.cashCoupon || 0);
-        const trueNetSales = itemSubtotal - discount;
+        
+        if (t.isCancelled || t.isDeliveryFailed) {
+            // นับยอดเป็นสินค้าตีกลับ/ยกเลิก (Lost GMV / Refund)
+            months[mIdx].refunds += itemSubtotal;
+        } else {
+            const fee = Number(t.platformFee) || 0;
+            const shipBuyer = Number(t.shippingFee) || 0;
+            const shipSubsidy = Number(t.shippingFeeSubsidy) || 0;
+            const shipActual = Number(t.estimatedShippingFee) || 0;
+            const shipReturn = Number(t.returnShippingFee) || 0;
+            const shipBal = (shipBuyer + shipSubsidy) - (shipActual + shipReturn);
 
-        const cogs = (t.items || []).reduce((sum, item) => {
-          if (item.desc && (item.desc.includes('ส่วนต่างยอดรับเงิน') || item.desc.includes('ค่าจัดส่ง'))) return sum;
-          const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
-          return sum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
-        }, 0);
+            const discount = Number(t.couponDiscount || 0) + Number(t.cashCoupon || 0);
+            const refund = Number(t.refundAmount || 0);
+            const wht = Number(t.whtAmount || 0);
+            
+            const trueNetSales = itemSubtotal - discount - refund;
 
-        months[mIdx].sales += trueNetSales;
-        months[mIdx].discounts += discount;
-        months[mIdx].cogs += cogs;
-        months[mIdx].fees += fee;
-        months[mIdx].shippingBalance += shipBal;
-        months[mIdx].orderCount += 1;
-      } else if (t.type === 'expense') {
+            const cogs = (t.items || []).reduce((sum, item) => {
+              if (item.desc && (item.desc.includes('ส่วนต่างยอดรับเงิน') || item.desc.includes('ค่าจัดส่ง'))) return sum;
+              const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
+              return sum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
+            }, 0);
+
+            months[mIdx].grossSales += itemSubtotal;
+            months[mIdx].discounts += discount;
+            months[mIdx].refunds += refund;
+            months[mIdx].sales += trueNetSales;
+            months[mIdx].cogs += cogs;
+            months[mIdx].fees += fee;
+            months[mIdx].shippingBalance += shipBal;
+            months[mIdx].wht += wht;
+            months[mIdx].orderCount += 1;
+        }
+      } else if (t.type === 'expense' && !t.isCancelled) {
         if (t.category === 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') return;
         const amt = Number(t.total) || 0;
         const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
@@ -917,29 +934,111 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
       const totalExpense = m.fees + m.expenses - m.shippingBalance;
       const netProfit = m.sales - m.cogs - totalExpense;
       const margin = m.sales > 0 ? (netProfit / m.sales) * 100 : 0;
+      const aov = m.orderCount > 0 ? m.sales / m.orderCount : 0;
       return {
         ...m,
         totalExpense,
         netProfit,
-        margin
+        margin,
+        aov
       };
     });
   }, [transactions, stockBatches, selectedYear, selectedShop, selectedChannel]);
 
+  // --- UX/UI: กรองข้อมูลตามเดือนที่เลือก ---
+  const filteredMonthlyData = useMemo(() => {
+      if (selectedFilterMonth === 'all') return monthlyData;
+      return monthlyData.filter(m => m.month === parseInt(selectedFilterMonth, 10));
+  }, [monthlyData, selectedFilterMonth]);
+
   const totals = useMemo(() => {
-    return monthlyData.reduce((acc, m) => ({
+    return filteredMonthlyData.reduce((acc, m) => ({
+      grossSales: acc.grossSales + m.grossSales,
+      discounts: acc.discounts + m.discounts,
+      refunds: acc.refunds + m.refunds,
       sales: acc.sales + m.sales,
       cogs: acc.cogs + m.cogs,
       fees: acc.fees + m.fees,
       expenses: acc.expenses + m.expenses,
       shippingBalance: acc.shippingBalance + m.shippingBalance,
+      wht: acc.wht + m.wht,
       totalExpense: acc.totalExpense + m.totalExpense,
       netProfit: acc.netProfit + m.netProfit,
       orderCount: acc.orderCount + m.orderCount
-    }), { sales: 0, cogs: 0, fees: 0, expenses: 0, shippingBalance: 0, totalExpense: 0, netProfit: 0, orderCount: 0 });
-  }, [monthlyData]);
+    }), { grossSales: 0, discounts: 0, refunds: 0, sales: 0, cogs: 0, fees: 0, expenses: 0, shippingBalance: 0, wht: 0, totalExpense: 0, netProfit: 0, orderCount: 0 });
+  }, [filteredMonthlyData]);
+
+  const prevTotals = useMemo(() => {
+    const prevYear = parseInt(selectedYear, 10) - 1;
+    let sales = 0, cogs = 0, fees = 0, expenses = 0, shippingBalance = 0;
+
+    transactions.forEach(t => {
+      if (t.isTaxOnly) return;
+      if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
+      if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
+
+      const d = normalizeDate(t.date);
+      if (!d || d.getFullYear() !== prevYear) return;
+
+      // UX/UI: เช็คว่ากรองดูเฉพาะเดือนหรือไม่ (เพื่อเทียบคู่เดือนเดียวกันของปีที่แล้ว)
+      if (selectedFilterMonth !== 'all' && (d.getMonth() + 1) !== parseInt(selectedFilterMonth, 10)) return;
+
+      if (t.type === 'income' && !t.isFromReconciliation) {
+        if (!t.isCancelled && !t.isDeliveryFailed) {
+            const fee = Number(t.platformFee) || 0;
+            const shipBuyer = Number(t.shippingFee) || 0;
+            const shipSubsidy = Number(t.shippingFeeSubsidy) || 0;
+            const shipActual = Number(t.estimatedShippingFee) || 0;
+            const shipReturn = Number(t.returnShippingFee) || 0;
+            const shipBal = (shipBuyer + shipSubsidy) - (shipActual + shipReturn);
+
+            const itemSubtotal = (t.items || []).reduce((sum, item) => sum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
+            const discount = Number(t.couponDiscount || 0) + Number(t.refundAmount || 0) + Number(t.cashCoupon || 0);
+            const trueNetSales = itemSubtotal - discount;
+
+            const cogsAmt = (t.items || []).reduce((sum, item) => {
+              if (item.desc && (item.desc.includes('ส่วนต่างยอดรับเงิน') || item.desc.includes('ค่าจัดส่ง'))) return sum;
+              const batch = stockBatches.find(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
+              return sum + (Number(item.qty) * Number(batch?.costPerUnit || 0));
+            }, 0);
+
+            sales += trueNetSales;
+            cogs += cogsAmt;
+            fees += fee;
+            shippingBalance += shipBal;
+        }
+      } else if (t.type === 'expense' && !t.isCancelled) {
+        if (t.category === 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') return;
+        const amt = Number(t.total) || 0;
+        const isCogsBill = t.category === 'ต้นทุนสินค้า' || t.isFromInventory;
+
+        if (t.category === 'ค่าธรรมเนียม Platform') {
+          if (t.isFromReconciliation) fees += amt;
+        } else if (!isCogsBill && !t.isFromReconciliation) {
+          expenses += amt;
+        }
+      }
+    });
+
+    const totalExpense = fees + expenses - shippingBalance;
+    const netProfit = sales - cogs - totalExpense;
+
+    return { sales, cogs, totalExpense, netProfit };
+  }, [transactions, stockBatches, selectedYear, selectedShop, selectedChannel, selectedFilterMonth]);
+
+  const getTrend = (current, prev, invertLogic = false) => {
+    if (prev === 0) {
+        if (current === 0) return { value: 0, isPositive: true };
+        return { value: 100, isPositive: !invertLogic };
+    }
+    const diff = current - prev;
+    const pct = (diff / Math.abs(prev)) * 100;
+    const isPos = invertLogic ? diff <= 0 : diff >= 0;
+    return { value: Math.abs(pct).toFixed(1), isPositive: isPos };
+  };
 
   const avgMargin = totals.sales > 0 ? (totals.netProfit / totals.sales) * 100 : 0;
+  const avgAov = totals.orderCount > 0 ? totals.sales / totals.orderCount : 0;
 
   const handleExportMonthlyReport = async () => {
     if (!window.XLSX) {
@@ -952,19 +1051,24 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
       [`รายงานสรุปผลประกอบการรายเดือน (Performance Report) ประจำปี ${selectedYear}`],
       [`ร้านค้า: ${selectedShop === 'all' ? 'ทุกร้าน' : selectedShop} | ช่องทาง: ${selectedChannel === 'all' ? 'ทุกช่องทาง' : selectedChannel}`],
       [],
-      ["เดือน", "จำนวนออเดอร์", "ยอดขายสุทธิ (฿)", "ต้นทุนสินค้า (COGS)", "ค่าธรรมเนียม Platform", "ค่าใช้จ่ายอื่นๆ", "ส่วนต่างค่าส่ง", "รวมค่าใช้จ่ายดำเนินงาน", "กำไรสุทธิ (Net Profit)", "Margin (%)"]
+      ["เดือน", "จำนวนออเดอร์", "ยอดซื้อเฉลี่ย AOV (฿)", "ยอดขายรวม (Gross)", "ส่วนลด (Discount)", "คืนเงิน/ตีกลับ (Refund)", "ยอดขายสุทธิ (Net Sales)", "ต้นทุนสินค้า (COGS)", "ค่าธรรมเนียม Platform", "ค่าใช้จ่ายอื่นๆ", "ส่วนต่างค่าส่ง", "รวมค่าใช้จ่ายดำเนินงาน", "ภาษีหัก ณ ที่จ่าย (WHT)", "กำไรสุทธิ (Net Profit)", "Margin (%)"]
     ];
 
     monthlyData.forEach(m => {
       dataRows.push([
         m.monthName,
         m.orderCount,
+        round2Dec(m.aov),
+        round2Dec(m.grossSales),
+        round2Dec(m.discounts),
+        round2Dec(m.refunds),
         round2Dec(m.sales),
         round2Dec(m.cogs),
         round2Dec(m.fees),
         round2Dec(m.expenses),
         round2Dec(m.shippingBalance),
         round2Dec(m.totalExpense),
+        round2Dec(m.wht),
         round2Dec(m.netProfit),
         `${m.margin.toFixed(1)}%`
       ]);
@@ -973,12 +1077,17 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     dataRows.push([
       "รวมทั้งปี",
       totals.orderCount,
+      round2Dec(avgAov),
+      round2Dec(totals.grossSales),
+      round2Dec(totals.discounts),
+      round2Dec(totals.refunds),
       round2Dec(totals.sales),
       round2Dec(totals.cogs),
       round2Dec(totals.fees),
       round2Dec(totals.expenses),
       round2Dec(totals.shippingBalance),
       round2Dec(totals.totalExpense),
+      round2Dec(totals.wht),
       round2Dec(totals.netProfit),
       `${avgMargin.toFixed(1)}%`
     ]);
@@ -1013,34 +1122,98 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
               <option value="2027">2027</option>
             </select>
           </div>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-            <Store size={14} className="text-slate-400"/>
-            <select value={selectedShop} onChange={e=>setSelectedShop(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer">
-              <option value="all">ทุกร้านค้า</option>
-              {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-            <Filter size={14} className="text-slate-400"/>
-            <select value={selectedChannel} onChange={e=>setSelectedChannel(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer">
-              <option value="all">ทุกช่องทาง</option>
-              {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <button onClick={handleExportMonthlyReport} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold border border-emerald-200 flex items-center gap-1.5 transition-colors shadow-sm">
+          <button onClick={handleExportMonthlyReport} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold border border-emerald-200 flex items-center gap-1.5 transition-colors shadow-sm ml-auto">
             <FileSpreadsheet size={16}/> Export Excel
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard title={`ยอดขายรวมปี ${selectedYear}`} value={totals.sales} color="indigo" icon={<TrendingUp />} subtitle={`รวม ${totals.orderCount.toLocaleString()} ออเดอร์`} />
-        <StatCard title="ต้นทุนสินค้าขาย (COGS)" value={totals.cogs} color="amber" icon={<Box />} subtitle="ต้นทุนสินค้าตามระบบ FIFO" />
-        <StatCard title="ค่าใช้จ่ายดำเนินงานรวม" value={totals.totalExpense} color="rose" icon={<TrendingDown />} subtitle="ค่าธรรมเนียม + รายจ่ายอื่นๆ" />
-        <StatCard title="กำไรสุทธิรวม (Net Profit)" value={totals.netProfit} color="emerald" icon={<ProfitIcon />} subtitle={`Margin เฉลี่ย ${avgMargin.toFixed(1)}%`} />
+      {/* --- UX/UI: Filter Stack (Shop, Channel, Month) --- */}
+      <div className="flex flex-col gap-3 w-full">
+          {/* 1. Shop Filter */}
+          <div className="flex items-center gap-3 w-full">
+             <div className="hidden md:flex p-2.5 bg-indigo-50 text-indigo-600 rounded-xl shrink-0 items-center justify-center shadow-sm border border-indigo-100" title="เลือกร้านค้า">
+                 <Store size={18}/>
+             </div>
+             <div className="flex bg-white p-1.5 rounded-2xl w-full overflow-x-auto shadow-sm border border-slate-100 custom-scrollbar gap-1.5 snap-x">
+                  <button 
+                      onClick={() => setSelectedShop('all')} 
+                      className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start flex items-center gap-1.5 ${selectedShop === 'all' ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
+                  >
+                      <Store size={14} className={selectedShop === 'all' ? 'text-indigo-200' : 'text-slate-400'}/> ทุกร้านค้า
+                  </button>
+                  <div className="w-px h-6 bg-slate-200 my-auto mx-1 shrink-0"></div>
+                  {CONSTANTS.SHOPS.map((s, i) => (
+                      <button 
+                          key={i} 
+                          onClick={() => setSelectedShop(s)} 
+                          className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start ${selectedShop === s ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-indigo-600'}`}
+                      >
+                          {s}
+                      </button>
+                  ))}
+             </div>
+          </div>
+
+          {/* 2. Channel Filter */}
+          <div className="flex items-center gap-3 w-full">
+             <div className="hidden md:flex p-2.5 bg-rose-50 text-rose-600 rounded-xl shrink-0 items-center justify-center shadow-sm border border-rose-100" title="เลือกช่องทาง">
+                 <Filter size={18}/>
+             </div>
+             <div className="flex bg-white p-1.5 rounded-2xl w-full overflow-x-auto shadow-sm border border-slate-100 custom-scrollbar gap-1.5 snap-x">
+                  <button 
+                      onClick={() => setSelectedChannel('all')} 
+                      className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start flex items-center gap-1.5 ${selectedChannel === 'all' ? 'bg-rose-500 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-rose-500'}`}
+                  >
+                      <Filter size={14} className={selectedChannel === 'all' ? 'text-rose-200' : 'text-slate-400'}/> ทุกช่องทาง
+                  </button>
+                  <div className="w-px h-6 bg-slate-200 my-auto mx-1 shrink-0"></div>
+                  {CONSTANTS.CHANNELS.map((c, i) => (
+                      <button 
+                          key={i} 
+                          onClick={() => setSelectedChannel(c)} 
+                          className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start ${selectedChannel === c ? 'bg-rose-500 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-rose-500'}`}
+                      >
+                          {c}
+                      </button>
+                  ))}
+             </div>
+          </div>
+
+          {/* 3. Month Filter */}
+          <div className="flex items-center gap-3 w-full">
+             <div className="hidden md:flex p-2.5 bg-emerald-50 text-emerald-600 rounded-xl shrink-0 items-center justify-center shadow-sm border border-emerald-100" title="เลือกเดือน">
+                 <Calendar size={18}/>
+             </div>
+             <div className="flex bg-white p-1.5 rounded-2xl w-full overflow-x-auto shadow-sm border border-slate-100 custom-scrollbar gap-1.5 snap-x">
+                  <button 
+                      onClick={() => setSelectedFilterMonth('all')} 
+                      className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start flex items-center gap-1.5 ${selectedFilterMonth === 'all' ? 'bg-emerald-500 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-emerald-600'}`}
+                  >
+                      <Calendar size={14} className={selectedFilterMonth === 'all' ? 'text-emerald-200' : 'text-slate-400'}/> รวมทั้งปี
+                  </button>
+                  <div className="w-px h-6 bg-slate-200 my-auto mx-1 shrink-0"></div>
+                  {['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'].map((m, i) => (
+                      <button 
+                          key={i} 
+                          onClick={() => setSelectedFilterMonth(String(i + 1))} 
+                          className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all whitespace-nowrap shrink-0 snap-start ${selectedFilterMonth === String(i + 1) ? 'bg-emerald-500 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-emerald-600'}`}
+                      >
+                          {m}
+                      </button>
+                  ))}
+             </div>
+          </div>
       </div>
 
-      <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <StatCard title={`ยอดขายรวมปี ${selectedYear}`} value={totals.sales} color="indigo" icon={<TrendingUp />} subtitle={`ออเดอร์รวม ${totals.orderCount.toLocaleString()} | เทียบปี ${parseInt(selectedYear)-1}`} trend={getTrend(totals.sales, prevTotals.sales)} />
+        <StatCard title="ต้นทุนสินค้าขาย (COGS)" value={totals.cogs} color="amber" icon={<Box />} subtitle={`ต้นทุน FIFO | เทียบปี ${parseInt(selectedYear)-1}`} trend={getTrend(totals.cogs, prevTotals.cogs, true)} />
+        <StatCard title="ค่าใช้จ่ายดำเนินงานรวม" value={totals.totalExpense} color="rose" icon={<TrendingDown />} subtitle={`ค่าธรรมเนียม+รายจ่าย | เทียบปี ${parseInt(selectedYear)-1}`} trend={getTrend(totals.totalExpense, prevTotals.totalExpense, true)} />
+        <StatCard title="กำไรสุทธิรวม (Net Profit)" value={totals.netProfit} color="emerald" icon={<ProfitIcon />} subtitle={`Margin ${avgMargin.toFixed(1)}% | เทียบปี ${parseInt(selectedYear)-1}`} trend={getTrend(totals.netProfit, prevTotals.netProfit)} />
+      </div>
+
+      <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6 mt-6">
         <div className="flex justify-between items-center border-b pb-4">
           <h3 className="font-bold text-slate-800 text-base flex items-center gap-2">
             <Calendar size={18} className="text-indigo-600"/> ตารางสรุปผลประกอบการรายเดือน ประจำปี {selectedYear}
@@ -1052,23 +1225,33 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
             <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-200">
               <tr>
                 <th className="p-4">เดือน</th>
-                <th className="p-4 text-center">ออเดอร์</th>
-                <th className="p-4 text-right text-indigo-600">ยอดขายสุทธิ</th>
-                <th className="p-4 text-right text-amber-600">ต้นทุนสินค้า (COGS)</th>
-                <th className="p-4 text-right text-rose-500">ค่าธรรมเนียม</th>
-                <th className="p-4 text-right text-slate-600">รายจ่ายอื่นๆ</th>
-                <th className="p-4 text-right text-blue-600">ส่วนต่างค่าส่ง</th>
-                <th className="p-4 text-right text-rose-600">รวมค่าใช้จ่าย</th>
-                <th className="p-4 text-right text-emerald-600">กำไรสุทธิ</th>
+                <th className="p-4 text-center">ออเดอร์ (AOV)</th>
+                <th className="p-4 text-right text-indigo-600">ยอดขายสุทธิ<br/><span className="text-[9px] font-normal">(Gross - ลด - คืน)</span></th>
+                <th className="p-4 text-right text-amber-600">ต้นทุนสินค้า<br/><span className="text-[9px] font-normal">(COGS)</span></th>
+                <th className="p-4 text-right text-rose-500">ค่าธรรมเนียม<br/><span className="text-[9px] font-normal">(Platform)</span></th>
+                <th className="p-4 text-right text-slate-600">รายจ่ายอื่นๆ<br/><span className="text-[9px] font-normal">(Expense)</span></th>
+                <th className="p-4 text-right text-blue-600">ส่วนต่างค่าส่ง<br/><span className="text-[9px] font-normal">(Shipping Bal.)</span></th>
+                <th className="p-4 text-right text-rose-600">รวมค่าใช้จ่าย<br/><span className="text-[9px] font-normal">(Total Exp.)</span></th>
+                <th className="p-4 text-right text-emerald-600">กำไรสุทธิ<br/><span className="text-[9px] font-normal">WHT (ถ้ามี)</span></th>
                 <th className="p-4 text-center">Margin</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {monthlyData.map((m, idx) => (
+              {filteredMonthlyData.map((m, idx) => (
                 <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
                   <td className="p-4 font-bold text-slate-800">{m.monthName}</td>
-                  <td className="p-4 text-center font-bold text-slate-500">{m.orderCount.toLocaleString()}</td>
-                  <td className="p-4 text-right font-black text-indigo-600">{formatCurrency(m.sales)}</td>
+                  <td className="p-4 text-center">
+                      <p className="font-bold text-slate-600">{m.orderCount.toLocaleString()}</p>
+                      <p className="text-[9px] text-slate-400 mt-1">AOV: {formatCurrency(m.aov)}</p>
+                  </td>
+                  <td className="p-4 text-right">
+                      <p className="font-black text-indigo-600 text-sm">{formatCurrency(m.sales)}</p>
+                      <div className="text-[9px] text-slate-400 mt-1 flex flex-col items-end leading-tight">
+                          <span>Gross: {formatCurrency(m.grossSales)}</span>
+                          {m.discounts > 0 && <span className="text-rose-400">ส่วนลด: -{formatCurrency(m.discounts)}</span>}
+                          {m.refunds > 0 && <span className="text-orange-400">คืน/ยกเลิก: -{formatCurrency(m.refunds)}</span>}
+                      </div>
+                  </td>
                   <td className="p-4 text-right font-bold text-amber-600">{formatCurrency(m.cogs)}</td>
                   <td className="p-4 text-right font-bold text-rose-500">{formatCurrency(m.fees)}</td>
                   <td className="p-4 text-right font-medium text-slate-600">{formatCurrency(m.expenses)}</td>
@@ -1076,10 +1259,11 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                     {m.shippingBalance > 0 ? '+' : ''}{formatCurrency(m.shippingBalance)}
                   </td>
                   <td className="p-4 text-right font-bold text-rose-600">{formatCurrency(m.totalExpense)}</td>
-                  <td className="p-4 text-right font-black text-sm">
-                    <span className={m.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                  <td className="p-4 text-right">
+                    <p className={`font-black text-sm ${m.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                       {m.netProfit > 0 ? '+' : ''}{formatCurrency(m.netProfit)}
-                    </span>
+                    </p>
+                    {m.wht > 0 && <p className="text-[9px] text-blue-500 font-bold mt-1" title="ภาษีถูกหัก ณ ที่จ่าย (ขอคืนได้)">WHT: +{formatCurrency(m.wht)}</p>}
                   </td>
                   <td className="p-4 text-center">
                     <span className={`px-2 py-1 rounded-md font-black text-[10px] ${m.margin >= 20 ? 'bg-emerald-100 text-emerald-700' : m.margin > 0 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'}`}>
@@ -1091,15 +1275,28 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
             </tbody>
             <tfoot className="bg-slate-900 text-white font-bold text-xs">
               <tr>
-                <td className="p-4">รวมทั้งปี</td>
-                <td className="p-4 text-center">{totals.orderCount.toLocaleString()}</td>
-                <td className="p-4 text-right text-indigo-300">{formatCurrency(totals.sales)}</td>
+                <td className="p-4">{selectedFilterMonth === 'all' ? 'รวมทั้งปี' : 'รวมยอดเดือนนี้'}</td>
+                <td className="p-4 text-center">
+                    <p>{totals.orderCount.toLocaleString()}</p>
+                    <p className="text-[9px] text-slate-400 mt-1">AOV: {formatCurrency(avgAov)}</p>
+                </td>
+                <td className="p-4 text-right">
+                    <p className="text-indigo-300 text-sm">{formatCurrency(totals.sales)}</p>
+                    <div className="text-[9px] text-slate-400 mt-1 flex flex-col items-end leading-tight">
+                          <span>Gross: {formatCurrency(totals.grossSales)}</span>
+                          {totals.discounts > 0 && <span className="text-rose-400">ส่วนลด: -{formatCurrency(totals.discounts)}</span>}
+                          {totals.refunds > 0 && <span className="text-orange-400">คืน/ยกเลิก: -{formatCurrency(totals.refunds)}</span>}
+                    </div>
+                </td>
                 <td className="p-4 text-right text-amber-300">{formatCurrency(totals.cogs)}</td>
                 <td className="p-4 text-right text-rose-300">{formatCurrency(totals.fees)}</td>
                 <td className="p-4 text-right text-slate-300">{formatCurrency(totals.expenses)}</td>
                 <td className="p-4 text-right text-blue-300">{formatCurrency(totals.shippingBalance)}</td>
                 <td className="p-4 text-right text-rose-300">{formatCurrency(totals.totalExpense)}</td>
-                <td className="p-4 text-right text-emerald-400 text-sm">{formatCurrency(totals.netProfit)}</td>
+                <td className="p-4 text-right">
+                    <p className="text-emerald-400 text-sm">{formatCurrency(totals.netProfit)}</p>
+                    {totals.wht > 0 && <p className="text-[9px] text-blue-300 mt-1">WHT: +{formatCurrency(totals.wht)}</p>}
+                </td>
                 <td className="p-4 text-center text-amber-400">{avgMargin.toFixed(1)}%</td>
               </tr>
             </tfoot>
@@ -1646,10 +1843,10 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                                 {monthlyStats.data.map((m, i) => (
                                     <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
                                         <div className="flex w-full items-end justify-center gap-1 h-full relative">
-                                             <div className="w-1/3 bg-indigo-500 rounded-t-md relative group-hover:bg-indigo-400 transition-colors cursor-pointer" style={{ height: `${(m.perfSales / monthlyStats.maxPerf) * 100}%`, minHeight: '4px' }}>
+                                             <div className="w-1/3 bg-indigo-500 rounded-t-md relative group-hover:bg-indigo-400 transition-colors cursor-pointer" style={{ height: `${(m.perfSales / monthlyStats.maxPerf) * 100}%`, minHeight: '4px', opacity: m.perfSales >= 0.01 ? 1 : 0 }}>
                                                  <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity bg-indigo-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.perfSales)}</span>
                                              </div>
-                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.perfExpTotal / monthlyStats.maxPerf) * 100}%`, minHeight: '4px' }}>
+                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.perfExpTotal / monthlyStats.maxPerf) * 100}%`, minHeight: '4px', opacity: m.perfExpTotal >= 0.01 ? 1 : 0 }}>
                                                  <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.perfExpTotal)}</span>
                                              </div>
                                         </div>
@@ -1762,10 +1959,10 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                                 {monthlyStats.data.map((m, i) => (
                                     <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
                                         <div className="flex w-full items-end justify-center gap-1 h-full relative">
-                                             <div className="w-1/3 bg-emerald-500 rounded-t-md relative group-hover:bg-emerald-400 transition-colors cursor-pointer" style={{ height: `${(m.cashIn / monthlyStats.maxCash) * 100}%`, minHeight: '4px' }}>
+                                             <div className="w-1/3 bg-emerald-500 rounded-t-md relative group-hover:bg-emerald-400 transition-colors cursor-pointer" style={{ height: `${(m.cashIn / monthlyStats.maxCash) * 100}%`, minHeight: '4px', opacity: m.cashIn >= 0.01 ? 1 : 0 }}>
                                                  <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity bg-emerald-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.cashIn)}</span>
                                              </div>
-                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.cashOut / monthlyStats.maxCash) * 100}%`, minHeight: '4px' }}>
+                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.cashOut / monthlyStats.maxCash) * 100}%`, minHeight: '4px', opacity: m.cashOut >= 0.01 ? 1 : 0 }}>
                                                  <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.cashOut)}</span>
                                              </div>
                                         </div>
@@ -7201,6 +7398,54 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               </div>
           </div>
       )}
+
+      {/* --- 🔥 NEW: Modal ประวัติความเคลื่อนไหวสินค้า (Stock Ledger / Stock Card) --- */}
+      {viewHistory && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-4xl w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+                  <div className="flex justify-between items-start mb-4 border-b border-slate-100 pb-4">
+                      <div>
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><History className="text-indigo-600"/> ประวัติความเคลื่อนไหวสินค้า (Stock Card)</h3>
+                          <p className="text-sm font-bold text-slate-600 mt-2">{viewHistory.name} <span className="text-xs text-indigo-500 font-mono bg-indigo-50 px-1.5 py-0.5 rounded ml-1">SKU: {viewHistory.sku}</span></p>
+                      </div>
+                      <button onClick={() => setViewHistory(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
+                  </div>
+                  
+                  <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 rounded-2xl bg-slate-50">
+                      <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                              <tr>
+                                  <th className="p-3 pl-4">วันที่</th>
+                                  <th className="p-3">อ้างอิง / รายการ</th>
+                                  <th className="p-3 text-center text-emerald-600">เข้า (IN)</th>
+                                  <th className="p-3 text-center text-rose-600">ออก (OUT)</th>
+                                  <th className="p-3 text-center text-indigo-600">คงเหลือ (Balance)</th>
+                                  <th className="p-3">หมายเหตุ</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 bg-white">
+                              {stockLedger.length > 0 ? stockLedger.map((row, idx) => (
+                                  <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                      <td className="p-3 pl-4 text-slate-600 font-medium whitespace-nowrap">{formatDate(row.date)}</td>
+                                      <td className="p-3 font-mono font-bold text-slate-700">{row.ref}</td>
+                                      <td className="p-3 text-center font-black text-emerald-600">{row.qty > 0 ? `+${row.qty}` : '-'}</td>
+                                      <td className="p-3 text-center font-black text-rose-500">{row.qty < 0 ? row.qty : '-'}</td>
+                                      <td className="p-3 text-center font-black text-indigo-600 bg-indigo-50/30">{row.balance}</td>
+                                      <td className="p-3 text-slate-500 text-[10px] max-w-[200px] truncate" title={row.note}>{row.note}</td>
+                                  </tr>
+                              )) : (
+                                  <tr><td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่พบประวัติความเคลื่อนไหว</td></tr>
+                              )}
+                          </tbody>
+                      </table>
+                  </div>
+                  <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
+                      <button onClick={() => setViewHistory(null)} className="px-6 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors">ปิดหน้าต่าง</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
     </div>
   );
 }
