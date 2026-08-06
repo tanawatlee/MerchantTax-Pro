@@ -13663,8 +13663,9 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   sellerZipCode: invData.sellerZipCode || savedSeller.sellerZipCode || '',
                   notes: bulkSettings.docType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน',
                   vatType: calc.vatType,
-                  logo: invData.logo || savedSeller.logo || '',
-                  signature: invData.signature || savedSeller.signature || '',
+                  // ป้องกัน Payload ใหญ่เกินไป: ตรวจสอบความยาวของ Logo และ Signature หากใหญ่เกินไปให้ตัดทิ้งไปก่อนเพื่อความปลอดภัย
+                  logo: (invData.logo || savedSeller.logo || '').length > 500000 ? '' : (invData.logo || savedSeller.logo || ''),
+                  signature: (invData.signature || savedSeller.signature || '').length > 500000 ? '' : (invData.signature || savedSeller.signature || ''),
                   discount: calc.discount,
                   sub: calc.sub,
                   afterDisc: calc.afterDisc,
@@ -13705,12 +13706,14 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
               processedCount++;
 
-              if (opsInCurrentBatch >= 100 || i === uploadQueue.length - 1) {
+              // --- 🔥 CRITICAL FIX: ลดจำนวนรอบและหน่วงเวลาเพื่อกัน Payload Limit ---
+              // ปกติ Firebase ให้ Batch ได้ 500 แต่เพราะข้อมูล Invoice มีขนาดใหญ่ เราเลยจะรันทีละ 15 บิล (30 Operations)
+              if (opsInCurrentBatch >= 30 || i === uploadQueue.length - 1) {
                   await batch.commit();
                   batch = writeBatch(dbInstance);
                   opsInCurrentBatch = 0;
-                  // ใส่ดีเลย์ให้ UI อัปเดตและป้องกัน Firebase ลิมิต
-                  await new Promise(r => setTimeout(r, 200));
+                  // ใส่ดีเลย์ให้ UI อัปเดตและป้องกัน Firebase ลิมิต (พักครึ่งวินาที)
+                  await new Promise(r => setTimeout(r, 500));
               }
           }
 
