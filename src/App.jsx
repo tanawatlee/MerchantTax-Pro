@@ -852,6 +852,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
   const [selectedShop, setSelectedShop] = useState('all');
   const [selectedChannel, setSelectedChannel] = useState('all');
+  const [selectedMonth, setSelectedMonth] = useState('all'); // NEW: เพิ่ม State สำหรับเลือกเดือน
 
   const monthlyData = useMemo(() => {
     const year = parseInt(selectedYear, 10);
@@ -871,7 +872,6 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     }));
 
     transactions.forEach(t => {
-      // --- FIX: นำ isCancelled ออกจากการ Return บรรทัดแรก เพื่อให้ระบบดึงยอด Cancel ไปใส่ใน Refund (ตีกลับ/ยกเลิก) ---
       if (t.isTaxOnly) return;
       if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
       if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
@@ -884,7 +884,6 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
         const itemSubtotal = (t.items || []).reduce((sum, item) => sum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
         
         if (t.isCancelled || t.isDeliveryFailed) {
-            // นับยอดเป็นสินค้าตีกลับ/ยกเลิก (Lost GMV / Refund)
             months[mIdx].refunds += itemSubtotal;
         } else {
             const fee = Number(t.platformFee) || 0;
@@ -944,8 +943,14 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     });
   }, [transactions, stockBatches, selectedYear, selectedShop, selectedChannel]);
 
+  // NEW: กรองข้อมูลตามเดือนที่เลือกก่อนนำไปรวมสถิติ
+  const displayedMonths = useMemo(() => {
+    if (selectedMonth === 'all') return monthlyData;
+    return monthlyData.filter(m => m.month.toString() === selectedMonth);
+  }, [monthlyData, selectedMonth]);
+
   const totals = useMemo(() => {
-    return monthlyData.reduce((acc, m) => ({
+    return displayedMonths.reduce((acc, m) => ({
       grossSales: acc.grossSales + m.grossSales,
       discounts: acc.discounts + m.discounts,
       refunds: acc.refunds + m.refunds,
@@ -959,7 +964,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
       netProfit: acc.netProfit + m.netProfit,
       orderCount: acc.orderCount + m.orderCount
     }), { grossSales: 0, discounts: 0, refunds: 0, sales: 0, cogs: 0, fees: 0, expenses: 0, shippingBalance: 0, wht: 0, totalExpense: 0, netProfit: 0, orderCount: 0 });
-  }, [monthlyData]);
+  }, [displayedMonths]);
 
   const prevTotals = useMemo(() => {
     const prevYear = parseInt(selectedYear, 10) - 1;
@@ -972,6 +977,9 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
 
       const d = normalizeDate(t.date);
       if (!d || d.getFullYear() !== prevYear) return;
+      
+      // NEW: สนใจเฉพาะเดือนที่ถูก Filter (กรณีเทียบปีต่อปีแบบระบุเดือน)
+      if (selectedMonth !== 'all' && (d.getMonth() + 1).toString() !== selectedMonth) return;
 
       if (t.type === 'income' && !t.isFromReconciliation) {
         if (!t.isCancelled && !t.isDeliveryFailed) {
@@ -1014,7 +1022,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     const netProfit = sales - cogs - totalExpense;
 
     return { sales, cogs, totalExpense, netProfit };
-  }, [transactions, stockBatches, selectedYear, selectedShop, selectedChannel]);
+  }, [transactions, stockBatches, selectedYear, selectedShop, selectedChannel, selectedMonth]);
 
   const getTrend = (current, prev, invertLogic = false) => {
     if (prev === 0) {
@@ -1039,12 +1047,12 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
 
     const dataRows = [
       [`รายงานสรุปผลประกอบการรายเดือน (Performance Report) ประจำปี ${selectedYear}`],
-      [`ร้านค้า: ${selectedShop === 'all' ? 'ทุกร้าน' : selectedShop} | ช่องทาง: ${selectedChannel === 'all' ? 'ทุกช่องทาง' : selectedChannel}`],
+      [`ร้านค้า: ${selectedShop === 'all' ? 'ทุกร้าน' : selectedShop} | ช่องทาง: ${selectedChannel === 'all' ? 'ทุกช่องทาง' : selectedChannel} | เดือน: ${selectedMonth === 'all' ? 'รวมทั้งปี' : selectedMonth}`],
       [],
       ["เดือน", "จำนวนออเดอร์", "ยอดซื้อเฉลี่ย AOV (฿)", "ยอดขายรวม (Gross)", "ส่วนลด (Discount)", "คืนเงิน/ตีกลับ (Refund)", "ยอดขายสุทธิ (Net Sales)", "ต้นทุนสินค้า (COGS)", "ค่าธรรมเนียม Platform", "ค่าใช้จ่ายอื่นๆ", "ส่วนต่างค่าส่ง", "รวมค่าใช้จ่ายดำเนินงาน", "ภาษีหัก ณ ที่จ่าย (WHT)", "กำไรสุทธิ (Net Profit)", "Margin (%)"]
     ];
 
-    monthlyData.forEach(m => {
+    displayedMonths.forEach(m => {
       dataRows.push([
         m.monthName,
         m.orderCount,
@@ -1065,7 +1073,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
     });
 
     dataRows.push([
-      "รวมทั้งปี",
+      selectedMonth === 'all' ? "รวมทั้งปี" : "รวม",
       totals.orderCount,
       round2Dec(avgAov),
       round2Dec(totals.grossSales),
@@ -1095,45 +1103,92 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
 
   return (
     <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-        <div>
-          <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
-            <BarChart2 className="text-indigo-600"/> สรุปยอดรายเดือน (Monthly Performance)
-          </h2>
-          <p className="text-sm text-slate-400 font-medium">สรุปผลการดำเนินงาน รายได้ ต้นทุน และกำไรสุทธิแยกตามเดือน</p>
+      
+      {/* ----------------- Header Card ----------------- */}
+      <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600 shrink-0 shadow-sm border border-indigo-100">
+            <BarChart2 size={24}/>
+          </div>
+          <div>
+            <h2 className="text-2xl font-black text-slate-800">สรุปยอดรายเดือน (Monthly Performance)</h2>
+            <p className="text-sm text-slate-500 font-medium mt-1">สรุปผลการดำเนินงาน รายได้ ต้นทุน และกำไรสุทธิแยกตามเดือน</p>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-            <Calendar size={14} className="text-slate-400"/>
-            <select value={selectedYear} onChange={e=>setSelectedYear(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-indigo-700 cursor-pointer">
+        <div className="flex items-center gap-3 w-full md:w-auto">
+          <div className="flex items-center gap-2 bg-white px-4 py-2.5 rounded-2xl border border-slate-200 shadow-sm">
+            <Calendar size={16} className="text-slate-400"/>
+            <select value={selectedYear} onChange={e=>setSelectedYear(e.target.value)} className="bg-transparent border-0 text-sm font-bold outline-none text-indigo-700 cursor-pointer pr-2">
               <option value="2024">2024</option>
               <option value="2025">2025</option>
               <option value="2026">2026</option>
               <option value="2027">2027</option>
             </select>
           </div>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-            <Store size={14} className="text-slate-400"/>
-            <select value={selectedShop} onChange={e=>setSelectedShop(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer">
-              <option value="all">ทุกร้านค้า</option>
-              {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-            <Filter size={14} className="text-slate-400"/>
-            <select value={selectedChannel} onChange={e=>setSelectedChannel(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer">
-              <option value="all">ทุกช่องทาง</option>
-              {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <button onClick={handleExportMonthlyReport} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold border border-emerald-200 flex items-center gap-1.5 transition-colors shadow-sm">
+          <button onClick={handleExportMonthlyReport} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-5 py-2.5 rounded-2xl text-sm font-bold border border-emerald-200 flex items-center gap-2 transition-colors shadow-sm whitespace-nowrap">
             <FileSpreadsheet size={16}/> Export Excel
           </button>
         </div>
       </div>
 
+      {/* ----------------- Visual Filters Stack ----------------- */}
+      <div className="space-y-4 mb-6">
+        {/* Row 1: Shop Filter */}
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 md:w-14 md:h-14 shrink-0 bg-indigo-50 rounded-[20px] flex items-center justify-center text-indigo-600 shadow-sm border border-indigo-100">
+            <Store size={24} />
+          </div>
+          <div className="flex-1 flex gap-2 overflow-x-auto custom-scrollbar items-center bg-white p-2 rounded-[24px] border border-slate-100 shadow-sm">
+            <button onClick={() => setSelectedShop('all')} className={`px-5 py-2.5 rounded-[16px] text-xs md:text-sm font-bold whitespace-nowrap transition-all flex items-center gap-2 ${selectedShop === 'all' ? 'bg-indigo-600 text-white shadow-md' : 'bg-transparent text-slate-500 hover:bg-slate-50'}`}>
+              <Store size={16} /> ทุกร้านค้า
+            </button>
+            {CONSTANTS.SHOPS.map(s => (
+              <button key={s} onClick={() => setSelectedShop(s)} className={`px-5 py-2.5 rounded-[16px] text-xs md:text-sm font-bold whitespace-nowrap transition-all ${selectedShop === s ? 'bg-indigo-600 text-white shadow-md' : 'bg-transparent text-slate-500 hover:bg-slate-50'}`}>
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Row 2: Channel Filter */}
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 md:w-14 md:h-14 shrink-0 bg-rose-50 rounded-[20px] flex items-center justify-center text-rose-500 shadow-sm border border-rose-100">
+            <Filter size={24} />
+          </div>
+          <div className="flex-1 flex gap-2 overflow-x-auto custom-scrollbar items-center bg-white p-2 rounded-[24px] border border-slate-100 shadow-sm">
+            <button onClick={() => setSelectedChannel('all')} className={`px-5 py-2.5 rounded-[16px] text-xs md:text-sm font-bold whitespace-nowrap transition-all flex items-center gap-2 ${selectedChannel === 'all' ? 'bg-rose-500 text-white shadow-md' : 'bg-transparent text-slate-500 hover:bg-slate-50'}`}>
+              <Filter size={16} /> ทุกช่องทาง
+            </button>
+            {CONSTANTS.CHANNELS.map(c => (
+              <button key={c} onClick={() => setSelectedChannel(c)} className={`px-5 py-2.5 rounded-[16px] text-xs md:text-sm font-bold whitespace-nowrap transition-all ${selectedChannel === c ? 'bg-rose-500 text-white shadow-md' : 'bg-transparent text-slate-500 hover:bg-slate-50'}`}>
+                {c}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Row 3: Month Filter */}
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 md:w-14 md:h-14 shrink-0 bg-emerald-50 rounded-[20px] flex items-center justify-center text-emerald-500 shadow-sm border border-emerald-100">
+            <Calendar size={24} />
+          </div>
+          <div className="flex-1 flex gap-2 overflow-x-auto custom-scrollbar items-center bg-white p-2 rounded-[24px] border border-slate-100 shadow-sm">
+            <button onClick={() => setSelectedMonth('all')} className={`px-5 py-2.5 rounded-[16px] text-xs md:text-sm font-bold whitespace-nowrap transition-all flex items-center gap-2 ${selectedMonth === 'all' ? 'bg-emerald-500 text-white shadow-md' : 'bg-transparent text-slate-500 hover:bg-slate-50'}`}>
+              <Calendar size={16} /> รวมทั้งปี
+            </button>
+            {['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'].map((m, i) => {
+              const mVal = (i + 1).toString();
+              return (
+              <button key={mVal} onClick={() => setSelectedMonth(mVal)} className={`px-5 py-2.5 rounded-[16px] text-xs md:text-sm font-bold whitespace-nowrap transition-all ${selectedMonth === mVal ? 'bg-emerald-500 text-white shadow-md' : 'bg-transparent text-slate-500 hover:bg-slate-50'}`}>
+                {m}
+              </button>
+            )})}
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard title={`ยอดขายรวมปี ${selectedYear}`} value={totals.sales} color="indigo" icon={<TrendingUp />} subtitle={`ออเดอร์รวม ${totals.orderCount.toLocaleString()} | เทียบปี ${parseInt(selectedYear)-1}`} trend={getTrend(totals.sales, prevTotals.sales)} />
+        <StatCard title={`ยอดขายรวมปี ${selectedYear} ${selectedMonth !== 'all' ? '(เฉพาะเดือน)' : ''}`} value={totals.sales} color="indigo" icon={<TrendingUp />} subtitle={`ออเดอร์รวม ${totals.orderCount.toLocaleString()} | เทียบปี ${parseInt(selectedYear)-1}`} trend={getTrend(totals.sales, prevTotals.sales)} />
         <StatCard title="ต้นทุนสินค้าขาย (COGS)" value={totals.cogs} color="amber" icon={<Box />} subtitle={`ต้นทุน FIFO | เทียบปี ${parseInt(selectedYear)-1}`} trend={getTrend(totals.cogs, prevTotals.cogs, true)} />
         <StatCard title="ค่าใช้จ่ายดำเนินงานรวม" value={totals.totalExpense} color="rose" icon={<TrendingDown />} subtitle={`ค่าธรรมเนียม+รายจ่าย | เทียบปี ${parseInt(selectedYear)-1}`} trend={getTrend(totals.totalExpense, prevTotals.totalExpense, true)} />
         <StatCard title="กำไรสุทธิรวม (Net Profit)" value={totals.netProfit} color="emerald" icon={<ProfitIcon />} subtitle={`Margin ${avgMargin.toFixed(1)}% | เทียบปี ${parseInt(selectedYear)-1}`} trend={getTrend(totals.netProfit, prevTotals.netProfit)} />
@@ -1142,7 +1197,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
       <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6 mt-6">
         <div className="flex justify-between items-center border-b pb-4">
           <h3 className="font-bold text-slate-800 text-base flex items-center gap-2">
-            <Calendar size={18} className="text-indigo-600"/> ตารางสรุปผลประกอบการรายเดือน ประจำปี {selectedYear}
+            <Calendar size={18} className="text-indigo-600"/> ตารางสรุปผลประกอบการรายเดือน ประจำปี {selectedYear} {selectedMonth !== 'all' && `(เดือนที่เลือก)`}
           </h3>
         </div>
 
@@ -1163,7 +1218,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {monthlyData.map((m, idx) => (
+              {displayedMonths.map((m, idx) => (
                 <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
                   <td className="p-4 font-bold text-slate-800">{m.monthName}</td>
                   <td className="p-4 text-center">
@@ -1198,10 +1253,16 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                   </td>
                 </tr>
               ))}
+              {displayedMonths.length === 0 && (
+                <tr>
+                    <td colSpan="10" className="p-8 text-center text-slate-400 font-bold">ไม่พบข้อมูลในเดือนที่เลือก</td>
+                </tr>
+              )}
             </tbody>
+            {displayedMonths.length > 0 && (
             <tfoot className="bg-slate-900 text-white font-bold text-xs">
               <tr>
-                <td className="p-4">รวมทั้งปี</td>
+                <td className="p-4">{selectedMonth === 'all' ? 'รวมทั้งปี' : 'รวม'}</td>
                 <td className="p-4 text-center">
                     <p>{totals.orderCount.toLocaleString()}</p>
                     <p className="text-[9px] text-slate-400 mt-1">AOV: {formatCurrency(avgAov)}</p>
@@ -1226,6 +1287,7 @@ function MonthlyReport({ transactions, stockBatches, showToast }) {
                 <td className="p-4 text-center text-amber-400">{avgMargin.toFixed(1)}%</td>
               </tr>
             </tfoot>
+            )}
           </table>
         </div>
       </div>
@@ -5434,7 +5496,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               // 1. หักสต็อกออกจากตัวต้นทาง
               let needed = qty;
               let totalCostTransferred = 0;
-              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort(sortClosestToDateThenOldest(actionDate));
+              const availableBatches = adjustStockItem.batches.map(b => ({ ...b, remaining: Number(b.quantity) - Number(b.sold || 0) })).filter(b => b.remaining > 0).sort(sortClosestToDateThenOldest(actionDate));
               for (const b of availableBatches) {
                   if (needed <= 0) break;
                   const take = Math.min(needed, b.remaining);
@@ -5492,7 +5554,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               // --- โหมดลดสต็อกปกติ ---
               let needed = qty;
               let totalCostLost = 0; 
-              const availableBatches = adjustStockItem.batches.filter(b => b.remaining > 0).sort(sortClosestToDateThenOldest(actionDate));
+              const availableBatches = adjustStockItem.batches.map(b => ({ ...b, remaining: Number(b.quantity) - Number(b.sold || 0) })).filter(b => b.remaining > 0).sort(sortClosestToDateThenOldest(actionDate));
 
               for (const b of availableBatches) {
                   if (needed <= 0) break;
@@ -13054,6 +13116,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [cancelConfirmId, setCancelConfirmId] = useState(null);
   const [hardDeleteInvoiceId, setHardDeleteInvoiceId] = useState(null);
   const [historyFilter, setHistoryFilter] = useState('all');
+  const [historyDocCategory, setHistoryDocCategory] = useState('all'); // --- 🔥 NEW: ตัวกรองหมวดหมู่เอกสาร (รายรับ/รายจ่าย) ---
 
   const [showBulkHardDeleteConfirm, setShowBulkHardDeleteConfirm] = useState(false); // --- NEW: State สำหรับลบถาวรแบบกลุ่ม ---
 
@@ -13536,11 +13599,6 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           showToast("ไม่พบรายการที่สอดคล้อง (ใบกำกับภาษีต้องมาจากรายรับ / ใบสำคัญจ่ายต้องมาจากรายจ่าย)", "error");
           return;
       }
-      
-      if (!invData.sellerName) {
-          showToast("กรุณาระบุข้อมูลผู้ขาย (Seller Profile) ในหน้าออกเอกสารก่อน", "error");
-          return;
-      }
 
       setIsBulkProcessing(true);
       try {
@@ -13592,21 +13650,21 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   date: transDate, 
                   orderDate: transDate, 
                   invNo: newInvNo,
-                  sellerName: invData.sellerName || '',
-                  sellerAddress: invData.sellerAddress || '',
-                  sellerTaxId: invData.sellerTaxId || '',
-                  sellerBranchId: invData.sellerBranchId || '00000',
-                  sellerBranchName: invData.sellerBranchName || '',
-                  sellerPhone: invData.sellerPhone || '',
-                  sellerEmail: invData.sellerEmail || '',
-                  sellerSubDistrict: invData.sellerSubDistrict || '',
-                  sellerDistrict: invData.sellerDistrict || '',
-                  sellerProvince: invData.sellerProvince || '',
-                  sellerZipCode: invData.sellerZipCode || '',
+                  sellerName: invData.sellerName || savedSeller.sellerName || 'ร้านค้า',
+                  sellerAddress: invData.sellerAddress || savedSeller.sellerAddress || '',
+                  sellerTaxId: invData.sellerTaxId || savedSeller.sellerTaxId || '',
+                  sellerBranchId: invData.sellerBranchId || savedSeller.sellerBranchId || '00000',
+                  sellerBranchName: invData.sellerBranchName || savedSeller.sellerBranchName || '',
+                  sellerPhone: invData.sellerPhone || savedSeller.sellerPhone || '',
+                  sellerEmail: invData.sellerEmail || savedSeller.sellerEmail || '',
+                  sellerSubDistrict: invData.sellerSubDistrict || savedSeller.sellerSubDistrict || '',
+                  sellerDistrict: invData.sellerDistrict || savedSeller.sellerDistrict || '',
+                  sellerProvince: invData.sellerProvince || savedSeller.sellerProvince || '',
+                  sellerZipCode: invData.sellerZipCode || savedSeller.sellerZipCode || '',
                   notes: bulkSettings.docType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน',
                   vatType: calc.vatType,
-                  logo: invData.logo || '',
-                  signature: invData.signature || '',
+                  logo: invData.logo || savedSeller.logo || '',
+                  signature: invData.signature || savedSeller.signature || '',
                   discount: calc.discount,
                   sub: calc.sub,
                   afterDisc: calc.afterDisc,
@@ -13614,8 +13672,12 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   total: calc.total,
                   preVat: calc.preVat,
                   status: 'paid',
+                  userId: user.uid,
                   createdAt: serverTimestamp()
               };
+
+              // Sanitize ข้อมูลป้องกันการติด Error ของ Firebase (ลบ properties ที่เป็น undefined ออก)
+              Object.keys(payload).forEach(k => { if (payload[k] === undefined) delete payload[k]; });
 
               const invRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'));
               const collName = trans.type === 'expense' ? 'transactions_expense' : 'transactions_income';
@@ -13643,7 +13705,6 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
               processedCount++;
 
-              // FIX: ลดขนาดของ Batch ลงเหลือ 100 operations เพื่อป้องกัน Database Throttling เมื่อทำรายการจำนวนมาก
               if (opsInCurrentBatch >= 100 || i === uploadQueue.length - 1) {
                   await batch.commit();
                   batch = writeBatch(dbInstance);
@@ -13657,7 +13718,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           setSelectedDocIds([]);
       } catch (e) {
           console.error(e);
-          showToast("เกิดข้อผิดพลาดในการออกเอกสารจำนวนมาก", "error");
+          showToast(`เกิดข้อผิดพลาดในการออกเอกสาร: ${e.message}`, "error");
       }
       setIsBulkProcessing(false);
   };
@@ -14031,7 +14092,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         vat: totals.vat,
         total: totals.total,
         preVat: totals.preVat,
-        status: invData.status || 'unpaid'
+        status: invData.status || 'unpaid',
+        userId: user.uid
       };
 
       const targetId = editingDocId;
@@ -14158,12 +14220,24 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
               if (historyPaymentStatus === 'unpaid' && isPaid) return false;
           }
 
+          // 5. Income / Expense Category Filter (--- 🔥 NEW ---)
+          if (historyDocCategory !== 'all') {
+              // สมมติฐาน: 
+              // รายรับ = income transaction, invoice, abb, quotation, receipt
+              // รายจ่าย = expense transaction, payment_voucher, credit_note
+              
+              const isExpenseLike = doc.type === 'expense' || doc.docType === 'payment_voucher' || doc.docType === 'credit_note';
+              
+              if (historyDocCategory === 'income' && isExpenseLike) return false;
+              if (historyDocCategory === 'expense' && !isExpenseLike) return false;
+          }
+
           return true;
       });
-  }, [combinedDocs, historyFilter, historyStartDate, historyEndDate, historyChannel, historyPaymentStatus]);
+  }, [combinedDocs, historyFilter, historyStartDate, historyEndDate, historyChannel, historyPaymentStatus, historyDocCategory]);
 
   // Reset page when filters change
-  useEffect(() => { setHistPage(1); }, [invoiceSearch, historyFilter, historyStartDate, historyEndDate, historyChannel, historyPaymentStatus, itemsPerPage]);
+  useEffect(() => { setHistPage(1); }, [invoiceSearch, historyFilter, historyStartDate, historyEndDate, historyChannel, historyPaymentStatus, historyDocCategory, itemsPerPage]);
 
   const histTotalPages = Math.max(1, Math.ceil(displayDocs.length / itemsPerPage));
   const currentHistData = displayDocs.slice((histPage - 1) * itemsPerPage, histPage * itemsPerPage);
@@ -14891,7 +14965,17 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                      </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3 mt-1">
+                    {/* --- 🔥 NEW: ตัวกรองหมวดหมู่เอกสาร (รายรับ/รายจ่าย) --- */}
+                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
+                        <LayersIcon size={14} className="text-slate-400 shrink-0"/>
+                        <select value={historyDocCategory} onChange={e=>setHistoryDocCategory(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 cursor-pointer focus:ring-0 p-0">
+                            <option value="all">ทุกหมวดหมู่</option>
+                            <option value="income">เฉพาะฝั่งรายรับ (INV, ABB, REC)</option>
+                            <option value="expense">เฉพาะฝั่งรายจ่าย (PV, CN)</option>
+                        </select>
+                    </div>
+
                     <div className="flex bg-slate-100 p-1 rounded-xl overflow-x-auto shrink-0">
                         <button onClick={() => setHistoryFilter('all')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ทั้งหมด</button>
                         <button onClick={() => setHistoryFilter('pending')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${historyFilter === 'pending' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รอออกเอกสาร</button>
@@ -16445,6 +16529,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
     noReceiptReason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
     approverName: '',
     notes: '',
+    attachmentUrl: '',
     items: [{ desc: '', qty: 1, unit: 'รายการ', price: 0 }]
   });
 
@@ -16455,6 +16540,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
     approverName: '',
     inspectorName: '',
     notes: '',
+    attachmentUrl: '',
     items: [{ sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]
   });
 
@@ -16463,6 +16549,177 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
   
   // --- 🔥 NEW: State สำหรับยกเลิกเอกสารภายใน ---
   const [voidConfirmId, setVoidConfirmId] = useState(null);
+
+  // --- 🔥 NEW: State สำหรับอัปโหลดไฟล์หลักฐาน (เอกสารภายใน) ---
+  const [uploadTargetDoc, setUploadTargetDoc] = useState(null);
+  const [isUploadingInternalFile, setIsUploadingInternalFile] = useState(false);
+  const [isUploadingCertFile, setIsUploadingCertFile] = useState(false);
+  const [isUploadingWriteOffFile, setIsUploadingWriteOffFile] = useState(false);
+
+  const handleUploadFormFile = async (e, formType) => {
+      const file = e.target.files[0];
+      if (!file || !user) return;
+
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (!webhookUrl) {
+          showToast('กรุณาตั้งค่าเชื่อมต่อ Google Drive ในเมนูเครื่องมือขั้นสูง (Admin) ก่อน', 'error');
+          return;
+      }
+
+      const setUploading = formType === 'cert' ? setIsUploadingCertFile : setIsUploadingWriteOffFile;
+      const setForm = formType === 'cert' ? setCertForm : setWriteOffForm;
+      
+      setUploading(true);
+      try {
+          let base64Data = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result.split(',')[1]);
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+          });
+
+          const mimeType = file.type;
+          const fileExt = file.name.split('.').pop();
+          const d = new Date();
+          const year = String(d.getFullYear());
+          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
+          const month = monthNames[d.getMonth()];
+          const day = String(d.getDate()).padStart(2, '0');
+          const category = formType === 'cert' ? 'Receipt_Cert' : 'Write_Off';
+          
+          const fileName = `${category}_${Date.now()}.${fileExt}`;
+
+          const payload = { 
+              base64Data, fileName, mimeType, 
+              rootFolder: 'MerchantTax_DigitalFiling',
+              year: year, type: '2_Expense', month: month, category: category, day: day
+          };
+
+          showToast(`กำลังส่งไฟล์หลักฐานไปที่ Google Drive...`, 'success');
+          const res = await fetch(webhookUrl.trim(), {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(payload)
+          });
+          
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          const data = await res.json();
+          
+          if (data.url) {
+              setForm(prev => ({ ...prev, attachmentUrl: data.url }));
+              showToast(`แนบไฟล์เอกสารสำเร็จ`, 'success');
+          } else {
+              throw new Error(data.message || "Upload failed");
+          }
+      } catch (err) {
+          console.error("Upload Error:", err);
+          showToast('อัปโหลดล้มเหลว (ตรวจสอบการตั้งค่า Webhook)', 'error');
+      } finally {
+          setUploading(false);
+          e.target.value = '';
+      }
+  };
+
+  const handleRemoveFormFile = async (formType) => {
+      if(!window.confirm('ยืนยันการลบไฟล์แนบ?')) return;
+      const setForm = formType === 'cert' ? setCertForm : setWriteOffForm;
+      const currentForm = formType === 'cert' ? certForm : writeOffForm;
+      
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (webhookUrl && currentForm.attachmentUrl) {
+          try {
+              await fetch(webhookUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                  body: JSON.stringify({ action: 'delete', fileUrl: currentForm.attachmentUrl })
+              });
+          } catch(e) { console.warn("Drive Delete Error:", e); }
+      }
+      setForm(prev => ({ ...prev, attachmentUrl: '' }));
+      showToast('นำไฟล์แนบออกแล้ว', 'success');
+  };
+
+  const handleAttachFileInternal = async (e) => {
+      const file = e.target.files[0];
+      if (!file || !user || !uploadTargetDoc) return;
+
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (!webhookUrl) {
+          showToast('กรุณาตั้งค่าเชื่อมต่อ Google Drive ในเมนูเครื่องมือขั้นสูง (Admin) ก่อน', 'error');
+          return;
+      }
+
+      setIsUploadingInternalFile(true);
+      try {
+          let base64Data = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result.split(',')[1]);
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+          });
+
+          const mimeType = file.type;
+          const fileExt = file.name.split('.').pop();
+          const d = normalizeDate(uploadTargetDoc.date) || new Date();
+          const year = String(d.getFullYear());
+          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
+          const month = monthNames[d.getMonth()];
+          const day = String(d.getDate()).padStart(2, '0');
+          const safeCategory = String(uploadTargetDoc.category || 'InternalDoc').replace(/[\/\\]/g, '_'); 
+
+          const refName = (uploadTargetDoc.sysDocId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9ก-๙]/g, '_');
+          const fileName = `${refName}_${Date.now()}.${fileExt}`;
+
+          const payload = { 
+              base64Data, fileName, mimeType, 
+              rootFolder: 'MerchantTax_DigitalFiling',
+              year: year, type: '2_Expense', month: month, category: safeCategory, day: day
+          };
+
+          showToast(`กำลังส่งไฟล์ไปที่ Google Drive...`, 'success');
+          const res = await fetch(webhookUrl.trim(), {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(payload)
+          });
+          
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          const data = await res.json();
+          
+          if (data.url) {
+              const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', uploadTargetDoc.id);
+              await updateDoc(docRef, { attachmentUrl: data.url, updatedAt: serverTimestamp() });
+              setUploadTargetDoc(prev => ({ ...prev, attachmentUrl: data.url }));
+              showToast(`แนบไฟล์เอกสารสำเร็จ`, 'success');
+          } else {
+              throw new Error(data.message || "Upload failed");
+          }
+      } catch (err) {
+          console.error("Upload Error:", err);
+          showToast('อัปโหลดล้มเหลว (ตรวจสอบการตั้งค่า Webhook)', 'error');
+      } finally {
+          setIsUploadingInternalFile(false);
+          e.target.value = '';
+      }
+  };
+
+  const handleRemoveInternalFile = async () => {
+      if(!window.confirm('ยืนยันการลบไฟล์แนบ? (ระบบจะพยายามลบไฟล์จาก Google Drive ด้วย)')) return;
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (webhookUrl && uploadTargetDoc.attachmentUrl) {
+          try {
+              await fetch(webhookUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                  body: JSON.stringify({ action: 'delete', fileUrl: uploadTargetDoc.attachmentUrl })
+              });
+          } catch(e) { console.warn("Drive Delete Error:", e); }
+      }
+      const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', uploadTargetDoc.id);
+      await updateDoc(docRef, { attachmentUrl: '' });
+      setUploadTargetDoc(prev => ({ ...prev, attachmentUrl: '' }));
+      showToast('ลบลิงก์ไฟล์แนบสำเร็จ', 'success');
+  };
 
   // --- ดึงรายการสินค้าที่มีในคลัง FIFO ---
   const uniqueInventory = useMemo(() => {
@@ -16537,7 +16794,8 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         isInternalCert: true,
         noReceiptReason: certForm.noReceiptReason,
         approverName: certForm.approverName,
-        notes: certForm.notes
+        notes: certForm.notes,
+        attachmentUrl: certForm.attachmentUrl
       };
 
       const docRef = await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), payload);
@@ -16548,7 +16806,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         date: formatDateISO(new Date()),
         recipientName: '', recipientCitizenId: '', recipientAddress: '',
         category: 'ค่าใช้จ่ายทั่วไป', noReceiptReason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
-        approverName: '', notes: '',
+        approverName: '', notes: '', attachmentUrl: '',
         items: [{ desc: '', qty: 1, unit: 'รายการ', price: 0 }]
       });
     } catch (err) {
@@ -16637,7 +16895,8 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         writeOffReason: writeOffForm.reason,
         approverName: writeOffForm.approverName,
         inspectorName: writeOffForm.inspectorName,
-        notes: writeOffForm.notes
+        notes: writeOffForm.notes,
+        attachmentUrl: writeOffForm.attachmentUrl
       };
 
       batchWriter.set(expRef, payload);
@@ -16651,6 +16910,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         approverName: '',
         inspectorName: '',
         notes: '',
+        attachmentUrl: '',
         items: [{ sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]
       });
     } catch (err) {
@@ -16683,12 +16943,10 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         // 2. หากเป็นใบตัดจำหน่าย (DMG) ต้องคืนสต็อก FIFO
         if (voidConfirmId.isWriteOffVoucher || String(voidConfirmId.sysDocId).startsWith('DMG-')) {
             if (voidConfirmId.items && voidConfirmId.items.length > 0) {
-                // กรองล็อตที่มีการหักสต็อกออกไปจากบิลนี้โดยตรง (ถ้ามีเก็บอ้างอิงไว้) หรือ คืนย้อนหลังแบบ LIFO
                 for (const item of voidConfirmId.items) {
                     let toReturn = Number(item.qty);
                     if (isNaN(toReturn) || toReturn <= 0) continue;
 
-                    // ค้นหาล็อตสินค้าที่ตรงกับ SKU/ชื่อ และถูกตัดยอด (sold > 0) เรียงจากใหม่ไปเก่า (เพื่อคืนล็อตที่เพิ่งตัดไปล่าสุดก่อน)
                     const affectedLots = stockBatches
                         .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
                         .sort(sortNewestFirst);
@@ -16700,12 +16958,9 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                         const canTakeBack = Math.min(toReturn, Number(lot.sold));
                         const lotRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id);
                         
-                        // คืนยอด (ลดค่า sold ลง)
                         batchWriter.set(lotRef, { sold: increment(-canTakeBack) }, { merge: true });
                         toReturn -= canTakeBack;
                     }
-                    
-                    // หากคืนไม่หมด (เช่น โดนลบล็อตต้นทางไปแล้ว) ระบบจะละเว้นส่วนที่เหลือเพื่อไม่ให้แอปแครช
                 }
             }
         }
@@ -16833,122 +17088,183 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                 </div>
               </div>
 
+              <div className="pt-4 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-2">
+                      <label className="text-[10px] font-bold uppercase text-slate-500 block flex items-center gap-1"><Camera size={14}/> แนบรูปหลักฐาน/สลิป (Digital Filing)</label>
+                  </div>
+                  {certForm.attachmentUrl ? (
+                      <div className="relative group inline-block w-full sm:w-auto">
+                          <a href={certForm.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block">
+                              {certForm.attachmentUrl.includes('pdf') || certForm.attachmentUrl.includes('drive.google.com') ? (
+                                  <div className="h-24 w-32 bg-blue-50 border border-blue-200 rounded-xl flex flex-col items-center justify-center text-blue-500 shadow-sm hover:bg-blue-100 transition-colors">
+                                      <FileText size={24} className="mb-1"/>
+                                      <span className="text-[10px] font-bold">ดูไฟล์</span>
+                                  </div>
+                              ) : (
+                                  <img src={certForm.attachmentUrl} alt="Evidence" className="h-24 w-32 object-cover rounded-xl border border-slate-200 shadow-sm" />
+                              )}
+                          </a>
+                          <button type="button" onClick={() => handleRemoveFormFile('cert')} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
+                      </div>
+                  ) : (
+                      <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
+                          {isUploadingCertFile ? (
+                              <div className="flex flex-col items-center gap-1">
+                                  <Loader className="animate-spin text-blue-500" size={16}/>
+                                  <span className="text-[9px] font-bold text-blue-500">กำลังอัปโหลดไป Drive...</span>
+                              </div>
+                          ) : (
+                              <>
+                                  <FileUp size={16} className="text-slate-400 mb-1"/>
+                                  <span className="text-[10px] font-bold text-slate-600">อัปโหลดสลิปโอนเงิน บัตรปชช. หรือใบเสนอราคา (JPG, PNG, PDF)</span>
+                              </>
+                          )}
+                          <input type="file" className="hidden" accept="image/*,.pdf" onChange={(e) => handleUploadFormFile(e, 'cert')} disabled={isUploadingCertFile} />
+                      </label>
+                  )}
+              </div>
+
               <div className="pt-4 border-t flex gap-3">
                 <button type="submit" disabled={isSaving} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3.5 rounded-2xl font-black text-base shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
                   {isSaving ? <Loader className="animate-spin" size={18}/> : <Save size={18}/>}
-                  {isSaving ? 'กำลังบันทึก...' : 'บันทึกใบรับรองแทนใบเสร็จรับเงิน'}
+                  {isSaving ? 'กำลังบันทึก...' : 'บันทึกใบรับรอง'}
                 </button>
               </div>
             </form>
           </div>
 
-          {/* Side Info */}
           <div className="space-y-6">
-            <div className="bg-gradient-to-br from-indigo-900 to-slate-800 p-6 rounded-[32px] text-white shadow-xl">
-              <h4 className="font-bold text-base text-indigo-300 mb-2 flex items-center gap-2"><Lightbulb size={18}/> ข้อแนะนำทางภาษี</h4>
+            <div className="bg-gradient-to-br from-indigo-900 to-slate-900 p-6 rounded-[32px] text-white shadow-xl">
+              <h4 className="font-bold text-base text-indigo-300 mb-2 flex items-center gap-2"><Info size={18}/> คำแนะนำการใช้งาน</h4>
               <p className="text-xs leading-relaxed text-indigo-100 font-medium whitespace-pre-line">
-                "ใบรับรองแทนใบเสร็จรับเงิน" ตามมาตรา 65 ตรี (18) แห่งประมวลรัษฎากร 
-                {"\n\n"}ใช้สำหรับกรณีพนักงาน/เจ้าของกิจการไปจ่ายเงินซื้อสินค้าหรือบริการแล้วผู้ขายไม่ออกใบเสร็จให้
-                {"\n\n"}<b>เงื่อนไขสำคัญ:</b>
-                {"\n"}1. ต้องมีชื่อ-นามสกุล และเลขบัตรประชาชนของผู้รับเงิน
-                {"\n"}2. แนบสลิปโอนเงิน (ถ้ามี)
-                {"\n"}3. ผู้จ่ายเงินต้องลงลายมือชื่อรับรองการจ่ายเงินจริง
+                ใบรับรองแทนใบเสร็จรับเงิน ใช้ในกรณีที่กิจการมีรายจ่ายที่เกิดขึ้นจริง แต่ผู้รับเงินไม่สามารถออกใบเสร็จรับเงินให้ได้ (เช่น ซื้อของจากชาวบ้าน, จ่ายค่าแรงบุคคลธรรมดา)
+                {"\n\n"}<b>เงื่อนไขสำคัญที่สรรพากรยอมรับ:</b>
+                {"\n"}1. ต้องระบุชื่อ-นามสกุล และเลขบัตรประชาชนผู้รับเงินให้ชัดเจน
+                {"\n"}2. ควรแนบหลักฐานการจ่ายเงิน เช่น สลิปโอนเงิน หรือสำเนาบัตรประชาชนผู้รับเงินประกอบด้วยทุกครั้ง
               </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* TAB 2: ใบตัดจำหน่ายสินค้า (ชำรุด/สูญหาย) */}
+      {/* TAB 2: ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย */}
       {activeSubTab === 'write_off' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
           <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6">
-            <div className="border-b pb-4 flex justify-between items-center">
-              <div>
-                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Trash2 className="text-rose-600"/> ออกใบตัดจำหน่ายสินค้า (Write-Off)</h3>
-                <p className="text-xs text-slate-400 mt-0.5">หักสต็อกสินค้าออกจากคลัง FIFO พร้อมลงบันทึกเป็นรายจ่ายธุรกิจอย่างถูกต้อง</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSaveWriteOff} className="space-y-5">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">วันที่ทำรายการ</label>
-                  <input type="date" required value={writeOffForm.date} onChange={e=>setWriteOffForm({...writeOffForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-100" />
+             <div className="border-b pb-4 flex justify-between items-center">
+                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Trash2 className="text-rose-600"/> ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย</h3>
+             </div>
+             <form onSubmit={handleSaveWriteOff} className="space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">วันที่ดำเนินการ</label>
+                    <input type="date" required value={writeOffForm.date} onChange={e=>setWriteOffForm({...writeOffForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-100" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">สาเหตุการตัดจำหน่าย</label>
+                    <select value={writeOffForm.reason} onChange={e=>setWriteOffForm({...writeOffForm, reason: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-100">
+                      <option value="สินค้าชำรุด/เสียหาย">สินค้าชำรุด/เสียหาย</option>
+                      <option value="สินค้าหมดอายุ/เสื่อมสภาพ">สินค้าหมดอายุ/เสื่อมสภาพ</option>
+                      <option value="สูญหาย/ถูกขโมย">สูญหาย/ถูกขโมย</option>
+                      <option value="นำไปใช้เป็นตัวอย่าง/ทดสอบ">นำไปใช้เป็นตัวอย่าง/ทดสอบ</option>
+                      <option value="อื่นๆ">อื่นๆ</option>
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">สาเหตุการตัดจำหน่าย *</label>
-                  <select value={writeOffForm.reason} onChange={e=>setWriteOffForm({...writeOffForm, reason: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-100 text-rose-700">
-                    <option value="สินค้าชำรุด/เสียหาย">สินค้าชำรุด/เสียหาย</option>
-                    <option value="สินค้าหมดอายุ/เสื่อมสภาพ">สินค้าหมดอายุ/เสื่อมสภาพ</option>
-                    <option value="สินค้าสูญหาย/ตรวจนับขาด">สินค้าสูญหาย/ตรวจนับขาด</option>
-                    <option value="สินค้าเสียหายจากการขนส่ง">สินค้าเสียหายจากการขนส่ง</option>
-                    <option value="ใช้เป็นสินค้าตัวอย่าง/สาธิต">ใช้เป็นสินค้าตัวอย่าง/สาธิต</option>
-                  </select>
-                </div>
-              </div>
 
-              {/* เลือกสินค้าจากคลัง */}
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-slate-600 uppercase">เลือกสินค้าจากคลัง FIFO ที่จะตัดทิ้ง</label>
-                  <button type="button" onClick={() => setWriteOffForm({...writeOffForm, items: [...writeOffForm.items, { sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]})} className="text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1">
-                    <Plus size={14}/> เพิ่มแถวสินค้า
+                {/* Items */}
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-bold text-slate-600 uppercase">รายการสินค้าที่ตัดจำหน่าย</label>
+                    <button type="button" onClick={() => setWriteOffForm({...writeOffForm, items: [...writeOffForm.items, { sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]})} className="text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1">
+                      <Plus size={14}/> เพิ่มรายการ
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {writeOffForm.items.map((it, idx) => (
+                      <div key={idx} className="flex flex-col sm:flex-row gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 items-center">
+                        <div className="flex-1 w-full relative">
+                          <input type="text" required value={it.desc} onChange={e=>{
+                            const newItems = [...writeOffForm.items]; newItems[idx].desc = e.target.value; setWriteOffForm({...writeOffForm, items: newItems});
+                          }} placeholder="ชื่อสินค้า..." className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none" />
+                          <button type="button" onClick={() => setShowStockPickerModal(idx)} className="absolute right-2 top-2 text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded font-bold">เลือกจากคลัง</button>
+                        </div>
+                        <div className="flex gap-2 w-full sm:w-auto">
+                          <input type="number" min="1" value={it.qty} onChange={e=>{
+                            const newItems = [...writeOffForm.items]; newItems[idx].qty = Number(e.target.value); setWriteOffForm({...writeOffForm, items: newItems});
+                          }} placeholder="จำนวน" className="w-20 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold text-center outline-none text-rose-600" />
+                          <button type="button" onClick={()=>{
+                            if (writeOffForm.items.length === 1) return;
+                            setWriteOffForm({...writeOffForm, items: writeOffForm.items.filter((_, i) => i !== idx)});
+                          }} className="p-2 text-rose-400 hover:text-rose-600 transition-colors" disabled={writeOffForm.items.length === 1}><Trash2 size={16}/></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ชื่อผู้เสนอตัดจำหน่าย</label>
+                    <input type="text" value={writeOffForm.inspectorName} onChange={e=>setWriteOffForm({...writeOffForm, inspectorName: e.target.value})} placeholder="ระบุชื่อผู้ตรวจนับ..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ผู้อนุมัติ</label>
+                    <input type="text" value={writeOffForm.approverName} onChange={e=>setWriteOffForm({...writeOffForm, approverName: e.target.value})} placeholder="ระบุชื่อผู้อนุมัติ..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">หมายเหตุเพิ่มเติม</label>
+                  <textarea rows="2" value={writeOffForm.notes} onChange={e=>setWriteOffForm({...writeOffForm, notes: e.target.value})} placeholder="รายละเอียดความเสียหายเพิ่มเติม..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs outline-none resize-none" />
+                </div>
+
+                {/* Attachment for Write-Off */}
+                <div className="pt-4 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-2">
+                      <label className="text-[10px] font-bold uppercase text-slate-500 block flex items-center gap-1"><Camera size={14}/> แนบรูปหลักฐานสินค้าชำรุด (Evidence)</label>
+                      <span className="text-[9px] text-slate-400">* จำเป็นมากสำหรับให้สรรพากรตรวจสอบ</span>
+                  </div>
+                  {writeOffForm.attachmentUrl ? (
+                      <div className="relative group inline-block w-full sm:w-auto">
+                          <a href={writeOffForm.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block">
+                              {writeOffForm.attachmentUrl.includes('pdf') || writeOffForm.attachmentUrl.includes('drive.google.com') ? (
+                                  <div className="h-24 w-32 bg-blue-50 border border-blue-200 rounded-xl flex flex-col items-center justify-center text-blue-500 shadow-sm hover:bg-blue-100 transition-colors">
+                                      <FileText size={24} className="mb-1"/>
+                                      <span className="text-[10px] font-bold">ดูไฟล์</span>
+                                  </div>
+                              ) : (
+                                  <img src={writeOffForm.attachmentUrl} alt="Evidence" className="h-24 w-32 object-cover rounded-xl border border-slate-200 shadow-sm" />
+                              )}
+                          </a>
+                          <button type="button" onClick={() => handleRemoveFormFile('write_off')} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
+                      </div>
+                  ) : (
+                      <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
+                          {isUploadingWriteOffFile ? (
+                              <div className="flex flex-col items-center gap-1">
+                                  <Loader className="animate-spin text-blue-500" size={16}/>
+                                  <span className="text-[9px] font-bold text-blue-500">กำลังอัปโหลดไป Drive...</span>
+                              </div>
+                          ) : (
+                              <>
+                                  <FileUp size={16} className="text-slate-400 mb-1"/>
+                                  <span className="text-[10px] font-bold text-slate-600">อัปโหลดรูปถ่ายสินค้าที่พัง/หมดอายุ หรือเอกสารทำลาย (JPG, PNG, PDF)</span>
+                              </>
+                          )}
+                          <input type="file" className="hidden" accept="image/*,.pdf" onChange={(e) => handleUploadFormFile(e, 'write_off')} disabled={isUploadingWriteOffFile} />
+                      </label>
+                  )}
+                </div>
+
+                <div className="pt-4 border-t flex gap-3">
+                  <button type="submit" disabled={isSaving} className="w-full bg-rose-600 hover:bg-rose-700 text-white py-3.5 rounded-2xl font-black text-base shadow-lg shadow-rose-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
+                    {isSaving ? <Loader className="animate-spin" size={18}/> : <Trash2 size={18}/>}
+                    {isSaving ? 'กำลังตัดจำหน่าย...' : 'บันทึกและหักสต็อกออกจากคลัง'}
                   </button>
                 </div>
-
-                <div className="space-y-2">
-                  {writeOffForm.items.map((it, idx) => (
-                    <div key={idx} className="flex flex-col sm:flex-row gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 items-center">
-                      <div className="flex-1 w-full relative">
-                        <input type="text" required value={it.desc} onChange={e=>{
-                          const newItems = [...writeOffForm.items]; newItems[idx].desc = e.target.value; setWriteOffForm({...writeOffForm, items: newItems});
-                        }} placeholder="ชื่อสินค้า หรือ SKU..." className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none pr-24" />
-                        <button type="button" onClick={() => setShowStockPickerModal(idx)} className="absolute right-1 top-1 text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-1 rounded-md hover:bg-indigo-100 transition-colors">
-                          <Search size={12} className="inline mr-0.5"/> เลือกคลัง
-                        </button>
-                      </div>
-
-                      <div className="flex gap-2 w-full sm:w-auto">
-                        <input type="number" min="1" value={it.qty} onChange={e=>{
-                          const newItems = [...writeOffForm.items]; newItems[idx].qty = Number(e.target.value); setWriteOffForm({...writeOffForm, items: newItems});
-                        }} placeholder="จำนวน" className="w-24 bg-white border border-slate-200 rounded-lg p-2 text-sm font-black text-center outline-none text-rose-600" />
-                        <button type="button" onClick={()=>{
-                          if (writeOffForm.items.length === 1) return;
-                          setWriteOffForm({...writeOffForm, items: writeOffForm.items.filter((_, i) => i !== idx)});
-                        }} className="p-2 text-rose-400 hover:text-rose-600 transition-colors" disabled={writeOffForm.items.length === 1}><Trash2 size={16}/></button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* ผู้รับผิดชอบ/อนุมัติ */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ผู้ตรวจนับ/เสนอตัดจำหน่าย</label>
-                  <input type="text" value={writeOffForm.inspectorName} onChange={e=>setWriteOffForm({...writeOffForm, inspectorName: e.target.value})} placeholder="ชื่อพนักงานคลัง/ผู้ตรวจสอบ..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ผู้อนุมัติการตัดจำหน่าย</label>
-                  <input type="text" value={writeOffForm.approverName} onChange={e=>setWriteOffForm({...writeOffForm, approverName: e.target.value})} placeholder="ชื่อเจ้าของร้าน/ผู้จัดการ..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">หมายเหตุเพิ่มเติม</label>
-                <textarea rows="2" value={writeOffForm.notes} onChange={e=>setWriteOffForm({...writeOffForm, notes: e.target.value})} placeholder="รายละเอียดความเสียหายเพิ่มเติม..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs outline-none resize-none" />
-              </div>
-
-              <div className="pt-4 border-t flex gap-3">
-                <button type="submit" disabled={isSaving} className="w-full bg-rose-600 hover:bg-rose-700 text-white py-3.5 rounded-2xl font-black text-base shadow-lg shadow-rose-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-                  {isSaving ? <Loader className="animate-spin" size={18}/> : <Trash2 size={18}/>}
-                  {isSaving ? 'กำลังตัดจำหน่าย...' : 'บันทึกและหักสต็อกออกจากคลัง'}
-                </button>
-              </div>
-            </form>
+             </form>
           </div>
-
           {/* Side Info */}
           <div className="space-y-6">
             <div className="bg-gradient-to-br from-rose-900 to-slate-900 p-6 rounded-[32px] text-white shadow-xl">
@@ -17005,12 +17321,21 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                     <td className="p-4">
                       <p className="font-bold text-slate-700">{docItem.description}</p>
                       <p className="text-[10px] text-slate-400 mt-0.5">ผู้รับเงิน/ตัดโดย: {docItem.partnerName || '-'}</p>
+                      {docItem.attachmentUrl && (
+                          <span className="mt-1 inline-flex items-center gap-1 bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[9px] font-bold border border-blue-100">
+                              <Cloud size={10}/> มีไฟล์แนบ
+                          </span>
+                      )}
                     </td>
                     <td className="p-4 text-right font-black text-slate-800 text-sm">
                       {formatCurrency(docItem.total || docItem.grandTotal)}
                     </td>
                     <td className="p-4 text-center">
                         <div className="flex justify-center items-center gap-2">
+                            {/* --- 🔥 NEW: ปุ่มแก้ไขและแนบไฟล์ --- */}
+                            <button onClick={() => setUploadTargetDoc(docItem)} className="px-2 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-600 rounded-lg font-bold transition-colors shadow-sm" title="แก้ไข / แนบไฟล์หลักฐาน">
+                                <Edit size={16}/>
+                            </button>
                             <button onClick={() => setPrintDoc({
                                 ...docItem,
                                 docType: docItem.isWriteOffVoucher || String(docItem.sysDocId).startsWith('DMG-') ? 'write_off' : 'receipt_cert'
@@ -17066,12 +17391,12 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                   setStockSearch('');
                 }} className="p-3 bg-slate-50 hover:bg-indigo-50 border border-slate-100 rounded-xl cursor-pointer transition-colors flex justify-between items-center">
                   <div>
-                    <p className="font-bold text-slate-800 text-xs">{item.name}</p>
-                    <p className="text-[10px] font-mono text-indigo-500">SKU: {item.sku}</p>
+                    <p className="font-bold text-slate-700 text-sm">{item.name}</p>
+                    <p className="text-[10px] font-mono text-indigo-500 mt-0.5">SKU: {item.sku}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs font-black text-emerald-600">มีอยู่ {item.qty} ชิ้น</p>
-                    <p className="text-[10px] text-slate-400">ทุน: {formatCurrency(item.cost)} ฿</p>
+                    <p className="text-xs font-bold text-emerald-600">ทุน: {formatCurrency(item.cost)}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">เหลือ: {item.qty}</p>
                   </div>
                 </div>
               ))}
@@ -17080,172 +17405,191 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
         </div>
       )}
 
-      {/* PRINT PREVIEW MODAL */}
+      {/* Print Modal */}
       {printDoc && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[3000] flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-[32px] w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden my-auto">
-            <div className="p-5 bg-slate-900 text-white flex justify-between items-center shrink-0">
-              <div className="flex items-center gap-2">
-                <Printer size={18} className="text-indigo-400"/>
-                <span className="font-bold text-sm">ตัวอย่างแบบพิมพ์เอกสาร</span>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => window.print()} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md">
-                  <Printer size={14}/> พิมพ์เอกสาร
-                </button>
-                <button onClick={() => setPrintDoc(null)} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white"><X size={18}/></button>
-              </div>
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[2000] flex items-center justify-center p-4">
+          <div className="bg-white rounded-[32px] w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 overflow-hidden text-left">
+            <div className="p-6 border-b flex justify-between items-center bg-slate-50">
+                <h3 className="font-bold text-lg flex items-center gap-2 text-slate-800"><Printer size={20} className="text-indigo-600"/> พิมพ์เอกสารภายใน</h3>
+                <button onClick={()=>setPrintDoc(null)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X size={20}/></button>
             </div>
+            
+            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-200 flex justify-center">
+                <div id="internal-doc-print-area" className="bg-white p-10 w-[210mm] min-h-[297mm] shadow-md mx-auto text-slate-800 relative">
+                  
+                  {printDoc.isCancelled && (
+                      <div className="absolute inset-0 flex items-center justify-center z-0 pointer-events-none opacity-10 transform -rotate-45">
+                          <span className="text-8xl font-black text-rose-600 border-8 border-rose-600 px-8 py-4 rounded-3xl tracking-widest whitespace-nowrap">ยกเลิก / VOID</span>
+                      </div>
+                  )}
 
-            {/* Print Container */}
-            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-100 flex justify-center">
-              <div id="invoice-preview-area" className="bg-white p-10 w-[210mm] min-h-[297mm] text-xs font-sarabun text-slate-900 leading-relaxed shadow-xl border relative box-border">
-                
-                {/* Header */}
-                <div className="border-b-2 border-slate-800 pb-4 mb-6 flex justify-between items-start">
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-900">{savedSeller.sellerName || 'บริษัท / ร้านค้า'}</h2>
-                    <p className="text-[10px] text-slate-600">{[savedSeller.sellerAddress, fmtAddr.sub(savedSeller.sellerSubDistrict), fmtAddr.dist(savedSeller.sellerDistrict), fmtAddr.prov(savedSeller.sellerProvince), savedSeller.sellerZipCode].filter(Boolean).join(' ')}</p>
-                    <p className="text-[10px] text-slate-600">เลขประจำตัวผู้เสียภาษี: {savedSeller.sellerTaxId || '-'}</p>
+                  <div className="flex justify-between items-start mb-8 border-b-2 border-slate-800 pb-4">
+                    <div className="w-2/3">
+                      <h2 className="text-2xl font-black text-slate-900">{savedSeller.sellerName || 'กิจการ/ร้านค้า'}</h2>
+                      <div className="text-xs mt-2 space-y-1 text-slate-600">
+                        <p>{[savedSeller.sellerAddress, fmtAddr.sub(savedSeller.sellerSubDistrict), fmtAddr.dist(savedSeller.sellerDistrict), fmtAddr.prov(savedSeller.sellerProvince), savedSeller.sellerZipCode].filter(Boolean).join(' ')}</p>
+                        <p>เลขประจำตัวผู้เสียภาษี: {savedSeller.sellerTaxId || '-'}</p>
+                        <p>สาขา: {savedSeller.sellerBranchId === '00000' || !savedSeller.sellerBranchId ? 'สำนักงานใหญ่' : savedSeller.sellerBranchId}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <h1 className="text-xl font-black text-slate-900 uppercase">
+                        {printDoc.docType === 'write_off' ? 'ใบสำคัญการตัดจำหน่ายสินค้า' : 'ใบรับรองแทนใบเสร็จรับเงิน'}
+                      </h1>
+                      <p className="font-mono font-bold text-indigo-600 text-sm mt-1">{printDoc.sysDocId}</p>
+                      <p className="text-[10px] text-slate-500">วันที่: {formatDate(printDoc.date)}</p>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <h1 className="text-base font-black text-slate-900 uppercase">
-                      {printDoc.docType === 'write_off' ? 'ใบสำคัญการตัดจำหน่ายสินค้า' : 'ใบรับรองแทนใบเสร็จรับเงิน'}
-                    </h1>
-                    <p className="font-mono font-bold text-indigo-600 text-sm mt-1">{printDoc.sysDocId}</p>
-                    <p className="text-[10px] text-slate-500">วันที่: {formatDate(printDoc.date)}</p>
-                  </div>
+
+                  {printDoc.docType === 'receipt_cert' && (
+                    <div className="space-y-6">
+                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs space-y-1">
+                        <p><b>ข้าพเจ้า:</b> {savedSeller.sellerName || 'ผู้ประกอบการ'}</p>
+                        <p><b>ขอรับรองว่า:</b> ได้จ่ายเงินจำนวนดังกล่าวข้างต้น ให้แก่ผู้รับเงินตามรายละเอียดด้านล่างนี้ โดยไม่อาจเรียกใบเสร็จรับเงินจากผู้รับได้</p>
+                        <p className="text-slate-500"><b>เหตุผล:</b> {printDoc.noReceiptReason || 'ผู้รับเงินไม่ออกใบเสร็จรับเงินให้'}</p>
+                      </div>
+
+                      <div className="border border-slate-300 p-4 rounded-xl space-y-1 text-xs">
+                        <p className="font-bold text-slate-800 border-b pb-1 mb-2">รายละเอียดผู้รับเงิน (Recipient)</p>
+                        <p><b>ชื่อ-นามสกุล:</b> {printDoc.partnerName}</p>
+                        <p><b>เลขบัตรประจำตัวประชาชน:</b> {printDoc.partnerTaxId || '-'}</p>
+                        <p><b>ที่อยู่:</b> {printDoc.partnerAddress || '-'}</p>
+                      </div>
+
+                      <table className="w-full border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-800 font-bold border-y border-slate-300">
+                            <th className="py-2 text-center w-10">ลำดับ</th>
+                            <th className="py-2 text-left pl-2">รายละเอียดรายการที่จ่าย</th>
+                            <th className="py-2 text-center w-16">จำนวน</th>
+                            <th className="py-2 text-right pr-2 w-28">จำนวนเงิน (บาท)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {(printDoc.items || []).map((it, i) => (
+                            <tr key={i}>
+                              <td className="py-2 text-center">{i+1}</td>
+                              <td className="py-2 pl-2">{it.desc}</td>
+                              <td className="py-2 text-center">{it.qty} {it.unit || 'รายการ'}</td>
+                              <td className="py-2 text-right pr-2 font-bold">{formatCurrency(it.buyPrice * it.qty)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="border-t-2 border-slate-800 font-bold bg-slate-50">
+                            <td colSpan="3" className="py-2 text-right pr-4">รวมจำนวนเงินทั้งสิ้น (บาท):</td>
+                            <td className="py-2 text-right pr-2 text-sm">{formatCurrency(printDoc.total || printDoc.grandTotal)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+
+                      <p className="text-center font-bold text-xs bg-slate-100 py-1.5 border rounded">
+                        ({THBText(printDoc.total || printDoc.grandTotal)})
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
+                        <div className="space-y-2">
+                          <p>ลงชื่อ ........................................................... ผู้รับเงิน</p>
+                          <p>({printDoc.partnerName || '...........................................................'})</p>
+                          <p>วันที่ .......... / .......... / .............</p>
+                        </div>
+                        <div className="space-y-2">
+                          <p>ลงชื่อ ........................................................... ผู้จ่ายเงิน/ผู้จัดทำ</p>
+                          <p>({printDoc.approverName || savedSeller.sellerName || '...........................................................'})</p>
+                          <p>วันที่ {formatDate(printDoc.date)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {printDoc.docType === 'write_off' && (
+                    <div className="space-y-6">
+                      <div className="bg-rose-50/60 p-4 rounded-xl border border-rose-200 text-xs space-y-1">
+                        <p className="font-bold text-rose-800">วัตถุประสงค์: ตัดจำหน่ายสินค้าออกจากคลังและลงบันทึกเป็นรายจ่ายธุรกิจ</p>
+                        <p><b>สาเหตุที่ทำการตัดจำหน่าย:</b> <span className="font-bold text-rose-700">{printDoc.writeOffReason || 'สินค้าชำรุด/เสียหาย'}</span></p>
+                        {printDoc.notes && <p><b>หมายเหตุเพิ่มเติม:</b> {printDoc.notes}</p>}
+                      </div>
+
+                      <table className="w-full border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-800 font-bold border-y border-slate-300">
+                            <th className="py-2 text-center w-10">ลำดับ</th>
+                            <th className="py-2 text-left pl-2">รายการสินค้า / SKU</th>
+                            <th className="py-2 text-center w-20">จำนวนที่ตัด</th>
+                            <th className="py-2 text-right w-24">ต้นทุน/หน่วย</th>
+                            <th className="py-2 text-right pr-2 w-28">มูลค่ารวม (บาท)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {(printDoc.originalItems || printDoc.items || []).map((it, i) => (
+                            <tr key={i}>
+                              <td className="py-2 text-center">{i+1}</td>
+                              <td className="py-2 pl-2">
+                                <p className="font-bold">{it.desc}</p>
+                                {it.sku && <p className="text-[9px] font-mono text-slate-400">SKU: {it.sku}</p>}
+                              </td>
+                              <td className="py-2 text-center font-bold text-rose-600">{it.qty} {it.unit || 'ชิ้น'}</td>
+                              <td className="py-2 text-right">{formatCurrency(it.costPrice || it.buyPrice)}</td>
+                              <td className="py-2 text-right pr-2 font-bold">{formatCurrency((it.costPrice || it.buyPrice) * it.qty)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="border-t-2 border-slate-800 font-bold bg-slate-50">
+                            <td colSpan="4" className="py-2 text-right pr-4">รวมมูลค่าสินค้าที่ตัดจำหน่ายทั้งสิ้น (บาท):</td>
+                            <td className="py-2 text-right pr-2 text-sm text-rose-700">{formatCurrency(printDoc.total || printDoc.grandTotal)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+
+                      <p className="text-center font-bold text-xs bg-slate-100 py-1.5 border rounded">
+                        ({THBText(printDoc.total || printDoc.grandTotal)})
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
+                        <div className="space-y-2">
+                          <p>ลงชื่อ ........................................................... ผู้ตรวจนับ/ผู้เสนอตัดจำหน่าย</p>
+                          <p>({printDoc.inspectorName || '...........................................................'})</p>
+                          <p>วันที่ {formatDate(printDoc.date)}</p>
+                        </div>
+                        <div className="space-y-2">
+                          <p>ลงชื่อ ........................................................... ผู้อนุมัติการตัดจำหน่าย</p>
+                          <p>({printDoc.approverName || savedSeller.sellerName || '...........................................................'})</p>
+                          <p>วันที่ {formatDate(printDoc.date)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
-
-                {/* Doc Type 1: ใบรับรองแทนใบเสร็จรับเงิน */}
-                {printDoc.docType === 'receipt_cert' && (
-                  <div className="space-y-6">
-                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs space-y-1">
-                      <p><b>ข้าพเจ้า:</b> {savedSeller.sellerName || 'ผู้ประกอบการ'}</p>
-                      <p><b>ขอรับรองว่า:</b> ได้จ่ายเงินจำนวนดังกล่าวข้างต้น ให้แก่ผู้รับเงินตามรายละเอียดด้านล่างนี้ โดยไม่อาจเรียกใบเสร็จรับเงินจากผู้รับได้</p>
-                      <p className="text-slate-500"><b>เหตุผล:</b> {printDoc.noReceiptReason || 'ผู้รับเงินไม่ออกใบเสร็จรับเงินให้'}</p>
-                    </div>
-
-                    <div className="border border-slate-300 p-4 rounded-xl space-y-1 text-xs">
-                      <p className="font-bold text-slate-800 border-b pb-1 mb-2">รายละเอียดผู้รับเงิน (Recipient)</p>
-                      <p><b>ชื่อ-นามสกุล:</b> {printDoc.partnerName}</p>
-                      <p><b>เลขบัตรประจำตัวประชาชน:</b> {printDoc.partnerTaxId || '-'}</p>
-                      <p><b>ที่อยู่:</b> {printDoc.partnerAddress || '-'}</p>
-                    </div>
-
-                    <table className="w-full border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-100 text-slate-800 font-bold border-y border-slate-300">
-                          <th className="py-2 text-center w-10">ลำดับ</th>
-                          <th className="py-2 text-left pl-2">รายละเอียดรายการที่จ่าย</th>
-                          <th className="py-2 text-center w-16">จำนวน</th>
-                          <th className="py-2 text-right pr-2 w-28">จำนวนเงิน (บาท)</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        {(printDoc.items || []).map((it, i) => (
-                          <tr key={i}>
-                            <td className="py-2 text-center">{i+1}</td>
-                            <td className="py-2 pl-2">{it.desc}</td>
-                            <td className="py-2 text-center">{it.qty} {it.unit || 'รายการ'}</td>
-                            <td className="py-2 text-right pr-2 font-bold">{formatCurrency(it.buyPrice * it.qty)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t-2 border-slate-800 font-bold bg-slate-50">
-                          <td colSpan="3" className="py-2 text-right pr-4">รวมจำนวนเงินทั้งสิ้น (บาท):</td>
-                          <td className="py-2 text-right pr-2 text-sm">{formatCurrency(printDoc.total || printDoc.grandTotal)}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-
-                    <p className="text-center font-bold text-xs bg-slate-100 py-1.5 border rounded">
-                      ({THBText(printDoc.total || printDoc.grandTotal)})
-                    </p>
-
-                    <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
-                      <div className="space-y-2">
-                        <p>ลงชื่อ ........................................................... ผู้รับเงิน</p>
-                        <p>({printDoc.partnerName || '...........................................................'})</p>
-                        <p>วันที่ .......... / .......... / .............</p>
-                      </div>
-                      <div className="space-y-2">
-                        <p>ลงชื่อ ........................................................... ผู้จ่ายเงิน/ผู้จัดทำ</p>
-                        <p>({printDoc.approverName || savedSeller.sellerName || '...........................................................'})</p>
-                        <p>วันที่ {formatDate(printDoc.date)}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Doc Type 2: ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย */}
-                {printDoc.docType === 'write_off' && (
-                  <div className="space-y-6">
-                    <div className="bg-rose-50/60 p-4 rounded-xl border border-rose-200 text-xs space-y-1">
-                      <p className="font-bold text-rose-800">วัตถุประสงค์: ตัดจำหน่ายสินค้าออกจากคลังและลงบันทึกเป็นรายจ่ายธุรกิจ</p>
-                      <p><b>สาเหตุที่ทำการตัดจำหน่าย:</b> <span className="font-bold text-rose-700">{printDoc.writeOffReason || 'สินค้าชำรุด/เสียหาย'}</span></p>
-                      {printDoc.notes && <p><b>หมายเหตุเพิ่มเติม:</b> {printDoc.notes}</p>}
-                    </div>
-
-                    <table className="w-full border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-100 text-slate-800 font-bold border-y border-slate-300">
-                          <th className="py-2 text-center w-10">ลำดับ</th>
-                          <th className="py-2 text-left pl-2">รายการสินค้า / SKU</th>
-                          <th className="py-2 text-center w-20">จำนวนที่ตัด</th>
-                          <th className="py-2 text-right w-24">ต้นทุน/หน่วย</th>
-                          <th className="py-2 text-right pr-2 w-28">มูลค่ารวม (บาท)</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        {(printDoc.items || []).map((it, i) => (
-                          <tr key={i}>
-                            <td className="py-2 text-center">{i+1}</td>
-                            <td className="py-2 pl-2">
-                              <p className="font-bold">{it.desc}</p>
-                              {it.sku && <p className="text-[9px] font-mono text-slate-400">SKU: {it.sku}</p>}
-                            </td>
-                            <td className="py-2 text-center font-bold text-rose-600">{it.qty} {it.unit || 'ชิ้น'}</td>
-                            <td className="py-2 text-right">{formatCurrency(it.buyPrice)}</td>
-                            <td className="py-2 text-right pr-2 font-bold">{formatCurrency(it.buyPrice * it.qty)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t-2 border-slate-800 font-bold bg-slate-50">
-                          <td colSpan="4" className="py-2 text-right pr-4">รวมมูลค่าสินค้าที่ตัดจำหน่ายทั้งสิ้น (บาท):</td>
-                          <td className="py-2 text-right pr-2 text-sm text-rose-700">{formatCurrency(printDoc.total || printDoc.grandTotal)}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-
-                    <p className="text-center font-bold text-xs bg-slate-100 py-1.5 border rounded">
-                      ({THBText(printDoc.total || printDoc.grandTotal)})
-                    </p>
-
-                    <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
-                      <div className="space-y-2">
-                        <p>ลงชื่อ ........................................................... ผู้ตรวจนับ/ผู้เสนอตัดจำหน่าย</p>
-                        <p>({printDoc.inspectorName || '...........................................................'})</p>
-                        <p>วันที่ {formatDate(printDoc.date)}</p>
-                      </div>
-                      <div className="space-y-2">
-                        <p>ลงชื่อ ........................................................... ผู้อนุมัติการตัดจำหน่าย</p>
-                        <p>({printDoc.approverName || savedSeller.sellerName || '...........................................................'})</p>
-                        <p>วันที่ {formatDate(printDoc.date)}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-              </div>
+            </div>
+            
+            <div className="p-4 border-t bg-slate-50 flex gap-4 text-center justify-end">
+                <button onClick={()=>setPrintDoc(null)} className="px-8 py-3 bg-white border border-slate-200 rounded-xl font-bold hover:bg-slate-100 transition-colors text-slate-600">ปิดหน้าต่าง</button>
+                <button onClick={async () => {
+                    const el = document.getElementById('internal-doc-print-area');
+                    if (!window.html2pdf) {
+                        showToast("กำลังโหลดโปรแกรมช่วยพิมพ์...", "success");
+                        const script = document.createElement('script');
+                        script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
+                        await new Promise(res => { script.onload = res; document.body.appendChild(script); });
+                    }
+                    window.html2pdf().set({
+                        margin: 0,
+                        filename: `${printDoc.sysDocId}.pdf`,
+                        image: { type: 'jpeg', quality: 0.98 },
+                        html2canvas: { scale: 2, useCORS: true },
+                        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+                    }).from(el).save();
+                }} className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition-all flex items-center justify-center gap-2">
+                    <Download size={18}/> ดาวน์โหลด PDF
+                </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* --- 🔥 NEW: Modal ยืนยันการยกเลิกเอกสารภายใน --- */}
+      {/* Void Confirm Modal */}
       {voidConfirmId && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 text-left">
             <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
@@ -17270,6 +17614,64 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                 </div>
             </div>
         </div>
+      )}
+
+      {/* Upload Modal */}
+      {uploadTargetDoc && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 text-left">
+              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+                  <div className="flex justify-between items-center mb-6">
+                      <div>
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Cloud className="text-blue-500"/> แนบไฟล์เอกสารอ้างอิง</h3>
+                          <p className="text-xs text-slate-500 mt-1">อ้างอิงเลขที่: <span className="font-mono text-indigo-600 font-bold">{uploadTargetDoc.sysDocId}</span></p>
+                      </div>
+                      <button onClick={() => setUploadTargetDoc(null)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                  </div>
+                  
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 text-sm">
+                      <p className="font-bold text-slate-700">{uploadTargetDoc.description}</p>
+                      <p className="text-xs text-slate-500 mt-1">ยอดเงินรวม: <span className="font-black text-rose-600">{formatCurrency(uploadTargetDoc.total || uploadTargetDoc.grandTotal)} ฿</span></p>
+                  </div>
+
+                  <div className="flex flex-col items-center justify-center gap-4">
+                      {uploadTargetDoc.attachmentUrl ? (
+                          <div className="relative group inline-block w-full">
+                              <a href={uploadTargetDoc.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block w-full">
+                                  {uploadTargetDoc.attachmentUrl.includes('pdf') || uploadTargetDoc.attachmentUrl.includes('drive.google.com') ? (
+                                      <div className="h-40 w-full bg-blue-50 border border-blue-200 rounded-2xl flex flex-col items-center justify-center text-blue-500 shadow-sm hover:bg-blue-100 transition-colors">
+                                          <FileText size={40} className="mb-2"/>
+                                          <span className="text-sm font-bold">เปิดดูไฟล์เอกสาร</span>
+                                      </div>
+                                  ) : (
+                                      <img src={uploadTargetDoc.attachmentUrl} alt="Evidence" className="h-40 w-full object-cover rounded-2xl border border-slate-200 shadow-sm" />
+                                  )}
+                              </a>
+                              <button type="button" onClick={handleRemoveInternalFile} className="absolute -top-3 -right-3 bg-rose-500 text-white rounded-full p-2 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-rose-600"><X size={16}/></button>
+                          </div>
+                      ) : (
+                          <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-slate-300 rounded-2xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
+                              {isUploadingInternalFile ? (
+                                  <div className="flex flex-col items-center gap-2">
+                                      <Loader className="animate-spin text-blue-500" size={24}/>
+                                      <span className="text-xs font-bold text-blue-500">กำลังอัปโหลดไปยัง Google Drive...</span>
+                                  </div>
+                              ) : (
+                                  <>
+                                      <FileUp size={24} className="text-slate-400 mb-2"/>
+                                      <span className="text-xs font-bold text-slate-600">คลิกอัปโหลดรูปภาพหลักฐาน หรือ PDF</span>
+                                      <span className="text-[10px] text-slate-400 mt-1">ไฟล์จะถูกจัดเก็บอัตโนมัติในโฟลเดอร์ปี/เดือน</span>
+                                  </>
+                              )}
+                              <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFileInternal} disabled={isUploadingInternalFile} />
+                          </label>
+                      )}
+                  </div>
+
+                  <div className="mt-8 pt-4 border-t border-slate-100 flex justify-end">
+                      <button onClick={() => setUploadTargetDoc(null)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors w-full">ปิดหน้าต่าง</button>
+                  </div>
+              </div>
+          </div>
       )}
     </div>
   );
