@@ -13442,7 +13442,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const [mode, setMode] = useState('dashboard'); 
   const [showAuditDetails, setShowAuditDetails] = useState(false); // NEW: State สำหรับยืด/หดหน้าต่างรายละเอียดเลขฟันหลอ
   const savedSeller = useMemo(() => { try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } catch (e) { return {}; } }, []);
-  const initialInvData = { docType: 'invoice', refInvNo: '', creditNoteReason: '', customerName: '', address: '', taxId: '', branch: '00000', orderId: '', orderDate: '', custSubDistrict: '', custDistrict: '', custProvince: '', custZipCode: '', items: [{ desc: '', qty: 1, unit: 'ชิ้น', price: 0 }], date: formatDateISO(new Date()), invNo: '', sellerName: savedSeller.sellerName || '', sellerAddress: savedSeller.sellerAddress || '', sellerTaxId: savedSeller.sellerTaxId || '', sellerBranchId: savedSeller.sellerBranchId || '00000', sellerBranchName: savedSeller.sellerBranchName || '', sellerPhone: savedSeller.sellerPhone || '', sellerEmail: savedSeller.sellerEmail || '', sellerSubDistrict: savedSeller.sellerSubDistrict || '', sellerDistrict: savedSeller.sellerDistrict || '', sellerProvince: savedSeller.sellerProvince || '', sellerZipCode: savedSeller.sellerZipCode || '', sellerPosNo: savedSeller.sellerPosNo || '', discount: 0, notes: '', vatType: 'excluded', logo: '', signature: '', status: 'unpaid' };
+  const initialInvData = { docType: 'invoice', refInvNo: '', creditNoteReason: '', customerName: '', address: '', taxId: '', branch: '00000', orderId: '', orderDate: '', custSubDistrict: '', custDistrict: '', custProvince: '', custZipCode: '', items: [{ desc: '', qty: 1, unit: 'ชิ้น', price: 0 }], date: formatDateISO(new Date()), invNo: '', sellerName: savedSeller.sellerName || '', sellerAddress: savedSeller.sellerAddress || '', sellerTaxId: savedSeller.sellerTaxId || '', sellerBranchId: savedSeller.sellerBranchId || '00000', sellerBranchName: savedSeller.sellerBranchName || '', sellerPhone: savedSeller.sellerPhone || '', sellerEmail: savedSeller.sellerEmail || '', sellerSubDistrict: savedSeller.sellerSubDistrict || '', sellerDistrict: savedSeller.sellerDistrict || '', sellerProvince: savedSeller.sellerProvince || '', sellerZipCode: savedSeller.sellerZipCode || '', sellerPosNo: savedSeller.sellerPosNo || '', discount: 0, notes: '', vatType: 'excluded', logo: '', signature: '', status: 'unpaid', channel: '', shopName: '' };
 
   const [invData, setInvData] = useState(initialInvData);
   const [editingDocId, setEditingDocId] = useState(null);
@@ -13831,6 +13831,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         date: formatDateISO(data.date || new Date()), 
         orderId: data.orderId || data.sysDocId || '', 
         orderDate: formatDateISO(data.date),
+        channel: data.channel || '',
+        shopName: data.shopName || '',
         discount: totalDisc,
         notes: defaultDocType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน'
     })); 
@@ -14028,6 +14030,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   sellerZipCode: invData.sellerZipCode || savedSeller.sellerZipCode || '',
                   notes: bulkSettings.docType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน',
                   vatType: calc.vatType,
+                  channel: trans.channel || '',
+                  shopName: trans.shopName || '',
                   // 🚨 THE FIX: นำ logo และ signature กลับมาเซฟลงใน Document ตามเดิม
                   logo: invData.logo || savedSeller.logo || '', 
                   signature: invData.signature || savedSeller.signature || '',
@@ -14452,6 +14456,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         sellerProvince: invData.sellerProvince || '',
         sellerZipCode: invData.sellerZipCode || '',
         notes: invData.notes || '',
+        channel: invData.channel || '',
+        shopName: invData.shopName || '',
         vatType: invData.vatType || 'excluded',
         logo: invData.logo || '',
         signature: invData.signature || '',
@@ -15780,7 +15786,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       {currentBulkPrintDoc && (
         <div className="fixed top-[-9999px] left-[-9999px] opacity-0 pointer-events-none z-[-100]">
           <div id="bulk-invoice-preview-area" className="bg-white p-[30px] w-[210mm] min-h-[296mm] text-sm font-sarabun text-slate-900 leading-relaxed relative box-border overflow-hidden">
-              {currentBulkPrintDoc.status === 'cancelled' && (
+          {currentBulkPrintDoc.status === 'cancelled' && (
                   <div className="absolute inset-0 flex items-center justify-center z-0 pointer-events-none opacity-20 transform -rotate-45">
                       <span className="text-8xl font-black text-rose-600 border-8 border-rose-600 px-8 py-4 rounded-3xl tracking-widest whitespace-nowrap">ยกเลิก / CANCELLED</span>
                   </div>
@@ -15807,7 +15813,9 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   {currentBulkPrintDoc.docType === 'abb' && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เครื่อง POS</span><span className="text-right text-[10px] font-mono font-bold text-slate-700 text-right">{currentBulkPrintDoc.sellerPosNo || '01'}</span></div>)}
                   {currentBulkPrintDoc.docType === 'credit_note' && currentBulkPrintDoc.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{currentBulkPrintDoc.refInvNo}</span></div>)}
                   {currentBulkPrintDoc.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{currentBulkPrintDoc.orderId}</span></div>)}
-                  {currentBulkPrintDoc.orderDate && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">วันที่ทำรายการ</span><span className="text-right text-[10px] text-right">{formatDate(currentBulkPrintDoc.orderDate)}</span></div>)}
+                  {currentBulkPrintDoc.orderDate && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ทำรายการ</span><span className="text-right text-[10px] text-right">{formatDate(currentBulkPrintDoc.orderDate)}</span></div>)}
+                  {currentBulkPrintDoc.channel && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">ช่องทาง</span><span className="text-right text-[10px] text-right">{currentBulkPrintDoc.channel}</span></div>)}
+                  {currentBulkPrintDoc.shopName && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">ร้านค้า</span><span className="text-right text-[10px] text-right">{currentBulkPrintDoc.shopName}</span></div>)}
               </div>
                   </div>
               </div>
@@ -15891,21 +15899,26 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                         <div className="grid grid-cols-2 gap-3 text-left">
                             <div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm text-left">
                                 <label className="text-[10px] font-bold text-indigo-600 mb-1 flex items-center gap-1 text-left">ประเภทเอกสาร</label>
-                                <select value={invData.docType} onChange={e => setInvData({...invData, docType: e.target.value})} className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left cursor-pointer outline-none">
-                                    <option value="invoice">ใบกำกับภาษี / ใบเสร็จรับเงิน</option>
-                                    <option value="abb">ใบกำกับภาษีอย่างย่อ (ABB)</option>
-                                    <option value="receipt">ใบเสร็จรับเงิน (Receipt)</option>
-                                    <option value="payment_voucher">ใบสำคัญจ่าย (Payment Voucher)</option>
-                                    <option value="quotation">ใบเสนอราคา (Quotation)</option>
-                                    <option value="credit_note">ใบลดหนี้ (Credit Note)</option>
+                                <label className="text-[10px] font-bold text-indigo-600 mb-1 flex items-center gap-1 text-left">วันที่เอกสาร</label><input type="date" className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left outline-none cursor-pointer" value={invData.date} onChange={e => setInvData({ ...invData, date: e.target.value })} /></div>
+                        </div>
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-left">
+                            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left"><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">อ้างอิงรหัสรายการ</label><input className="w-full border-0 p-1 text-sm font-mono text-indigo-600 bg-transparent focus:ring-0 text-left outline-none" placeholder="อ้างอิง..." value={invData.orderId} onChange={e => setInvData({ ...invData, orderId: e.target.value })} /></div>
+                            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left"><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">วันที่อ้างอิง</label><input type="date" className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left outline-none cursor-pointer" value={invData.orderDate || ''} onChange={e => setInvData({ ...invData, orderDate: e.target.value })} /></div>
+                            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left">
+                                <label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">ช่องทางขาย (Channel)</label>
+                                <select value={invData.channel} onChange={e=>setInvData({...invData, channel: e.target.value})} className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left outline-none cursor-pointer">
+                                    <option value="">ไม่ระบุ</option>
+                                    {CONSTANTS.CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
-                            <div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm text-left"><label className="text-[10px] font-bold text-indigo-600 mb-1 flex items-center gap-1 text-left">วันที่เอกสาร</label><input type="date" className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left outline-none cursor-pointer" value={invData.date} onChange={e => setInvData({ ...invData, date: e.target.value })} /></div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 text-left">
-                            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left"><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">อ้างอิงรหัสรายการ (Order/Sys ID)</label><input className="w-full border-0 p-1 text-sm font-mono text-indigo-600 bg-transparent focus:ring-0 text-left outline-none" placeholder="อ้างอิง..." value={invData.orderId} onChange={e => setInvData({ ...invData, orderId: e.target.value })} /></div>
-                            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left"><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">วันที่อ้างอิง (Order Date)</label><input type="date" className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left outline-none cursor-pointer" value={invData.orderDate || ''} onChange={e => setInvData({ ...invData, orderDate: e.target.value })} /></div>
-                            {invData.docType === 'credit_note' && (<div className="col-span-2 bg-white p-3 rounded-xl border border-rose-200 shadow-sm text-left"><label className="text-[10px] font-bold text-rose-500 mb-1 flex items-center gap-1 text-left">อ้างอิงใบเดิม</label><input className="w-full border-0 p-1 text-sm font-mono text-rose-600 bg-transparent focus:ring-0 text-left outline-none" placeholder="INV-XXXXXXXX" value={invData.refInvNo} onChange={e => setInvData({ ...invData, refInvNo: e.target.value })} /></div>)}
+                            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left">
+                                <label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">ร้านค้า (Shop)</label>
+                                <select value={invData.shopName} onChange={e=>setInvData({...invData, shopName: e.target.value})} className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left outline-none cursor-pointer">
+                                    <option value="">ไม่ระบุ</option>
+                                    {CONSTANTS.SHOPS.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                            </div>
+                            {invData.docType === 'credit_note' && (<div className="col-span-2 lg:col-span-4 bg-white p-3 rounded-xl border border-rose-200 shadow-sm text-left"><label className="text-[10px] font-bold text-rose-500 mb-1 flex items-center gap-1 text-left">อ้างอิงใบเดิม</label><input className="w-full border-0 p-1 text-sm font-mono text-rose-600 bg-transparent focus:ring-0 text-left outline-none" placeholder="INV-XXXXXXXX" value={invData.refInvNo} onChange={e => setInvData({ ...invData, refInvNo: e.target.value })} /></div>)}
                         </div>
                         <div className="flex justify-between items-center text-left">
                             <h4 className="font-bold text-sm text-rose-600 text-left">ข้อมูลลูกค้า / ผู้รับเงิน</h4>
@@ -16012,7 +16025,9 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                       <div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(invData.date)}</span></div>
                                       {invData.docType === 'abb' && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เครื่อง POS</span><span className="text-right text-[10px] font-mono font-bold text-slate-700 text-right">{invData.sellerPosNo || '01'}</span></div>)}
                                       {invData.docType === 'credit_note' && invData.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{invData.refInvNo}</span></div>)}
-                                      {invData.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{invData.orderId}</span></div>)}
+                                      {invData.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{invData.orderId}</span></div>)}
+                                      {invData.channel && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">ช่องทาง</span><span className="text-right text-[10px] text-right">{invData.channel}</span></div>)}
+                                      {invData.shopName && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">ร้านค้า</span><span className="text-right text-[10px] text-right">{invData.shopName}</span></div>)}
                                   </div>
                               </div>
                             </div>
