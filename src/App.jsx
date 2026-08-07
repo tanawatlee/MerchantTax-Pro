@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, AlertTriangle, Calendar, Info, MapPin, Building, Layers, ArrowRightLeft, Percent, ClipboardList, Briefcase,
   Camera, Sparkles, ScanText, Zap, ChevronRight, Truck, Ticket, CreditCard, FileUp, Hash, Copy, FileCheck, Box, History, AlertCircle, ShoppingCart, Truck as TruckIcon,
   RefreshCw, Plus, FileSpreadsheet, DownloadCloud, Users, Layers as LayersIcon, Filter, ArrowRight, FileJson, FileType, SaveAll,
-  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail, Key, Gift, Wand2, BookOpen, Lightbulb, Receipt, FileMinus, Cloud, ShieldCheck
+  TrendingUp as ProfitIcon, Star, HandCoins, Landmark, LogOut, Lock, Mail, Key, Gift, Wand2, BookOpen, Lightbulb, Receipt, FileMinus, Cloud, ShieldCheck, Monitor
 } from 'lucide-react';
 
 // --- Import Firebase ---
@@ -35,7 +35,14 @@ const CONSTANTS = {
   CATEGORIES: {
     INCOME: ['รายได้จากการขายสินค้า', 'รายได้จากค่าจัดส่ง (ลูกค้าจ่าย)', 'รายได้จากการให้บริการ', 'รายได้ค่านายหน้า/ตัวแทน', 'รายได้อื่นๆ (ดอกเบี้ย, เงินปันผล)'],
     EXPENSE: ['ค่าใช้จ่ายทั่วไป', 'ต้นทุนสินค้า', 'ค่าแพ็คกิ้ง/บรรจุภัณฑ์', 'อุปกรณ์/เครื่องใช้สำนักงาน', 'ค่าน้ำมัน (ซื้อของเข้าร้าน)', 'ค่าขนส่งพัสดุ (ส่งลูกค้า)', 'สินค้าเสียหาย/หมดอายุ', 'ค่าบริการ/จ้างทำของ', 'ค่าโฆษณา (ในประเทศ)', 'ค่าโฆษณา (ภ.พ.36)', 'ค่าธรรมเนียม Platform', 'ค่าคอมมิชชั่น', 'ค่าคอมมิชชั่น Affiliate', 'ค่าเช่า', 'เงินเดือน', 'ภาษี/เบี้ยปรับ', 'ส่วนลดร้านค้า'],
-    STOCK: ['อาหาร and เครื่องดื่ม', 'ของใช้ส่วนตัว', 'ผลิตภัณฑ์ในครัวเรือน', 'ผลิตภัณฑ์ดูแลผ้า', 'แม่ and เด็ก', 'สุขภาพ and ความงาม', 'สัตว์เลี้ยง', 'ขนม and ของว่าง', 'เครื่องปรุง/วัตถุดิบ', 'บรรจุภัณฑ์/อุปกรณ์แพ็ค', 'อื่นๆ']
+    STOCK: ['อาหาร and เครื่องดื่ม', 'ของใช้ส่วนตัว', 'ผลิตภัณฑ์ในครัวเรือน', 'ผลิตภัณฑ์ดูแลผ้า', 'แม่ and เด็ก', 'สุขภาพ and ความงาม', 'สัตว์เลี้ยง', 'ขนม and ของว่าง', 'เครื่องปรุง/วัตถุดิบ', 'บรรจุภัณฑ์/อุปกรณ์แพ็ค', 'อื่นๆ'],
+    ASSET: [
+      { name: 'คอมพิวเตอร์และซอฟต์แวร์', years: 3 },
+      { name: 'เครื่องตกแต่งและเครื่องใช้สำนักงาน', years: 5 },
+      { name: 'ยานพาหนะ', years: 5 },
+      { name: 'เครื่องจักรและอุปกรณ์', years: 5 },
+      { name: 'อาคารถาวร', years: 20 }
+    ]
   },
   CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
   VAT_RATES: { INCLUDED: 'included', EXCLUDED: 'excluded', NONE: 'none' }
@@ -1302,11 +1309,66 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
   const [dashTab, setDashTab] = useState('performance'); // NEW: 'performance', 'cashflow'
   const [aiSummary, setAiSummary] = useState(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [showAiModal, setShowAiModal] = useState(false); // NEW: Modal State for AI
 
   // ล้างค่า AI Summary เมื่อเปลี่ยน Tab หรือตัวกรอง
   useEffect(() => {
       setAiSummary(null);
   }, [dashTab, selectedChannel, selectedShop, selectedMonth]);
+
+  // --- 🔥 NEW: Tax Radar Logic (เกณฑ์สิทธิ์ & เงินสด) ---
+  const taxRadar = useMemo(() => {
+      let ytdCashIncome = 0;
+      let outputVat = 0;
+      let inputVat = 0;
+
+      const targetYear = selectedMonth !== 'all' ? selectedMonth.split('-')[0] : new Date().getFullYear().toString();
+
+      // 1. YTD Cash Income (เกณฑ์เงินสด สำหรับเช็คเพดาน 1.8 ล้านบาทของปีนั้น)
+      transactions.forEach(t => {
+          if (t.isCancelled) return;
+          if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
+          if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
+
+          if (t.type === 'income' && (t.paymentStatus === 'settled' || t.status === 'paid')) {
+              const settleD = normalizeDate(t.settlementDate || t.date);
+              if (settleD && settleD.getFullYear().toString() === targetYear) {
+                  ytdCashIncome += (t.actualSettledAmt !== undefined ? t.actualSettledAmt : (t.grandTotal || t.total));
+              }
+          }
+      });
+
+      // 2. VAT (เกณฑ์สิทธิ์ สำหรับประเมิน ภ.พ.30 ประจำเดือน)
+      invoices.forEach(inv => {
+          if (inv.status === 'cancelled' || ['quotation', 'receipt', 'payment_voucher'].includes(inv.docType)) return;
+          const d = normalizeDate(inv.date);
+          if (d && (selectedMonth === 'all' || `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === selectedMonth)) {
+              const mult = inv.docType === 'credit_note' ? -1 : 1;
+              outputVat += (Number(inv.vat) || 0) * mult;
+          }
+      });
+
+      transactions.forEach(t => {
+          if (t.isCancelled || t.type !== 'expense' || t.isNonCreditableVat || t.isCashBill || t.vatType === 'none') return;
+          if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
+          if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
+
+          const d = normalizeDate(t.date);
+          if (d && (selectedMonth === 'all' || `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === selectedMonth)) {
+               const sub = Number(t.total) || 0;
+               const disc = Number(t.couponDiscount) || 0;
+               const isNegative = sub < 0;
+               const baseAmt = Math.max(0, Math.abs(sub) - Math.abs(disc)) * (isNegative ? -1 : 1);
+               const manualVat = t.manualVatAmount !== undefined && t.manualVatAmount !== '' ? Number(t.manualVatAmount) : null;
+               const finalManualVat = manualVat !== null ? (isNegative && manualVat > 0 ? -manualVat : manualVat) : null;
+               
+               if (t.vatType === 'excluded') inputVat += finalManualVat !== null ? finalManualVat : baseAmt * 0.07;
+               else if (t.vatType === 'included') inputVat += finalManualVat !== null ? finalManualVat : baseAmt * 7 / 107;
+          }
+      });
+
+      return { ytdCashIncome, outputVat, inputVat, netVat: outputVat - inputVat };
+  }, [transactions, invoices, selectedMonth, selectedShop, selectedChannel]);
 
   const analytics = useMemo(() => {
     let perfSales = 0; let perfCogs = 0; let perfFees = 0; let perfExp = 0; let perfBuyerShipping = 0; let lostGmv = 0; 
@@ -1714,47 +1776,133 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
             </div>
         </div>
 
-        {/* Tab Selector */}
-        <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit overflow-x-auto shadow-inner border border-slate-200/50">
-            <button onClick={() => setDashTab('performance')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${dashTab === 'performance' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                <TrendingUp size={16}/> ผลประกอบการ (อิงวันสั่งซื้อ)
-            </button>
-            <button onClick={() => setDashTab('cashflow')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${dashTab === 'cashflow' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                <Wallet size={16}/> กระแสเงินสด (อิงวันรับเงิน)
+        {/* --- 🔥 NEW: Tax & Compliance Radar --- */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* VAT Radar (เกณฑ์สิทธิ์) */}
+            <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm flex flex-col justify-between">
+                <div className="flex justify-between items-center mb-3">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl"><Calculator size={20}/></div>
+                        <div>
+                            <p className="text-sm font-black text-slate-800">ประเมิน VAT (เกณฑ์สิทธิ์)</p>
+                            <p className="text-[10px] text-slate-500 font-medium">สำหรับยื่น ภ.พ.30 {selectedMonth !== 'all' ? `เดือน ${selectedMonth}` : 'รวม'}</p>
+                        </div>
+                    </div>
+                    <div className={`px-3 py-1.5 rounded-full text-[10px] font-black shadow-sm ${taxRadar.netVat >= 0 ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>
+                        {taxRadar.netVat >= 0 ? 'เตรียมจ่ายเพิ่ม' : 'ขอคืน/เครดิต'}
+                    </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-slate-50 rounded-2xl p-3 text-center border border-slate-100">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">ภาษีขาย</p>
+                        <p className="font-black text-slate-700 text-sm">{formatCurrency(taxRadar.outputVat)}</p>
+                    </div>
+                    <div className="bg-slate-50 rounded-2xl p-3 text-center border border-slate-100">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">ภาษีซื้อ</p>
+                        <p className="font-black text-slate-700 text-sm">{formatCurrency(taxRadar.inputVat)}</p>
+                    </div>
+                    <div className={`rounded-2xl p-3 text-center border ${taxRadar.netVat >= 0 ? 'bg-rose-50 border-rose-100' : 'bg-emerald-50 border-emerald-100'}`}>
+                        <p className={`text-[9px] font-black uppercase mb-1 ${taxRadar.netVat >= 0 ? 'text-rose-500' : 'text-emerald-600'}`}>ยอดสุทธิ (Net)</p>
+                        <p className={`font-black text-sm ${taxRadar.netVat >= 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{formatCurrency(Math.abs(taxRadar.netVat))}</p>
+                    </div>
+                </div>
+            </div>
+
+            {/* 1.8M Radar (เกณฑ์เงินสด) */}
+            <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm flex flex-col justify-between">
+                <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2.5 bg-amber-50 text-amber-600 rounded-xl"><Landmark size={20}/></div>
+                        <div>
+                            <p className="text-sm font-black text-slate-800">ยอดเงินสดรับสะสมปี {selectedMonth !== 'all' ? selectedMonth.split('-')[0] : new Date().getFullYear()}</p>
+                            <p className="text-[10px] text-slate-500 font-medium">เพดานจด VAT 1.8 ล้านบาท (เกณฑ์เงินสด ภ.ง.ด.)</p>
+                        </div>
+                    </div>
+                    <div className="text-right">
+                        <p className="text-[10px] font-bold text-slate-400">เข้าบัญชีแล้ว (Settled)</p>
+                        <p className="text-lg font-black text-slate-800 leading-none mt-1">{formatCurrency(taxRadar.ytdCashIncome)}</p>
+                    </div>
+                </div>
+                <div className="mt-2">
+                    <div className="flex justify-between text-[10px] font-bold mb-1.5">
+                        <span className={taxRadar.ytdCashIncome >= 1800000 ? 'text-rose-600 bg-rose-50 px-2 py-0.5 rounded' : 'text-slate-500'}>
+                            {taxRadar.ytdCashIncome >= 1800000 ? 'ทะลุเพดานจด VAT แล้ว!' : `คิดเป็น ${((taxRadar.ytdCashIncome / 1800000) * 100).toFixed(1)}%`}
+                        </span>
+                        <span className="text-slate-400 bg-slate-50 px-2 py-0.5 rounded">Max: 1.8M</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden shadow-inner border border-slate-200/50">
+                        <div 
+                            className={`h-full transition-all duration-1000 ${taxRadar.ytdCashIncome >= 1800000 ? 'bg-rose-500' : taxRadar.ytdCashIncome >= 1500000 ? 'bg-amber-400' : 'bg-emerald-400'}`} 
+                            style={{ width: `${Math.min((taxRadar.ytdCashIncome / 1800000) * 100, 100)}%` }}
+                        ></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {/* Tab Selector & AI Button */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mt-6">
+            <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit overflow-x-auto shadow-inner border border-slate-200/50">
+                <button onClick={() => setDashTab('performance')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${dashTab === 'performance' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                    <TrendingUp size={16}/> ผลประกอบการ (อิงวันสั่งซื้อ)
+                </button>
+                <button onClick={() => setDashTab('cashflow')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${dashTab === 'cashflow' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                    <Wallet size={16}/> กระแสเงินสด (อิงวันรับเงิน)
+                </button>
+            </div>
+            
+            <button onClick={() => setShowAiModal(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-md transition-all shrink-0">
+                <Sparkles size={16}/> AI วิเคราะห์ภาพรวม
             </button>
         </div>
 
-        {/* Executive AI Summary Banner */}
-        <div className="bg-gradient-to-r from-indigo-900 to-slate-800 rounded-[32px] p-6 md:p-8 text-white shadow-xl relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-6">
-            <Wand2 size={120} className="absolute -left-10 -bottom-10 opacity-10 text-indigo-400" />
-            <div className="flex-1 relative z-10 w-full text-left">
-                <div className="flex items-center gap-2 mb-3">
-                    <Sparkles className="text-amber-400" size={20} />
-                    <h3 className="font-black text-lg text-indigo-100 uppercase tracking-widest">Executive AI Summary</h3>
+        {/* AI Modal */}
+        {showAiModal && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4">
+                <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-2xl w-full shadow-2xl animate-in zoom-in-95">
+                    <div className="flex justify-between items-start mb-6">
+                        <div>
+                            <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Sparkles className="text-indigo-600"/> Executive AI Summary</h3>
+                            <p className="text-xs text-slate-500 mt-1">ให้ AI สรุป{dashTab === 'performance' ? 'ผลประกอบการ' : 'สภาพคล่องทางการเงิน'}และให้คำแนะนำประจำวัน</p>
+                        </div>
+                        <button onClick={() => setShowAiModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={20}/></button>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5 mb-6 min-h-[120px] flex items-center justify-center text-center">
+                        {isGeneratingAi ? (
+                            <div className="flex flex-col items-center gap-3">
+                                <Loader size={24} className="animate-spin text-indigo-500" />
+                                <p className="text-sm font-bold text-indigo-600">กำลังวิเคราะห์ข้อมูลเชิงลึก...</p>
+                            </div>
+                        ) : aiSummary ? (
+                            <p className="text-sm leading-relaxed text-slate-700 font-medium whitespace-pre-line text-left w-full">{aiSummary}</p>
+                        ) : (
+                            <div className="text-slate-400 flex flex-col items-center gap-2">
+                                <Activity size={32} className="opacity-20"/>
+                                <p className="text-sm font-bold">คลิกปุ่มด้านล่างเพื่อเริ่มการวิเคราะห์</p>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex justify-end gap-3">
+                        <button onClick={() => setShowAiModal(false)} className="px-6 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-colors text-sm">ปิด</button>
+                        <button onClick={generateAiSummary} disabled={isGeneratingAi} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 disabled:opacity-50 text-sm">
+                            <Activity size={18} /> วิเคราะห์เดี๋ยวนี้
+                        </button>
+                    </div>
                 </div>
-                {aiSummary ? (
-                    <p className="text-sm md:text-base leading-relaxed text-indigo-50 font-medium whitespace-pre-line">{aiSummary}</p>
-                ) : (
-                    <p className="text-sm text-slate-400">ให้ AI สรุป{dashTab === 'performance' ? 'ผลประกอบการ' : 'สภาพคล่องทางการเงิน'}และให้คำแนะนำประจำวันจาก Data จริงของคุณ</p>
-                )}
             </div>
-            <button onClick={generateAiSummary} disabled={isGeneratingAi} className="relative z-10 shrink-0 w-full md:w-auto bg-indigo-500 hover:bg-indigo-400 text-white px-6 py-3.5 rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-                {isGeneratingAi ? <Loader size={18} className="animate-spin" /> : <Activity size={18} />}
-                {isGeneratingAi ? 'กำลังวิเคราะห์ข้อมูล...' : 'วิเคราะห์ภาพรวมธุรกิจ'}
-            </button>
-        </div>
+        )}
 
         {/* --------------------- PERFORMANCE TAB (อิงวันสั่งซื้อ) --------------------- */}
         {dashTab === 'performance' && (
-            <div className="space-y-6 animate-fadeIn">
-                <div className="bg-indigo-50/50 border border-indigo-100 p-5 rounded-2xl flex gap-3 items-start shadow-sm">
-                    <Info className="text-indigo-500 shrink-0 mt-0.5" size={18} />
-                    <div>
-                        <p className="text-sm font-black text-indigo-800">วิธีการคำนวณ: เกณฑ์สิทธิ์ (Accrual Basis)</p>
-                        <p className="text-xs text-indigo-600/80 mt-1 leading-relaxed font-medium">
-                            คำนวณรายรับและรายจ่ายโดยยึดตาม <b>"วันที่ลูกค้ากดสั่งซื้อ"</b> (Order Date) หรือวันที่เกิดรายการจริง <br/>
-                            เพื่อวัดผล <b>ยอดขายและกำไรสุทธิที่แท้จริง</b> ของเดือนนั้นๆ แม้แพลตฟอร์มจะยังไม่โอนเงินเข้าบัญชีก็ตาม
-                        </p>
+            <div className="space-y-6 animate-fadeIn mt-6">
+                <div className="flex items-center gap-2 group relative w-fit z-20">
+                    <h3 className="text-lg font-black text-slate-800">สรุปผลประกอบการ (อิงวันสั่งซื้อ)</h3>
+                    <div className="text-slate-400 cursor-help hover:text-indigo-600 transition-colors"><Info size={16}/></div>
+                    <div className="absolute left-0 top-full mt-2 w-80 bg-slate-900 text-white text-xs p-4 rounded-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all shadow-xl pointer-events-none">
+                        <p className="font-bold text-indigo-400 mb-1.5 text-sm">เกณฑ์สิทธิ์ (Accrual Basis)</p>
+                        <p className="leading-relaxed text-slate-300">คำนวณโดยยึดตาม <b className="text-white">"วันที่ลูกค้ากดสั่งซื้อ"</b> หรือวันที่เกิดรายการจริง เพื่อวัดผลกำไรสุทธิที่แท้จริง แม้แพลตฟอร์มจะยังไม่โอนเงิน</p>
                     </div>
                 </div>
 
@@ -1823,55 +1971,35 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-                    <div className="lg:col-span-2 bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex flex-col w-full">
-                        <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChart2 className="text-indigo-600"/> กราฟผลประกอบการ (Sales vs Expense)</h3>
-                        <div className="flex-1 flex flex-col justify-end text-slate-300 w-full mt-4 min-h-[250px]">
-                            <div className="flex h-48 items-end gap-2 w-full">
-                                {monthlyStats.data.map((m, i) => (
-                                    <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
-                                        <div className="flex w-full items-end justify-center gap-1 h-full relative">
-                                             <div className="w-1/3 bg-indigo-500 rounded-t-md relative group-hover:bg-indigo-400 transition-colors cursor-pointer" style={{ height: `${(m.perfSales / monthlyStats.maxPerf) * 100}%`, minHeight: '4px', opacity: m.perfSales >= 0.01 ? 1 : 0 }}>
-                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity bg-indigo-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.perfSales)}</span>
-                                             </div>
-                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.perfExpTotal / monthlyStats.maxPerf) * 100}%`, minHeight: '4px', opacity: m.perfExpTotal >= 0.01 ? 1 : 0 }}>
-                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.perfExpTotal)}</span>
-                                             </div>
-                                        </div>
-                                        <span className="text-[10px] font-bold text-slate-500">{m.name}</span>
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="flex justify-center gap-4 mt-6 border-t border-slate-100 pt-4">
-                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-indigo-500"></span> ยอดขายรวม (Sales)</div>
-                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-rose-400"></span> รายจ่าย (Expense)</div>
-                            </div>
-                        </div>
+                {/* --- 🔥 NEW LAYOUT: สินค้ายอดฮิต (Top Sellers) แนวนอน ตัดกราฟทิ้ง --- */}
+                <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 w-full mt-6">
+                    <div className="flex justify-between items-center mb-6">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2"><Star className="text-amber-500 fill-amber-500"/> สินค้ายอดฮิต (Top Sellers)</h3>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase">อิงตามยอดขาย (จำนวนชิ้น)</p>
                     </div>
-                    
-                    <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex flex-col w-full h-full">
-                        <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Star className="text-amber-500 fill-amber-500"/> สินค้ายอดฮิต (Top Sellers)</h3>
-                        <div className="space-y-4 flex-1 overflow-y-auto custom-scrollbar">
-                            {topSellers.map((item, idx) => (
-                                <div key={idx} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-black text-xs shrink-0">{idx + 1}</div>
-                                        <div>
-                                            <p className="font-bold text-slate-800 text-sm line-clamp-1">{item.name}</p>
-                                            <p className="text-[10px] text-slate-400 font-mono">SKU: {item.sku || '-'}</p>
-                                        </div>
-                                    </div>
-                                    <div className="text-right shrink-0">
-                                        <p className="font-black text-indigo-600">{item.qty.toLocaleString()} <span className="text-[10px] text-slate-500">ชิ้น</span></p>
-                                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                        {topSellers.map((item, idx) => (
+                            <div key={idx} className="flex flex-col p-4 bg-slate-50 hover:bg-indigo-50 transition-colors rounded-2xl border border-slate-100 relative group">
+                                <div className="absolute -top-3 -left-2 w-7 h-7 rounded-full bg-indigo-600 text-white flex items-center justify-center font-black text-xs shadow-md border-2 border-white z-10">{idx + 1}</div>
+                                <div className="flex-1 mt-1">
+                                    <p className="font-bold text-slate-800 text-sm line-clamp-2 leading-snug">{item.name}</p>
+                                    <p className="text-[10px] text-slate-400 font-mono mt-1">SKU: {item.sku || '-'}</p>
                                 </div>
-                            ))}
-                            {topSellers.length === 0 && <div className="h-full flex items-center justify-center"><p className="text-sm text-slate-400">ยังไม่มีข้อมูลการขาย</p></div>}
-                        </div>
+                                <div className="mt-3 pt-3 border-t border-slate-200/60 flex justify-between items-end">
+                                    <span className="text-[10px] font-bold text-slate-500">ยอดขาย</span>
+                                    <p className="font-black text-indigo-600 text-lg leading-none">{item.qty.toLocaleString()} <span className="text-[10px] text-slate-500">ชิ้น</span></p>
+                                </div>
+                            </div>
+                        ))}
+                        {topSellers.length === 0 && (
+                            <div className="lg:col-span-5 py-8 flex items-center justify-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                                <p className="text-sm text-slate-400 font-bold">ยังไม่มีข้อมูลการขาย</p>
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 w-full">
+                <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 w-full mt-6">
                     <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-indigo-600"/> สรุปผลประกอบการรายเดือนย้อนหลัง (Performance Summary)</h3>
                     <div className="overflow-x-auto custom-scrollbar">
                         <table className="w-full text-sm text-left">
@@ -1905,15 +2033,13 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
 
         {/* --------------------- CASH FLOW TAB (อิงวันรับเงิน) --------------------- */}
         {dashTab === 'cashflow' && (
-            <div className="space-y-6 animate-fadeIn">
-                <div className="bg-emerald-50/50 border border-emerald-100 p-5 rounded-2xl flex gap-3 items-start shadow-sm">
-                    <Info className="text-emerald-500 shrink-0 mt-0.5" size={18} />
-                    <div>
-                        <p className="text-sm font-black text-emerald-800">วิธีการคำนวณ: เกณฑ์เงินสด (Cash Basis)</p>
-                        <p className="text-xs text-emerald-600/80 mt-1 leading-relaxed font-medium">
-                            คำนวณเฉพาะเงินที่เข้า-ออกบัญชีจริง โดยยึดตาม <b>"วันที่เงินโอนสำเร็จ"</b> (Settlement Date) <br/>
-                            เพื่อดู <b>สภาพคล่องทางการเงิน (Cash Flow)</b> ใช้เทียบยอดกับ Statement ธนาคาร
-                        </p>
+            <div className="space-y-6 animate-fadeIn mt-6">
+                <div className="flex items-center gap-2 group relative w-fit z-20">
+                    <h3 className="text-lg font-black text-slate-800">สรุปกระแสเงินสด (อิงวันรับเงิน)</h3>
+                    <div className="text-slate-400 cursor-help hover:text-emerald-600 transition-colors"><Info size={16}/></div>
+                    <div className="absolute left-0 top-full mt-2 w-80 bg-slate-900 text-white text-xs p-4 rounded-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all shadow-xl pointer-events-none">
+                        <p className="font-bold text-emerald-400 mb-1.5 text-sm">เกณฑ์เงินสด (Cash Basis)</p>
+                        <p className="leading-relaxed text-slate-300">คำนวณเฉพาะเงินที่เข้า-ออกบัญชีจริง โดยยึดตาม <b className="text-white">"วันที่เงินโอนสำเร็จ"</b> เพื่อดูสภาพคล่อง ใช้เทียบยอดกับ Statement ธนาคาร</p>
                     </div>
                 </div>
 
@@ -1924,7 +2050,6 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     <StatCard title="กระแสเงินสดสุทธิ (Net Cash)" value={analytics.cash.netCash} color="indigo" icon={<ProfitIcon />} subtitle="เงินเข้า หัก เงินออก" trend={analytics.trends.cashNet} />
                 </div>
 
-                {/* NEW: แถบแสดงข้อมูลอ้างอิง (ต้นทุนสินค้าที่แฝงอยู่ในเงินที่รับเข้า) */}
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 w-full shadow-sm mb-6">
                     <div className="flex items-start md:items-center gap-3">
                         <div className="p-2 bg-slate-200 rounded-xl text-slate-500 shrink-0"><Box size={20}/></div>
@@ -1939,62 +2064,33 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <div className="lg:col-span-2 bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 flex flex-col min-h-[350px] w-full">
-                        <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChart2 className="text-emerald-600"/> กราฟกระแสเงินสด (Cash In vs Cash Out)</h3>
-                        <div className="flex-1 flex flex-col justify-end text-slate-300 w-full mt-4 min-h-[250px]">
-                            <div className="flex h-48 items-end gap-2 w-full">
-                                {monthlyStats.data.map((m, i) => (
-                                    <div key={i} className="flex-1 flex flex-col items-center gap-2 group">
-                                        <div className="flex w-full items-end justify-center gap-1 h-full relative">
-                                             <div className="w-1/3 bg-emerald-500 rounded-t-md relative group-hover:bg-emerald-400 transition-colors cursor-pointer" style={{ height: `${(m.cashIn / monthlyStats.maxCash) * 100}%`, minHeight: '4px', opacity: m.cashIn >= 0.01 ? 1 : 0 }}>
-                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity bg-emerald-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.cashIn)}</span>
-                                             </div>
-                                             <div className="w-1/3 bg-rose-400 rounded-t-md relative group-hover:bg-rose-300 transition-colors cursor-pointer" style={{ height: `${(m.cashOut / monthlyStats.maxCash) * 100}%`, minHeight: '4px', opacity: m.cashOut >= 0.01 ? 1 : 0 }}>
-                                                 <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] font-bold text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity bg-rose-50 px-1.5 py-0.5 rounded shadow-sm z-10">{formatCurrency(m.cashOut)}</span>
-                                             </div>
-                                        </div>
-                                        <span className="text-[10px] font-bold text-slate-500">{m.name}</span>
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="flex justify-center gap-4 mt-6 border-t border-slate-100 pt-4">
-                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-emerald-500"></span> เงินเข้าแล้ว (Cash In)</div>
-                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500"><span className="w-3 h-3 rounded bg-rose-400"></span> จ่ายแล้ว (Cash Out)</div>
-                            </div>
-                        </div>
+                {/* --- 🔥 NEW LAYOUT: Liquidity Alert แนวนอน ตัดกราฟทิ้ง --- */}
+                <div className="bg-slate-900 p-6 md:p-8 rounded-[32px] shadow-xl text-white w-full mt-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+                    <div className="lg:w-1/3">
+                        <h4 className="text-indigo-400 text-[10px] font-black uppercase tracking-[0.2em] mb-2 flex items-center gap-1"><AlertTriangle size={14}/> Liquidity Alert</h4>
+                        <p className="text-lg font-bold mb-2">สถานะความเสี่ยงสภาพคล่อง</p>
+                        <p className="text-xs text-slate-400 leading-relaxed">ตรวจสอบยอดเงินที่ยังค้างอยู่ในระบบ และหนี้สินที่รอการชำระ เพื่อบริหารเงินสดให้เพียงพอ</p>
+                        <button onClick={() => window.print()} className="mt-6 w-full lg:w-fit px-6 bg-indigo-600 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-900/20">
+                            <Printer size={16}/> พิมพ์รายงาน
+                        </button>
                     </div>
-                    
-                    <div className="bg-slate-900 p-8 rounded-[40px] shadow-xl text-white flex flex-col justify-between w-full h-full">
-                        <div>
-                            <h4 className="text-indigo-400 text-[10px] font-black uppercase tracking-[0.2em] mb-2 flex items-center gap-1"><AlertTriangle size={14}/> Liquidity Alert</h4>
-                            <p className="text-sm font-bold mb-6">สรุปสถานะความเสี่ยงสภาพคล่อง</p>
-                            <div className="space-y-4">
-                                <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                                    <span className="text-xs opacity-60">เงินค้างในระบบ (Pending):</span>
-                                    <span className="text-sm font-black text-indigo-400">{formatCurrency(analytics.cash.pending)}</span>
-                                </div>
-                                <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                                    <span className="text-xs opacity-60">หนี้ค้างชำระเจ้าหนี้ (Credit):</span>
-                                    <span className="text-sm font-black text-amber-400">{formatCurrency(analytics.cash.supplierDebt)}</span>
-                                </div>
-                                <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                                    <span className="text-xs opacity-60">สินค้าใกล้หมด (SKUs):</span>
-                                    <span className="text-sm font-black text-rose-400">
-                                        {lowStockItems.length > 0 ? lowStockItems.length : 0} รายการ
-                                    </span>
-                                </div>
-                            </div>
+                    <div className="lg:w-2/3 w-full grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div className="bg-slate-800/50 border border-slate-700 p-5 rounded-2xl">
+                            <span className="text-xs opacity-60 text-slate-300 block mb-1">เงินค้างในระบบ (Pending)</span>
+                            <span className="text-2xl font-black text-indigo-400">{formatCurrency(analytics.cash.pending)}</span>
                         </div>
-                        <div className="pt-6">
-                            <button onClick={() => window.print()} className="w-full bg-indigo-600 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-900/20">
-                                <Printer size={16}/> พิมพ์รายงานการเงินสรุป
-                            </button>
+                        <div className="bg-slate-800/50 border border-slate-700 p-5 rounded-2xl">
+                            <span className="text-xs opacity-60 text-slate-300 block mb-1">หนี้ค้างชำระ (Credit)</span>
+                            <span className="text-2xl font-black text-amber-400">{formatCurrency(analytics.cash.supplierDebt)}</span>
+                        </div>
+                        <div className="bg-slate-800/50 border border-slate-700 p-5 rounded-2xl">
+                            <span className="text-xs opacity-60 text-slate-300 block mb-1">สินค้าใกล้หมด (SKUs)</span>
+                            <span className="text-2xl font-black text-rose-400">{lowStockItems.length > 0 ? lowStockItems.length : 0} <span className="text-sm">รายการ</span></span>
                         </div>
                     </div>
                 </div>
 
-                <div className="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100 w-full mt-6">
+                <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 w-full mt-6">
                     <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Wallet className="text-emerald-600"/> สรุปกระแสเงินสดรายเดือนย้อนหลัง (Cash Flow Summary)</h3>
                     <div className="overflow-x-auto custom-scrollbar">
                         <table className="w-full text-sm text-left">
@@ -2453,6 +2549,24 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
           // คำนวณต้นทุนต่อหน่วยของสต็อกที่ถูกโอนมา
           const avgCostTransferred = qty > 0 ? totalCostTransferred / qty : 0;
+
+          // --- 🔥 MATH TEAM FIX: สร้าง Log การโอนออกให้ต้นทาง เพื่อให้หน้าจอและสมการหักลบยอดคงเหลือลง ---
+          const logSourceRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+          batchWriter.set(logSourceRef, {
+              productName: sourceGroup.name,
+              sku: sourceGroup.sku !== '-' ? sourceGroup.sku : '',
+              category: sourceGroup.batches[0]?.category || 'อื่นๆ',
+              quantity: -qty, // แจ้งระบบให้ลด Total In (หักลบยอดหน้าจอ)
+              costPerUnit: avgCostTransferred, 
+              sellPrice: 0,
+              date: new Date(),
+              sold: -qty, // ปรับ sold ติดลบตามกัน เพื่อให้ remaining สุทธิเป็น 0 (ไม่กวนระบบตัด FIFO ล็อตอื่นๆ)
+              userId: user.uid,
+              createdAt: serverTimestamp(),
+              paymentStatus: 'paid',
+              isAdjustment: true,
+              adjustReason: `โอนย้ายด่วน(ลงสินค้าผิด) ไปยัง: ${quickTransferItem.name}`
+          });
 
           // 2. เพิ่มสต็อกไปให้ตัวปลายทาง (สร้างล็อตใหม่ด้วยต้นทุนที่คำนวณได้)
           const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
@@ -5514,6 +5628,24 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
 
               const avgCostTransferred = qty > 0 ? totalCostTransferred / qty : 0;
 
+              // --- 🔥 MATH TEAM FIX: สร้าง Log การโอนออกให้ต้นทาง สำหรับโหมดโอนย้ายปกติ ---
+              const logSourceRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+              batchWriter.set(logSourceRef, {
+                  productName: adjustStockItem.name,
+                  sku: adjustStockItem.sku || '',
+                  category: adjustStockItem.category || 'อื่นๆ',
+                  quantity: -qty, 
+                  costPerUnit: avgCostTransferred, 
+                  sellPrice: 0,
+                  date: actionDate,
+                  sold: -qty, 
+                  userId: user.uid,
+                  createdAt: serverTimestamp(),
+                  paymentStatus: 'paid',
+                  isAdjustment: true,
+                  adjustReason: adjustData.note ? `${adjustData.reason} ไปยัง: ${targetItem.name} (หมายเหตุ: ${adjustData.note})` : `${adjustData.reason} ไปยัง: ${targetItem.name}`
+              });
+
               // 2. เพิ่มสต็อกไปให้ตัวปลายทาง (สร้างล็อตใหม่ด้วยต้นทุนเฉลี่ยที่ดึงมา)
               const newBatchRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
               batchWriter.set(newBatchRef, {
@@ -5602,6 +5734,24 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                       isFromReconciliation: true,
                       isTaxOnly: false, // เปิดให้บิลนี้โชว์ใน Dashboard เพื่อตัดกำไรสุทธิ
                       attachmentUrl: adjustAttachmentUrl 
+                  });
+              } else {
+                  // --- 🔥 MATH TEAM FIX: ถ้าเบิกออกเฉยๆ ไม่เป็นค่าใช้จ่าย ต้องสร้าง Log แจ้งระบบให้ตัดหน้าจอลงด้วย ---
+                  const logSourceRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+                  batchWriter.set(logSourceRef, {
+                      productName: adjustStockItem.name,
+                      sku: adjustStockItem.sku || '',
+                      category: adjustStockItem.category || 'อื่นๆ',
+                      quantity: -qty,
+                      costPerUnit: qty > 0 ? (totalCostLost / qty) : 0,
+                      sellPrice: 0,
+                      date: actionDate,
+                      sold: -qty,
+                      userId: user.uid,
+                      createdAt: serverTimestamp(),
+                      paymentStatus: 'paid',
+                      isAdjustment: true,
+                      adjustReason: adjustData.note ? `${adjustData.reason} (หมายเหตุ: ${adjustData.note})` : adjustData.reason
                   });
               }
           }
@@ -13584,6 +13734,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   const executeBulkIssue = async () => {
       setShowBulkIssueModal(false);
       
+      // --- 🔥 FIX: คัดกรองป้องกันการออกเอกสารผิดประเภทข้ามหมวด ---
       const isSalesDoc = ['invoice', 'abb', 'receipt'].includes(bulkSettings.docType);
       const isExpenseDoc = bulkSettings.docType === 'payment_voucher';
       
@@ -13606,39 +13757,33 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           const prefix = prefixMapBulk[bulkSettings.docType] || 'INV-';
           
           let counters = {}; 
+          
+          // --- NEW: เตรียมข้อมูลล่วงหน้าให้เสร็จก่อน แล้วค่อยยิงแบบ Batch เพื่อความเร็วและเสถียร ---
           const uploadQueue = [];
-          
-          // 🚀 ปฏิบัติการที่ 1: BLAZING FAST SEQUENCE GENERATOR
-          // แทนที่จะเรียกฟังก์ชันไปวนหาเลขทีละออเดอร์ เราจะค้นหาแค่ครั้งเดียวแล้วจำไว้ใน memory
-          
-          setBulkStatus({ current: 0, total: docsToIssue.length, message: 'กำลังคำนวณและรันเลขเอกสารล่วงหน้า (Pre-calculating Sequence)...' });
-          
-          // ดึงเลขล่าสุดมาเก็บใน counters ไว้ก่อน
-          allInvs.forEach(item => {
-              const num = String(item.invNo || '');
-              const match = num.match(/^([A-Za-z]+-\d{8}-)(\d+)$/);
-              if (match) {
-                  const pfx = match[1];
-                  const seqNum = parseInt(match[2], 10);
-                  if (!counters[pfx]) counters[pfx] = 0;
-                  if (seqNum > counters[pfx]) counters[pfx] = seqNum;
-              }
-          });
 
-          // รันเลขให้เอกสารใหม่แบบไม่ต้องวนลูปซ้ำ
           for (let i = 0; i < docsToIssue.length; i++) {
               const trans = docsToIssue[i];
               const transDate = normalizeDate(trans.date) || new Date();
               const dateStr = formatDateISO(transDate).replace(/-/g, '');
               const fullPrefix = `${prefix}${dateStr}-`;
 
-              // ถ้ายังไม่เคยมีเลขนี้ในวันนั้นๆ ให้เริ่มที่ 0
               if (counters[fullPrefix] === undefined) {
-                  counters[fullPrefix] = 0;
+                  const usedNums = new Set();
+                  allInvs.forEach(item => {
+                      if (item.invNo && String(item.invNo).startsWith(fullPrefix)) {
+                          const num = parseInt(String(item.invNo).replace(fullPrefix, ''), 10);
+                          if (!isNaN(num)) usedNums.add(num);
+                      }
+                  });
+                  counters[fullPrefix] = usedNums;
               }
-              
-              counters[fullPrefix]++; // บวกทีละ 1 ดื้อๆ ไปเลย (เร็วที่สุด)
-              const newInvNo = `${fullPrefix}${String(counters[fullPrefix]).padStart(5, '0')}`;
+
+              let nextNum = 1;
+              while (counters[fullPrefix].has(nextNum)) {
+                  nextNum++;
+              }
+              counters[fullPrefix].add(nextNum);
+              const newInvNo = `${fullPrefix}${String(nextNum).padStart(5, '0')}`;
 
               const calc = calculateTransactionTotals(trans, bulkSettings.vatType);
               
@@ -13668,10 +13813,9 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   sellerZipCode: invData.sellerZipCode || savedSeller.sellerZipCode || '',
                   notes: bulkSettings.docType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน',
                   vatType: calc.vatType,
-                  // 🚨 THE OPTIMIZATION: ไม่เอาโลโก้และลายเซ็นไปเซฟใน Database ให้หนักเครื่อง 
-                  // เดี๋ยวตอนกดปริ้นท์ ระบบจะดึงรูปจาก Profile มาแปะให้เอง
-                  logo: '', 
-                  signature: '',
+                  // 🚨 THE FIX: นำ logo และ signature กลับมาเซฟลงใน Document ตามเดิม
+                  logo: invData.logo || savedSeller.logo || '', 
+                  signature: invData.signature || savedSeller.signature || '',
                   discount: calc.discount,
                   sub: calc.sub,
                   afterDisc: calc.afterDisc,
@@ -13683,6 +13827,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                   createdAt: serverTimestamp()
               };
 
+              // Sanitize ข้อมูลป้องกันการติด Error ของ Firebase (ลบ properties ที่เป็น undefined ออก)
               Object.keys(payload).forEach(k => { if (payload[k] === undefined) delete payload[k]; });
 
               const invRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'));
@@ -13697,33 +13842,33 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
               });
           }
 
-          // 🚀 ปฏิบัติการที่ 2: BATCH WRITING แบบมีประสิทธิภาพ
           let processedCount = 0;
           let batch = writeBatch(dbInstance);
           let opsInCurrentBatch = 0;
 
-          // เราจะไม่แจ้งเตือน UI ทุกๆ ใบ ให้มันหนักเครื่อง จะเตือนทีละ 50 ใบเท่านั้น
           for (let i = 0; i < uploadQueue.length; i++) {
-              if (i % 50 === 0) {
-                  setBulkStatus({ current: i, total: uploadQueue.length, message: `กำลังเขียนข้อมูลลงฐานข้อมูล...` });
-              }
+              setBulkStatus({ current: i + 1, total: uploadQueue.length, message: `กำลังเขียนข้อมูลเอกสารที่ ${i + 1}...` });
               
               const item = uploadQueue[i];
               batch.set(item.invRef, item.payload);
               batch.update(item.transRef, item.transPayload);
               opsInCurrentBatch += 2;
+
               processedCount++;
 
-              // Firebase อนุญาตสูงสุด 500 operation ต่อ 1 Batch
-              // เราจะตัดจบทุกๆ 200 บิล (400 ops) เพื่อความปลอดภัยและทำงานได้เร็ว
-              if (opsInCurrentBatch >= 400 || i === uploadQueue.length - 1) {
+              // --- 🔥 CRITICAL FIX: แบ่ง Lot ให้เหลือแค่ "ทีละ 10 รายการ" (ops <= 20)
+              // เพราะรูป Base64 หนึ่งรูปอาจจะใหญ่ถึง 300KB-500KB ถ้าคูณ 10 จะเท่ากับ 3-5MB 
+              // ซึ่งจะไม่เกิน Limit (10MB) ของ Firebase แน่นอน
+              if (opsInCurrentBatch >= 20 || i === uploadQueue.length - 1) {
                   await batch.commit();
                   batch = writeBatch(dbInstance);
                   opsInCurrentBatch = 0;
+                  // พักหายใจ 300ms ระหว่างรอบให้ Server ประมวลผลภาพ
+                  await new Promise(r => setTimeout(r, 300)); 
               }
           }
 
-          showToast(`ออกเอกสารสำเร็จ ${processedCount} รายการ ไวขึ้น 100 เท่า!`, "success");
+          showToast(`ออกเอกสารสำเร็จ ${processedCount} รายการ`, "success");
           setSelectedDocIds([]);
       } catch (e) {
           console.error(e);
@@ -16504,7 +16649,7 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
               </div>
 
               <div className="pt-4 flex gap-3">
-                <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-4 bg-white border border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-colors shadow-sm">
+                <button onClick={() => setShowModal(false)} className="flex-1 py-4 bg-white border border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 transition-colors shadow-sm">
                     {editingId ? 'ยกเลิกแก้ไข' : 'ยกเลิก'}
                 </button>
                 <button onClick={handleSave} className={`flex-[2] py-4 text-white rounded-xl font-black shadow-lg transition-all text-lg flex items-center justify-center gap-2 ${formData.type.includes('shopee') ? 'bg-orange-500 hover:bg-orange-600 shadow-orange-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}>
@@ -16519,148 +16664,392 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
   );
 }
 
-function InternalDocGenerator({ user, transactions, stockBatches, showToast, appId }) {
-  const [activeSubTab, setActiveSubTab] = useState('receipt_cert'); // 'receipt_cert', 'write_off', 'history'
-  const [isSaving, setIsSaving] = useState(false);
-  const [printDoc, setPrintDoc] = useState(null);
-
-  const savedSeller = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } catch (e) { return {}; }
-  }, []);
-
-  // --- Form State: ใบรับรองแทนใบเสร็จรับเงิน ---
-  const [certForm, setCertForm] = useState({
-    date: formatDateISO(new Date()),
-    recipientName: '',
-    recipientCitizenId: '',
-    recipientAddress: '',
-    category: 'ค่าใช้จ่ายทั่วไป',
-    noReceiptReason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
-    approverName: '',
-    notes: '',
-    attachmentUrl: '',
-    items: [{ desc: '', qty: 1, unit: 'รายการ', price: 0 }]
+function AssetRegister({ appId, user, showToast, assets }) {
+  const [showModal, setShowModal] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [formData, setFormData] = useState({
+      assetName: '',
+      category: CONSTANTS.CATEGORIES.ASSET[0].name,
+      lifespan: CONSTANTS.CATEGORIES.ASSET[0].years,
+      purchaseDate: formatDateISO(new Date()),
+      cost: '',
+      serialNumber: '',
+      notes: ''
   });
 
-  // --- Form State: ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย ---
-  const [writeOffForm, setWriteOffForm] = useState({
-    date: formatDateISO(new Date()),
-    reason: 'สินค้าชำรุด/เสียหาย',
-    approverName: '',
-    inspectorName: '',
-    notes: '',
-    attachmentUrl: '',
-    items: [{ sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]
-  });
+  const handleCategoryChange = (e) => {
+      const selectedCat = CONSTANTS.CATEGORIES.ASSET.find(c => c.name === e.target.value);
+      setFormData(prev => ({
+          ...prev,
+          category: selectedCat.name,
+          lifespan: selectedCat.years
+      }));
+  };
 
-  const [showStockPickerModal, setShowStockPickerModal] = useState(null);
-  const [stockSearch, setStockSearch] = useState('');
-  
-  // --- 🔥 NEW: State สำหรับยกเลิกเอกสารภายใน ---
-  const [voidConfirmId, setVoidConfirmId] = useState(null);
+  const calculateDepreciation = (asset) => {
+      const cost = Number(asset.cost) || 0;
+      const lifespan = Number(asset.lifespan) || 5;
+      const purchaseDate = normalizeDate(asset.purchaseDate);
+      const today = new Date();
 
-  // --- 🔥 NEW: State สำหรับอัปโหลดไฟล์หลักฐาน (เอกสารภายใน) ---
-  const [uploadTargetDoc, setUploadTargetDoc] = useState(null);
-  const [isUploadingInternalFile, setIsUploadingInternalFile] = useState(false);
-  const [isUploadingCertFile, setIsUploadingCertFile] = useState(false);
-  const [isUploadingWriteOffFile, setIsUploadingWriteOffFile] = useState(false);
+      if (!purchaseDate || cost <= 0) return { accumDep: 0, nbv: cost, currentYearDep: 0 };
 
-  const handleUploadFormFile = async (e, formType) => {
-      const file = e.target.files[0];
-      if (!file || !user) return;
+      // คำนวณจำนวนวันที่ใช้งานจนถึงปัจจุบัน
+      const daysUsed = Math.max(0, Math.floor((today - purchaseDate) / (1000 * 60 * 60 * 24)));
+      const dailyDep = cost / (lifespan * 365);
+      let accumDep = daysUsed * dailyDep;
 
-      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
-      if (!webhookUrl) {
-          showToast('กรุณาตั้งค่าเชื่อมต่อ Google Drive ในเมนูเครื่องมือขั้นสูง (Admin) ก่อน', 'error');
+      // กฎหมายสรรพากร: มูลค่าซากเหลือ 1 บาท
+      if (accumDep >= cost - 1) accumDep = Math.max(0, cost - 1);
+
+      const nbv = cost - accumDep;
+
+      // คำนวณค่าเสื่อมเฉพาะของปีนี้ (เพื่อลงรายจ่ายหักภาษี)
+      const startOfYear = new Date(today.getFullYear(), 0, 1);
+      const calcStart = purchaseDate > startOfYear ? purchaseDate : startOfYear;
+      const daysInThisYear = Math.max(0, Math.floor((today - calcStart) / (1000 * 60 * 60 * 24)));
+      let currentYearDep = daysInThisYear * dailyDep;
+
+      if (currentYearDep > nbv - 1) currentYearDep = Math.max(0, nbv - 1);
+      if (accumDep === cost - 1) currentYearDep = 0;
+
+      return { accumDep, nbv, currentYearDep };
+  };
+
+  const assetList = useMemo(() => {
+      return assets.map(a => ({ ...a, ...calculateDepreciation(a) })).sort(sortNewestFirst);
+  }, [assets]);
+
+  const stats = useMemo(() => {
+      return assetList.reduce((acc, a) => ({
+          totalCost: acc.totalCost + (Number(a.cost) || 0),
+          totalAccumDep: acc.totalAccumDep + a.accumDep,
+          totalNbv: acc.totalNbv + a.nbv,
+          totalCurrentYearDep: acc.totalCurrentYearDep + a.currentYearDep
+      }), { totalCost: 0, totalAccumDep: 0, totalNbv: 0, totalCurrentYearDep: 0 });
+  }, [assetList]);
+
+  const handleSaveAsset = async (e) => {
+      e.preventDefault();
+      if (!user) return;
+      if (!formData.assetName || !formData.cost) {
+          showToast('กรุณาระบุชื่อทรัพย์สินและมูลค่าให้ครบถ้วน', 'error');
           return;
       }
 
-      const setUploading = formType === 'cert' ? setIsUploadingCertFile : setIsUploadingWriteOffFile;
-      const setForm = formType === 'cert' ? setCertForm : setWriteOffForm;
-      
-      setUploading(true);
+      setIsProcessing(true);
       try {
-          let base64Data = await new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result.split(',')[1]);
-              reader.onerror = reject;
-              reader.readAsDataURL(file);
-          });
-
-          const mimeType = file.type;
-          const fileExt = file.name.split('.').pop();
-          const d = new Date();
-          const year = String(d.getFullYear());
-          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
-          const month = monthNames[d.getMonth()];
-          const day = String(d.getDate()).padStart(2, '0');
-          const category = formType === 'cert' ? 'Receipt_Cert' : 'Write_Off';
-          
-          const fileName = `${category}_${Date.now()}.${fileExt}`;
-
-          const payload = { 
-              base64Data, fileName, mimeType, 
-              rootFolder: 'MerchantTax_DigitalFiling',
-              year: year, type: '2_Expense', month: month, category: category, day: day
+          const sysDocId = generateDateBasedDocId(assets, 'AST-', formData.purchaseDate, 'sysDocId');
+          const payload = {
+              sysDocId,
+              assetName: formData.assetName,
+              category: formData.category,
+              lifespan: Number(formData.lifespan),
+              purchaseDate: normalizeDate(formData.purchaseDate),
+              cost: Number(formData.cost),
+              serialNumber: formData.serialNumber,
+              notes: formData.notes,
+              createdAt: serverTimestamp(),
+              userId: user.uid,
+              status: 'active'
           };
 
-          showToast(`กำลังส่งไฟล์หลักฐานไปที่ Google Drive...`, 'success');
-          const res = await fetch(webhookUrl.trim(), {
-              method: 'POST',
-              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: JSON.stringify(payload)
+          await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'assets'), payload);
+          showToast('ขึ้นทะเบียนทรัพย์สินสำเร็จ', 'success');
+          setShowModal(false);
+          setFormData({
+              assetName: '', category: CONSTANTS.CATEGORIES.ASSET[0].name, lifespan: CONSTANTS.CATEGORIES.ASSET[0].years,
+              purchaseDate: formatDateISO(new Date()), cost: '', serialNumber: '', notes: ''
+          });
+      } catch (err) {
+          console.error(err);
+          showToast('เกิดข้อผิดพลาดในการบันทึก', 'error');
+      }
+      setIsProcessing(false);
+  };
+
+  const handleDeleteAsset = async (id) => {
+      if (!window.confirm('ยืนยันการลบทรัพย์สินนี้ออกจากทะเบียน?')) return;
+      try {
+          await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'assets', id));
+          showToast('ลบทรัพย์สินสำเร็จ', 'success');
+      } catch (err) {
+          showToast('ลบไม่สำเร็จ', 'error');
+      }
+  };
+
+  return (
+      <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-6 mb-2">
+              <div>
+                  <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><Monitor className="text-indigo-600"/> ทะเบียนทรัพย์สิน (Asset Register)</h2>
+                  <p className="text-sm text-slate-500 mt-1">ระบบคำนวณค่าเสื่อมราคาสะสมอัตโนมัติ สำหรับใช้ตัดเป็นรายจ่ายเพื่อลดหย่อนภาษีเงินได้สิ้นปี</p>
+              </div>
+              <button onClick={() => setShowModal(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-indigo-100 transition-all flex items-center gap-2">
+                  <PlusCircle size={16}/> ขึ้นทะเบียนทรัพย์สินใหม่
+              </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
+              <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">มูลค่าทรัพย์สินรวม (Total Cost)</p>
+                  <p className="text-2xl font-black text-slate-800">{formatCurrency(stats.totalCost)}</p>
+              </div>
+              <div className="bg-rose-50 border border-rose-100 p-5 rounded-2xl shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-rose-500 mb-1">ค่าเสื่อมราคาสะสม (Accumulated)</p>
+                  <p className="text-2xl font-black text-rose-600">{formatCurrency(stats.totalAccumDep)}</p>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-100 p-5 rounded-2xl shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600 mb-1">มูลค่าสุทธิทางบัญชี (Net Book Value)</p>
+                  <p className="text-2xl font-black text-emerald-700">{formatCurrency(stats.totalNbv)}</p>
+              </div>
+              <div className="bg-indigo-900 border border-indigo-800 p-5 rounded-2xl shadow-lg relative overflow-hidden">
+                  <Calculator className="absolute -right-2 -bottom-2 text-indigo-500 opacity-20" size={64}/>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-indigo-300 mb-1 relative z-10">ค่าเสื่อมสำหรับปีนี้ (Yearly Expense)</p>
+                  <p className="text-2xl font-black text-white relative z-10">{formatCurrency(stats.totalCurrentYearDep)}</p>
+                  <p className="text-[9px] text-indigo-200 mt-1 relative z-10">นำยอดนี้ไปลงรายจ่าย ภ.ง.ด. ตอนสิ้นปีได้เลย</p>
+              </div>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col flex-1">
+              <div className="p-5 border-b bg-slate-50 flex justify-between items-center">
+                  <h4 className="font-bold text-slate-700 text-sm uppercase tracking-widest">รายการทรัพย์สิน</h4>
+                  <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full">{assetList.length} รายการ</span>
+              </div>
+              <div className="overflow-x-auto flex-1 custom-scrollbar">
+                  <table className="w-full text-xs text-left whitespace-nowrap">
+                      <thead className="bg-white text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                          <tr>
+                              <th className="p-4 pl-6">วันที่ซื้อ / รหัสทรัพย์สิน</th>
+                              <th className="p-4">รายการ / หมวดหมู่</th>
+                              <th className="p-4 text-center">อายุ (ปี)</th>
+                              <th className="p-4 text-right">มูลค่าทุน (Cost)</th>
+                              <th className="p-4 text-right text-rose-500 bg-rose-50/30">ค่าเสื่อมสะสม</th>
+                              <th className="p-4 text-right text-indigo-600 bg-indigo-50/30 pr-6">มูลค่าคงเหลือ (NBV)</th>
+                              <th className="p-4 text-center">จัดการ</th>
+                          </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                          {assetList.map((asset, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                                  <td className="p-4 pl-6">
+                                      <p className="font-bold text-slate-700">{formatDate(asset.purchaseDate)}</p>
+                                      <p className="font-mono text-[10px] text-slate-400 mt-0.5">{asset.sysDocId}</p>
+                                  </td>
+                                  <td className="p-4">
+                                      <p className="font-bold text-slate-800">{asset.assetName}</p>
+                                      <p className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded w-fit mt-1">{asset.category}</p>
+                                  </td>
+                                  <td className="p-4 text-center font-bold text-slate-600">{asset.lifespan}</td>
+                                  <td className="p-4 text-right font-black text-slate-700">{formatCurrency(asset.cost)}</td>
+                                  <td className="p-4 text-right font-black text-rose-500 bg-rose-50/10">-{formatCurrency(asset.accumDep)}</td>
+                                  <td className="p-4 text-right font-black text-indigo-600 bg-indigo-50/10 pr-6">{formatCurrency(asset.nbv)}</td>
+                                  <td className="p-4 text-center">
+                                      <button onClick={() => handleDeleteAsset(asset.id)} className="p-2 bg-white border border-slate-200 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shadow-sm">
+                                          <Trash2 size={14}/>
+                                      </button>
+                                  </td>
+                              </tr>
+                          ))}
+                          {assetList.length === 0 && (
+                              <tr><td colSpan="7" className="p-10 text-center text-slate-400 font-bold">ยังไม่ได้ขึ้นทะเบียนทรัพย์สิน</td></tr>
+                          )}
+                      </tbody>
+                  </table>
+              </div>
+          </div>
+
+          {/* Add Asset Modal */}
+          {showModal && (
+              <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4">
+                  <div className="bg-white rounded-[32px] p-8 max-w-lg w-full shadow-2xl animate-in zoom-in-95">
+                      <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><PlusCircle className="text-indigo-600"/> ขึ้นทะเบียนทรัพย์สินใหม่</h3>
+                          <button onClick={() => setShowModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={20}/></button>
+                      </div>
+                      
+                      <form onSubmit={handleSaveAsset} className="space-y-4">
+                          <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 mb-4 flex items-start gap-2">
+                              <Info size={16} className="text-amber-500 shrink-0 mt-0.5"/>
+                              <p className="text-[10px] text-amber-700 font-medium">
+                                  ทรัพย์สิน (เช่น คอมพิวเตอร์, อุปกรณ์สำนักงาน) ไม่สามารถนำมาลงเป็นรายจ่ายก้อนเดียวในปีที่ซื้อได้ ระบบจะคำนวณหักค่าเสื่อมราคาให้คุณอัตโนมัติตามกฎหมายสรรพากร
+                              </p>
+                          </div>
+                          
+                          <div>
+                              <label className="text-xs font-bold text-slate-500 uppercase">ชื่อทรัพย์สิน (Asset Name)</label>
+                              <input type="text" required value={formData.assetName} onChange={e=>setFormData({...formData, assetName: e.target.value})} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100" placeholder="เช่น Notebook Dell, แอร์ติดผนัง" />
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-4">
+                              <div className="col-span-2">
+                                  <label className="text-xs font-bold text-slate-500 uppercase">หมวดหมู่และอายุใช้งาน</label>
+                                  <select value={formData.category} onChange={handleCategoryChange} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100">
+                                      {CONSTANTS.CATEGORIES.ASSET.map(c => (
+                                          <option key={c.name} value={c.name}>{c.name} (อายุ {c.years} ปี)</option>
+                                      ))}
+                                  </select>
+                              </div>
+                              <div>
+                                  <label className="text-xs font-bold text-slate-500 uppercase">วันที่ซื้อ/ได้มา</label>
+                                  <input type="date" required value={formData.purchaseDate} onChange={e=>setFormData({...formData, purchaseDate: e.target.value})} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100" />
+                              </div>
+                              <div>
+                                  <label className="text-xs font-bold text-slate-500 uppercase">มูลค่าทุน (ไม่รวม VAT)</label>
+                                  <input type="number" required min="1" step="0.01" value={formData.cost} onChange={e=>setFormData({...formData, cost: e.target.value})} className="w-full mt-1 bg-white border-2 border-indigo-100 rounded-xl p-3 text-base font-black text-indigo-700 outline-none focus:border-indigo-400" placeholder="0.00" />
+                              </div>
+                          </div>
+
+                          <div>
+                              <label className="text-xs font-bold text-slate-500 uppercase">เลขซีเรียล / รหัสอ้างอิง (ถ้ามี)</label>
+                              <input type="text" value={formData.serialNumber} onChange={e=>setFormData({...formData, serialNumber: e.target.value})} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-100" placeholder="S/N..." />
+                          </div>
+
+                          <div className="pt-4 mt-2 border-t border-slate-100 flex gap-3">
+                              <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">ยกเลิก</button>
+                              <button type="submit" disabled={isProcessing} className="flex-[2] py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
+                                  {isProcessing ? <Loader size={16} className="animate-spin"/> : <Save size={16}/>} บันทึกทะเบียน
+                              </button>
+                          </div>
+                      </form>
+                  </div>
+              </div>
+          )}
+      </div>
+  );
+}
+
+// --- 🔥 สร้าง Placeholder สำหรับคอมโพเนนต์ที่ขาดหายไปเพื่อแก้บั๊ก ReferenceError ---
+function InternalDocGenerator({ user, transactions, stockBatches, showToast, appId }) {
+  const [activeTab, setActiveTab] = useState('cert_receipt'); // 'cert_receipt', 'write_off', 'history'
+  const [internalDocs, setInternalDocs] = useState([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const [showStockSelectModal, setShowStockSelectModal] = useState(false);
+  const [stockSearchTerm, setStockSearchTerm] = useState('');
+  const [viewDoc, setViewDoc] = useState(null);
+
+  const savedSeller = useMemo(() => { 
+      try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } 
+      catch (e) { return {}; } 
+  }, []);
+
+  // --- 🔥 THE FIX: ดึงข้อมูล Internal Docs และควบรวมบิล DMG จาก transactions_expense แบบ Real-time ---
+  useEffect(() => {
+      if (!user || !appId) return;
+      
+      const unsubs = [];
+
+      // 1. ดึงจากตาราง internal_docs
+      const qInternal = query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
+      const unsubInternal = onSnapshot(qInternal, (snap) => {
+          const docsArr = snap.docs.map(d => {
+              const data = d.data();
+              return {
+                  id: d.id, 
+                  ...data, 
+                  docType: data.docType || 'write_off',
+                  date: normalizeDate(data.date)
+              };
           });
           
-          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-          const data = await res.json();
-          
-          if (data.url) {
-              setForm(prev => ({ ...prev, attachmentUrl: data.url }));
-              showToast(`แนบไฟล์เอกสารสำเร็จ`, 'success');
-          } else {
-              throw new Error(data.message || "Upload failed");
-          }
-      } catch (err) {
-          console.error("Upload Error:", err);
-          showToast('อัปโหลดล้มเหลว (ตรวจสอบการตั้งค่า Webhook)', 'error');
-      } finally {
-          setUploading(false);
-          e.target.value = '';
-      }
+          // 2. ดึงบิลรายจ่ายหมวด 'สินค้าเสียหาย/หมดอายุ' (รวมพวก DMG เก่าทั้งหมด) จาก transactions_expense มารวมร่างกัน
+          const dmgTransactions = transactions
+              .filter(t => t.type === 'expense' && (t.category === 'สินค้าเสียหาย/หมดอายุ' || (t.sysDocId && String(t.sysDocId).toUpperCase().includes('DMG'))))
+              .map(t => ({
+                  id: t.id,
+                  docNo: t.sysDocId || t.orderId || 'DMG-REF',
+                  docType: 'write_off',
+                  date: normalizeDate(t.date),
+                  requestedBy: 'Internal (ระบบอัตโนมัติ)',
+                  approvedBy: 'ผู้บริหาร',
+                  notes: t.description || 'ตัดจำหน่ายสินค้าชำรุด/สูญหาย',
+                  reason: 'สินค้าชำรุด/เสียหาย',
+                  items: t.items || [],
+                  totalCost: t.total || t.grandTotal || 0,
+                  status: 'completed',
+                  isFromExpenseTable: true // ป้ายบอกว่าเป็นข้อมูลจากตาราง Expense
+              }));
+
+          // รวมกันและเรียงลำดับใหม่
+          const combined = [...docsArr, ...dmgTransactions].sort(sortNewestFirst);
+          setInternalDocs(combined);
+      });
+
+      return () => unsubInternal();
+  }, [user, appId, transactions]);
+
+  // --- State สำหรับ ใบรับรองแทนใบเสร็จรับเงิน ---
+  const [certForm, setCertForm] = useState({
+      id: null,
+      docNo: '',
+      date: formatDateISO(new Date()),
+      category: CONSTANTS.CATEGORIES.EXPENSE[0],
+      recipientName: '',
+      recipientId: '',
+      recipientAddress: '',
+      items: [{ desc: '', qty: 1, price: '' }],
+      reason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
+      payerName: '',
+      attachmentUrl: ''
+  });
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+
+  // --- State สำหรับ ใบตัดจำหน่ายสินค้า ---
+  const [writeOffForm, setWriteOffForm] = useState({
+      id: null,
+      docNo: '',
+      date: formatDateISO(new Date()),
+      requestedBy: '',
+      approvedBy: '',
+      notes: '',
+      reason: 'สินค้าชำรุด/เสียหาย',
+      items: []
+  });
+
+  const uniqueInventory = useMemo(() => {
+      const map = {};
+      stockBatches.forEach(batch => {
+          const name = batch.productName; if (!name) return;
+          const sku = batch.sku || '-';
+          const remaining = Number(batch.quantity) - Number(batch.sold || 0);
+          const key = sku !== '-' ? sku : name;
+          if (!map[key]) map[key] = { name, sku, qty: 0, cost: batch.costPerUnit || 0, category: batch.category || '' };
+          map[key].qty += Math.max(0, remaining);
+          if (batch.costPerUnit > 0) map[key].cost = batch.costPerUnit;
+      });
+      return Object.values(map).filter(i => i.qty > 0);
+  }, [stockBatches]);
+
+  const filteredStock = useMemo(() => {
+      return uniqueInventory.filter(item =>
+          item.name.toLowerCase().includes(stockSearchTerm.toLowerCase()) ||
+          item.sku.toLowerCase().includes(stockSearchTerm.toLowerCase())
+      );
+  }, [uniqueInventory, stockSearchTerm]);
+
+  const selectStockItem = (item) => {
+      setWriteOffForm(prev => ({
+          ...prev,
+          items: [...prev.items, { desc: item.name, sku: item.sku, qty: 1, costPerUnit: item.cost }]
+      }));
+      setShowStockSelectModal(false);
+      setStockSearchTerm('');
   };
 
-  const handleRemoveFormFile = async (formType) => {
-      if(!window.confirm('ยืนยันการลบไฟล์แนบ?')) return;
-      const setForm = formType === 'cert' ? setCertForm : setWriteOffForm;
-      const currentForm = formType === 'cert' ? certForm : writeOffForm;
-      
-      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
-      if (webhookUrl && currentForm.attachmentUrl) {
-          try {
-              await fetch(webhookUrl, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                  body: JSON.stringify({ action: 'delete', fileUrl: currentForm.attachmentUrl })
-              });
-          } catch(e) { console.warn("Drive Delete Error:", e); }
-      }
-      setForm(prev => ({ ...prev, attachmentUrl: '' }));
-      showToast('นำไฟล์แนบออกแล้ว', 'success');
-  };
-
-  const handleAttachFileInternal = async (e) => {
+  const handleAttachFile = async (e) => {
       const file = e.target.files[0];
-      if (!file || !user || !uploadTargetDoc) return;
-
+      if (!file || !user) return;
+      
       const webhookUrl = localStorage.getItem('google_drive_webhook_url');
       if (!webhookUrl) {
           showToast('กรุณาตั้งค่าเชื่อมต่อ Google Drive ในเมนูเครื่องมือขั้นสูง (Admin) ก่อน', 'error');
           return;
       }
 
-      setIsUploadingInternalFile(true);
+      setIsUploadingFile(true);
       try {
-          let base64Data = await new Promise((resolve, reject) => {
+          const base64Data = await new Promise((resolve, reject) => {
               const reader = new FileReader();
               reader.onload = () => resolve(reader.result.split(',')[1]);
               reader.onerror = reject;
@@ -16669,15 +17058,14 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
 
           const mimeType = file.type;
           const fileExt = file.name.split('.').pop();
-          const d = normalizeDate(uploadTargetDoc.date) || new Date();
+          const d = normalizeDate(certForm.date) || new Date();
           const year = String(d.getFullYear());
           const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
           const month = monthNames[d.getMonth()];
           const day = String(d.getDate()).padStart(2, '0');
-          const safeCategory = String(uploadTargetDoc.category || 'InternalDoc').replace(/[\/\\]/g, '_'); 
-
-          const refName = (uploadTargetDoc.sysDocId || `DOC_${Date.now()}`).replace(/[^a-zA-Z0-9ก-๙]/g, '_');
-          const fileName = `${refName}_${Date.now()}.${fileExt}`;
+          const safeCategory = String(certForm.category || 'ทั่วไป').replace(/[\/\\]/g, '_'); 
+          
+          const fileName = `CERT_RECEIPT_${Date.now()}.${fileExt}`;
 
           const payload = { 
               base64Data, fileName, mimeType, 
@@ -16686,6 +17074,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
           };
 
           showToast(`กำลังส่งไฟล์ไปที่ Google Drive...`, 'success');
+          
           const res = await fetch(webhookUrl.trim(), {
               method: 'POST',
               headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -16696,1818 +17085,896 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
           const data = await res.json();
           
           if (data.url) {
-              const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', uploadTargetDoc.id);
-              await updateDoc(docRef, { attachmentUrl: data.url, updatedAt: serverTimestamp() });
-              setUploadTargetDoc(prev => ({ ...prev, attachmentUrl: data.url }));
-              showToast(`แนบไฟล์เอกสารสำเร็จ`, 'success');
+              setCertForm(prev => ({ ...prev, attachmentUrl: data.url }));
+              showToast(`อัปโหลดหลักฐานสำเร็จ!`, 'success');
           } else {
               throw new Error(data.message || "Upload failed");
           }
       } catch (err) {
-          console.error("Upload Error:", err);
-          showToast('อัปโหลดล้มเหลว (ตรวจสอบการตั้งค่า Webhook)', 'error');
+          console.error("Drive Upload Error:", err);
+          showToast('อัปโหลดล้มเหลว (เกิดข้อผิดพลาดในการส่งข้อมูล)', 'error');
       } finally {
-          setIsUploadingInternalFile(false);
-          e.target.value = '';
+          setIsUploadingFile(false);
+          e.target.value = ''; 
       }
   };
 
-  const handleRemoveInternalFile = async () => {
-      if(!window.confirm('ยืนยันการลบไฟล์แนบ? (ระบบจะพยายามลบไฟล์จาก Google Drive ด้วย)')) return;
+  const handleRemoveAttachment = async () => {
+      if(!window.confirm('ยืนยันการลบไฟล์แนบ? (ระบบจะลบไฟล์ออกจาก Google Drive ด้วย)')) return;
       const webhookUrl = localStorage.getItem('google_drive_webhook_url');
-      if (webhookUrl && uploadTargetDoc.attachmentUrl) {
+      if (webhookUrl && certForm.attachmentUrl) {
+          showToast('กำลังลบไฟล์ออกจาก Google Drive...', 'success');
           try {
               await fetch(webhookUrl, {
                   method: 'POST',
                   headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                  body: JSON.stringify({ action: 'delete', fileUrl: uploadTargetDoc.attachmentUrl })
+                  body: JSON.stringify({ action: 'delete', fileUrl: certForm.attachmentUrl })
               });
           } catch(e) { console.warn("Drive Delete Error:", e); }
       }
-      const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', uploadTargetDoc.id);
-      await updateDoc(docRef, { attachmentUrl: '' });
-      setUploadTargetDoc(prev => ({ ...prev, attachmentUrl: '' }));
-      showToast('ลบลิงก์ไฟล์แนบสำเร็จ', 'success');
+      setCertForm(prev => ({ ...prev, attachmentUrl: '' }));
   };
 
-  // --- ดึงรายการสินค้าที่มีในคลัง FIFO ---
-  const uniqueInventory = useMemo(() => {
-    const map = {};
-    stockBatches.forEach(b => {
-      const name = b.productName; if (!name) return;
-      const remaining = Number(b.quantity) - Number(b.sold || 0);
-      const key = b.sku && b.sku !== '-' ? b.sku : name;
-      if (!map[key]) map[key] = { name, sku: b.sku || '-', qty: 0, cost: b.costPerUnit || 0, category: b.category || 'ทั่วไป' };
-      map[key].qty += Math.max(0, remaining);
-      if (b.costPerUnit > 0) map[key].cost = b.costPerUnit;
-    });
-    return Object.values(map);
-  }, [stockBatches]);
+  const handleSaveCertReceipt = async (e) => {
+      e.preventDefault();
+      if (!user) return;
+      
+      const cleanItems = certForm.items.filter(i => i.desc.trim() !== '' && Number(i.price) > 0);
+      if (cleanItems.length === 0) return showToast("กรุณาเพิ่มรายการค่าใช้จ่ายอย่างน้อย 1 รายการ", "error");
+      if (!certForm.recipientName.trim()) return showToast("กรุณาระบุชื่อผู้รับเงิน", "error");
 
-  const filteredStockPicker = useMemo(() => {
-    if (!stockSearch) return uniqueInventory;
-    return uniqueInventory.filter(i => 
-      i.name.toLowerCase().includes(stockSearch.toLowerCase()) || 
-      i.sku.toLowerCase().includes(stockSearch.toLowerCase())
-    );
-  }, [uniqueInventory, stockSearch]);
-
-  // --- บันทึก: ใบรับรองแทนใบเสร็จรับเงิน ---
-  const handleSaveReceiptCert = async (e) => {
-    if (e) e.preventDefault();
-    if (!user) return;
-
-    if (!certForm.recipientName.trim()) {
-      showToast("กรุณาระบุชื่อ-นามสกุลของผู้รับเงิน", "error");
-      return;
-    }
-
-    const validItems = certForm.items.filter(i => i.desc.trim() && Number(i.price) > 0);
-    if (validItems.length === 0) {
-      showToast("กรุณาระบุรายการและจำนวนเงินอย่างน้อย 1 รายการ", "error");
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      const subTotal = validItems.reduce((sum, item) => sum + (Number(item.qty || 1) * Number(item.price || 0)), 0);
-      const prefix = getExpensePrefix(certForm.category);
-      const sysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), prefix, certForm.date, 'sysDocId');
-
-      const payload = {
-        sysDocId,
-        type: 'expense',
-        category: certForm.category || 'ค่าใช้จ่ายทั่วไป',
-        description: `[ใบรับรองแทนใบเสร็จ] ${validItems.map(i => i.desc).join(', ')}`,
-        items: validItems.map(i => ({
-          desc: i.desc,
-          qty: Number(i.qty) || 1,
-          unit: i.unit || 'รายการ',
-          buyPrice: Number(i.price) || 0,
-          sellPrice: 0,
-          sku: '',
-          category: certForm.category
-        })),
-        total: subTotal,
-        grandTotal: subTotal,
-        date: normalizeDate(certForm.date),
-        userId: user.uid,
-        createdAt: serverTimestamp(),
-        status: 'paid',
-        partnerName: certForm.recipientName,
-        partnerTaxId: certForm.recipientCitizenId,
-        partnerAddress: certForm.recipientAddress,
-        partnerBranch: '00000',
-        isCashBill: true,
-        vatType: 'none',
-        isInternalCert: true,
-        noReceiptReason: certForm.noReceiptReason,
-        approverName: certForm.approverName,
-        notes: certForm.notes,
-        attachmentUrl: certForm.attachmentUrl
-      };
-
-      const docRef = await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), payload);
-      showToast("บันทึกใบรับรองแทนใบเสร็จรับเงินสำเร็จ", "success");
-
-      setPrintDoc({ ...payload, docType: 'receipt_cert', id: docRef.id });
-      setCertForm({
-        date: formatDateISO(new Date()),
-        recipientName: '', recipientCitizenId: '', recipientAddress: '',
-        category: 'ค่าใช้จ่ายทั่วไป', noReceiptReason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
-        approverName: '', notes: '', attachmentUrl: '',
-        items: [{ desc: '', qty: 1, unit: 'รายการ', price: 0 }]
-      });
-    } catch (err) {
-      console.error(err);
-      showToast("เกิดข้อผิดพลาดในการบันทึก: " + err.message, "error");
-    }
-    setIsSaving(false);
-  };
-
-  // --- บันทึก: ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย ---
-  const handleSaveWriteOff = async (e) => {
-    if (e) e.preventDefault();
-    if (!user) return;
-
-    const validItems = writeOffForm.items.filter(i => i.desc.trim() && Number(i.qty) > 0);
-    if (validItems.length === 0) {
-      showToast("กรุณาเลือกรายการสินค้าที่ต้องการตัดจำหน่าย", "error");
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      const batchWriter = writeBatch(dbInstance);
-      const actionDate = normalizeDate(writeOffForm.date) || new Date();
-      let totalCostLost = 0;
-      const processedItems = [];
-      const stockSnap = [...stockBatches];
-
-      for (const item of validItems) {
-        let needed = Number(item.qty || 1);
-        let itemCostLost = 0;
-
-        const batches = stockSnap
-          .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName))
-          .sort(sortClosestToDateThenOldest(actionDate));
-
-        for (let i = 0; i < batches.length; i++) {
-          const b = batches[i];
-          if (needed <= 0) break;
-          const remaining = Number(b.quantity) - Number(b.sold || 0);
-          let take = (i === batches.length - 1) ? needed : Math.min(needed, Math.max(0, remaining));
-
-          if (take > 0) {
-            const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
-            batchWriter.update(batchRef, { sold: increment(take) });
-            itemCostLost += take * (Number(b.costPerUnit) || 0);
-            needed -= take;
+      setIsProcessing(true);
+      try {
+          const batchWriter = writeBatch(dbInstance);
+          const docDate = normalizeDate(certForm.date);
+          
+          let docNo = certForm.docNo;
+          if (!docNo) {
+             docNo = generateDateBasedDocId(internalDocs, 'CERT-', docDate, 'docNo');
           }
-        }
 
-        const unitCost = item.qty > 0 ? (itemCostLost / item.qty) : (Number(item.costPrice) || 0);
-        const finalCost = itemCostLost > 0 ? itemCostLost : (Number(item.costPrice || 0) * Number(item.qty));
-        totalCostLost += finalCost;
+          let totalAmount = cleanItems.reduce((sum, item) => sum + (Number(item.qty) * Number(item.price)), 0);
 
-        processedItems.push({
-          desc: `ตัดจำหน่าย (${writeOffForm.reason}): ${item.desc}`,
-          qty: Number(item.qty) || 1,
-          unit: item.unit || 'ชิ้น',
-          buyPrice: unitCost,
-          sellPrice: 0,
-          sku: item.sku || ''
-        });
+          const certPayload = {
+              docNo,
+              docType: 'cert_receipt',
+              date: docDate,
+              category: certForm.category,
+              recipientName: certForm.recipientName,
+              recipientId: certForm.recipientId,
+              recipientAddress: certForm.recipientAddress,
+              reason: certForm.reason,
+              payerName: certForm.payerName,
+              items: cleanItems,
+              totalAmount,
+              attachmentUrl: certForm.attachmentUrl,
+              status: 'completed',
+              userId: user.uid
+          };
+
+          let newDocRef;
+          if (certForm.id) {
+              newDocRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs', certForm.id);
+              certPayload.updatedAt = serverTimestamp();
+              batchWriter.set(newDocRef, certPayload, { merge: true });
+          } else {
+              newDocRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
+              certPayload.createdAt = serverTimestamp();
+              batchWriter.set(newDocRef, certPayload);
+          }
+
+          const expItems = cleanItems.map(i => ({
+              desc: i.desc, qty: i.qty, unit: 'รายการ', buyPrice: i.price, sellPrice: 0, sku: '', category: certForm.category
+          }));
+
+          const expPayload = {
+              type: 'expense',
+              category: certForm.category,
+              description: `ใบรับรองแทนใบเสร็จ: จ่ายให้ ${certForm.recipientName}`,
+              items: expItems,
+              total: totalAmount,
+              grandTotal: totalAmount,
+              platformFee: 0,
+              date: docDate,
+              userId: user.uid,
+              status: 'paid',
+              partnerName: certForm.recipientName,
+              partnerBranch: '00000',
+              isFromReconciliation: false,
+              isCashBill: true,
+              vatType: 'none',
+              linkedOrderId: newDocRef.id,
+              linkedOrderNo: docNo,
+              attachmentUrl: certForm.attachmentUrl,
+              channel: 'หน้าร้าน',
+              shopName: CONSTANTS.SHOPS[0]
+          };
+
+          if (certForm.id) {
+               const expQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), where('linkedOrderId', '==', certForm.id)));
+               if (!expQuery.empty) {
+                   const expDoc = expQuery.docs[0];
+                   expPayload.updatedAt = serverTimestamp();
+                   batchWriter.set(expDoc.ref, expPayload, { merge: true });
+               } else {
+                   const expPrefix = getExpensePrefix(certForm.category);
+                   const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), expPrefix, docDate, 'sysDocId');
+                   expPayload.sysDocId = expSysDocId;
+                   expPayload.createdAt = serverTimestamp();
+                   const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                   batchWriter.set(expRef, expPayload);
+               }
+          } else {
+               const expPrefix = getExpensePrefix(certForm.category);
+               const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), expPrefix, docDate, 'sysDocId');
+               expPayload.sysDocId = expSysDocId;
+               expPayload.createdAt = serverTimestamp();
+               const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+               batchWriter.set(expRef, expPayload);
+          }
+
+          await batchWriter.commit();
+          showToast(certForm.id ? "อัปเดตใบรับรองแทนใบเสร็จสำเร็จ" : "บันทึกใบรับรองแทนใบเสร็จรับเงินสำเร็จ", "success");
+          
+          setCertForm({
+              id: null, docNo: '', date: formatDateISO(new Date()), category: CONSTANTS.CATEGORIES.EXPENSE[0], recipientName: '', recipientId: '', recipientAddress: '',
+              items: [{ desc: '', qty: 1, price: '' }], reason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน', payerName: '', attachmentUrl: ''
+          });
+          setActiveTab('history');
+      } catch (err) {
+          console.error(err);
+          showToast("เกิดข้อผิดพลาดในการบันทึกข้อมูล", "error");
       }
-
-      const prefix = 'DMG-';
-      const sysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), prefix, writeOffForm.date, 'sysDocId');
-      const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
-
-      const payload = {
-        sysDocId,
-        type: 'expense',
-        category: 'สินค้าเสียหาย/หมดอายุ',
-        description: `[ใบตัดจำหน่ายสินค้า] (${writeOffForm.reason}): ${validItems.map(i => i.desc).join(', ')}`,
-        items: processedItems,
-        total: totalCostLost,
-        grandTotal: totalCostLost,
-        date: actionDate,
-        userId: user.uid,
-        createdAt: serverTimestamp(),
-        status: 'paid',
-        partnerName: 'Internal (ตัดจำหน่าย)',
-        partnerBranch: '00000',
-        isFromReconciliation: true,
-        isTaxOnly: false,
-        isWriteOffVoucher: true,
-        writeOffReason: writeOffForm.reason,
-        approverName: writeOffForm.approverName,
-        inspectorName: writeOffForm.inspectorName,
-        notes: writeOffForm.notes,
-        attachmentUrl: writeOffForm.attachmentUrl
-      };
-
-      batchWriter.set(expRef, payload);
-      await batchWriter.commit();
-
-      showToast("บันทึกใบตัดจำหน่ายและตัดสต็อก FIFO สำเร็จ!", "success");
-      setPrintDoc({ ...payload, docType: 'write_off', id: expRef.id, originalItems: validItems });
-      setWriteOffForm({
-        date: formatDateISO(new Date()),
-        reason: 'สินค้าชำรุด/เสียหาย',
-        approverName: '',
-        inspectorName: '',
-        notes: '',
-        attachmentUrl: '',
-        items: [{ sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]
-      });
-    } catch (err) {
-      console.error(err);
-      showToast("เกิดข้อผิดพลาดในการบันทึก: " + err.message, "error");
-    }
-    setIsSaving(false);
+      setIsProcessing(false);
   };
 
-  // --- ประวัติเอกสารภายใน ---
-  const internalDocsHistory = useMemo(() => {
-    return transactions.filter(t => t.type === 'expense' && (t.isInternalCert || t.isWriteOffVoucher || (t.sysDocId && String(t.sysDocId).startsWith('DMG-')))).sort(sortNewestFirst);
-  }, [transactions]);
+  const handleSaveWriteOff = async (e) => {
+      e.preventDefault();
+      if (!user) return;
+      if (writeOffForm.items.length === 0) return showToast("กรุณาเพิ่มรายการสินค้าที่ต้องการตัดชำรุด", "error");
 
-  // --- 🔥 NEW: ฟังก์ชันยกเลิกเอกสารภายใน & ตัดจำหน่าย ---
-  const handleVoidInternalDoc = async () => {
-    if (!voidConfirmId || !user) return;
-    setIsSaving(true);
-    try {
-        const batchWriter = writeBatch(dbInstance);
-        const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', voidConfirmId.id);
+      setIsProcessing(true);
+      try {
+          const batchWriter = writeBatch(dbInstance);
+          const docDate = normalizeDate(writeOffForm.date);
+          
+          let docNo = writeOffForm.docNo;
+          if (!docNo) {
+             docNo = generateDateBasedDocId(internalDocs, 'DMG-', docDate, 'docNo');
+          }
 
-        // 1. อัปเดตสถานะเอกสารเป็นยกเลิก (Void)
-        batchWriter.set(docRef, {
-            isCancelled: true,
-            cancelledAt: serverTimestamp(),
-            cancelReason: 'ยกเลิกรายการและดึงสต็อกกลับโดยผู้ใช้'
-        }, { merge: true });
+          let totalCost = 0;
+          const expenseItems = [];
+          const stockSnap = [...stockBatches];
 
-        // 2. หากเป็นใบตัดจำหน่าย (DMG) ต้องคืนสต็อก FIFO
-        if (voidConfirmId.isWriteOffVoucher || String(voidConfirmId.sysDocId).startsWith('DMG-')) {
-            if (voidConfirmId.items && voidConfirmId.items.length > 0) {
-                for (const item of voidConfirmId.items) {
-                    let toReturn = Number(item.qty);
-                    if (isNaN(toReturn) || toReturn <= 0) continue;
+          if (writeOffForm.id) {
+              const oldDoc = internalDocs.find(d => d.id === writeOffForm.id);
+              if (oldDoc && oldDoc.items && !oldDoc.isFromExpenseTable) {
+                   for (const item of oldDoc.items) {
+                       let toReturn = Number(item.qty);
+                       if (isNaN(toReturn) || toReturn <= 0) continue;
 
-                    const affectedLots = stockBatches
-                        .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
-                        .sort(sortNewestFirst);
+                       const affectedLots = stockBatches.filter(b => (b.sku === item.sku || b.productName === item.desc) && Number(b.sold) > 0).sort(sortNewestFirst);
+                       for (const lot of affectedLots) {
+                           if (toReturn <= 0) break;
+                           const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                           batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                           const snapIdx = stockSnap.findIndex(s => s.id === lot.id);
+                           if (snapIdx !== -1) stockSnap[snapIdx].sold = Math.max(0, (Number(stockSnap[snapIdx].sold) || 0) - canTakeBack);
+                           toReturn -= canTakeBack;
+                       }
+                   }
+              }
+          }
 
-                    for (const lot of affectedLots) {
-                        if (toReturn <= 0) break;
-                        if (!lot?.id) continue;
-                        
-                        const canTakeBack = Math.min(toReturn, Number(lot.sold));
-                        const lotRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id);
-                        
-                        batchWriter.set(lotRef, { sold: increment(-canTakeBack) }, { merge: true });
-                        toReturn -= canTakeBack;
-                    }
-                }
-            }
-        }
+          for (const item of writeOffForm.items) {
+              let needed = Number(item.qty);
+              if (needed <= 0) continue;
 
-        await batchWriter.commit();
-        showToast("ยกเลิกเอกสารและดึงยอดสต็อกกลับคืนสำเร็จ", "success");
-        setVoidConfirmId(null);
-    } catch (error) {
-        console.error("Void Internal Doc Error:", error);
-        showToast(`เกิดข้อผิดพลาดในการยกเลิก: ${error.message}`, "error");
-    }
-    setIsSaving(false);
+              let itemTotalCost = 0;
+              const lots = stockSnap.filter(b => b.sku === item.sku || b.productName === item.desc).sort(sortClosestToDateThenOldest(docDate));
+
+              for (let i = 0; i < lots.length; i++) {
+                  const lot = lots[i];
+                  if (needed <= 0) break;
+                  const remaining = Number(lot.quantity) - Number(lot.sold || 0);
+
+                  let take = 0;
+                  if (i === lots.length - 1) take = needed;
+                  else take = Math.min(needed, Math.max(0, remaining));
+
+                  if (take > 0) {
+                      const lotRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id);
+                      batchWriter.update(lotRef, { sold: increment(take) });
+
+                      const snapIdx = stockSnap.findIndex(s => s.id === lot.id);
+                      if (snapIdx !== -1) stockSnap[snapIdx].sold = (Number(stockSnap[snapIdx].sold) || 0) + take;
+
+                      needed -= take;
+                      itemTotalCost += take * (Number(lot.costPerUnit) || 0);
+                      totalCost += take * (Number(lot.costPerUnit) || 0);
+                  }
+              }
+
+              if (needed > 0) {
+                  const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+                  batchWriter.set(dummyRef, {
+                      productName: item.desc, sku: item.sku || '-', category: 'อื่นๆ', quantity: 0, costPerUnit: 0, sellPrice: 0,
+                      date: docDate, sold: needed, userId: user.uid, createdAt: serverTimestamp(), paymentStatus: 'paid', isAdjustment: true, adjustReason: `เอกสารตัดชำรุด: ${docNo}`
+                  });
+              }
+
+              expenseItems.push({ desc: item.desc, qty: item.qty, unit: 'ชิ้น', buyPrice: item.qty > 0 ? (itemTotalCost / item.qty) : 0, sellPrice: 0, sku: item.sku });
+          }
+
+          const writeOffPayload = {
+              docNo, docType: 'write_off', date: docDate, requestedBy: writeOffForm.requestedBy, approvedBy: writeOffForm.approvedBy,
+              notes: writeOffForm.notes, reason: writeOffForm.reason, items: writeOffForm.items, totalCost, status: 'completed', userId: user.uid
+          };
+
+          let newDocRef;
+          if (writeOffForm.id && !writeOffForm.isFromExpenseTable) {
+              newDocRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs', writeOffForm.id);
+              writeOffPayload.updatedAt = serverTimestamp();
+              batchWriter.set(newDocRef, writeOffPayload, { merge: true });
+          } else {
+              newDocRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
+              writeOffPayload.createdAt = serverTimestamp();
+              batchWriter.set(newDocRef, writeOffPayload);
+          }
+
+          if (totalCost > 0 || writeOffForm.id) {
+              const expCategory = 'สินค้าเสียหาย/หมดอายุ';
+              const expPayload = {
+                  type: 'expense', category: expCategory, description: `บันทึกตัดจำหน่ายสต็อก (ชำรุด/เสียหาย): ${(writeOffForm.items || []).map(i => i.desc).join(', ')}`,
+                  items: expenseItems, total: totalCost, grandTotal: totalCost, date: docDate, userId: user.uid,
+                  status: 'paid', partnerName: 'Internal (ตัดจำหน่าย/เคลม)', partnerBranch: '00000', isFromReconciliation: true,
+                  linkedOrderId: newDocRef.id, linkedOrderNo: docNo, sysDocId: docNo, isTaxOnly: false
+              };
+
+              if (writeOffForm.id) {
+                  const targetExpId = writeOffForm.isFromExpenseTable ? writeOffForm.id : null;
+                  if (targetExpId) {
+                      const expRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', targetExpId);
+                      batchWriter.set(expRef, expPayload, { merge: true });
+                  } else {
+                      const expQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), where('linkedOrderId', '==', writeOffForm.id)));
+                      if (!expQuery.empty) {
+                          const expDoc = expQuery.docs[0];
+                          batchWriter.set(expDoc.ref, expPayload, { merge: true });
+                      } else {
+                          const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                          batchWriter.set(expRef, expPayload);
+                      }
+                  }
+              } else {
+                  const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                  batchWriter.set(expRef, expPayload);
+              }
+          }
+
+          await batchWriter.commit();
+          showToast(writeOffForm.id ? "อัปเดตเอกสารและสต็อกเรียบร้อยแล้ว" : "บันทึกเอกสารและตัดสต็อกเรียบร้อยแล้ว", "success");
+          setWriteOffForm({ id: null, docNo: '', date: formatDateISO(new Date()), requestedBy: '', approvedBy: '', notes: '', reason: 'สินค้าชำรุด/เสียหาย', items: [] });
+          setActiveTab('history');
+      } catch (err) {
+          console.error(err);
+          showToast("เกิดข้อผิดพลาดในการบันทึกข้อมูล", "error");
+      }
+      setIsProcessing(false);
+  };
+
+  const handleEditDoc = (docItem) => {
+      if (docItem.docType === 'cert_receipt') {
+          setCertForm({
+              id: docItem.id,
+              docNo: docItem.docNo || '',
+              date: formatDateISO(docItem.date),
+              category: docItem.category || CONSTANTS.CATEGORIES.EXPENSE[0],
+              recipientName: docItem.recipientName || '',
+              recipientId: docItem.recipientId || '',
+              recipientAddress: docItem.recipientAddress || '',
+              items: docItem.items || [{ desc: '', qty: 1, price: '' }],
+              reason: docItem.reason || 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
+              payerName: docItem.payerName || '',
+              attachmentUrl: docItem.attachmentUrl || ''
+          });
+          setActiveTab('cert_receipt');
+      } else {
+          setWriteOffForm({
+              id: docItem.id,
+              docNo: docItem.docNo || '',
+              date: formatDateISO(docItem.date),
+              requestedBy: docItem.requestedBy || '',
+              approvedBy: docItem.approvedBy || '',
+              notes: docItem.notes || docItem.description || '',
+              reason: docItem.reason || 'สินค้าชำรุด/เสียหาย',
+              items: docItem.items || [],
+              isFromExpenseTable: docItem.isFromExpenseTable || false
+          });
+          setActiveTab('write_off');
+      }
+      window.scrollTo(0,0);
+  };
+
+  const handleDeleteDoc = async (docItem) => {
+      if (!window.confirm(`ยืนยันการลบเอกสาร ${docItem.docNo} ออกจากระบบ?`)) return;
+      setIsProcessing(true);
+      try {
+          const batchWriter = writeBatch(dbInstance);
+
+          if (docItem.isFromExpenseTable) {
+              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', docItem.id));
+              // คืนสต็อก
+              const stockSnap = [...stockBatches];
+              for (const item of (docItem.items || [])) {
+                  let toReturn = Number(item.qty);
+                  if (isNaN(toReturn) || toReturn <= 0) continue;
+                  const affectedLots = stockSnap.filter(b => (b.sku === item.sku || b.productName === item.desc) && Number(b.sold) > 0).sort(sortNewestFirst);
+                  for (const lot of affectedLots) {
+                      if (toReturn <= 0) break;
+                      const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                      batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                      toReturn -= canTakeBack;
+                  }
+              }
+          } else {
+              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs', docItem.id));
+              const expQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), where('linkedOrderId', '==', docItem.id)));
+              expQuery.docs.forEach(d => batchWriter.delete(d.ref));
+              
+              if (docItem.docType === 'write_off' || !docItem.docType) {
+                  const stockSnap = [...stockBatches];
+                  for (const item of (docItem.items || [])) {
+                      let toReturn = Number(item.qty);
+                      if (isNaN(toReturn) || toReturn <= 0) continue;
+                      const affectedLots = stockSnap.filter(b => (b.sku === item.sku || b.productName === item.desc) && Number(b.sold) > 0).sort(sortNewestFirst);
+                      for (const lot of affectedLots) {
+                          if (toReturn <= 0) break;
+                          const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                          batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                          toReturn -= canTakeBack;
+                      }
+                  }
+              }
+          }
+
+          await batchWriter.commit();
+          showToast("ลบเอกสารเรียบร้อย", "success");
+      } catch (e) {
+          console.error(e);
+          showToast("ลบเอกสารไม่สำเร็จ", "error");
+      }
+      setIsProcessing(false);
+  };
+
+  const handleDownloadPDF = async (docObj) => {
+      if (!window.html2pdf) {
+          showToast("กำลังโหลดโปรแกรมช่วยดาวน์โหลด...", "success");
+          const loadScript = (src) => new Promise(res => {
+              const s = document.createElement('script');
+              s.src = src; s.onload = res; document.body.appendChild(s);
+          });
+          await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js");
+      }
+      try {
+          const element = document.getElementById('internal-doc-preview');
+          const opt = {
+              margin: 10,
+              filename: `${docObj.docNo}.pdf`,
+              image: { type: 'jpeg', quality: 0.98 },
+              html2canvas: { scale: 2, useCORS: true },
+              jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+          };
+          showToast("กำลังสร้างไฟล์ PDF...", "success");
+          await window.html2pdf().set(opt).from(element).save();
+          showToast("ดาวน์โหลด PDF สำเร็จ", "success");
+      } catch (e) {
+          showToast("เกิดข้อผิดพลาดในการสร้างไฟล์ PDF", "error");
+      }
   };
 
   return (
-    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-20">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-        <div>
-          <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
-            <FileCheck className="text-indigo-600"/> เอกสารภายใน & ตัดจำหน่ายสินค้า
-          </h2>
-          <p className="text-sm text-slate-400 font-medium">สร้างใบรับรองแทนใบเสร็จรับเงิน และใบตัดจำหน่ายสินค้าชำรุด/สูญหาย ตามมาตรฐานกรมสรรพากร</p>
-        </div>
-      </div>
-
-      {/* Sub Tabs */}
-      <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit overflow-x-auto shadow-inner border border-slate-200/50">
-        <button onClick={() => setActiveSubTab('receipt_cert')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'receipt_cert' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-          <FileText size={16}/> ใบรับรองแทนใบเสร็จรับเงิน
-        </button>
-        <button onClick={() => setActiveSubTab('write_off')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'write_off' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-          <Trash2 size={16}/> ใบตัดจำหน่ายสินค้า (ชำรุด/สูญหาย)
-        </button>
-        <button onClick={() => setActiveSubTab('history')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeSubTab === 'history' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-          <History size={16}/> ประวัติเอกสารภายใน
-        </button>
-      </div>
-
-      {/* TAB 1: ใบรับรองแทนใบเสร็จรับเงิน */}
-      {activeSubTab === 'receipt_cert' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
-          <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6">
-            <div className="border-b pb-4 flex justify-between items-center">
-              <div>
-                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><FileText className="text-indigo-600"/> ออกใบรับรองแทนใบเสร็จรับเงิน</h3>
-                <p className="text-xs text-slate-400 mt-0.5">สำหรับบันทึกรายจ่ายที่ผู้ขายไม่ออกบิลให้ (สรรพากรยอมรับเมื่อมีเอกสารนี้พร้อมบัตรประชาชนผู้รับเงิน)</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSaveReceiptCert} className="space-y-5">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">วันที่จ่ายเงิน</label>
-                  <input type="date" required value={certForm.date} onChange={e=>setCertForm({...certForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">หมวดหมู่รายจ่าย</label>
-                  <select value={certForm.category} onChange={e=>setCertForm({...certForm, category: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100">
-                    {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* ข้อมูลผู้รับเงิน */}
-              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
-                <p className="text-xs font-black text-indigo-700 uppercase tracking-wide flex items-center gap-1"><User size={14}/> ข้อมูลผู้รับเงิน (Recipient Details)</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">ชื่อ - นามสกุล ผู้รับเงิน *</label>
-                    <input type="text" required value={certForm.recipientName} onChange={e=>setCertForm({...certForm, recipientName: e.target.value})} placeholder="นาย / นาง / นางสาว..." className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">เลขประจำตัวประชาชน (13 หลัก)</label>
-                    <input type="text" value={certForm.recipientCitizenId} onChange={e=>setCertForm({...certForm, recipientCitizenId: e.target.value})} placeholder="x-xxxx-xxxxx-xx-x" className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-100" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">ที่อยู่ผู้รับเงิน</label>
-                    <input type="text" value={certForm.recipientAddress} onChange={e=>setCertForm({...certForm, recipientAddress: e.target.value})} placeholder="บ้านเลขที่, ถนน, ตำบล, อำเภอ, จังหวัด..." className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-100" />
-                  </div>
-                </div>
-              </div>
-
-              {/* รายการจ่ายเงิน */}
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-slate-600 uppercase">รายการสินค้า/บริการที่จ่าย</label>
-                  <button type="button" onClick={() => setCertForm({...certForm, items: [...certForm.items, { desc: '', qty: 1, unit: 'รายการ', price: 0 }]})} className="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1">
-                    <Plus size={14}/> เพิ่มรายการ
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {certForm.items.map((it, idx) => (
-                    <div key={idx} className="flex flex-col sm:flex-row gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 items-center">
-                      <input type="text" required value={it.desc} onChange={e=>{
-                        const newItems = [...certForm.items]; newItems[idx].desc = e.target.value; setCertForm({...certForm, items: newItems});
-                      }} placeholder="รายละเอียดรายการจ่าย..." className="flex-1 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none" />
-                      <div className="flex gap-2 w-full sm:w-auto">
-                        <input type="number" min="1" value={it.qty} onChange={e=>{
-                          const newItems = [...certForm.items]; newItems[idx].qty = Number(e.target.value); setCertForm({...certForm, items: newItems});
-                        }} placeholder="จำนวน" className="w-20 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold text-center outline-none" />
-                        <input type="number" step="0.01" value={it.price} onChange={e=>{
-                          const newItems = [...certForm.items]; newItems[idx].price = Number(e.target.value); setCertForm({...certForm, items: newItems});
-                        }} placeholder="จำนวนเงิน" className="w-28 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold text-right outline-none text-indigo-600" />
-                        <button type="button" onClick={()=>{
-                          if (certForm.items.length === 1) return;
-                          setCertForm({...certForm, items: certForm.items.filter((_, i) => i !== idx)});
-                        }} className="p-2 text-rose-400 hover:text-rose-600 transition-colors" disabled={certForm.items.length === 1}><Trash2 size={16}/></button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* เหตุผลและผู้อนุมัติ */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">เหตุผลที่ไม่ได้รับใบเสร็จ</label>
-                  <input type="text" value={certForm.noReceiptReason} onChange={e=>setCertForm({...certForm, noReceiptReason: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-medium outline-none" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ชื่อผู้ตรวจรับ / ผู้จ่ายเงิน</label>
-                  <input type="text" value={certForm.approverName} onChange={e=>setCertForm({...certForm, approverName: e.target.value})} placeholder="ระบุชื่อผู้เบิก/ผู้จ่ายเงิน..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
-                </div>
-              </div>
-
-              <div className="pt-4 border-t border-slate-100">
-                  <div className="flex items-center justify-between mb-2">
-                      <label className="text-[10px] font-bold uppercase text-slate-500 block flex items-center gap-1"><Camera size={14}/> แนบรูปหลักฐาน/สลิป (Digital Filing)</label>
-                  </div>
-                  {certForm.attachmentUrl ? (
-                      <div className="relative group inline-block w-full sm:w-auto">
-                          <a href={certForm.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block">
-                              {certForm.attachmentUrl.includes('pdf') || certForm.attachmentUrl.includes('drive.google.com') ? (
-                                  <div className="h-24 w-32 bg-blue-50 border border-blue-200 rounded-xl flex flex-col items-center justify-center text-blue-500 shadow-sm hover:bg-blue-100 transition-colors">
-                                      <FileText size={24} className="mb-1"/>
-                                      <span className="text-[10px] font-bold">ดูไฟล์</span>
-                                  </div>
-                              ) : (
-                                  <img src={certForm.attachmentUrl} alt="Evidence" className="h-24 w-32 object-cover rounded-xl border border-slate-200 shadow-sm" />
-                              )}
-                          </a>
-                          <button type="button" onClick={() => handleRemoveFormFile('cert')} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
-                      </div>
-                  ) : (
-                      <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
-                          {isUploadingCertFile ? (
-                              <div className="flex flex-col items-center gap-1">
-                                  <Loader className="animate-spin text-blue-500" size={16}/>
-                                  <span className="text-[9px] font-bold text-blue-500">กำลังอัปโหลดไป Drive...</span>
-                              </div>
-                          ) : (
-                              <>
-                                  <FileUp size={16} className="text-slate-400 mb-1"/>
-                                  <span className="text-[10px] font-bold text-slate-600">อัปโหลดสลิปโอนเงิน บัตรปชช. หรือใบเสนอราคา (JPG, PNG, PDF)</span>
-                              </>
-                          )}
-                          <input type="file" className="hidden" accept="image/*,.pdf" onChange={(e) => handleUploadFormFile(e, 'cert')} disabled={isUploadingCertFile} />
-                      </label>
-                  )}
-              </div>
-
-              <div className="pt-4 border-t flex gap-3">
-                <button type="submit" disabled={isSaving} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3.5 rounded-2xl font-black text-base shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-                  {isSaving ? <Loader className="animate-spin" size={18}/> : <Save size={18}/>}
-                  {isSaving ? 'กำลังบันทึก...' : 'บันทึกใบรับรอง'}
-                </button>
-              </div>
-            </form>
-          </div>
-
-          <div className="space-y-6">
-            <div className="bg-gradient-to-br from-indigo-900 to-slate-900 p-6 rounded-[32px] text-white shadow-xl">
-              <h4 className="font-bold text-base text-indigo-300 mb-2 flex items-center gap-2"><Info size={18}/> คำแนะนำการใช้งาน</h4>
-              <p className="text-xs leading-relaxed text-indigo-100 font-medium whitespace-pre-line">
-                ใบรับรองแทนใบเสร็จรับเงิน ใช้ในกรณีที่กิจการมีรายจ่ายที่เกิดขึ้นจริง แต่ผู้รับเงินไม่สามารถออกใบเสร็จรับเงินให้ได้ (เช่น ซื้อของจากชาวบ้าน, จ่ายค่าแรงบุคคลธรรมดา)
-                {"\n\n"}<b>เงื่อนไขสำคัญที่สรรพากรยอมรับ:</b>
-                {"\n"}1. ต้องระบุชื่อ-นามสกุล และเลขบัตรประชาชนผู้รับเงินให้ชัดเจน
-                {"\n"}2. ควรแนบหลักฐานการจ่ายเงิน เช่น สลิปโอนเงิน หรือสำเนาบัตรประชาชนผู้รับเงินประกอบด้วยทุกครั้ง
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 2: ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย */}
-      {activeSubTab === 'write_off' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
-          <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-6">
-             <div className="border-b pb-4 flex justify-between items-center">
-                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Trash2 className="text-rose-600"/> ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย</h3>
-             </div>
-             <form onSubmit={handleSaveWriteOff} className="space-y-5">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">วันที่ดำเนินการ</label>
-                    <input type="date" required value={writeOffForm.date} onChange={e=>setWriteOffForm({...writeOffForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-100" />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">สาเหตุการตัดจำหน่าย</label>
-                    <select value={writeOffForm.reason} onChange={e=>setWriteOffForm({...writeOffForm, reason: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-100">
-                      <option value="สินค้าชำรุด/เสียหาย">สินค้าชำรุด/เสียหาย</option>
-                      <option value="สินค้าหมดอายุ/เสื่อมสภาพ">สินค้าหมดอายุ/เสื่อมสภาพ</option>
-                      <option value="สูญหาย/ถูกขโมย">สูญหาย/ถูกขโมย</option>
-                      <option value="นำไปใช้เป็นตัวอย่าง/ทดสอบ">นำไปใช้เป็นตัวอย่าง/ทดสอบ</option>
-                      <option value="อื่นๆ">อื่นๆ</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Items */}
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <label className="text-xs font-bold text-slate-600 uppercase">รายการสินค้าที่ตัดจำหน่าย</label>
-                    <button type="button" onClick={() => setWriteOffForm({...writeOffForm, items: [...writeOffForm.items, { sku: '', desc: '', qty: 1, unit: 'ชิ้น', costPrice: 0 }]})} className="text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1">
-                      <Plus size={14}/> เพิ่มรายการ
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    {writeOffForm.items.map((it, idx) => (
-                      <div key={idx} className="flex flex-col sm:flex-row gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 items-center">
-                        <div className="flex-1 w-full relative">
-                          <input type="text" required value={it.desc} onChange={e=>{
-                            const newItems = [...writeOffForm.items]; newItems[idx].desc = e.target.value; setWriteOffForm({...writeOffForm, items: newItems});
-                          }} placeholder="ชื่อสินค้า..." className="w-full bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold outline-none" />
-                          <button type="button" onClick={() => setShowStockPickerModal(idx)} className="absolute right-2 top-2 text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded font-bold">เลือกจากคลัง</button>
-                        </div>
-                        <div className="flex gap-2 w-full sm:w-auto">
-                          <input type="number" min="1" value={it.qty} onChange={e=>{
-                            const newItems = [...writeOffForm.items]; newItems[idx].qty = Number(e.target.value); setWriteOffForm({...writeOffForm, items: newItems});
-                          }} placeholder="จำนวน" className="w-20 bg-white border border-slate-200 rounded-lg p-2 text-sm font-bold text-center outline-none text-rose-600" />
-                          <button type="button" onClick={()=>{
-                            if (writeOffForm.items.length === 1) return;
-                            setWriteOffForm({...writeOffForm, items: writeOffForm.items.filter((_, i) => i !== idx)});
-                          }} className="p-2 text-rose-400 hover:text-rose-600 transition-colors" disabled={writeOffForm.items.length === 1}><Trash2 size={16}/></button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ชื่อผู้เสนอตัดจำหน่าย</label>
-                    <input type="text" value={writeOffForm.inspectorName} onChange={e=>setWriteOffForm({...writeOffForm, inspectorName: e.target.value})} placeholder="ระบุชื่อผู้ตรวจนับ..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">ผู้อนุมัติ</label>
-                    <input type="text" value={writeOffForm.approverName} onChange={e=>setWriteOffForm({...writeOffForm, approverName: e.target.value})} placeholder="ระบุชื่อผู้อนุมัติ..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">หมายเหตุเพิ่มเติม</label>
-                  <textarea rows="2" value={writeOffForm.notes} onChange={e=>setWriteOffForm({...writeOffForm, notes: e.target.value})} placeholder="รายละเอียดความเสียหายเพิ่มเติม..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs outline-none resize-none" />
-                </div>
-
-                {/* Attachment for Write-Off */}
-                <div className="pt-4 border-t border-slate-100">
-                  <div className="flex items-center justify-between mb-2">
-                      <label className="text-[10px] font-bold uppercase text-slate-500 block flex items-center gap-1"><Camera size={14}/> แนบรูปหลักฐานสินค้าชำรุด (Evidence)</label>
-                      <span className="text-[9px] text-slate-400">* จำเป็นมากสำหรับให้สรรพากรตรวจสอบ</span>
-                  </div>
-                  {writeOffForm.attachmentUrl ? (
-                      <div className="relative group inline-block w-full sm:w-auto">
-                          <a href={writeOffForm.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block">
-                              {writeOffForm.attachmentUrl.includes('pdf') || writeOffForm.attachmentUrl.includes('drive.google.com') ? (
-                                  <div className="h-24 w-32 bg-blue-50 border border-blue-200 rounded-xl flex flex-col items-center justify-center text-blue-500 shadow-sm hover:bg-blue-100 transition-colors">
-                                      <FileText size={24} className="mb-1"/>
-                                      <span className="text-[10px] font-bold">ดูไฟล์</span>
-                                  </div>
-                              ) : (
-                                  <img src={writeOffForm.attachmentUrl} alt="Evidence" className="h-24 w-32 object-cover rounded-xl border border-slate-200 shadow-sm" />
-                              )}
-                          </a>
-                          <button type="button" onClick={() => handleRemoveFormFile('write_off')} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
-                      </div>
-                  ) : (
-                      <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
-                          {isUploadingWriteOffFile ? (
-                              <div className="flex flex-col items-center gap-1">
-                                  <Loader className="animate-spin text-blue-500" size={16}/>
-                                  <span className="text-[9px] font-bold text-blue-500">กำลังอัปโหลดไป Drive...</span>
-                              </div>
-                          ) : (
-                              <>
-                                  <FileUp size={16} className="text-slate-400 mb-1"/>
-                                  <span className="text-[10px] font-bold text-slate-600">อัปโหลดรูปถ่ายสินค้าที่พัง/หมดอายุ หรือเอกสารทำลาย (JPG, PNG, PDF)</span>
-                              </>
-                          )}
-                          <input type="file" className="hidden" accept="image/*,.pdf" onChange={(e) => handleUploadFormFile(e, 'write_off')} disabled={isUploadingWriteOffFile} />
-                      </label>
-                  )}
-                </div>
-
-                <div className="pt-4 border-t flex gap-3">
-                  <button type="submit" disabled={isSaving} className="w-full bg-rose-600 hover:bg-rose-700 text-white py-3.5 rounded-2xl font-black text-base shadow-lg shadow-rose-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-                    {isSaving ? <Loader className="animate-spin" size={18}/> : <Trash2 size={18}/>}
-                    {isSaving ? 'กำลังตัดจำหน่าย...' : 'บันทึกและหักสต็อกออกจากคลัง'}
-                  </button>
-                </div>
-             </form>
-          </div>
-          {/* Side Info */}
-          <div className="space-y-6">
-            <div className="bg-gradient-to-br from-rose-900 to-slate-900 p-6 rounded-[32px] text-white shadow-xl">
-              <h4 className="font-bold text-base text-rose-300 mb-2 flex items-center gap-2"><AlertTriangle size={18}/> คำแนะนำการตัดจำหน่ายสินค้า</h4>
-              <p className="text-xs leading-relaxed text-rose-100 font-medium whitespace-pre-line">
-                เมื่อสินค้าชำรุด หมดอายุ หรือสูญหาย การตัดออกจากระบบเป็นเรื่องสำคัญมาก
-                {"\n\n"}<b>ประโยชน์ที่ได้:</b>
-                {"\n"}1. ระบบจะหักสต็อก FIFO จริง ทำให้ยอดคงเหลือแม่นยำ 100%
-                {"\n"}2. มูลค่าต้นทุนของสินค้าที่ตัดทิ้ง จะถูกบันทึกเป็น <b>"รายจ่ายของกิจการ" (หมวดสินค้าเสียหาย/หมดอายุ)</b> อัตโนมัติ เพื่อนำไปลดหย่อนภาษีเงินได้สิ้นปี
-                {"\n"}3. มีใบสำคัญการตัดจำหน่ายเก็บเข้าแฟ้มเป็นหลักฐานยันสรรพากร
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: ประวัติเอกสารภายใน */}
-      {activeSubTab === 'history' && (
-        <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm animate-fadeIn">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><History size={20} className="text-indigo-600"/> ประวัติเอกสารภายในและใบตัดจำหน่าย</h3>
-            <span className="text-xs font-bold text-slate-400">พบทั้งหมด {internalDocsHistory.length} รายการ</span>
-          </div>
-
-          <div className="overflow-x-auto custom-scrollbar border border-slate-100 rounded-2xl">
-            <table className="w-full text-xs text-left">
-              <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b">
-                <tr>
-                  <th className="p-4">วันที่ / SYS ID</th>
-                  <th className="p-4">ประเภทเอกสาร</th>
-                  <th className="p-4">รายละเอียด / ผู้รับเงิน</th>
-                  <th className="p-4 text-right">ยอดเงินรวม (฿)</th>
-                  <th className="p-4 text-center">จัดการ</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {internalDocsHistory.map((docItem, idx) => (
-                  <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="p-4">
-                      <p className="font-bold text-slate-800">{formatDate(docItem.date)}</p>
-                      <p className="font-mono text-indigo-600 font-bold text-[10px] mt-0.5">{docItem.sysDocId}</p>
-                    </td>
-                    <td className="p-4">
-                      {docItem.isWriteOffVoucher || String(docItem.sysDocId).startsWith('DMG-') ? (
-                        <span className="bg-rose-100 text-rose-700 px-2.5 py-1 rounded-md font-bold text-[10px] border border-rose-200">
-                          ใบตัดจำหน่ายสินค้า
-                        </span>
-                      ) : (
-                        <span className="bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-md font-bold text-[10px] border border-indigo-200">
-                          ใบรับรองแทนใบเสร็จ
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      <p className="font-bold text-slate-700">{docItem.description}</p>
-                      <p className="text-[10px] text-slate-400 mt-0.5">ผู้รับเงิน/ตัดโดย: {docItem.partnerName || '-'}</p>
-                      {docItem.attachmentUrl && (
-                          <span className="mt-1 inline-flex items-center gap-1 bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[9px] font-bold border border-blue-100">
-                              <Cloud size={10}/> มีไฟล์แนบ
-                          </span>
-                      )}
-                    </td>
-                    <td className="p-4 text-right font-black text-slate-800 text-sm">
-                      {formatCurrency(docItem.total || docItem.grandTotal)}
-                    </td>
-                    <td className="p-4 text-center">
-                        <div className="flex justify-center items-center gap-2">
-                            {/* --- 🔥 NEW: ปุ่มแก้ไขและแนบไฟล์ --- */}
-                            <button onClick={() => setUploadTargetDoc(docItem)} className="px-2 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-600 rounded-lg font-bold transition-colors shadow-sm" title="แก้ไข / แนบไฟล์หลักฐาน">
-                                <Edit size={16}/>
-                            </button>
-                            <button onClick={() => setPrintDoc({
-                                ...docItem,
-                                docType: docItem.isWriteOffVoucher || String(docItem.sysDocId).startsWith('DMG-') ? 'write_off' : 'receipt_cert'
-                            })} className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg font-bold transition-colors flex items-center gap-1 shadow-sm">
-                                <Printer size={14}/> พิมพ์
-                            </button>
-                            {/* --- 🔥 NEW: ปุ่มยกเลิกเอกสาร --- */}
-                            {!docItem.isCancelled && (
-                                <button onClick={() => setVoidConfirmId(docItem)} className="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg font-bold transition-colors shadow-sm" title="ยกเลิกและคืนสต็อก">
-                                    <XCircle size={16}/>
-                                </button>
-                            )}
-                            {docItem.isCancelled && (
-                                <span className="px-2 py-1 bg-slate-100 text-slate-400 rounded-lg text-[10px] font-bold">Void</span>
-                            )}
-                        </div>
-                    </td>
-                  </tr>
-                ))}
-                {internalDocsHistory.length === 0 && (
-                  <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ไม่พบประวัติเอกสารภายใน</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Stock Picker Modal */}
-      {showStockPickerModal !== null && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[32px] p-6 max-w-lg w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[80vh]">
-            <div className="flex justify-between items-center mb-4 border-b pb-3">
-              <h4 className="font-bold text-slate-800 text-base flex items-center gap-2"><Box size={18} className="text-indigo-600"/> เลือกสินค้าในคลัง FIFO</h4>
-              <button onClick={() => setShowStockPickerModal(null)} className="text-slate-400 hover:text-slate-600"><X size={18}/></button>
-            </div>
-            <div className="mb-3">
-              <input type="text" autoFocus value={stockSearch} onChange={e=>setStockSearch(e.target.value)} placeholder="พิมพ์ค้นหาชื่อสินค้า หรือ SKU..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold outline-none" />
-            </div>
-            <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar pr-1">
-              {filteredStockPicker.map((item, i) => (
-                <div key={i} onClick={() => {
-                  const newItems = [...writeOffForm.items];
-                  newItems[showStockPickerModal] = {
-                    sku: item.sku !== '-' ? item.sku : '',
-                    desc: item.name,
-                    qty: 1,
-                    unit: 'ชิ้น',
-                    costPrice: item.cost
-                  };
-                  setWriteOffForm({ ...writeOffForm, items: newItems });
-                  setShowStockPickerModal(null);
-                  setStockSearch('');
-                }} className="p-3 bg-slate-50 hover:bg-indigo-50 border border-slate-100 rounded-xl cursor-pointer transition-colors flex justify-between items-center">
-                  <div>
-                    <p className="font-bold text-slate-700 text-sm">{item.name}</p>
-                    <p className="text-[10px] font-mono text-indigo-500 mt-0.5">SKU: {item.sku}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xs font-bold text-emerald-600">ทุน: {formatCurrency(item.cost)}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">เหลือ: {item.qty}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Print Modal */}
-      {printDoc && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[2000] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[32px] w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 overflow-hidden text-left">
-            <div className="p-6 border-b flex justify-between items-center bg-slate-50">
-                <h3 className="font-bold text-lg flex items-center gap-2 text-slate-800"><Printer size={20} className="text-indigo-600"/> พิมพ์เอกสารภายใน</h3>
-                <button onClick={()=>setPrintDoc(null)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X size={20}/></button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-200 flex justify-center">
-                <div id="internal-doc-print-area" className="bg-white p-10 w-[210mm] min-h-[297mm] shadow-md mx-auto text-slate-800 relative">
-                  
-                  {printDoc.isCancelled && (
-                      <div className="absolute inset-0 flex items-center justify-center z-0 pointer-events-none opacity-10 transform -rotate-45">
-                          <span className="text-8xl font-black text-rose-600 border-8 border-rose-600 px-8 py-4 rounded-3xl tracking-widest whitespace-nowrap">ยกเลิก / VOID</span>
-                      </div>
-                  )}
-
-                  <div className="flex justify-between items-start mb-8 border-b-2 border-slate-800 pb-4">
-                    <div className="w-2/3">
-                      <h2 className="text-2xl font-black text-slate-900">{savedSeller.sellerName || 'กิจการ/ร้านค้า'}</h2>
-                      <div className="text-xs mt-2 space-y-1 text-slate-600">
-                        <p>{[savedSeller.sellerAddress, fmtAddr.sub(savedSeller.sellerSubDistrict), fmtAddr.dist(savedSeller.sellerDistrict), fmtAddr.prov(savedSeller.sellerProvince), savedSeller.sellerZipCode].filter(Boolean).join(' ')}</p>
-                        <p>เลขประจำตัวผู้เสียภาษี: {savedSeller.sellerTaxId || '-'}</p>
-                        <p>สาขา: {savedSeller.sellerBranchId === '00000' || !savedSeller.sellerBranchId ? 'สำนักงานใหญ่' : savedSeller.sellerBranchId}</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <h1 className="text-xl font-black text-slate-900 uppercase">
-                        {printDoc.docType === 'write_off' ? 'ใบสำคัญการตัดจำหน่ายสินค้า' : 'ใบรับรองแทนใบเสร็จรับเงิน'}
-                      </h1>
-                      <p className="font-mono font-bold text-indigo-600 text-sm mt-1">{printDoc.sysDocId}</p>
-                      <p className="text-[10px] text-slate-500">วันที่: {formatDate(printDoc.date)}</p>
-                    </div>
-                  </div>
-
-                  {printDoc.docType === 'receipt_cert' && (
-                    <div className="space-y-6">
-                      <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs space-y-1">
-                        <p><b>ข้าพเจ้า:</b> {savedSeller.sellerName || 'ผู้ประกอบการ'}</p>
-                        <p><b>ขอรับรองว่า:</b> ได้จ่ายเงินจำนวนดังกล่าวข้างต้น ให้แก่ผู้รับเงินตามรายละเอียดด้านล่างนี้ โดยไม่อาจเรียกใบเสร็จรับเงินจากผู้รับได้</p>
-                        <p className="text-slate-500"><b>เหตุผล:</b> {printDoc.noReceiptReason || 'ผู้รับเงินไม่ออกใบเสร็จรับเงินให้'}</p>
-                      </div>
-
-                      <div className="border border-slate-300 p-4 rounded-xl space-y-1 text-xs">
-                        <p className="font-bold text-slate-800 border-b pb-1 mb-2">รายละเอียดผู้รับเงิน (Recipient)</p>
-                        <p><b>ชื่อ-นามสกุล:</b> {printDoc.partnerName}</p>
-                        <p><b>เลขบัตรประจำตัวประชาชน:</b> {printDoc.partnerTaxId || '-'}</p>
-                        <p><b>ที่อยู่:</b> {printDoc.partnerAddress || '-'}</p>
-                      </div>
-
-                      <table className="w-full border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-slate-100 text-slate-800 font-bold border-y border-slate-300">
-                            <th className="py-2 text-center w-10">ลำดับ</th>
-                            <th className="py-2 text-left pl-2">รายละเอียดรายการที่จ่าย</th>
-                            <th className="py-2 text-center w-16">จำนวน</th>
-                            <th className="py-2 text-right pr-2 w-28">จำนวนเงิน (บาท)</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                          {(printDoc.items || []).map((it, i) => (
-                            <tr key={i}>
-                              <td className="py-2 text-center">{i+1}</td>
-                              <td className="py-2 pl-2">{it.desc}</td>
-                              <td className="py-2 text-center">{it.qty} {it.unit || 'รายการ'}</td>
-                              <td className="py-2 text-right pr-2 font-bold">{formatCurrency(it.buyPrice * it.qty)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        <tfoot>
-                          <tr className="border-t-2 border-slate-800 font-bold bg-slate-50">
-                            <td colSpan="3" className="py-2 text-right pr-4">รวมจำนวนเงินทั้งสิ้น (บาท):</td>
-                            <td className="py-2 text-right pr-2 text-sm">{formatCurrency(printDoc.total || printDoc.grandTotal)}</td>
-                          </tr>
-                        </tfoot>
-                      </table>
-
-                      <p className="text-center font-bold text-xs bg-slate-100 py-1.5 border rounded">
-                        ({THBText(printDoc.total || printDoc.grandTotal)})
-                      </p>
-
-                      <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
-                        <div className="space-y-2">
-                          <p>ลงชื่อ ........................................................... ผู้รับเงิน</p>
-                          <p>({printDoc.partnerName || '...........................................................'})</p>
-                          <p>วันที่ .......... / .......... / .............</p>
-                        </div>
-                        <div className="space-y-2">
-                          <p>ลงชื่อ ........................................................... ผู้จ่ายเงิน/ผู้จัดทำ</p>
-                          <p>({printDoc.approverName || savedSeller.sellerName || '...........................................................'})</p>
-                          <p>วันที่ {formatDate(printDoc.date)}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {printDoc.docType === 'write_off' && (
-                    <div className="space-y-6">
-                      <div className="bg-rose-50/60 p-4 rounded-xl border border-rose-200 text-xs space-y-1">
-                        <p className="font-bold text-rose-800">วัตถุประสงค์: ตัดจำหน่ายสินค้าออกจากคลังและลงบันทึกเป็นรายจ่ายธุรกิจ</p>
-                        <p><b>สาเหตุที่ทำการตัดจำหน่าย:</b> <span className="font-bold text-rose-700">{printDoc.writeOffReason || 'สินค้าชำรุด/เสียหาย'}</span></p>
-                        {printDoc.notes && <p><b>หมายเหตุเพิ่มเติม:</b> {printDoc.notes}</p>}
-                      </div>
-
-                      <table className="w-full border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-slate-100 text-slate-800 font-bold border-y border-slate-300">
-                            <th className="py-2 text-center w-10">ลำดับ</th>
-                            <th className="py-2 text-left pl-2">รายการสินค้า / SKU</th>
-                            <th className="py-2 text-center w-20">จำนวนที่ตัด</th>
-                            <th className="py-2 text-right w-24">ต้นทุน/หน่วย</th>
-                            <th className="py-2 text-right pr-2 w-28">มูลค่ารวม (บาท)</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                          {(printDoc.originalItems || printDoc.items || []).map((it, i) => (
-                            <tr key={i}>
-                              <td className="py-2 text-center">{i+1}</td>
-                              <td className="py-2 pl-2">
-                                <p className="font-bold">{it.desc}</p>
-                                {it.sku && <p className="text-[9px] font-mono text-slate-400">SKU: {it.sku}</p>}
-                              </td>
-                              <td className="py-2 text-center font-bold text-rose-600">{it.qty} {it.unit || 'ชิ้น'}</td>
-                              <td className="py-2 text-right">{formatCurrency(it.costPrice || it.buyPrice)}</td>
-                              <td className="py-2 text-right pr-2 font-bold">{formatCurrency((it.costPrice || it.buyPrice) * it.qty)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        <tfoot>
-                          <tr className="border-t-2 border-slate-800 font-bold bg-slate-50">
-                            <td colSpan="4" className="py-2 text-right pr-4">รวมมูลค่าสินค้าที่ตัดจำหน่ายทั้งสิ้น (บาท):</td>
-                            <td className="py-2 text-right pr-2 text-sm text-rose-700">{formatCurrency(printDoc.total || printDoc.grandTotal)}</td>
-                          </tr>
-                        </tfoot>
-                      </table>
-
-                      <p className="text-center font-bold text-xs bg-slate-100 py-1.5 border rounded">
-                        ({THBText(printDoc.total || printDoc.grandTotal)})
-                      </p>
-
-                      <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
-                        <div className="space-y-2">
-                          <p>ลงชื่อ ........................................................... ผู้ตรวจนับ/ผู้เสนอตัดจำหน่าย</p>
-                          <p>({printDoc.inspectorName || '...........................................................'})</p>
-                          <p>วันที่ {formatDate(printDoc.date)}</p>
-                        </div>
-                        <div className="space-y-2">
-                          <p>ลงชื่อ ........................................................... ผู้อนุมัติการตัดจำหน่าย</p>
-                          <p>({printDoc.approverName || savedSeller.sellerName || '...........................................................'})</p>
-                          <p>วันที่ {formatDate(printDoc.date)}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                </div>
-            </div>
-            
-            <div className="p-4 border-t bg-slate-50 flex gap-4 text-center justify-end">
-                <button onClick={()=>setPrintDoc(null)} className="px-8 py-3 bg-white border border-slate-200 rounded-xl font-bold hover:bg-slate-100 transition-colors text-slate-600">ปิดหน้าต่าง</button>
-                <button onClick={async () => {
-                    const el = document.getElementById('internal-doc-print-area');
-                    if (!window.html2pdf) {
-                        showToast("กำลังโหลดโปรแกรมช่วยพิมพ์...", "success");
-                        const script = document.createElement('script');
-                        script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
-                        await new Promise(res => { script.onload = res; document.body.appendChild(script); });
-                    }
-                    window.html2pdf().set({
-                        margin: 0,
-                        filename: `${printDoc.sysDocId}.pdf`,
-                        image: { type: 'jpeg', quality: 0.98 },
-                        html2canvas: { scale: 2, useCORS: true },
-                        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-                    }).from(el).save();
-                }} className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition-all flex items-center justify-center gap-2">
-                    <Download size={18}/> ดาวน์โหลด PDF
-                </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Void Confirm Modal */}
-      {voidConfirmId && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 text-left">
-            <div className="bg-white rounded-[32px] p-8 max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 text-center">
-                <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500 text-center">
-                    <XCircle size={32}/>
-                </div>
-                <h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันการยกเลิกเอกสาร?</h3>
-                <p className="text-xs text-slate-400 mb-6 text-center leading-relaxed">
-                    ระบบจะทำเครื่องหมายเอกสาร <b className="text-slate-600">{voidConfirmId.sysDocId}</b> เป็น "ยกเลิกแล้ว"<br/>
-                    {voidConfirmId.isWriteOffVoucher || String(voidConfirmId.sysDocId).startsWith('DMG-') ? (
-                        <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded mt-2 inline-block">พร้อมดึงยอดสต็อกสินค้ากลับเข้าคลังอัตโนมัติ</span>
-                    ) : (
-                        <span className="font-bold text-rose-600">*เลขเอกสารจะยังคงอยู่เพื่อการตรวจสอบบัญชี</span>
-                    )}
-                </p>
-                <div className="flex gap-3 text-center">
-                    <button onClick={() => setVoidConfirmId(null)} disabled={isSaving} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ปิด</button>
-                    <button onClick={handleVoidInternalDoc} disabled={isSaving} className="flex-[2] py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center hover:bg-rose-700 transition-colors flex justify-center items-center gap-2">
-                        {isSaving ? <Loader size={16} className="animate-spin"/> : <Trash2 size={16}/>}
-                        {isSaving ? 'กำลังยกเลิก...' : 'ยืนยันยกเลิกรายการ'}
-                    </button>
-                </div>
-            </div>
-        </div>
-      )}
-
-      {/* Upload Modal */}
-      {uploadTargetDoc && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 text-left">
-              <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
-                  <div className="flex justify-between items-center mb-6">
-                      <div>
-                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Cloud className="text-blue-500"/> แนบไฟล์เอกสารอ้างอิง</h3>
-                          <p className="text-xs text-slate-500 mt-1">อ้างอิงเลขที่: <span className="font-mono text-indigo-600 font-bold">{uploadTargetDoc.sysDocId}</span></p>
-                      </div>
-                      <button onClick={() => setUploadTargetDoc(null)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
-                  </div>
-                  
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 text-sm">
-                      <p className="font-bold text-slate-700">{uploadTargetDoc.description}</p>
-                      <p className="text-xs text-slate-500 mt-1">ยอดเงินรวม: <span className="font-black text-rose-600">{formatCurrency(uploadTargetDoc.total || uploadTargetDoc.grandTotal)} ฿</span></p>
-                  </div>
-
-                  <div className="flex flex-col items-center justify-center gap-4">
-                      {uploadTargetDoc.attachmentUrl ? (
-                          <div className="relative group inline-block w-full">
-                              <a href={uploadTargetDoc.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block w-full">
-                                  {uploadTargetDoc.attachmentUrl.includes('pdf') || uploadTargetDoc.attachmentUrl.includes('drive.google.com') ? (
-                                      <div className="h-40 w-full bg-blue-50 border border-blue-200 rounded-2xl flex flex-col items-center justify-center text-blue-500 shadow-sm hover:bg-blue-100 transition-colors">
-                                          <FileText size={40} className="mb-2"/>
-                                          <span className="text-sm font-bold">เปิดดูไฟล์เอกสาร</span>
-                                      </div>
-                                  ) : (
-                                      <img src={uploadTargetDoc.attachmentUrl} alt="Evidence" className="h-40 w-full object-cover rounded-2xl border border-slate-200 shadow-sm" />
-                                  )}
-                              </a>
-                              <button type="button" onClick={handleRemoveInternalFile} className="absolute -top-3 -right-3 bg-rose-500 text-white rounded-full p-2 opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-rose-600"><X size={16}/></button>
-                          </div>
-                      ) : (
-                          <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-slate-300 rounded-2xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
-                              {isUploadingInternalFile ? (
-                                  <div className="flex flex-col items-center gap-2">
-                                      <Loader className="animate-spin text-blue-500" size={24}/>
-                                      <span className="text-xs font-bold text-blue-500">กำลังอัปโหลดไปยัง Google Drive...</span>
-                                  </div>
-                              ) : (
-                                  <>
-                                      <FileUp size={24} className="text-slate-400 mb-2"/>
-                                      <span className="text-xs font-bold text-slate-600">คลิกอัปโหลดรูปภาพหลักฐาน หรือ PDF</span>
-                                      <span className="text-[10px] text-slate-400 mt-1">ไฟล์จะถูกจัดเก็บอัตโนมัติในโฟลเดอร์ปี/เดือน</span>
-                                  </>
-                              )}
-                              <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFileInternal} disabled={isUploadingInternalFile} />
-                          </label>
-                      )}
-                  </div>
-
-                  <div className="mt-8 pt-4 border-t border-slate-100 flex justify-end">
-                      <button onClick={() => setUploadTargetDoc(null)} className="px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors w-full">ปิดหน้าต่าง</button>
-                  </div>
-              </div>
-          </div>
-      )}
-    </div>
-  );
-}
-
-function PricingCalculator({ stockBatches, transactions, showToast, appId, user }) { 
-    const [pricingTab, setPricingTab] = useState('single'); // 'single', 'bulk'
-
-    // --- Single Item States ---
-    const [cost, setCost] = useState('');
-    const [desiredProfit, setDesiredProfit] = useState('');
-    const [competitorPrice, setCompetitorPrice] = useState('');
-    const [platformFeePct, setPlatformFeePct] = useState(25); 
-    const [marketingBufferPct, setMarketingBufferPct] = useState(0); 
-    const [selectedItemKey, setSelectedItemKey] = useState('');
-    const [simulatedPrice, setSimulatedPrice] = useState(''); 
-    const [includeVat, setIncludeVat] = useState(false);
-    const [aiSuggestion, setAiSuggestion] = useState(null);
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
-
-    // --- 🔥 NEW: Bulk / Mass Update States ---
-    const [bulkProducts, setBulkProducts] = useState([]);
-    const [bulkFeePct, setBulkFeePct] = useState(25);
-    const [isParsingBulk, setIsParsingBulk] = useState(false);
-    const [isAnalyzingBulk, setIsAnalyzingBulk] = useState(false); // NEW: State สำหรับ AI วิเคราะห์ทั้งร้าน
-    const bulkFileInputRef = useRef(null);
-
-    const uniqueItems = useMemo(() => {
-        const map = {};
-        stockBatches.forEach(b => {
-            const key = b.sku && b.sku !== '-' ? b.sku : b.productName;
-            if (!map[key]) map[key] = { name: b.productName, sku: b.sku, cost: b.costPerUnit || 0, sellPrice: b.sellPrice || 0 };
-        });
-        return Object.values(map);
-    }, [stockBatches]);
-
-    const itemSalesStats = useMemo(() => {
-        if (!selectedItemKey || !transactions) return null;
-        const targetItem = uniqueItems.find(i => i.sku === selectedItemKey || i.name === selectedItemKey);
-        if (!targetItem) return null;
-
-        const targetSku = targetItem.sku;
-        const targetName = targetItem.name;
+    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
         
-        let totalSold = 0; let soldLast30Days = 0; let totalRevenue = 0;
-        const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-        transactions.forEach(t => {
-            if (t.type !== 'income' || t.isCancelled || t.isFromReconciliation) return;
-            const tDate = normalizeDate(t.date);
-            const isLast30Days = tDate && tDate >= thirtyDaysAgo;
-
-            (t.items || []).forEach(item => {
-                if (matchItemToBatch(item.sku, item.desc, targetSku, targetName)) {
-                    const qty = Number(item.qty) || 0;
-                    const price = Number(item.sellPrice || item.price || 0);
-                    totalSold += qty;
-                    totalRevenue += (qty * price);
-                    if (isLast30Days) soldLast30Days += qty;
-                }
-            });
-        });
-        const avgPrice = totalSold > 0 ? totalRevenue / totalSold : 0;
-        return { totalSold, soldLast30Days, totalRevenue, avgPrice };
-    }, [selectedItemKey, transactions, uniqueItems]);
-
-    const handleSelectItem = (e) => {
-        const val = e.target.value;
-        setSelectedItemKey(val);
-        if (val) {
-            const item = uniqueItems.find(i => (i.sku === val || i.name === val));
-            if (item && item.cost > 0) {
-                setCost(item.cost);
-                setSimulatedPrice(item.sellPrice || ''); 
-            }
-        } else {
-            setCost(''); setSimulatedPrice('');
-        }
-    };
-
-    const updateSellPriceInInventory = async (newPrice) => {
-        if (!selectedItemKey || !user || newPrice <= 0) return;
-        setIsAnalyzing(true);
-        try {
-            const batchWriter = writeBatch(dbInstance);
-            const targetBatches = stockBatches.filter(b => b.sku === selectedItemKey || b.productName === selectedItemKey);
-            targetBatches.forEach(b => {
-                const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
-                batchWriter.update(ref, { sellPrice: newPrice });
-            });
-            await batchWriter.commit();
-            showToast(`อัปเดตราคาขายใหม่ (${formatCurrency(newPrice)} ฿) ลงในคลังสำเร็จ!`, "success");
-            setSimulatedPrice(newPrice);
-        } catch (e) {
-            console.error(e);
-            showToast("เกิดข้อผิดพลาดในการอัปเดตราคา", "error");
-        }
-        setIsAnalyzing(false);
-    };
-
-    const marginCalculations = useMemo(() => {
-        const c = Number(cost) || 0;
-        const feePct = (Number(platformFeePct) || 0) / 100;
-        const mktPct = (Number(marketingBufferPct) || 0) / 100;
-        const totalDeductionPct = feePct + mktPct;
-
-        const calcPrice = (targetMargin) => {
-            const denominator = 1 - totalDeductionPct - targetMargin;
-            if (denominator <= 0) return 0;
-            return c / denominator;
-        };
-
-        return [
-            { label: 'กำไร 40%', margin: 0.40, price: calcPrice(0.40) },
-            { label: 'กำไร 50%', margin: 0.50, price: calcPrice(0.50) },
-            { label: 'กำไร 60%', margin: 0.60, price: calcPrice(0.60) },
-        ];
-    }, [cost, platformFeePct, marketingBufferPct]);
-
-    const calculations = useMemo(() => {
-        const c = Number(cost) || 0;
-        const p = Number(desiredProfit) || 0;
-        const feePct = (Number(platformFeePct) || 0) / 100;
-        const mktPct = (Number(marketingBufferPct) || 0) / 100;
-        const totalDeductionPct = feePct + mktPct;
-        
-        let recommendedPrice = 0;
-        if (1 - totalDeductionPct > 0) recommendedPrice = (c + p) / (1 - totalDeductionPct);
-
-        const feeAmount = recommendedPrice * feePct;
-        const mktAmount = recommendedPrice * mktPct;
-
-        return { recommendedPrice, feeAmount, mktAmount, totalDeductionPct: totalDeductionPct * 100 };
-    }, [cost, desiredProfit, platformFeePct, marketingBufferPct]);
-
-    const simulator = useMemo(() => {
-        const p = Number(simulatedPrice) || 0;
-        const c = Number(cost) || 0;
-        const mkt = p * ((Number(marketingBufferPct) || 0) / 100);
-
-        const scenarios = [
-            { name: 'ไม่หักค่าธรรมเนียม 0%', feePct: 0 },
-            { name: 'กรณีค่าธรรมเนียม 25%', feePct: 25 },
-            { name: 'กรณีค่าธรรมเนียม 27%', feePct: 27 },
-            { name: 'กรณีค่าธรรมเนียม 30%', feePct: 30 } 
-        ];
-
-        return scenarios.map(scenario => {
-            const feeAmt = p * (scenario.feePct / 100);
-            let vatAmt = 0;
-            if (includeVat && p > c) vatAmt = (p - c) * 7 / 107;
-            const netProfit = p - c - feeAmt - mkt - vatAmt;
-            const marginPct = p > 0 ? (netProfit / p) * 100 : 0;
-            return { ...scenario, feeAmt, netProfit, marginPct, mkt, vatAmt };
-        });
-    }, [simulatedPrice, cost, marketingBufferPct, includeVat]);
-
-    const handleAiAnalysis = async () => {
-        if (!cost || (!desiredProfit && !simulatedPrice)) { showToast("กรุณากรอกต้นทุน และ กำไร/ราคาขายที่ต้องการ ให้ครบถ้วนก่อน", "error"); return; }
-        setIsAnalyzing(true);
-        try {
-            const c = Number(cost);
-            const feeDecimal = (Number(platformFeePct) + Number(marketingBufferPct)) / 100;
-            const breakEvenPrice = feeDecimal < 1 ? c / (1 - feeDecimal) : c; 
-            const targetPrice = calculations.recommendedPrice; 
-            const basePrice = simulatedPrice ? Number(simulatedPrice) : targetPrice;
-            const compText = competitorPrice ? `- ราคาคู่แข่งในตลาดเฉลี่ย: ${competitorPrice} บาท` : '- ไม่มีข้อมูลราคาคู่แข่ง';
-            const salesHistoryText = itemSalesStats ? `- ประวัติการขายของร้าน: ขายไปแล้ว ${itemSalesStats.totalSold} ชิ้น (30 วันล่าสุด: ${itemSalesStats.soldLast30Days} ชิ้น), ลูกค้าเคยยอมจ่ายที่ราคาเฉลี่ย: ${itemSalesStats.avgPrice.toFixed(2)} บาท` : '- ไม่มีประวัติการขาย';
-            const desiredProfitText = desiredProfit ? `- เป้าหมายกำไรสุทธิที่ต้องการ: ${desiredProfit} บาท/ชิ้น (หลังหักค่าธรรมเนียมแล้ว)` : '';
-
-            const prompt = `คุณคือ Chief Pricing Officer... [คำสั่ง AI เดิม]
-            [ข้อมูลพื้นฐานของสินค้า]
-            - ต้นทุนสินค้า: ${c} บาท
-            - ภาระค่าธรรมเนียม Platform: ${(feeDecimal * 100).toFixed(1)}%
-            - จุดคุ้มทุน (Break-even): ${Math.ceil(breakEvenPrice)} บาท
-            ${desiredProfitText}
-            - ราคาเป้าหมาย: ${Math.ceil(targetPrice)} บาท
-            - ราคาที่ตั้งไว้ทดสอบ: ${basePrice} บาท
-            ${compText}
-            ${salesHistoryText}
-            
-            ตอบกลับเป็น JSON... { "tiers": [...], "campaignHook": "...", "bundleIdea": "...", "valueProp": "..." }`;
-            
-            const res = await callGeminiAPI(prompt, true);
-            if (res && res.tiers) {
-                setAiSuggestion(res);
-                setSimulatedPrice(res.tiers[1]?.price || basePrice); 
-                showToast("AI วิเคราะห์กลยุทธ์ราคาและโปรโมชั่นสำเร็จ!", "success");
-            }
-        } catch (e) {
-            showToast("AI ขัดข้อง กรุณาลองใหม่อีกครั้ง", "error");
-        }
-        setIsAnalyzing(false);
-    };
-
-    // --- 🔥 NEW: ฟังก์ชันประมวลผลไฟล์ Shopee Mass Update ---
-    const handleBulkFileUpload = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        const processBulkFile = (f) => {
-            setIsParsingBulk(true);
-            const reader = new FileReader();
-            reader.onload = (evt) => {
-                try {
-                    const dataBuffer = new Uint8Array(evt.target.result);
-                    const wb = window.XLSX.read(dataBuffer, { type: 'array' });
-                    const ws = wb.Sheets[wb.SheetNames[0]];
-                    const rawAoA = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-                    
-                    // หาระยะบรรทัดที่เป็น Header ภาษาไทย หรือ ภาษาอังกฤษ
-                    let headerRowIdx = -1;
-                    for (let i = 0; i < Math.min(rawAoA.length, 10); i++) {
-                        const rowStr = rawAoA[i].join('').replace(/\s/g, '').toLowerCase();
-                        if (rowStr.includes('รหัสสินค้า') || rowStr.includes('ชื่อสินค้า') || rowStr.includes('เลขsku') || rowStr.includes('productname') || rowStr.includes('variationsku') || rowStr.includes('et_title_product_name')) {
-                            headerRowIdx = i;
-                            break;
-                        }
-                    }
-
-                    if (headerRowIdx === -1) {
-                        showToast("รูปแบบไฟล์ไม่ถูกต้อง ไม่พบคอลัมน์ 'ชื่อสินค้า' หรือ 'เลข SKU'", "error");
-                        setIsParsingBulk(false);
-                        return;
-                    }
-
-                    const headers = rawAoA[headerRowIdx];
-                    const rawData = [];
-                    for (let i = headerRowIdx + 1; i < rawAoA.length; i++) {
-                        const rowArr = rawAoA[i] || [];
-                        const rowObj = {};
-                        let hasData = false;
-                        headers.forEach((h, colIdx) => {
-                            if (h && String(h).trim() !== '') {
-                                rowObj[String(h).trim()] = rowArr[colIdx];
-                                if (rowArr[colIdx] !== '' && rowArr[colIdx] !== undefined) hasData = true;
-                            }
-                        });
-                        if (hasData) rawData.push(rowObj);
-                    }
-
-                    // สกัดข้อมูลและประมวลผล
-                    const cleanStr = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
-                    const parsedProducts = [];
-
-                    rawData.forEach(row => {
-                        const sku = cleanStr(row['เลข SKU'] || row['Variation SKU'] || row['รหัสตัวเลือกสินค้า'] || row['รหัสสินค้า'] || row['et_title_variation_sku']);
-                        const parentSku = cleanStr(row['Parent SKU'] || row['รหัสสินค้า'] || row['et_title_parent_sku']);
-                        const finalSku = sku || parentSku;
-
-                        const name = cleanStr(row['ชื่อสินค้า'] || row['Product Name'] || row['et_title_product_name']);
-                        const variationName = cleanStr(row['ชื่อตัวเลือกสินค้า'] || row['Variation Name'] || row['et_title_variation_name']);
-                        const price = Number(row['ราคา'] || row['Price'] || row['et_title_variation_price'] || 0);
-
-                        if (!name || price <= 0) return; // ข้ามบรรทัดเปล่า
-
-                        const displayName = variationName && variationName !== '-' ? `${name} - ${variationName}` : name;
-
-                        // วิ่งไปจับคู่กับ Cost ในคลังสินค้า (ถ้ามี)
-                        let matchedCost = 0;
-                        if (finalSku && finalSku !== '-') {
-                            const matchedItem = uniqueItems.find(i => String(i.sku).toLowerCase() === String(finalSku).toLowerCase());
-                            if (matchedItem) matchedCost = matchedItem.cost;
-                        }
-                        if (matchedCost === 0) {
-                            const matchedByName = uniqueItems.find(i => String(i.name).toLowerCase() === String(name).toLowerCase());
-                            if (matchedByName) matchedCost = matchedByName.cost;
-                        }
-
-                        parsedProducts.push({
-                            sku: finalSku || '-',
-                            name: displayName,
-                            shopeePrice: price,
-                            cost: matchedCost > 0 ? matchedCost : '',
-                            aiMargin: null, // สำหรับรับค่าจาก AI แนะนำ
-                            aiReason: ''
-                        });
-                    });
-
-                    if (parsedProducts.length === 0) {
-                         showToast("ไม่พบรายการสินค้าในไฟล์ กรุณาตรวจสอบความถูกต้อง", "error");
-                    } else {
-                         setBulkProducts(parsedProducts);
-                         showToast(`อ่านข้อมูลและผูกต้นทุนสำเร็จ ${parsedProducts.length} รายการ`, "success");
-                    }
-                } catch (err) {
-                    console.error("Parse Error:", err);
-                    showToast("ไม่สามารถอ่านไฟล์ได้ กรุณาใช้ไฟล์ Mass Update ของ Shopee", "error");
-                }
-                setIsParsingBulk(false);
-                if (bulkFileInputRef.current) bulkFileInputRef.current.value = '';
-            };
-            
-            // ใช้ readAsArrayBuffer แทนเพื่อให้ XLSX ดึงข้อมูลได้ครบถ้วนแม้เป็น CSV
-            reader.readAsArrayBuffer(f);
-        };
-
-        if (!window.XLSX) {
-            setIsParsingBulk(true);
-            const script = document.createElement('script');
-            script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-            script.onload = () => processBulkFile(file);
-            document.body.appendChild(script);
-        } else {
-            processBulkFile(file);
-        }
-    };
-
-    const updateBulkCost = (index, val) => {
-        const newArr = [...bulkProducts];
-        newArr[index].cost = val;
-        setBulkProducts(newArr);
-    };
-
-    // --- Helper function สำหรับคำนวณราคาในตาราง Bulk ---
-    const calcBulkPrice = (costVal, targetMargin) => {
-        const c = Number(costVal) || 0;
-        if (c <= 0) return 0;
-        const feeDecimal = Number(bulkFeePct) / 100;
-        const denominator = 1 - feeDecimal - targetMargin;
-        if (denominator <= 0) return 0;
-        return c / denominator;
-    };
-
-    // --- 🔥 NEW: AI Bulk Repricing Strategy (วิเคราะห์กลยุทธ์ทั้งกระดาน) ---
-    const handleBulkAiAnalysis = async () => {
-        const validItems = bulkProducts.filter(p => Number(p.cost) > 0);
-        if (validItems.length === 0) {
-            showToast("ไม่พบต้นทุนสินค้า (Cost) เลยสักรายการ กรุณาระบุต้นทุนก่อนให้ AI วิเคราะห์", "error");
-            return;
-        }
-
-        setIsAnalyzingBulk(true);
-        try {
-            // จำกัดส่งข้อมูลให้ AI แค่ 30 รายการแรกเพื่อป้องกัน Token ทะลุลิมิต
-            const sampleData = validItems.slice(0, 30).map(p => ({
-                sku: p.sku,
-                name: p.name,
-                cost: p.cost,
-                currentPrice: p.shopeePrice
-            }));
-
-            const prompt = `คุณคือผู้เชี่ยวชาญด้านตั้งราคาสินค้า E-commerce (Pricing Strategist)
-            วิเคราะห์ตารางสินค้าต่อไปนี้ ซึ่งมีภาระค่าธรรมเนียม Platform คงที่ ${bulkFeePct}%
-            เป้าหมาย: แนะนำให้ผู้ขายตั้งกำไรสุทธิ (Net Margin) สำหรับสินค้าแต่ละชิ้นว่าควรเป็นกี่เปอร์เซ็นต์ ระหว่าง 40%, 50%, หรือ 60%
-            หลักการพิจารณา:
-            - หากต้นทุนต่ำ (เช่น หลักสิบ) ควรตั้ง Margin สูง (60%) เพื่อให้คุ้มค่าแพ็ค/ค่าแรง
-            - หากต้นทุนสูงมาก หรือสินค้าน่าจะเป็นสินค้าแข่งขันสูง ควรตั้ง Margin ต่ำลงมาหน่อย (40-50%) เพื่อดึงดูดลูกค้า
-            
-            ข้อมูลสินค้า:
-            ${JSON.stringify(sampleData)}
-            
-            ตอบกลับเป็น JSON Array โครงสร้างนี้เท่านั้น:
-            [
-              { "sku": "รหัสsku", "recommendedMargin": 40 หรือ 50 หรือ 60, "reason": "เหตุผลสั้นๆ ไม่เกิน 10 คำ" }
-            ]`;
-
-            showToast("AI กำลังสแกนและประเมินราคาสินค้าทั้งร้าน...", "success");
-            const res = await callGeminiAPI(prompt, true);
-            
-            if (Array.isArray(res)) {
-                // ผสานข้อมูลกลับเข้า State
-                const newBulk = bulkProducts.map(p => {
-                    const aiRec = res.find(r => r.sku === p.sku);
-                    if (aiRec) {
-                        return { ...p, aiMargin: aiRec.recommendedMargin, aiReason: aiRec.reason };
-                    }
-                    return p;
-                });
-                setBulkProducts(newBulk);
-                showToast("AI วิเคราะห์ราคาทั้งกระดานเสร็จสิ้น! (ทำไฮไลต์รายการที่แนะนำให้แล้ว)", "success");
-            } else {
-                throw new Error("Invalid AI format");
-            }
-        } catch (err) {
-            console.error(err);
-            showToast("AI เกิดข้อขัดข้องในการวิเคราะห์ข้อมูลจำนวนมาก", "error");
-        }
-        setIsAnalyzingBulk(false);
-    };
-
-    const handleExportBulkExcel = async () => {
-        if (bulkProducts.length === 0) return;
-        showToast("กำลังเตรียมไฟล์ Excel...", "success");
-        try {
-            const dataRows = [
-                ["เลข SKU", "ชื่อสินค้า (Name)", "ราคาเดิม (Shopee)", "ต้นทุน (Cost)", "ราคาแนะนำ กำไร 40%", "ราคาแนะนำ กำไร 50%", "ราคาแนะนำ กำไร 60%", "AI แนะนำ % กำไร", "เหตุผลจาก AI"]
-            ];
-
-            bulkProducts.forEach(p => {
-                dataRows.push([
-                    p.sku,
-                    p.name,
-                    p.shopeePrice,
-                    p.cost || 0,
-                    Math.ceil(calcBulkPrice(p.cost, 0.40)),
-                    Math.ceil(calcBulkPrice(p.cost, 0.50)),
-                    Math.ceil(calcBulkPrice(p.cost, 0.60)),
-                    p.aiMargin ? `${p.aiMargin}%` : '-',
-                    p.aiReason || '-'
-                ]);
-            });
-
-            const wb = window.XLSX.utils.book_new();
-            const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
-            window.XLSX.utils.book_append_sheet(wb, ws, "Bulk Pricing");
-            window.XLSX.writeFile(wb, `Shopee_Repricing_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
-            showToast("ส่งออกไฟล์สำเร็จ นำราคากลับไปวางใน Shopee ได้เลย", "success");
-        } catch (e) {
-            showToast("เกิดข้อผิดพลาดในการส่งออก", "error");
-        }
-    };
-
-    return (
-        <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full h-full pb-20">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 border-b pb-4 gap-4">
-                <div className="space-y-1">
-                    <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><Calculator className="text-indigo-600"/> AI Smart Pricing & Strategy</h2>
-                    <p className="text-sm text-slate-400 font-medium">ศูนย์บัญชาการกลยุทธ์ราคา: คำนวณกำไรย้อนหลัง และจำลองกำไรสุทธิแยกตามแพลตฟอร์ม</p>
-                </div>
+        {/* Header */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+                <h2 className="text-xl font-black text-indigo-800 flex items-center gap-2">
+                    <FileText size={24} className="text-indigo-600"/> เอกสารภายใน & ตัดจำหน่ายสินค้า
+                </h2>
+                <p className="text-xs text-slate-500 mt-1 font-medium">สร้างใบรับรองแทนใบเสร็จรับเงิน และใบตัดจำหน่ายสินค้าชำรุด/สูญหาย ตามมาตรฐานกรมสรรพากร</p>
             </div>
-
-            {/* --- 🔥 NEW: Tab Switcher --- */}
-            <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit mb-6 overflow-x-auto shadow-inner border border-slate-200/50">
-                <button onClick={() => setPricingTab('single')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${pricingTab === 'single' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                    <Box size={16}/> วิเคราะห์รายชิ้น (Single Item)
-                </button>
-                <button onClick={() => setPricingTab('bulk')} className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${pricingTab === 'bulk' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                    <Layers size={16}/> อัปเดตทั้งร้านจากไฟล์ Shopee (Mass Update)
-                </button>
+            <div className="flex items-center gap-2">
+                <span className="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-lg border border-emerald-200 flex items-center gap-1">
+                    <Zap size={12}/> Speed Optimized
+                </span>
+                <span className="px-3 py-1.5 bg-white text-slate-500 text-[10px] font-bold rounded-lg border border-slate-200 flex items-center gap-1 hover:bg-slate-50 cursor-pointer transition-colors" onClick={() => window.location.reload()}>
+                    <RefreshCw size={12}/> รีเฟรชซิงค์ข้อมูล
+                </span>
             </div>
+        </div>
 
-            {pricingTab === 'single' ? (
-                // ==========================================
-                // 🏷️ TAB 1: SINGLE ITEM PRICING (ORIGINAL)
-                // ==========================================
-                <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 animate-fadeIn">
-                    {/* ... (เนื้อหา Single Item คงเดิม) ... */}
-                    {/* --- Left Column: Inputs --- */}
-                    <div className="xl:col-span-4 flex flex-col gap-6">
-                        <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm space-y-5">
-                            <h3 className="text-base font-black text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2"><Box size={16} className="text-indigo-500"/> ข้อมูลสินค้า & ต้นทุน</h3>
-                            
-                            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                                <label className="text-xs font-bold text-slate-500 uppercase">ดึงข้อมูลจากคลังสินค้า (Optional)</label>
-                                <select value={selectedItemKey} onChange={handleSelectItem} className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer">
-                                    <option value="">-- ระบุต้นทุนเอง (Manual) --</option>
-                                    {uniqueItems.map((item, idx) => (
-                                        <option key={idx} value={item.sku !== '-' ? item.sku : item.name}>
-                                            {item.name} (ต้นทุน: {formatCurrency(item.cost)} ฿)
-                                        </option>
-                                    ))}
+        {/* Tab Selector */}
+        <div className="flex bg-white border border-slate-200 p-1.5 rounded-2xl w-fit shadow-sm overflow-x-auto">
+            <button onClick={() => setActiveTab('cert_receipt')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'cert_receipt' ? 'bg-indigo-50 text-indigo-700 shadow-sm border border-indigo-100' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
+                <FileText size={16}/> ใบรับรองแทนใบเสร็จรับเงิน
+            </button>
+            <button onClick={() => setActiveTab('write_off')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'write_off' ? 'bg-rose-50 text-rose-700 shadow-sm border border-rose-100' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
+                <Trash2 size={16}/> ใบตัดจำหน่ายสินค้า (ชำรุด/สูญหาย)
+            </button>
+            <button onClick={() => setActiveTab('history')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'history' ? 'bg-slate-100 text-slate-800 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
+                <History size={16}/> ประวัติเอกสารภายใน
+            </button>
+        </div>
+
+        {/* TAB 1: CERTIFICATE RECEIPT */}
+        {activeTab === 'cert_receipt' && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div className="xl:col-span-2 bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm text-left">
+                    <div className="mb-6 border-b border-slate-100 pb-4 flex justify-between items-start">
+                        <div>
+                            <h3 className="text-xl font-black text-indigo-800 flex items-center gap-2">
+                                <FileText className="text-indigo-600"/> {certForm.id ? 'แก้ไขใบรับรองแทนใบเสร็จรับเงิน' : 'ออกใบรับรองแทนใบเสร็จรับเงิน'}
+                            </h3>
+                            <p className="text-xs text-slate-500 mt-1">สำหรับบันทึกรายจ่ายที่ผู้ขายไม่ออกบิลให้ (สรรพากรยอมรับเมื่อมีเอกสารนี้พร้อมบัตรประชาชนผู้รับเงิน)</p>
+                        </div>
+                        {certForm.id && (
+                            <button onClick={() => setCertForm({ id: null, docNo: '', date: formatDateISO(new Date()), category: CONSTANTS.CATEGORIES.EXPENSE[0], recipientName: '', recipientId: '', recipientAddress: '', items: [{ desc: '', qty: 1, price: '' }], reason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน', payerName: '', attachmentUrl: '' })} className="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-bold hover:bg-slate-200 transition-colors">
+                                ยกเลิกแก้ไข
+                            </button>
+                        )}
+                    </div>
+
+                    <form onSubmit={handleSaveCertReceipt} className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="text-xs font-bold text-slate-600 mb-1.5 block">วันที่จ่ายเงิน</label>
+                                <input type="date" required value={certForm.date} onChange={e=>setCertForm({...certForm, date: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-slate-50 transition-all"/>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-600 mb-1.5 block">หมวดหมู่รายจ่าย</label>
+                                <select value={certForm.category} onChange={e=>setCertForm({...certForm, category: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-slate-50 cursor-pointer transition-all">
+                                    {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
-
-                                {/* --- UI แสดงสถิติย้อนหลัง (Feedback Loop) --- */}
-                                {itemSalesStats && selectedItemKey && (
-                                    <div className="mt-4 pt-4 border-t border-slate-200 grid grid-cols-2 gap-3 animate-fadeIn">
-                                        <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase">ขายไปแล้วรวม</p>
-                                            <p className="text-sm font-black text-indigo-600">{itemSalesStats.totalSold.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
-                                        </div>
-                                        <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase">ยอดขาย 30 วันล่าสุด</p>
-                                            <p className="text-sm font-black text-emerald-600">{itemSalesStats.soldLast30Days.toLocaleString()} <span className="text-[10px]">ชิ้น</span></p>
-                                        </div>
-                                        <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase">ราคาขายเฉลี่ย</p>
-                                            <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.avgPrice)} <span className="text-[10px]">฿</span></p>
-                                        </div>
-                                        <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase">สร้างรายได้แล้ว</p>
-                                            <p className="text-sm font-black text-slate-700">{formatCurrency(itemSalesStats.totalRevenue)} <span className="text-[10px]">฿</span></p>
-                                        </div>
-                                        {itemSalesStats.soldLast30Days === 0 && (
-                                            <p className="col-span-2 text-[10px] text-rose-500 font-bold mt-1 text-center bg-rose-50 p-1.5 rounded-md">
-                                                ⚠️ สินค้านี้ยังขายไม่ได้เลยในช่วง 30 วันที่ผ่านมา
-                                            </p>
-                                        )}
-                                    </div>
-                                )}
                             </div>
+                        </div>
 
-                            <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-indigo-50/30 p-5 rounded-2xl border border-indigo-100 space-y-4">
+                            <h4 className="text-xs font-bold text-indigo-600 flex items-center gap-2 mb-2"><User size={16}/> ข้อมูลผู้รับเงิน (RECIPIENT DETAILS)</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase">ต้นทุนสินค้า (Cost)</label>
-                                    <input type="number" value={cost} onChange={e=>setCost(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-base font-black mt-1 outline-none focus:ring-2 focus:ring-indigo-200 text-slate-800" placeholder="0.00" />
+                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">ชื่อ - นามสกุล ผู้รับเงิน *</label>
+                                    <input type="text" required value={certForm.recipientName} onChange={e=>setCertForm({...certForm, recipientName: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-white transition-all shadow-sm" placeholder="นาย / นาง / นางสาว..."/>
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold text-amber-500 uppercase">ราคาคู่แข่ง (Competitor)</label>
-                                    <input type="number" value={competitorPrice} onChange={e=>setCompetitorPrice(e.target.value)} className="w-full bg-amber-50 border border-amber-200 rounded-xl p-3 text-base font-black mt-1 outline-none focus:ring-2 focus:ring-amber-200 text-amber-700" placeholder="ไม่บังคับ" />
+                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">เลขประจำตัวประชาชน (13 หลัก)</label>
+                                    <input type="text" value={certForm.recipientId} onChange={e=>setCertForm({...certForm, recipientId: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-white transition-all shadow-sm" placeholder="X-XXXX-XXXXX-XX-X"/>
                                 </div>
-                            </div>
-
-                            <div className="pt-3 border-t border-slate-100">
-                                <label className="text-xs font-bold text-slate-700 uppercase mb-2 flex items-center gap-2"><Percent size={14} className="text-rose-500"/> ภาระค่าใช้จ่ายแฝง (%)</label>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="text-[9px] font-bold text-slate-400 uppercase">Platform Fee (เฉลี่ย)</label>
-                                        <input type="number" value={platformFeePct} onChange={e=>setPlatformFeePct(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold mt-1 outline-none focus:border-indigo-400 text-slate-700" placeholder="15" />
-                                    </div>
-                                    <div>
-                                        <label className="text-[9px] font-bold text-slate-400 uppercase">เผื่อส่วนลด/Ads Buffer</label>
-                                        <input type="number" value={marketingBufferPct} onChange={e=>setMarketingBufferPct(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold mt-1 outline-none focus:border-indigo-400 text-slate-700" placeholder="5" />
-                                    </div>
+                                <div className="md:col-span-2">
+                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">ที่อยู่ผู้รับเงิน</label>
+                                    <input type="text" value={certForm.recipientAddress} onChange={e=>setCertForm({...certForm, recipientAddress: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-white transition-all shadow-sm" placeholder="บ้านเลขที่, ถนน, ตำบล, อำเภอ, จังหวัด..."/>
                                 </div>
                             </div>
                         </div>
 
-                        {/* เครื่องมือที่ 1: หาจากกำไร */}
-                        <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-6 rounded-[32px] shadow-lg text-white relative overflow-hidden">
-                            <TrendingUp size={80} className="absolute -right-4 -bottom-4 opacity-10" />
-                            <h3 className="text-sm font-black text-indigo-200 mb-4 flex items-center gap-2 relative z-10">โหมดที่ 1: กำหนดราคาจาก Margin (40%, 50%, 60%)</h3>
-                            
-                            <div className="relative z-10 grid grid-cols-3 gap-3 mb-5">
-                                {marginCalculations.map((tier, idx) => (
-                                    <div key={idx} className="bg-white/10 border border-white/20 p-3 rounded-2xl text-center flex flex-col justify-between">
-                                        <p className="text-[10px] font-bold text-indigo-200 uppercase">{tier.label}</p>
-                                        <p className="text-lg font-black mt-1 text-white">
-                                            {tier.price > 0 ? formatCurrency(tier.price) : 'N/A'}
-                                        </p>
-                                        <button 
-                                            onClick={() => {
-                                                if(tier.price > 0) {
-                                                    setSimulatedPrice(tier.price.toFixed(0));
-                                                    updateSellPriceInInventory(Number(tier.price.toFixed(0)));
-                                                }
-                                            }} 
-                                            disabled={tier.price <= 0 || isAnalyzing}
-                                            className="mt-2 w-full bg-white/20 hover:bg-white/30 py-1.5 rounded-lg text-[10px] font-bold transition-colors disabled:opacity-50"
-                                        >
-                                            ใช้ราคานี้
+                        <div>
+                            <div className="flex justify-between items-center mb-3">
+                                <h4 className="text-sm font-bold text-slate-700">รายการสินค้า/บริการที่จ่าย</h4>
+                                <button type="button" onClick={() => setCertForm(p => ({...p, items: [...p.items, {desc: '', qty: 1, price: ''}]}))} className="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-4 py-2 rounded-lg font-bold flex items-center gap-1.5 transition-colors shadow-sm">
+                                    <PlusCircle size={14}/> เพิ่มรายการ
+                                </button>
+                            </div>
+                            <div className="space-y-3">
+                                {certForm.items.map((item, idx) => (
+                                    <div key={idx} className="flex flex-col sm:flex-row gap-2 items-start sm:items-center bg-slate-50 p-3 rounded-xl border border-slate-200 shadow-sm">
+                                        <input type="text" value={item.desc} onChange={e => {
+                                            const newItems = [...certForm.items]; newItems[idx].desc = e.target.value; setCertForm({...certForm, items: newItems});
+                                        }} className="w-full sm:flex-1 p-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 transition-colors" placeholder="รายละเอียดรายการจ่าย..."/>
+                                        <div className="flex gap-2 w-full sm:w-auto">
+                                            <input type="number" min="1" value={item.qty} onChange={e => {
+                                                const newItems = [...certForm.items]; newItems[idx].qty = e.target.value; setCertForm({...certForm, items: newItems});
+                                            }} className="w-full sm:w-20 p-3 rounded-lg border border-slate-200 bg-white text-sm text-center font-bold outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 transition-colors" placeholder="จำนวน"/>
+                                            <input type="number" value={item.price} onChange={e => {
+                                                const newItems = [...certForm.items]; newItems[idx].price = e.target.value; setCertForm({...certForm, items: newItems});
+                                            }} className="w-full sm:w-32 p-3 rounded-lg border border-slate-200 bg-white text-sm text-right font-bold text-indigo-600 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 transition-colors" placeholder="ราคา/หน่วย"/>
+                                        </div>
+                                        <button type="button" onClick={() => {
+                                            if (certForm.items.length > 1) {
+                                                const newItems = certForm.items.filter((_, i) => i !== idx); setCertForm({...certForm, items: newItems});
+                                            }
+                                        }} className="p-3 bg-white border border-slate-200 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-30 w-full sm:w-auto shadow-sm" disabled={certForm.items.length === 1}>
+                                            <Trash2 size={16} className="mx-auto"/>
                                         </button>
                                     </div>
                                 ))}
                             </div>
+                        </div>
 
-                            <div className="pt-4 border-t border-white/20 relative z-10">
-                                <label className="text-[10px] font-bold text-white uppercase opacity-80">หรือระบุกำไรสุทธิที่ต้องการ/ชิ้น (฿)</label>
-                                <div className="flex items-center gap-3 mt-1">
-                                    <input type="number" value={desiredProfit} onChange={e=>setDesiredProfit(e.target.value)} className="w-full bg-white/20 border border-white/30 rounded-xl p-2.5 text-lg font-black outline-none focus:border-white text-white placeholder-white/40" placeholder="0.00" />
-                                    <span className="font-bold text-sm text-indigo-300">฿</span>
-                                    <button onClick={() => {
-                                        setSimulatedPrice(calculations.recommendedPrice.toFixed(0));
-                                        updateSellPriceInInventory(Number(calculations.recommendedPrice.toFixed(0)));
-                                    }} className="whitespace-nowrap px-4 bg-white/20 hover:bg-white/30 py-2.5 rounded-xl text-xs font-bold transition-colors disabled:opacity-50" disabled={isAnalyzing}>
-                                        ใช้ราคานี้
-                                    </button>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">เหตุผลที่ไม่ได้รับใบเสร็จ</label>
+                                <input type="text" value={certForm.reason} onChange={e=>setCertForm({...certForm, reason: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-slate-50 transition-all"/>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">ชื่อผู้ตรวจรับ / ผู้จ่ายเงิน</label>
+                                <input type="text" value={certForm.payerName} onChange={e=>setCertForm({...certForm, payerName: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-slate-50 transition-all" placeholder="ระบุชื่อผู้เบิก/ผู้จ่ายเงิน..."/>
+                            </div>
+                        </div>
+
+                        <div className="pt-4">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1 mb-2"><Camera size={14}/> แนบรูปหลักฐาน/สลิป (DIGITAL FILING)</label>
+                            {certForm.attachmentUrl ? (
+                                <div className="relative group inline-block w-full sm:w-auto">
+                                    <a href={certForm.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block">
+                                        <img src={certForm.attachmentUrl} alt="Evidence" className="h-32 w-auto object-contain rounded-xl border border-slate-200 shadow-sm bg-slate-50" />
+                                    </a>
+                                    <button type="button" onClick={handleRemoveAttachment} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
                                 </div>
+                            ) : (
+                                <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
+                                    {isUploadingFile ? (
+                                        <div className="flex flex-col items-center gap-1">
+                                            <Loader className="animate-spin text-indigo-500" size={16}/>
+                                            <span className="text-[9px] font-bold text-indigo-500">กำลังอัปโหลด...</span>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <FileUp size={16} className="text-slate-400 mb-1"/>
+                                            <span className="text-[10px] font-bold text-slate-600">อัปโหลดสลิปโอนเงิน บัตรปชช. หรือใบเสนอราคา (JPG, PNG, PDF)</span>
+                                        </>
+                                    )}
+                                    <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFile} disabled={isUploadingFile} />
+                                </label>
+                            )}
+                        </div>
+
+                        <div className="pt-6 border-t border-slate-100 flex justify-end">
+                            <button type="submit" disabled={isProcessing} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-xl font-black shadow-lg shadow-indigo-200 flex justify-center items-center gap-2 transition-all hover:-translate-y-0.5 active:scale-95 disabled:opacity-50 text-base">
+                                {isProcessing ? <Loader size={20} className="animate-spin"/> : <Save size={20}/>} 
+                                {certForm.id ? 'อัปเดตข้อมูล' : 'บันทึกใบรับรองฯ และลงบัญชี'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div className="xl:col-span-1">
+                    <div className="bg-[#1e1b4b] rounded-[32px] p-8 text-white shadow-xl sticky top-6">
+                        <div className="flex items-center gap-2 mb-6 text-indigo-300"><Info size={24}/><h4 className="font-bold text-base">คำแนะนำการใช้งาน</h4></div>
+                        <div className="text-sm leading-relaxed space-y-6 text-indigo-50/90 font-medium">
+                            <p>ใบรับรองแทนใบเสร็จรับเงิน ใช้ในกรณีที่กิจการมีรายจ่ายที่เกิดขึ้นจริง แต่ผู้รับเงินไม่สามารถออกใบเสร็จรับเงินให้ได้</p>
+                            <div>
+                                <p className="font-bold text-white mb-2">เงื่อนไขสำคัญที่สรรพากรยอมรับ:</p>
+                                <ol className="list-decimal pl-4 space-y-2">
+                                    <li>ต้องระบุชื่อ-นามสกุล และเลขบัตรประชาชนผู้รับเงินให้ชัดเจน</li>
+                                    <li>ควรแนบหลักฐานการจ่ายเงิน เช่น สลิปโอนเงิน หรือสำเนาบัตรประชาชน</li>
+                                </ol>
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        )}
 
-                    {/* --- Right Column: Simulators & AI --- */}
-                    <div className="xl:col-span-8 flex flex-col gap-6">
-                        
-                        {/* เครื่องมือที่ 2: Multi-Platform Simulator */}
-                        <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm">
-                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 border-b border-slate-100 pb-4">
-                                <div>
-                                    <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Layers size={20} className="text-emerald-500"/> โหมดที่ 2: จำลองกำไรตามโครงสร้างค่าธรรมเนียม</h3>
-                                    <p className="text-xs text-slate-400 mt-1">ใส่ราคาขายสุทธิ เพื่อดูว่าเมื่อโดนหักแล้ว จะเหลือกำไรเข้ากระเป๋าจริงๆ กี่บาท</p>
-                                </div>
-                                <div className="flex flex-col md:items-end gap-3 w-full md:w-auto">
-                                    <div className="flex items-center gap-3 bg-emerald-50 p-2 rounded-2xl border border-emerald-100 w-full md:w-auto">
-                                        <span className="text-xs font-bold text-emerald-700 whitespace-nowrap pl-2">ราคาขาย (Price):</span>
-                                        <input type="number" value={simulatedPrice} onChange={e=>setSimulatedPrice(e.target.value)} className="w-full md:w-32 bg-white border-none rounded-xl p-2 text-lg font-black text-emerald-700 outline-none focus:ring-2 focus:ring-emerald-300 shadow-sm text-center" placeholder="0" />
-                                    </div>
-                                    <label className="flex items-center gap-2 cursor-pointer w-fit group">
-                                        <input type="checkbox" checked={includeVat} onChange={e=>setIncludeVat(e.target.checked)} className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer" />
-                                        <span className="text-[10px] font-bold text-slate-500 group-hover:text-indigo-600 transition-colors">
-                                            กัน VAT 7% นำส่งสรรพากร (คิดจากส่วนต่าง)
-                                        </span>
-                                    </label>
-                                </div>
+        {/* TAB 2: WRITE-OFF (ตัดชำรุด) - ปรับ UI ให้ตรงกับภาพที่ 1 เป๊ะๆ */}
+        {activeTab === 'write_off' && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div className="xl:col-span-2 bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm text-left">
+                    <div className="mb-6 border-b border-slate-100 pb-4 flex justify-between items-start">
+                        <div>
+                            <h3 className="text-xl font-black text-rose-600 flex items-center gap-2"><Trash2/> {writeOffForm.id ? 'แก้ไขใบตัดจำหน่ายสินค้า' : 'ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย'}</h3>
+                            <p className="text-xs text-slate-500 mt-1">ใช้สำหรับตัดสต็อกสินค้าที่เสียหายหรือหมดอายุ และลงเป็นค่าใช้จ่ายของกิจการโดยอัตโนมัติ</p>
+                        </div>
+                        {writeOffForm.id && (
+                            <button onClick={() => setWriteOffForm({ id: null, docNo: '', date: formatDateISO(new Date()), requestedBy: '', approvedBy: '', notes: '', reason: 'สินค้าชำรุด/เสียหาย', items: [] })} className="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-bold hover:bg-slate-200 transition-colors">
+                                ยกเลิกแก้ไข
+                            </button>
+                        )}
+                    </div>
+
+                    <form onSubmit={handleSaveWriteOff} className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="text-xs font-bold text-slate-600 mb-1.5 block">วันที่ดำเนินการ</label>
+                                <input type="date" required value={writeOffForm.date} onChange={e=>setWriteOffForm({...writeOffForm, date: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 transition-all"/>
                             </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                                {simulator.map((plat, idx) => {
-                                    const is0 = plat.feePct === 0;
-                                    const is25 = plat.feePct === 25;
-                                    const is27 = plat.feePct === 27;
-                                    
-                                    const bgClass = is0 ? 'bg-emerald-50 border-emerald-200' : is25 ? 'bg-indigo-50 border-indigo-200' : is27 ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200';
-                                    const titleClass = is0 ? 'text-emerald-600' : is25 ? 'text-indigo-600' : is27 ? 'text-amber-600' : 'text-rose-600';
-                                    const feeTextClass = is0 ? 'text-emerald-500' : is25 ? 'text-indigo-500' : is27 ? 'text-amber-500' : 'text-rose-500';
-                                    const badgeClass = plat.netProfit > 0 
-                                        ? (is0 ? 'bg-emerald-100 text-emerald-700' : is25 ? 'bg-indigo-100 text-indigo-700' : is27 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700')
-                                        : 'bg-slate-200 text-slate-500';
-
-                                    return (
-                                        <div key={idx} className={`p-4 rounded-2xl border flex flex-col justify-between ${bgClass}`}>
-                                            <div>
-                                                <p className={`text-[10px] font-black uppercase tracking-widest ${titleClass}`}>{plat.name}</p>
-                                                <div className="flex justify-between items-center mt-3 mb-1.5">
-                                                    <span className="text-[10px] font-bold text-slate-500">โดนหัก ({plat.feePct}%):</span>
-                                                    <span className={`text-xs font-bold ${feeTextClass}`}>-{formatCurrency(plat.feeAmt)}</span>
-                                                </div>
-                                                <div className="flex justify-between items-center mb-1.5">
-                                                    <span className="text-[10px] font-bold text-slate-500">เผื่อทำโปร/Ads:</span>
-                                                    <span className="text-xs font-bold text-slate-400">-{formatCurrency(plat.mkt)}</span>
-                                                </div>
-                                                {includeVat && (
-                                                    <div className="flex justify-between items-center mb-1.5 animate-fadeIn">
-                                                        <span className="text-[10px] font-bold text-rose-500">กัน VAT 7% ส่งหลวง:</span>
-                                                        <span className="text-xs font-black text-rose-500">-{formatCurrency(plat.vatAmt)}</span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <div className="pt-3 border-t border-slate-200/60 mt-2">
-                                                <p className={`text-[9px] font-bold uppercase mb-0.5 ${titleClass}`}>กำไรสุทธิ (Net Profit)</p>
-                                                <div className="flex items-end justify-between">
-                                                    <p className="text-2xl font-black text-slate-800">{formatCurrency(plat.netProfit)}</p>
-                                                </div>
-                                                <div className="mt-1">
-                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-black w-fit inline-block ${badgeClass}`}>
-                                                        Margin {plat.marginPct.toFixed(1)}%
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
+                            <div>
+                                <label className="text-xs font-bold text-slate-600 mb-1.5 block">สาเหตุการตัดจำหน่าย</label>
+                                <select value={writeOffForm.reason} onChange={e=>setWriteOffForm({...writeOffForm, reason: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 cursor-pointer transition-all">
+                                    <option value="สินค้าชำรุด/เสียหาย">สินค้าชำรุด/เสียหาย</option>
+                                    <option value="สินค้าหมดอายุ">สินค้าหมดอายุ</option>
+                                    <option value="สูญหาย/หาไม่พบ">สูญหาย/หาไม่พบ</option>
+                                    <option value="นำไปใช้เป็นตัวอย่าง">นำไปใช้เป็นตัวอย่าง / ถ่ายรูป</option>
+                                    <option value="อื่นๆ">อื่นๆ</option>
+                                </select>
                             </div>
                         </div>
 
-                        {/* เครื่องมือที่ 3: AI Pricing Strategy */}
-                        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-6 md:p-8 rounded-[32px] border border-indigo-100 shadow-sm relative flex-1 flex flex-col justify-center min-h-[250px]">
-                            <Wand2 size={80} className="absolute right-4 top-4 text-indigo-200 opacity-40 pointer-events-none" />
-                            <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                        {/* --- UI ตรงตามภาพที่ 1 เป๊ะๆ --- */}
+                        <div className="space-y-3">
+                            <div className="flex justify-between items-center">
+                                <label className="text-xs font-bold text-slate-700">รายการสินค้าที่ตัดจำหน่าย</label>
+                                <button type="button" onClick={() => setShowStockSelectModal(true)} className="text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 px-4 py-2 rounded-lg font-bold flex items-center gap-1.5 transition-colors shadow-sm border border-rose-200">
+                                    <PlusCircle size={14}/> เพิ่มรายการ
+                                </button>
+                            </div>
+
+                            <div className="space-y-2">
+                                {writeOffForm.items.map((item, idx) => (
+                                    <div key={idx} className="flex flex-col sm:flex-row gap-2 items-start sm:items-center bg-slate-50/50 p-3 rounded-xl border border-slate-200 shadow-sm">
+                                        <div className="relative flex-1">
+                                            <input type="text" readOnly value={item.desc} onClick={() => setShowStockSelectModal(true)} className="w-full p-3 rounded-lg border border-slate-200 bg-white text-sm outline-none cursor-pointer font-bold text-slate-800" placeholder="ชื่อสินค้า..."/>
+                                            <span className="absolute right-3 top-3 text-[10px] bg-indigo-50 text-indigo-600 font-bold px-2 py-0.5 rounded cursor-pointer" onClick={() => setShowStockSelectModal(true)}>เลือกจากคลัง</span>
+                                        </div>
+                                        <input type="number" min="1" required value={item.qty} onChange={e => {
+                                            const newItems = [...writeOffForm.items]; newItems[idx].qty = e.target.value; setWriteOffForm({...writeOffForm, items: newItems});
+                                        }} className="w-full sm:w-24 p-3 rounded-lg border border-slate-200 bg-white text-sm text-center font-black outline-none text-rose-600 shadow-sm" placeholder="1"/>
+                                        <button type="button" onClick={() => {
+                                            const newItems = writeOffForm.items.filter((_, i) => i !== idx); setWriteOffForm({...writeOffForm, items: newItems});
+                                        }} className="p-3 bg-white border border-slate-200 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shadow-sm w-full sm:w-auto text-center"><Trash2 size={16} className="mx-auto"/></button>
+                                    </div>
+                                ))}
+                                {writeOffForm.items.length === 0 && (
+                                    <div onClick={() => setShowStockSelectModal(true)} className="p-8 border-2 border-dashed border-slate-200 rounded-2xl text-center cursor-pointer hover:bg-slate-50 transition-colors text-slate-400 font-bold text-xs">
+                                        + คลิกเพื่อเลือกสินค้าจากคลังสินค้า
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">ชื่อผู้เสนอตัดจำหน่าย</label>
+                                <input type="text" required value={writeOffForm.requestedBy} onChange={e=>setWriteOffForm({...writeOffForm, requestedBy: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 transition-all" placeholder="ระบุชื่อผู้ตรวจรับ..."/>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">ผู้อนุมัติ</label>
+                                <input type="text" required value={writeOffForm.approvedBy} onChange={e=>setWriteOffForm({...writeOffForm, approvedBy: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 transition-all" placeholder="ระบุชื่อผู้อุมัติ..."/>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">หมายเหตุเพิ่มเติม</label>
+                            <textarea value={writeOffForm.notes} onChange={e=>setWriteOffForm({...writeOffForm, notes: e.target.value})} className="w-full p-4 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 min-h-[90px] leading-relaxed custom-scrollbar transition-all" placeholder="รายละเอียดความเสียหายเพิ่มเติม..."></textarea>
+                        </div>
+
+                        <div className="pt-6 border-t border-slate-100 flex justify-end">
+                            <button type="submit" disabled={isProcessing} className="w-full bg-rose-600 hover:bg-rose-700 text-white px-8 py-4 rounded-xl font-black shadow-lg shadow-rose-200 flex justify-center items-center gap-2 transition-transform hover:-translate-y-0.5 active:scale-95 disabled:opacity-50 text-base">
+                                {isProcessing ? <Loader size={20} className="animate-spin"/> : <Save size={20}/>} 
+                                {writeOffForm.id ? 'อัปเดตเอกสารและตัดสต็อก' : 'บันทึกและหักสต็อกออกจากคลัง'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div className="xl:col-span-1">
+                    <div className="bg-gradient-to-b from-[#2e1025] to-[#1e0a18] rounded-[32px] p-8 text-white shadow-xl sticky top-6">
+                        <div className="flex items-center gap-2 mb-6 text-rose-300"><AlertTriangle size={24}/><h4 className="font-bold text-base">คำแนะนำการตัดจำหน่ายสินค้า</h4></div>
+                        <div className="text-sm leading-relaxed space-y-6 text-rose-50/90 font-medium">
+                            <p>เมื่อสินค้าชำรุด หมดอายุ หรือสูญหาย การตัดออกจากระบบเป็นเรื่องสำคัญ</p>
+                            <div>
+                                <p className="font-bold text-white mb-2">ประโยชน์ที่ได้:</p>
+                                <ol className="list-decimal pl-4 space-y-2">
+                                    <li>ระบบจะหักสต็อกตามจริง (FIFO) ทำให้ยอดคงเหลือแม่นยำ 100%</li>
+                                    <li>มูลค่าต้นทุนจะถูกบันทึกเป็น <b>"รายจ่ายของกิจการ"</b> (หมวดสินค้าเสียหาย) เพื่อนำไปลดหย่อนภาษีสิ้นปี</li>
+                                    <li>มีใบสำคัญตัดจำหน่ายเก็บเป็นหลักฐานยืนยันกับสรรพากร</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* TAB 3: HISTORY (ประวัติเอกสารภายใน - ดึง DMG มาแสดงครบถ้วนตามภาพที่ 2 เป๊ะๆ) */}
+        {activeTab === 'history' && (
+            <div className="bg-white rounded-[32px] border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[700px]">
+                <div className="p-6 border-b bg-slate-50 flex justify-between items-center text-left">
+                    <div className="flex items-center gap-3">
+                        <History size={20} className="text-slate-500"/>
+                        <h4 className="font-black text-slate-800 text-lg">ประวัติเอกสารภายในและใบตัดจำหน่าย</h4>
+                    </div>
+                    <span className="text-xs font-bold text-slate-500">พบลั้งหมด {internalDocs.length} รายการ</span>
+                </div>
+                
+                <div className="overflow-x-auto flex-1 custom-scrollbar">
+                    <table className="w-full text-sm text-left whitespace-nowrap">
+                        <thead className="bg-white text-slate-500 uppercase tracking-widest text-[10px] sticky top-0 border-b border-slate-200 z-10 font-bold">
+                            <tr>
+                                <th className="p-5 pl-6">วันที่ / SYS ID</th>
+                                <th className="p-5">ประเภทเอกสาร</th>
+                                <th className="p-5">รายละเอียด / ผู้รับเงิน</th>
+                                <th className="p-5 text-right">ยอดเงินรวม (฿)</th>
+                                <th className="p-5 text-center">จัดการ</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {internalDocs.map((docItem, idx) => {
+                                const isWriteOff = docItem.docType === 'write_off' || docItem.isFromExpenseTable;
+                                return (
+                                <tr key={idx} className="hover:bg-slate-50/80 transition-colors text-left">
+                                    <td className="p-5 pl-6">
+                                        <p className="font-black text-slate-700">{formatDate(docItem.date)}</p>
+                                        <p className="font-mono text-[10px] font-bold text-rose-600 mt-0.5">{docItem.docNo || docItem.sysDocId || 'DMG-REF'}</p>
+                                    </td>
+                                    <td className="p-5">
+                                        <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black border shadow-sm ${isWriteOff ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}`}>
+                                            {isWriteOff ? 'ใบตัดจำหน่ายสินค้า' : 'ใบรับรองแทนใบเสร็จ'}
+                                        </span>
+                                    </td>
+                                    <td className="p-5">
+                                        <p className="text-xs text-slate-800 font-bold truncate max-w-[350px]">
+                                            {isWriteOff 
+                                                ? (docItem.notes || docItem.description || `บันทึกตัดจำหน่ายสินค้าชำรุด: ${(docItem.items || []).map(i => `${i.desc} (x${i.qty})`).join(', ')}`)
+                                                : `จ่ายให้: ${docItem.recipientName}`}
+                                        </p>
+                                        <p className="text-[10px] text-slate-400 mt-1 truncate max-w-[300px]">
+                                            {isWriteOff ? `ผู้ขอ/ผู้รับผิดชอบ: ${docItem.requestedBy || 'Internal (ตัดชำรุด)'}` : `เหตุผล: ${docItem.reason}`}
+                                        </p>
+                                    </td>
+                                    <td className="p-5 text-right font-black text-slate-800">
+                                        {formatCurrency(docItem.totalCost || docItem.totalAmount || docItem.total || 0)}
+                                    </td>
+                                    <td className="p-5 text-center">
+                                        <div className="flex justify-center gap-2 text-center">
+                                            <button onClick={() => handleEditDoc(docItem)} className="p-2.5 bg-white border border-slate-200 text-amber-500 hover:text-white hover:bg-amber-500 hover:border-amber-500 rounded-xl transition-all shadow-sm flex items-center justify-center" title="แก้ไขเอกสาร">
+                                                <Edit size={16}/>
+                                            </button>
+                                            <button onClick={() => setViewDoc(docItem)} className="p-2.5 bg-white border border-slate-200 text-indigo-500 hover:text-white hover:bg-indigo-600 hover:border-indigo-600 rounded-xl transition-all shadow-sm flex items-center gap-1.5" title="ดู/พิมพ์เอกสาร">
+                                                <Printer size={16}/> พิมพ์
+                                            </button>
+                                            <button onClick={() => handleDeleteDoc(docItem)} className="p-2.5 bg-white border border-slate-200 text-rose-400 hover:text-white hover:bg-rose-500 hover:border-rose-500 rounded-xl transition-all shadow-sm flex items-center justify-center" title="ลบทิ้ง">
+                                                <XCircle size={16}/>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            )})}
+                            {internalDocs.length === 0 && (
+                                <tr><td colSpan="5" className="p-16 text-center text-slate-400">
+                                    <FileCheck size={48} className="mx-auto mb-4 opacity-20"/>
+                                    <p className="font-bold text-sm">ยังไม่มีประวัติเอกสารภายในหรือใบตัดชำรุด</p>
+                                </td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        )}
+
+        {/* Modal เลือกสินค้าจากคลัง */}
+        {showStockSelectModal && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4">
+                <div className="bg-white rounded-[32px] p-6 max-w-lg w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[80vh]">
+                    <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-4">
+                        <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Box className="text-rose-600"/> เลือกสินค้าที่จะตัดจำหน่าย</h3>
+                        <button onClick={() => setShowStockSelectModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                    </div>
+                    <div className="mb-4 relative">
+                        <Search className="absolute left-4 top-3.5 text-slate-400" size={18}/>
+                        <input autoFocus value={stockSearchTerm} onChange={e => setStockSearchTerm(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-sm outline-none focus:border-rose-400 focus:ring-1 shadow-sm font-bold" placeholder="ค้นหาชื่อสินค้า หรือ SKU..." />
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">
+                        {filteredStock.map((item, idx) => (
+                            <div key={idx} onClick={() => selectStockItem(item)} className="p-4 border border-slate-100 rounded-2xl hover:border-rose-300 hover:bg-rose-50/50 cursor-pointer transition-colors flex justify-between items-center bg-white shadow-sm group">
                                 <div>
-                                    <h4 className="font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="text-amber-500"/> AI Strategy Insight (ทีมวิเคราะห์ราคา)</h4>
-                                    <p className="text-xs text-indigo-600/70 mt-1">ให้ทีม AI ช่วยวางโครงสร้างราคา โปรจัดเซ็ต และจุดขายเพื่อสู้กับคู่แข่ง</p>
+                                    <p className="font-bold text-sm text-slate-800 group-hover:text-rose-700 transition-colors">{item.name}</p>
+                                    <p className="text-[10px] text-slate-400 font-mono mt-1">SKU: {item.sku}</p>
                                 </div>
-                                <div className="flex gap-2 w-full md:w-auto">
-                                    <button onClick={handleAiAnalysis} disabled={isAnalyzing} className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
-                                        {isAnalyzing ? <Loader className="animate-spin" size={16}/> : <Activity size={16}/>} 
-                                        {isAnalyzing ? 'กำลังวิเคราะห์...' : 'ให้ AI แนะนำกลยุทธ์'}
-                                    </button>
+                                <div className="text-right">
+                                    <span className="bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-[10px] font-black shadow-sm">มีของ {item.qty}</span>
                                 </div>
                             </div>
-                            
-                            {aiSuggestion && Array.isArray(aiSuggestion) ? (
-                                <div className="space-y-4 animate-fadeIn relative z-10 w-full mt-2">
-                                    {aiSuggestion.map((chat, idx) => (
-                                        <div key={idx} className="bg-slate-900 p-5 md:p-6 rounded-[24px] border border-slate-800 flex flex-col md:flex-row gap-5 shadow-lg relative overflow-hidden">
-                                            <div className={`w-14 h-14 shrink-0 rounded-[18px] border flex items-center justify-center shadow-inner ${chat.color}`}>
-                                                {chat.icon}
-                                            </div>
-                                            <div className="flex-1">
-                                                <div className="flex flex-wrap items-center gap-2 mb-3">
-                                                    <p className="text-sm font-black uppercase tracking-widest text-slate-200">{chat.name}</p>
-                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">{chat.role}</span>
-                                                </div>
-                                                <div className="text-sm text-indigo-50/90 leading-loose font-medium whitespace-pre-line break-words">
-                                                    {chat.text}
-                                                </div>
+                        ))}
+                        {filteredStock.length === 0 && (
+                            <div className="py-10 text-center text-slate-400 font-bold">ไม่พบสินค้าที่ค้นหา</div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* Modal พิมพ์ PDF */}
+        {viewDoc && (
+            <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[1000] flex items-center justify-center p-4">
+                <div className="bg-white rounded-[40px] w-full max-w-5xl h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 text-left">
+                    <div className="p-6 border-b flex justify-between items-center bg-slate-50">
+                        <div className="flex items-center gap-3">
+                            <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><FileText className="text-indigo-600"/> พรีวิวเอกสารภายใน</h3>
+                            <span className="font-mono text-xs font-bold text-indigo-600 bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm">{viewDoc.docNo || viewDoc.sysDocId || 'ไม่มีเลขที่'}</span>
+                        </div>
+                        <button onClick={() => setViewDoc(null)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X/></button>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto bg-slate-200 p-8 flex justify-center custom-scrollbar">
+                        <div id="internal-doc-preview" className="bg-white p-[30px] w-[210mm] min-h-[296mm] text-slate-800 text-sm font-sarabun shadow-xl relative box-border">
+                            {viewDoc.docType === 'cert_receipt' ? (
+                                <>
+                                    <div className="text-center mb-8"><h1 className="text-2xl font-black tracking-widest uppercase mb-2">ใบรับรองแทนใบเสร็จรับเงิน</h1><p className="text-xs text-slate-600">ส่วนราชการ/บริษัท/ห้างหุ้นส่วน/นิติบุคคล: {savedSeller.sellerName || '-'}</p></div>
+                                    <div className="flex justify-between items-start mb-6 text-sm"><div><p className="mb-1"><span className="font-bold">วันที่:</span> {formatDate(viewDoc.date)}</p><p><span className="font-bold">เลขที่เอกสาร:</span> {viewDoc.docNo}</p></div></div>
+                                    <div className="mb-6 space-y-2 text-sm leading-relaxed">
+                                        <p>ข้าพเจ้า <span className="font-bold border-b border-dotted border-slate-800 px-2">{viewDoc.recipientName || '...................................................'}</span></p>
+                                        <p>เลขประจำตัวประชาชน <span className="font-mono border-b border-dotted border-slate-800 px-2">{viewDoc.recipientId || '...................................................'}</span></p>
+                                        <p>อยู่บ้านเลขที่ <span className="border-b border-dotted border-slate-800 px-2">{viewDoc.recipientAddress || '...........................................................................................................................'}</span></p>
+                                        <p>ได้รับเงินจาก <span className="font-bold">{savedSeller.sellerName || '-'}</span> ดังรายการต่อไปนี้</p>
+                                    </div>
+                                    <table className="w-full mb-8 border-collapse text-xs border border-slate-800">
+                                        <thead><tr className="bg-slate-100 border-b border-slate-800 font-bold"><th className="py-3 text-center w-12 border-r border-slate-800">ลำดับ</th><th className="py-3 pl-4 text-left border-r border-slate-800">รายการ (Description)</th><th className="py-3 text-center w-24 border-r border-slate-800">จำนวน (Qty)</th><th className="py-3 text-right pr-4 w-32 border-r border-slate-800">ราคา/หน่วย (Price)</th><th className="py-3 text-right pr-4 w-32">จำนวนเงิน (Amount)</th></tr></thead>
+                                        <tbody>
+                                            {(viewDoc.items || []).map((it, i) => (
+                                                <tr key={i} className="border-b border-slate-300"><td className="py-3 text-center border-r border-slate-800">{i+1}</td><td className="py-3 pl-4 text-left border-r border-slate-800">{it.desc}</td><td className="py-3 text-center border-r border-slate-800">{it.qty}</td><td className="py-3 text-right pr-4 border-r border-slate-800">{formatCurrency(it.price || it.buyPrice || 0)}</td><td className="py-3 text-right pr-4 font-bold">{formatCurrency((it.price || it.buyPrice || 0) * it.qty)}</td></tr>
+                                            ))}
+                                        </tbody>
+                                        <tfoot><tr className="border-t-2 border-slate-800"><td colSpan="3" className="py-4 text-center font-bold bg-slate-50 border-r border-slate-800">({THBText(viewDoc.totalAmount || viewDoc.totalCost || 0)})</td><td className="py-4 text-right pr-4 font-black border-r border-slate-800 uppercase tracking-widest text-slate-600">รวมเงินทั้งสิ้น</td><td className="py-4 text-right pr-4 font-black text-lg">{formatCurrency(viewDoc.totalAmount || viewDoc.totalCost || 0)}</td></tr></tfoot>
+                                    </table>
+                                    <div className="text-sm mb-12 bg-slate-50 p-4 border border-slate-200"><p><span className="font-bold text-slate-700">เหตุผลที่ไม่สามารถเรียกเก็บใบเสร็จรับเงินได้:</span> {viewDoc.reason || '-'}</p></div>
+                                    <div className="grid grid-cols-2 gap-10 text-center text-sm absolute bottom-20 w-full pr-[60px]">
+                                        <div><p className="mb-2 text-slate-400">(...............................................................)</p><p className="font-bold text-slate-800">ผู้รับเงิน / Recipient</p><p className="text-xs mt-1 text-slate-600">{viewDoc.recipientName || '-'}</p></div>
+                                        <div><p className="mb-2 text-slate-400">(...............................................................)</p><p className="font-bold text-slate-800">ผู้จ่ายเงิน / Payer</p><p className="text-xs mt-1 text-slate-600">{viewDoc.payerName || '-'}</p></div>
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="flex justify-between items-start mb-10 border-b-2 border-slate-800 pb-6">
+                                        <div className="flex gap-4 items-center">
+                                            {savedSeller.logo && <img src={savedSeller.logo} alt="Logo" className="w-[80px] h-[80px] object-contain"/>}
+                                            <div>
+                                                <h2 className="text-xl font-black text-slate-900">{savedSeller.sellerName || 'บริษัท / ห้างร้าน'}</h2>
+                                                <p className="text-xs text-slate-600 mt-1">{savedSeller.sellerAddress} {fmtAddr.sub(savedSeller.sellerSubDistrict)} {fmtAddr.dist(savedSeller.sellerDistrict)} {fmtAddr.prov(savedSeller.sellerProvince)} {savedSeller.sellerZipCode}</p>
                                             </div>
                                         </div>
-                                    ))}
-                                    <div className="pt-2 flex justify-end">
-                                        <button onClick={() => setAiSuggestion(null)} className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors flex items-center gap-1">
-                                            <RefreshCw size={12}/> ล้างข้อมูล (Clear)
-                                        </button>
+                                        <div className="text-right">
+                                            <h1 className="text-2xl font-black tracking-widest uppercase mb-2">ใบตัดจำหน่ายสินค้า</h1>
+                                            <div className="text-xs font-bold space-y-1">
+                                                <p className="text-slate-500">เลขที่เอกสาร: <span className="font-mono text-slate-800">{viewDoc.docNo || viewDoc.sysDocId || '-'}</span></p>
+                                                <p className="text-slate-500">วันที่: <span className="text-slate-800">{formatDate(viewDoc.date)}</span></p>
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                            ) : !isAnalyzing && (
-                                <div className="flex-1 border-2 border-dashed border-indigo-200 rounded-2xl flex flex-col items-center justify-center text-indigo-300 py-10 relative z-10 bg-white/50">
-                                    <Sparkles size={40} className="mb-2 opacity-50"/>
-                                    <p className="font-bold text-sm">พร้อมให้ทีม AI ช่วยวางกลยุทธ์แล้ว</p>
-                                    <p className="text-xs opacity-70">ระบุต้นทุนและราคาขาย แล้วกดปุ่มด้านบนได้เลย</p>
-                                </div>
+                                    <div className="grid grid-cols-2 gap-6 mb-8 text-sm border border-slate-300 p-5 bg-slate-50">
+                                        <div><span className="font-bold text-slate-500 uppercase text-[10px]">ผู้แจ้ง:</span> <span className="font-bold text-slate-800 block mt-1">{viewDoc.requestedBy || 'Internal'}</span></div>
+                                        <div><span className="font-bold text-slate-500 uppercase text-[10px]">ผู้อนุมัติ:</span> <span className="font-bold text-slate-800 block mt-1">{viewDoc.approvedBy || 'ผู้บริหาร'}</span></div>
+                                        <div className="col-span-2"><span className="font-bold text-slate-500 uppercase text-[10px]">หมายเหตุ/สาเหตุ:</span> <span className="font-bold text-slate-800 block mt-1">{viewDoc.notes || viewDoc.description || '-'}</span></div>
+                                    </div>
+                                    <table className="w-full mb-10 border-collapse text-xs">
+                                        <thead><tr className="bg-slate-200 border-y border-slate-300 font-bold uppercase text-slate-700"><th className="py-3 text-center w-12 border-x border-slate-300">ลำดับ</th><th className="py-3 pl-4 text-left border-x border-slate-300">รหัสสินค้า / รายละเอียด</th><th className="py-3 text-center w-24 border-x border-slate-300">จำนวน</th><th className="py-3 text-right pr-4 w-32 border-x border-slate-300">ต้นทุนต่อหน่วย</th><th className="py-3 text-right pr-4 w-32 border-x border-slate-300">มูลค่าความเสียหาย</th></tr></thead>
+                                        <tbody>
+                                            {(viewDoc.items || []).map((it, i) => (
+                                                <tr key={i} className="border-b border-slate-200">
+                                                    <td className="py-3 text-center border-x border-slate-300">{i+1}</td>
+                                                    <td className="py-3 pl-4 text-left border-x border-slate-300"><p className="font-bold text-slate-800 text-sm">{it.desc}</p><p className="text-[10px] text-slate-500 font-mono mt-0.5">SKU: {it.sku || '-'}</p></td>
+                                                    <td className="py-3 text-center font-bold text-slate-800 border-x border-slate-300">{it.qty}</td>
+                                                    <td className="py-3 text-right pr-4 text-slate-600 border-x border-slate-300">{formatCurrency(it.buyPrice || 0)}</td>
+                                                    <td className="py-3 text-right pr-4 font-bold text-slate-900 border-x border-slate-300">{formatCurrency((it.buyPrice || 0) * it.qty)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                        <tfoot><tr className="border-b-2 border-slate-800 bg-slate-50"><td colSpan="4" className="py-4 text-right pr-4 font-black uppercase text-slate-500 tracking-widest">รวมมูลค่าทั้งสิ้น</td><td className="py-4 text-right pr-4 font-black text-lg text-slate-800">{formatCurrency(viewDoc.totalCost || viewDoc.totalAmount || viewDoc.total || 0)}</td></tr></tfoot>
+                                    </table>
+                                </>
                             )}
                         </div>
                     </div>
-                </div>
-            ) : (
-                // ==========================================
-                // 📦 TAB 2: BULK SHOPEE DATA IMPORT (NEW)
-                // ==========================================
-                <div className="bg-white p-6 md:p-8 rounded-[32px] border border-orange-100 shadow-sm animate-fadeIn">
-                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8 border-b border-orange-100 pb-6">
-                        <div>
-                            <h3 className="text-xl font-black text-orange-600 flex items-center gap-2"><FileSpreadsheet size={24}/> Mass Update Pricing (Shopee Data)</h3>
-                            <p className="text-sm text-slate-500 mt-2 max-w-2xl leading-relaxed">
-                                อัปโหลดไฟล์ <b className="text-orange-500">"Mass Update Sales Info"</b> จากระบบ Shopee Seller Centre<br/>
-                                เพื่อดึง <span className="bg-slate-100 px-1 rounded font-bold">ต้นทุน</span> อัตโนมัติจากคลังสินค้า FIFO และคำนวณราคาใหม่รวดเดียวทั้งร้าน
-                            </p>
-                        </div>
-                        <div className="w-full md:w-auto flex flex-col gap-3 shrink-0">
-                            <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 p-2.5 rounded-2xl w-full">
-                                <span className="text-xs font-bold text-slate-600 whitespace-nowrap pl-2">Platform Fee:</span>
-                                <input type="number" value={bulkFeePct} onChange={e=>setBulkFeePct(e.target.value)} className="w-20 bg-white border border-slate-200 rounded-xl p-2 text-sm font-black text-orange-600 outline-none focus:ring-2 focus:ring-orange-200 text-center" placeholder="25" />
-                                <span className="text-xs font-bold text-slate-500">%</span>
-                            </div>
-                            
-                            <input type="file" ref={bulkFileInputRef} hidden accept=".xlsx, .xls, .csv" onChange={handleBulkFileUpload} />
-                            <button onClick={() => bulkFileInputRef.current?.click()} disabled={isParsingBulk || isAnalyzingBulk} className="w-full bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-2xl font-bold shadow-lg shadow-orange-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-                                {isParsingBulk ? <Loader className="animate-spin" size={18}/> : <FileUp size={18}/>} 
-                                อัปโหลดไฟล์ Shopee (Mass Update)
-                            </button>
-                        </div>
+                    
+                    <div className="p-6 border-t bg-slate-50 flex gap-4 text-center">
+                        <button onClick={() => setViewDoc(null)} className="flex-1 py-4 bg-white border border-slate-200 rounded-2xl font-bold hover:bg-slate-100 transition-colors text-slate-700">ปิดหน้านี้</button>
+                        <button onClick={() => handleDownloadPDF(viewDoc)} className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"><Download size={20}/> ดาวน์โหลด PDF</button>
                     </div>
-
-                    {bulkProducts.length > 0 ? (
-                        <>
-                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-                                <p className="text-sm font-bold text-slate-600">พบสินค้าทั้งหมด <span className="text-orange-600 font-black">{bulkProducts.length}</span> รายการ</p>
-                                <div className="flex gap-2 w-full sm:w-auto">
-                                    <button onClick={handleBulkAiAnalysis} disabled={isAnalyzingBulk} className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-700 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-200 flex items-center justify-center gap-2 disabled:opacity-50 whitespace-nowrap">
-                                        {isAnalyzingBulk ? <Loader size={14} className="animate-spin"/> : <Sparkles size={14}/>} 
-                                        {isAnalyzingBulk ? 'AI กำลังประเมินราคาทั้งร้าน...' : 'ให้ AI วิเคราะห์โครงสร้างราคาทั้งร้าน'}
-                                    </button>
-                                    <button onClick={handleExportBulkExcel} disabled={isAnalyzingBulk} className="flex-1 sm:flex-none bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-4 py-2 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 shadow-sm whitespace-nowrap">
-                                        <Download size={14}/> Export เป็น Excel
-                                    </button>
-                                </div>
-                            </div>
-                            
-                            <div className="overflow-x-auto custom-scrollbar border border-slate-200 rounded-2xl shadow-sm">
-                                <table className="w-full text-xs text-left whitespace-nowrap">
-                                    <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 z-10 border-b border-slate-200">
-                                        <tr>
-                                            <th className="p-4 pl-6">SKU / ชื่อสินค้า (จาก Shopee)</th>
-                                            <th className="p-4 text-right">ราคาปัจจุบัน</th>
-                                            <th className="p-4 text-center bg-indigo-50/50 border-x border-indigo-100 w-32" title="ระบบดึงจาก คลังสินค้า FIFO (เปลี่ยนตัวเลขเองได้ถ้าต้องการ)">
-                                                ต้นทุน (Cost ฿)
-                                            </th>
-                                            <th className="p-4 text-right bg-emerald-50/50 text-emerald-700 border-r border-emerald-100">
-                                                ราคาใหม่<br/><span className="text-[9px] font-black uppercase text-emerald-500">กำไร 40%</span>
-                                            </th>
-                                            <th className="p-4 text-right bg-indigo-50/50 text-indigo-700 border-r border-indigo-100">
-                                                ราคาใหม่<br/><span className="text-[9px] font-black uppercase text-indigo-500">กำไร 50%</span>
-                                            </th>
-                                            <th className="p-4 text-right bg-rose-50/50 text-rose-700 pr-6 border-r border-rose-100">
-                                                ราคาใหม่<br/><span className="text-[9px] font-black uppercase text-rose-500">กำไร 60%</span>
-                                            </th>
-                                            {/* --- 🔥 NEW: AI Column --- */}
-                                            {bulkProducts.some(p => p.aiMargin) && (
-                                                <th className="p-4 text-left bg-slate-900 text-amber-400">
-                                                    <span className="flex items-center gap-1"><Sparkles size={12}/> AI แนะนำ & เหตุผล</span>
-                                                </th>
-                                            )}
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                        {bulkProducts.map((p, idx) => {
-                                            const price40 = Math.ceil(calcBulkPrice(p.cost, 0.40));
-                                            const price50 = Math.ceil(calcBulkPrice(p.cost, 0.50));
-                                            const price60 = Math.ceil(calcBulkPrice(p.cost, 0.60));
-                                            
-                                            // Highlight CSS based on AI recommendation
-                                            const isAi40 = p.aiMargin === 40;
-                                            const isAi50 = p.aiMargin === 50;
-                                            const isAi60 = p.aiMargin === 60;
-                                            
-                                            return (
-                                            <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                                                <td className="p-4 pl-6">
-                                                    <p className="font-mono font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded w-fit mb-1">SKU: {p.sku}</p>
-                                                    <p className="font-bold text-slate-700 truncate max-w-[250px]" title={p.name}>{p.name}</p>
-                                                </td>
-                                                <td className="p-4 text-right font-black text-slate-500">{formatCurrency(p.shopeePrice)}</td>
-                                                <td className="p-3 border-x border-slate-100 bg-slate-50/30">
-                                                    <input 
-                                                        type="number" 
-                                                        value={p.cost} 
-                                                        onChange={e => updateBulkCost(idx, e.target.value)}
-                                                        className="w-full bg-white border border-slate-300 rounded-lg p-2 text-center font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-200"
-                                                        placeholder="ระบุทุน"
-                                                    />
-                                                </td>
-                                                <td className={`p-4 text-right font-black border-r border-emerald-50/50 relative ${isAi40 ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-400 z-10' : 'bg-emerald-50/20 text-emerald-600'}`}>
-                                                    {isAi40 && <Sparkles size={12} className="absolute top-1 left-1 text-amber-500"/>}
-                                                    {price40 > 0 ? formatCurrency(price40) : '-'}
-                                                </td>
-                                                <td className={`p-4 text-right font-black border-r border-indigo-50/50 relative ${isAi50 ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-400 z-10' : 'bg-indigo-50/20 text-indigo-600'}`}>
-                                                    {isAi50 && <Sparkles size={12} className="absolute top-1 left-1 text-amber-500"/>}
-                                                    {price50 > 0 ? formatCurrency(price50) : '-'}
-                                                </td>
-                                                <td className={`p-4 text-right font-black pr-6 border-r border-rose-50/50 relative ${isAi60 ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-400 z-10' : 'bg-rose-50/20 text-rose-600'}`}>
-                                                    {isAi60 && <Sparkles size={12} className="absolute top-1 left-1 text-amber-500"/>}
-                                                    {price60 > 0 ? formatCurrency(price60) : '-'}
-                                                </td>
-                                                
-                                                {/* --- 🔥 NEW: AI Reason Column --- */}
-                                                {bulkProducts.some(item => item.aiMargin) && (
-                                                    <td className="p-4 text-left max-w-[250px] whitespace-normal bg-slate-50/30">
-                                                        {p.aiMargin ? (
-                                                            <div>
-                                                                <span className="text-[10px] font-black bg-slate-800 text-amber-400 px-2 py-0.5 rounded-full mr-2 shadow-sm">แนะนำ {p.aiMargin}%</span>
-                                                                <span className="text-[10px] text-slate-600 font-bold">{p.aiReason}</span>
-                                                            </div>
-                                                        ) : (
-                                                            <span className="text-[10px] text-slate-400">-</span>
-                                                        )}
-                                                    </td>
-                                                )}
-                                            </tr>
-                                        )})}
-                                    </tbody>
-                                </table>
-                            </div>
-                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl mt-4 flex items-start gap-3">
-                                <Info size={18} className="text-slate-400 shrink-0 mt-0.5"/>
-                                <div className="text-[10px] font-bold text-slate-500 leading-relaxed">
-                                    <p className="text-slate-700 font-black mb-1">การคำนวณและข้อแนะนำ:</p>
-                                    <p>1. ระบบปัดเศษขึ้น (Ceil) ให้อัตโนมัติ เพื่อป้องกันการขาดทุนทศนิยม</p>
-                                    <p>2. ราคาที่แสดงคำนวณหักลบค่าธรรมเนียม Platform {bulkFeePct}% ให้แล้ว (แปลว่าถ้าบอสขายราคานี้ บอสจะได้กำไร {40}% สุทธิเข้ากระเป๋าแน่นอน)</p>
-                                    <p>3. <span className="text-indigo-600 underline">ต้นทุน (Cost)</span> ถูกดึงมาจาก "คลังสินค้า FIFO" อัตโนมัติโดยเทียบจากเลข SKU ให้แล้ว (บอสสามารถพิมพ์แก้ไขตัวเลขเองในตารางได้เลยหากต้องการปรับเปลี่ยนเฉพาะกิจ)</p>
-                                </div>
-                            </div>
-                        </>
-                    ) : (
-                        <div className="flex flex-col items-center justify-center py-20 text-slate-400 border-2 border-dashed border-orange-200 rounded-3xl bg-orange-50/30">
-                            <Layers size={64} className="opacity-30 mb-4 text-orange-400"/>
-                            <p className="font-bold text-base text-slate-700">อัปโหลดไฟล์ตารางจาก Shopee เพื่อเริ่มวิเคราะห์ภาพรวม</p>
-                            <p className="text-xs mt-2 text-slate-500 text-center leading-relaxed">
-                                ระบบรองรับไฟล์ <b>Mass Update (การขาย)</b> นามสกุล .xlsx หรือ .csv<br/>
-                                (ดาวน์โหลดได้จากเมนู สินค้าของฉัน {`>`} เครื่องมือจัดการแบบชุด {`>`} Mass Update {`>`} ข้อมูลการขาย)
-                            </p>
-                        </div>
-                    )}
                 </div>
-            )}
+            </div>
+        )}
+    </div>
+  );
+}
 
-        </div>
-    );
+function PricingCalculator({ stockBatches, transactions, showToast, appId, user }) {
+  return (
+    <div className="flex flex-col items-center justify-center p-20 bg-white rounded-[40px] border border-slate-100 shadow-sm text-center h-full min-h-[400px]">
+      <Calculator size={80} className="text-slate-200 mb-6" />
+      <h3 className="text-2xl font-black text-slate-800 mb-2">เครื่องมือตั้งราคา AI (Pricing Calculator)</h3>
+      <p className="text-slate-500 font-medium">ส่วนนี้กำลังอยู่ในระหว่างการพัฒนา (Under Construction)</p>
+    </div>
+  );
 }
 
 // --- Main App Component ---
@@ -18517,6 +17984,7 @@ export default function App() {
   const [transactions, setTransactions] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [stockBatches, setStockBatches] = useState([]);
+  const [assets, setAssets] = useState([]); // --- NEW: เพิ่ม State สำหรับ Assets ---
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(true);
   const [currentAppId, setCurrentAppId] = useState(localStorage.getItem('merchant_app_id') || CONSTANTS.IDS.PROD);
@@ -18712,13 +18180,16 @@ export default function App() {
     // 🚨 ข้อยกเว้นสำคัญ: สต็อกสินค้า (inventory_batches) ต้องดึงมา "ทั้งหมด" ห้ามตัดเวลาทิ้งเด็ดขาด เพราะสินค้าเก่าอาจยังขายไม่หมด
     const unsubStock = onSnapshot(query(path('inventory_batches')), (s) => setStockBatches(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
     
+    // ดึง Assets --- NEW ---
+    const unsubAssets = onSnapshot(query(path('assets')), (s) => setAssets(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
+
     // คู่ค้าและโปรโมชั่น (ข้อมูลน้อย ดึงทั้งหมดได้)
     const unsubPromo = onSnapshot(query(path('promotions')), (s) => setPromotions(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
     
     // Import Logs ดึงแค่ 6 เดือนล่าสุด
     const unsubLogs = onSnapshot(query(path('import_logs'), where('date', '>=', logCutoffDate)), (s) => setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)}))), errorFn);
     
-    return () => { unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubPromo(); unsubLogs(); };
+    return () => { unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubAssets(); unsubPromo(); unsubLogs(); };
   }, [user, currentAppId, isRestoring, isMigrating, isBackingUp]);
 
   const forceDeleteById = async () => {
@@ -18790,7 +18261,7 @@ export default function App() {
     setIsBackingUp(true);
     addToast("กำลังรวบรวมข้อมูลเพื่อสำรอง...", "success");
     try {
-      const collectionsToBackup = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
+      const collectionsToBackup = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'assets', 'partners', 'promotions', 'seller_profiles'];
       const backupData = {};
       
       for (const collName of collectionsToBackup) {
@@ -19092,7 +18563,7 @@ export default function App() {
       
       // --- 🔥 FIX: ใช้ restoreDataPreview ที่โหลดไว้แล้ว แทนการพยายามอ่านไฟล์ใหม่ที่มักจะ Error ---
       const revivedData = sanitizeForFirestore(reviveTimestamps(restoreDataPreview));
-      const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'partners', 'promotions', 'seller_profiles'];
+      const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'assets', 'partners', 'promotions', 'seller_profiles'];
 
       // --- 🔥 THE ULTIMATE FIX 6: Flatten & Multiplexing Engine 🔥 ---
       // ยกเลิกการใช้ writeBatch ที่เป็นสาเหตุของคอขวดที่ 2,500 รายการ เปลี่ยนมาใช้การยิงข้อมูลคู่ขนานแทน
@@ -19610,6 +19081,7 @@ export default function App() {
       case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={currentAppId} stockBatches={stockBatches} showToast={addToast} onIssueInvoice={(t)=>{setPreFillInvoice(t); setActiveTab('invoice');}} promotions={promotions} />;
       case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} importLogs={importLogs} />;
       case 'stock': return <StockManager appId={currentAppId} stockBatches={stockBatches} showToast={addToast} user={user} transactions={transactions} />;
+      case 'assets': return <AssetRegister appId={currentAppId} user={user} showToast={addToast} assets={assets} />;
       case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} transactions={transactions} appId={currentAppId} showToast={addToast} preFillData={preFillInvoice} promotions={promotions} />;
       case 'internal_docs': return <InternalDocGenerator user={user} transactions={transactions} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} />;
       case 'reports': return <TaxReports transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} user={user} />;
@@ -19635,9 +19107,10 @@ export default function App() {
         <div className="p-8 border-b border-slate-800 flex items-center gap-3 text-left"><div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-center"><Wallet size={20} className="text-white text-center"/></div><h1 className="text-xl font-bold tracking-tight text-left">MerchantTax</h1></div>
         <nav className="p-6 space-y-4 flex-1 overflow-y-auto text-left">
             <NavButton active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard');}} icon={<PieChart size={18} />} label="แดชบอร์ด" />
-            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Analytics</p>
+            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Analytics & Accounting</p>
             <NavButton active={activeTab === 'monthly_report'} onClick={()=>{setActiveTab('monthly_report');}} icon={<BarChart2 size={18} />} label="สรุปยอดรายเดือน (Performance)" />
             <NavButton active={activeTab === 'reports'} onClick={()=>{setActiveTab('reports');}} icon={<ClipboardList size={18} />} label="รายงานภาษี และ บัญชี" />
+            <NavButton active={activeTab === 'assets'} onClick={()=>{setActiveTab('assets');}} icon={<Monitor size={18} />} label="ทะเบียนทรัพย์สิน (Asset)" />
             
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Operations</p>
             <NavButton active={activeTab === 'records'} onClick={()=>{setActiveTab('records');}} icon={<Store size={18} />} label="บันทึกขาย/หน้าร้าน" />
