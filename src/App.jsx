@@ -14157,7 +14157,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                       if (badge) badge.innerText = badgeText;
 
                       const canvas = await window.html2canvas(element, {
-                          scale: 1.2, 
+                          scale: 3, // 🚀 เพิ่มความคมชัดระดับ Retina (จากเดิม 1.2)
                           useCORS: true,
                           logging: false,
                           imageTimeout: 300, 
@@ -14166,7 +14166,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
                       if (badge) badge.innerText = oldText;
 
-                      const imgData = canvas.toDataURL('image/jpeg', 0.85); 
+                      const imgData = canvas.toDataURL('image/jpeg', 0.98); // 🚀 เพิ่มคุณภาพไฟล์เป็น 98%
                       const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
                       const pdfWidth = pdf.internal.pageSize.getWidth();
                       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
@@ -14270,8 +14270,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
           const originalBoxShadow = element.style.boxShadow;
           element.style.boxShadow = 'none';
 
-          const canvas = await window.html2canvas(element, { scale: 1.5, useCORS: true, logging: false });
-          const imgData = canvas.toDataURL('image/jpeg', 0.85);
+          const canvas = await window.html2canvas(element, { scale: 3, useCORS: true, logging: false }); // 🚀 เพิ่มความคมชัด
+          const imgData = canvas.toDataURL('image/jpeg', 0.98); // 🚀 เพิ่มคุณภาพเป็น 98%
           const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
           const pdfWidth = pdf.internal.pageSize.getWidth();
           const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
@@ -14927,9 +14927,9 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       const opt = {
         margin: 0,
         filename: `${invData.invNo}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, allowTaint: true, letterRendering: true },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        image: { type: 'jpeg', quality: 0.98 }, // 🚀 เพิ่มคุณภาพเป็น 98%
+        html2canvas: { scale: 4, useCORS: true, allowTaint: true, letterRendering: true }, // 🚀 เพิ่มความคมชัดสูงสุด (จากเดิม 2)
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true }
       };
 
       showToast(invData.docType === 'abb' ? "กำลังสร้างไฟล์ PDF..." : "กำลังสร้างไฟล์ Original...", "success");
@@ -15834,7 +15834,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                   <h1 className={`text-2xl font-black uppercase leading-tight mb-1 ${themeColor}`}>{titleTh}</h1>
                                   <p className="text-[11px] font-bold text-slate-500 uppercase">{titleEn}</p>
                                   {currentBulkPrintDoc.docType === 'invoice' && <div className="text-[9px] font-bold text-slate-400 mt-0.5">(เอกสารออกเป็นชุด)</div>}
-                                  <div className={`status-badge-bulk text-sm font-black uppercase mt-3 mb-4 px-3 py-1 rounded-full border ${currentBulkPrintDoc.status === 'cancelled' ? 'text-rose-600 border-rose-200 bg-rose-50' : 'text-slate-600 border-slate-200 bg-slate-50'}`}>
+                                  <div className={`status-badge-bulk text-sm font-black uppercase mt-3 mb-4 ${currentBulkPrintDoc.status === 'cancelled' ? 'text-rose-600' : 'text-slate-700'}`}>
                                       {currentBulkPrintDoc.status === 'cancelled' ? 'ยกเลิกแล้ว (CANCELLED)' : 'ต้นฉบับ (ORIGINAL)'}
                                   </div>
                                   <table className="ml-auto text-[11px] text-left border-collapse">
@@ -16124,7 +16124,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                                         <h1 className={`text-2xl font-black uppercase leading-tight mb-1 ${themeColor}`}>{titleTh}</h1>
                                         <p className="text-[11px] font-bold text-slate-500 uppercase">{titleEn}</p>
                                         {invData.docType === 'invoice' && <div className="text-[9px] font-bold text-slate-400 mt-0.5">(เอกสารออกเป็นชุด)</div>}
-                                        <div className={`status-badge text-sm font-black uppercase mt-3 mb-4 px-3 py-1 rounded-full border ${invData.status === 'cancelled' ? 'text-rose-600 border-rose-200 bg-rose-50' : 'text-slate-600 border-slate-200 bg-slate-50'}`}>
+                                        <div className={`status-badge text-sm font-black uppercase mt-3 mb-4 ${invData.status === 'cancelled' ? 'text-rose-600' : 'text-slate-700'}`}>
                                             {invData.status === 'cancelled' ? 'ยกเลิกแล้ว (CANCELLED)' : 'ต้นฉบับ (ORIGINAL)'}
                                         </div>
                                         <table className="ml-auto text-[11px] text-left border-collapse">
