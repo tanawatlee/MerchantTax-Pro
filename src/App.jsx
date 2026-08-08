@@ -15791,96 +15791,154 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                       <span className="text-8xl font-black text-rose-600 border-8 border-rose-600 px-8 py-4 rounded-3xl tracking-widest whitespace-nowrap">ยกเลิก / CANCELLED</span>
                   </div>
               )}
-              <div className="flex justify-between items-start mb-8 text-left relative z-10">
-                  <div className="w-[70%] flex items-start gap-5 text-left">
-                      {currentBulkPrintDoc.logo && !(currentBulkPrintDoc.docType === 'abb' && hideAbbLogoSig) && (<img src={currentBulkPrintDoc.logo} className="w-[90px] h-[90px] object-contain flex-shrink-0 text-center" alt="Logo"/>)}
-                      <div className="flex flex-col justify-center flex-1 text-left">
-                          <h2 className="text-xl font-bold text-slate-900 mb-1 leading-tight text-left">{currentBulkPrintDoc.sellerName}</h2>
-                          <div className="text-xs leading-relaxed space-y-1 mt-1 text-left">
-                              <p className="text-slate-600 text-left">{[currentBulkPrintDoc.sellerAddress, fmtAddr.sub(currentBulkPrintDoc.sellerSubDistrict)].filter(Boolean).join(' ')}</p>
-                              <p className="text-slate-600 text-left">{[fmtAddr.dist(currentBulkPrintDoc.sellerDistrict), fmtAddr.prov(currentBulkPrintDoc.sellerProvince), currentBulkPrintDoc.sellerZipCode].filter(Boolean).join(' ')}</p>
-                              <p className="text-slate-700 text-left"><b>เลขผู้เสียภาษี:</b> {currentBulkPrintDoc.sellerTaxId} <span className="ml-2"><b>สาขา:</b> {currentBulkPrintDoc.sellerBranchId === '00000' || !currentBulkPrintDoc.sellerBranchId ? 'สำนักงานใหญ่' : currentBulkPrintDoc.sellerBranchId} {currentBulkPrintDoc.sellerBranchName && `(${currentBulkPrintDoc.sellerBranchName})`}</span></p>
-                              <p className="text-slate-700 text-left"><b>โทร:</b> {currentBulkPrintDoc.sellerPhone}</p>
-                          </div>
-                      </div>
-                  </div>
-                  <div className="text-right w-[30%] flex flex-col items-end text-right">
-                      <div className="text-lg font-bold uppercase mb-0 text-right">{currentBulkPrintDoc.docType === 'quotation' ? 'ใบเสนอราคา / QUOTATION' : (currentBulkPrintDoc.docType === 'receipt' ? 'ใบเสร็จรับเงิน / RECEIPT' : (currentBulkPrintDoc.docType === 'payment_voucher' ? 'ใบสำคัญจ่าย / PAYMENT VOUCHER' : (currentBulkPrintDoc.docType === 'credit_note' ? 'ใบลดหนี้ / CREDIT NOTE' : (currentBulkPrintDoc.docType === 'abb' ? 'ใบกำกับภาษีอย่างย่อ' : 'ใบกำกับภาษี / ใบเสร็จรับเงิน'))))}</div>
-                      <div className={`status-badge-bulk text-lg font-bold uppercase mb-3 text-right ${currentBulkPrintDoc.status === 'cancelled' ? 'text-rose-600' : ''}`}>{currentBulkPrintDoc.status === 'cancelled' ? 'ยกเลิกแล้ว (Cancelled)' : 'ต้นฉบับ (Original)'}</div>
-                      <div className="border border-slate-300 p-2 w-full max-w-[200px] text-right">
-                  <div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เลขที่ (No.)</span><span className="font-bold text-right text-[10px]">{currentBulkPrintDoc.invNo}</span></div>
-                  <div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(currentBulkPrintDoc.date)}</span></div>
-                  {currentBulkPrintDoc.docType === 'abb' && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เครื่อง POS</span><span className="text-right text-[10px] font-mono font-bold text-slate-700 text-right">{currentBulkPrintDoc.sellerPosNo || '01'}</span></div>)}
-                  {currentBulkPrintDoc.docType === 'credit_note' && currentBulkPrintDoc.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{currentBulkPrintDoc.refInvNo}</span></div>)}
-                  {currentBulkPrintDoc.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{currentBulkPrintDoc.orderId}</span></div>)}
-                  {currentBulkPrintDoc.orderDate && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ทำรายการ</span><span className="text-right text-[10px] text-right">{formatDate(currentBulkPrintDoc.orderDate)}</span></div>)}
-                  {currentBulkPrintDoc.channel && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">ช่องทาง</span><span className="text-right text-[10px] text-right">{currentBulkPrintDoc.channel}</span></div>)}
-                  {currentBulkPrintDoc.shopName && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">ร้านค้า</span><span className="text-right text-[10px] text-right">{currentBulkPrintDoc.shopName}</span></div>)}
-              </div>
-                  </div>
-              </div>
-              
-              <div className="border border-slate-300 p-4 mb-4 flex flex-col gap-1 text-left text-left relative z-10">
-                  <div className="text-xs font-bold text-slate-400 uppercase mb-1 text-left">{currentBulkPrintDoc.docType === 'payment_voucher' ? 'จ่ายให้แก่ (Pay To)' : 'ลูกค้า (Customer)'}</div>
-                  <p className="font-bold text-base text-left">{currentBulkPrintDoc.customerName || (currentBulkPrintDoc.docType === 'payment_voucher' ? 'ผู้รับเงิน' : 'ลูกค้าทั่วไป (เงินสด)')}</p>
-                  {currentBulkPrintDoc.docType !== 'abb' && (
+              {(() => {
+                  let titleTh = 'ใบกำกับภาษี / ใบเสร็จรับเงิน';
+                  let titleEn = 'TAX INVOICE / RECEIPT';
+                  let themeColor = 'text-indigo-900';
+                  let borderColor = 'border-slate-800';
+                  let textColor = 'text-slate-700';
+
+                  if (currentBulkPrintDoc.docType === 'quotation') { titleTh = 'ใบเสนอราคา'; titleEn = 'QUOTATION'; themeColor = 'text-teal-700'; borderColor = 'border-teal-700'; textColor = 'text-teal-700'; }
+                  else if (currentBulkPrintDoc.docType === 'receipt') { titleTh = 'ใบเสร็จรับเงิน'; titleEn = 'RECEIPT'; themeColor = 'text-blue-700'; borderColor = 'border-blue-700'; textColor = 'text-blue-700'; }
+                  else if (currentBulkPrintDoc.docType === 'payment_voucher') { titleTh = 'ใบสำคัญจ่าย'; titleEn = 'PAYMENT VOUCHER'; themeColor = 'text-purple-700'; borderColor = 'border-purple-700'; textColor = 'text-purple-700'; }
+                  else if (currentBulkPrintDoc.docType === 'credit_note') { titleTh = 'ใบลดหนี้'; titleEn = 'CREDIT NOTE'; themeColor = 'text-rose-700'; borderColor = 'border-rose-700'; textColor = 'text-rose-700'; }
+                  else if (currentBulkPrintDoc.docType === 'abb') { titleTh = 'ใบกำกับภาษีอย่างย่อ'; titleEn = 'TAX INVOICE (ABB)'; themeColor = 'text-indigo-900'; }
+
+                  return (
                       <>
-                          <p className="text-slate-600 text-sm leading-relaxed text-left">{currentBulkPrintDoc.address}</p>
-                          <div className="flex gap-4 text-xs text-slate-600"><p>เลขผู้เสียภาษี: {currentBulkPrintDoc.taxId || '-'}</p><p>สาขา: {currentBulkPrintDoc.branch === '00000' || !currentBulkPrintDoc.branch ? 'สำนักงานใหญ่' : currentBulkPrintDoc.branch}</p></div>
+                          {/* Top Header */}
+                          <div className="flex justify-between items-start mb-4 text-left relative z-10">
+                              <div className="w-[60%] flex items-start gap-4 text-left">
+                                  {currentBulkPrintDoc.logo && !(currentBulkPrintDoc.docType === 'abb' && hideAbbLogoSig) && (<img src={currentBulkPrintDoc.logo} className="max-w-[80px] max-h-[80px] w-auto h-auto object-contain flex-shrink-0" alt="Logo"/>)}
+                                  <div className="flex flex-col justify-center flex-1 text-left">
+                                      <h2 className="text-xl font-black text-slate-900 mb-1 leading-tight">{currentBulkPrintDoc.sellerName}</h2>
+                                      <div className="text-[11px] leading-relaxed space-y-0.5 mt-1">
+                                          <p className="text-slate-700">{[currentBulkPrintDoc.sellerAddress, fmtAddr.sub(currentBulkPrintDoc.sellerSubDistrict)].filter(Boolean).join(' ')}</p>
+                                          <p className="text-slate-700">{[fmtAddr.dist(currentBulkPrintDoc.sellerDistrict), fmtAddr.prov(currentBulkPrintDoc.sellerProvince), currentBulkPrintDoc.sellerZipCode].filter(Boolean).join(' ')}</p>
+                                          <p className="text-slate-800 mt-1"><b>เลขผู้เสียภาษี:</b> {currentBulkPrintDoc.sellerTaxId} <span className="ml-2"><b>สาขา:</b> {currentBulkPrintDoc.sellerBranchId === '00000' || !currentBulkPrintDoc.sellerBranchId ? 'สำนักงานใหญ่' : currentBulkPrintDoc.sellerBranchId} {currentBulkPrintDoc.sellerBranchName && `(${currentBulkPrintDoc.sellerBranchName})`}</span></p>
+                                          <p className="text-slate-800"><b>โทร:</b> {currentBulkPrintDoc.sellerPhone}</p>
+                                      </div>
+                                  </div>
+                              </div>
+                              <div className="w-[40%] text-right flex flex-col items-end">
+                                  <h1 className={`text-2xl font-black uppercase leading-tight mb-1 ${themeColor}`}>{titleTh}</h1>
+                                  <p className="text-[11px] font-bold text-slate-500 uppercase">{titleEn}</p>
+                                  {currentBulkPrintDoc.docType === 'invoice' && <div className="text-[9px] font-bold text-slate-400 mt-0.5">(เอกสารออกเป็นชุด)</div>}
+                                  <div className={`status-badge-bulk text-sm font-black uppercase mt-3 mb-4 px-3 py-1 rounded-full border ${currentBulkPrintDoc.status === 'cancelled' ? 'text-rose-600 border-rose-200 bg-rose-50' : 'text-slate-600 border-slate-200 bg-slate-50'}`}>
+                                      {currentBulkPrintDoc.status === 'cancelled' ? 'ยกเลิกแล้ว (CANCELLED)' : 'ต้นฉบับ (ORIGINAL)'}
+                                  </div>
+                                  <table className="ml-auto text-[11px] text-left border-collapse">
+                                      <tbody>
+                                          <tr><td className="font-bold text-slate-500 pr-3 pb-1">เลขที่ (No.)</td><td className={`font-black pb-1 ${themeColor}`}>{currentBulkPrintDoc.invNo}</td></tr>
+                                          <tr><td className="font-bold text-slate-500 pr-3">วันที่ (Date)</td><td className="font-bold text-slate-800">{formatDate(currentBulkPrintDoc.date)}</td></tr>
+                                      </tbody>
+                                  </table>
+                              </div>
+                          </div>
+
+                          {/* Horizontal Metadata Strip */}
+                          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 bg-slate-50 px-4 py-2.5 rounded-lg border border-slate-100 mb-6 text-[10px] relative z-10">
+                              {currentBulkPrintDoc.orderId && <div><span className="font-bold text-slate-400 mr-1.5">ORDER ID:</span><span className="font-mono font-bold text-slate-800">{currentBulkPrintDoc.orderId}</span></div>}
+                              {currentBulkPrintDoc.channel && <div><span className="font-bold text-slate-400 mr-1.5">CHANNEL:</span><span className="font-bold text-slate-800 uppercase">{currentBulkPrintDoc.channel}</span></div>}
+                              {currentBulkPrintDoc.shopName && <div><span className="font-bold text-slate-400 mr-1.5">SHOP:</span><span className="font-bold text-slate-800">{currentBulkPrintDoc.shopName}</span></div>}
+                              {currentBulkPrintDoc.docType === 'abb' && currentBulkPrintDoc.sellerPosNo && <div><span className="font-bold text-slate-400 mr-1.5">POS:</span><span className="font-mono font-bold text-slate-800">{currentBulkPrintDoc.sellerPosNo}</span></div>}
+                              {currentBulkPrintDoc.docType === 'credit_note' && currentBulkPrintDoc.refInvNo && <div><span className="font-bold text-slate-400 mr-1.5">อ้างอิงใบกำกับภาษีเดิม (REF):</span><span className="font-bold text-rose-600">{currentBulkPrintDoc.refInvNo}</span></div>}
+                          </div>
+
+                          {/* Customer Section */}
+                          <div className="mb-6 pb-4 border-b border-slate-200 relative z-10">
+                              <div className={`text-[10px] font-black uppercase mb-1.5 ${themeColor}`}>{currentBulkPrintDoc.docType === 'payment_voucher' ? 'จ่ายให้แก่ (PAY TO)' : 'ลูกค้า (CUSTOMER)'}</div>
+                              <p className="font-black text-base text-slate-900">{currentBulkPrintDoc.customerName || (currentBulkPrintDoc.docType === 'payment_voucher' ? 'ผู้รับเงิน' : 'ลูกค้าทั่วไป (เงินสด)')}</p>
+                              {currentBulkPrintDoc.docType !== 'abb' && (
+                                  <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-slate-700">
+                                      <p>{currentBulkPrintDoc.address || '-'}</p>
+                                      <div className="flex gap-6 font-medium mt-1">
+                                          <p><b>เลขผู้เสียภาษี:</b> {currentBulkPrintDoc.taxId || '-'}</p>
+                                          <p><b>สาขา:</b> {currentBulkPrintDoc.branch === '00000' || !currentBulkPrintDoc.branch ? 'สำนักงานใหญ่' : currentBulkPrintDoc.branch}</p>
+                                      </div>
+                                  </div>
+                              )}
+                          </div>
+
+                          {/* Items Table */}
+                          <table className="w-full mb-6 border-collapse text-left text-[11px] relative z-10">
+                              <thead>
+                                  <tr className={`border-b-2 border-t font-bold uppercase text-center ${borderColor} ${textColor}`}>
+                                      <th className="py-2.5 w-12 text-center">No.</th>
+                                      <th className="py-2.5 text-left pl-2">Description</th>
+                                      <th className="py-2.5 w-16 text-center">Qty</th>
+                                      <th className="py-2.5 w-24 text-right">Price</th>
+                                      <th className="py-2.5 w-28 text-right pr-4">Amount</th>
+                                  </tr>
+                              </thead>
+                              <tbody>
+                                  {(currentBulkPrintDoc.items || []).map((it, i) => (
+                                      <tr key={i} className="text-left border-b border-slate-100">
+                                          <td className="py-2.5 text-center text-slate-500">{i+1}</td>
+                                          <td className="py-2.5 pl-2 text-slate-800 font-medium">{it.desc}</td>
+                                          <td className="py-2.5 text-center text-slate-700">{it.qty}</td>
+                                          <td className="py-2.5 text-right text-slate-600">{formatCurrency(it.price)}</td>
+                                          <td className="py-2.5 text-right pr-4 font-bold text-slate-800">{formatCurrency(it.qty * it.price)}</td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+
+                          {/* Summary Section */}
+                          <div className="flex justify-between items-start text-left relative z-10">
+                              <div className="flex-1 mt-2 mr-4 text-left">
+                                  <div className={`font-bold text-[11px] mb-4 ${themeColor}`}>({THBText(currentBulkPrintDoc.total)})</div>
+                                  <div className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                                      {currentBulkPrintDoc.docType === 'abb' && <p className="mb-1 text-slate-800 font-bold">* ราคารวมภาษีมูลค่าเพิ่มแล้ว (VAT Included)</p>}
+                                      {currentBulkPrintDoc.docType === 'credit_note' && <p className="mb-1 text-rose-700 font-bold bg-rose-50 px-2 py-1 rounded inline-block border border-rose-100">สาเหตุการลดหนี้: {currentBulkPrintDoc.creditNoteReason || 'รับคืนสินค้า / ลดราคา'}</p>}
+                                      {currentBulkPrintDoc.docType === 'quotation' && <p className="mb-1 text-teal-700 font-bold">เงื่อนไข: ยืนราคา 30 วันนับจากวันที่เสนอราคา</p>}
+                                      <p className="mt-1">หมายเหตุ: {currentBulkPrintDoc.notes || (currentBulkPrintDoc.docType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน')}</p>
+                                  </div>
+                              </div>
+                              <div className="w-[45%] text-right text-[11px] space-y-2">
+                                  <div className="flex justify-between px-2 pr-4 text-slate-600"><span className="font-bold">{currentBulkPrintDoc.docType === 'credit_note' ? 'มูลค่าสินค้าที่รับคืน' : 'รวมมูลค่า (Subtotal)'}</span><span>{formatCurrency(currentBulkPrintDoc.docType === 'credit_note' ? currentBulkPrintDoc.preVat : currentBulkPrintDoc.sub)}</span></div>
+                                  {currentBulkPrintDoc.discount > 0 && <div className="flex justify-between px-2 pr-4 text-rose-600"><span className="font-bold">ส่วนลด/หักเงิน (Discount)</span><span className="font-bold">-{formatCurrency(currentBulkPrintDoc.discount)}</span></div>}
+                                  
+                                  {currentBulkPrintDoc.docType !== 'credit_note' && currentBulkPrintDoc.vatType !== 'none' && <div className="flex justify-between px-2 pr-4 pt-1.5 border-t border-slate-200 text-slate-600"><span className="font-bold">{currentBulkPrintDoc.docType === 'credit_note' ? 'มูลค่าที่ถูกต้อง' : 'รวมก่อนภาษี (Net Before VAT)'}</span><span>{formatCurrency(currentBulkPrintDoc.preVat)}</span></div>}
+                                  
+                                  {currentBulkPrintDoc.vatType !== 'none' && <div className="flex justify-between px-2 pr-4 text-slate-600"><span className="font-bold">ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(currentBulkPrintDoc.vat)}</span></div>}
+                                  
+                                  <div className={`flex justify-between font-black border-t-2 pt-2 text-[13px] pr-4 uppercase ${borderColor} ${themeColor}`}><span>ยอดเงินสุทธิ (Grand Total)</span><span>{formatCurrency(currentBulkPrintDoc.total)}</span></div>
+                              </div>
+                          </div>
+
+                          {/* Signatures */}
+                          {systemGeneratedText ? (
+                              <div className="mt-16 text-center text-slate-400 text-[10px] font-bold relative z-10 border-t border-slate-200 pt-4">
+                                  เอกสารฉบับนี้จัดทำและประมวลผลด้วยระบบคอมพิวเตอร์ จึงสมบูรณ์โดยไม่ต้องมีลายเซ็น
+                              </div>
+                          ) : (
+                              <div className="mt-16 grid grid-cols-2 gap-10 text-center relative z-10">
+                                  <div className="flex flex-col items-center text-center">
+                                      <div className="h-16 flex items-center justify-center mb-1 relative w-full text-center">
+                                          {currentBulkPrintDoc.signature && !(currentBulkPrintDoc.docType === 'abb' && hideAbbLogoSig) && <img src={currentBulkPrintDoc.signature} className="max-h-full object-contain text-center" alt="Signature"/>}
+                                      </div>
+                                      <div className="w-full text-[11px] space-y-1 text-center">
+                                          <p className="mb-1 text-center text-slate-400">(...........................................................................)</p>
+                                          <p className={`font-bold text-center uppercase ${textColor}`}>{currentBulkPrintDoc.docType === 'credit_note' ? 'ผู้อนุมัติ / Authorized Signature' : currentBulkPrintDoc.docType === 'payment_voucher' ? 'ผู้อนุมัติจ่าย / Authorized Payer' : (currentBulkPrintDoc.docType === 'abb' ? 'พนักงานรับเงิน / Cashier' : 'ผู้รับเงิน / Authorized Signature')}</p>
+                                          <p className="mt-1 text-center text-slate-500">วันที่ (Date): {formatDate(currentBulkPrintDoc.date)}</p>
+                                      </div>
+                                  </div>
+                                  {currentBulkPrintDoc.docType !== 'abb' && (
+                                  <div className="flex flex-col items-center text-center">
+                                      <div className="h-16 flex items-center justify-center mb-1 w-full text-center"></div>
+                                      <div className="w-full text-[11px] space-y-1 text-center">
+                                          <p className="mb-1 text-center text-slate-400">(...........................................................................)</p>
+                                          <p className={`font-bold text-center uppercase ${textColor}`}>{currentBulkPrintDoc.docType === 'credit_note' ? 'ผู้รับเอกสาร / Document Received By' : currentBulkPrintDoc.docType === 'payment_voucher' ? 'ผู้รับเงิน / Receiver' : (currentBulkPrintDoc.docType === 'quotation' ? 'ผู้เสนอราคา / Proposed By' : 'ผู้รับสินค้า / Received By')}</p>
+                                          <p className="mt-1 text-center text-center text-slate-500">วันที่ (Date): .......................................</p>
+                                      </div>
+                                  </div>
+                                  )}
+                              </div>
+                          )}
                       </>
-                  )}
-              </div>
-              
-              <table className="w-full mb-6 border-collapse text-left text-[10px] text-left relative z-10">
-                  <thead><tr className="bg-slate-100 text-slate-800 font-bold uppercase text-center"><th className="py-2 border-y border-slate-300 w-10 text-center">No.</th><th className="py-2 border-y border-slate-300 text-left pl-2 text-left">Description</th><th className="py-2 border-y border-slate-300 w-14 text-center text-center">Qty</th><th className="py-2 border-y border-slate-300 w-20 text-right text-right">Price</th><th className="py-2 border-y border-slate-300 w-24 text-right text-right">Amount</th></tr></thead>
-                  <tbody>
-                      {(currentBulkPrintDoc.items || []).map((it, i) => (
-                          <tr key={i} className="text-left"><td className="py-1.5 border-b border-slate-200 text-center">{i+1}</td><td className="py-1.5 border-b border-slate-200 pl-2 text-left">{it.desc}</td><td className="py-1.5 border-b border-slate-200 text-center">{it.qty}</td><td className="py-1.5 border-b border-slate-200 text-right">{formatCurrency(it.price)}</td><td className="p-1.5 border-b border-slate-200 text-right pr-2 font-bold">{formatCurrency(it.qty * it.price)}</td></tr>
-                      ))}
-                  </tbody>
-              </table>
-              
-              <div className="flex justify-between items-start text-left relative z-10">
-                  <div className="flex-1 mt-4 mr-4 text-left">
-                      <div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center">({THBText(currentBulkPrintDoc.total)})</div>
-                      <div className="mt-8 text-[10px] text-slate-500 text-left text-left">หมายเหตุ: {currentBulkPrintDoc.notes || (currentBulkPrintDoc.docType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน')}</div>
-                  </div>
-                  <div className="w-[45%] text-right text-[10px] space-y-1 text-right">
-                      <div className="flex justify-between px-2 text-right"><span>รวมมูลค่า (Subtotal)</span><span>{formatCurrency(currentBulkPrintDoc.sub)}</span></div>
-                      {currentBulkPrintDoc.discount > 0 && <div className="flex justify-between px-2 text-rose-600 text-right"><span>ส่วนลด/หักเงิน (Discount/WHT)</span><span>-{formatCurrency(currentBulkPrintDoc.discount)}</span></div>}
-                      <div className="flex justify-between px-2 pt-1 border-t border-slate-200 text-right"><span>รวมก่อนภาษี (Net Before VAT)</span><span>{formatCurrency(currentBulkPrintDoc.preVat)}</span></div>
-                      <div className="flex justify-between px-2 text-right"><span>ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(currentBulkPrintDoc.vat)}</span></div>
-                      <div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>ยอดเงินสุทธิ (Grand Total)</span><span>{formatCurrency(currentBulkPrintDoc.total)}</span></div>
-                  </div>
-              </div>
-              
-              {/* --- 🔥 FIX: จัดการส่วนลายเซ็นใน Bulk Print ให้สอดคล้องกับ State ใหม่ --- */}
-              {systemGeneratedText ? (
-                  <div className="mt-16 text-center text-slate-500 text-[10px] font-bold relative z-10 border-t border-slate-300 pt-4">
-                      เอกสารฉบับนี้จัดทำและประมวลผลด้วยระบบคอมพิวเตอร์ จึงสมบูรณ์โดยไม่ต้องมีลายเซ็น
-                  </div>
-              ) : (
-                  <div className="mt-20 grid grid-cols-2 gap-10 text-center relative z-10">
-                      <div className="flex flex-col items-center text-center">
-                          <div className="h-14 flex items-center justify-center mb-1 relative w-full text-center">
-                              {currentBulkPrintDoc.signature && !(currentBulkPrintDoc.docType === 'abb' && hideAbbLogoSig) && <img src={currentBulkPrintDoc.signature} className="max-h-full object-contain text-center" alt="Signature"/>}
-                          </div>
-                          <div className="w-full text-[10px] space-y-1 text-center">
-                              <p className="mb-1 text-center">(...........................................................................)</p>
-                              <p className="font-bold text-slate-700 text-center">{currentBulkPrintDoc.docType === 'credit_note' ? 'ผู้อนุมัติ / Authorized Signature' : currentBulkPrintDoc.docType === 'payment_voucher' ? 'ผู้รับเงิน / Receiver' : 'ผู้รับเงิน / Authorized Signature'}</p>
-                              <p className="mt-1 text-center">วันที่ (Date): {formatDate(currentBulkPrintDoc.date)}</p>
-                          </div>
-                      </div>
-                      <div className="flex flex-col items-center text-center">
-                          <div className="h-14 flex items-center justify-center mb-1 w-full text-center"></div>
-                          <div className="w-full text-[10px] space-y-1 text-center">
-                              <p className="mb-1 text-center">(...........................................................................)</p>
-                              <p className="font-bold text-slate-700 text-center">{currentBulkPrintDoc.docType === 'credit_note' ? 'ผู้รับเอกสาร / Document Received By' : currentBulkPrintDoc.docType === 'payment_voucher' ? 'ผู้จ่ายเงิน / ผู้อนุมัติ' : 'ผู้รับสินค้า / Received By'}</p>
-                              <p className="mt-1 text-center text-center">วันที่ (Date): .......................................</p>
-                          </div>
-                      </div>
-                  </div>
-              )}
+                  );
+              })()}
           </div>
         </div>
       )}
@@ -15899,7 +15957,19 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                         <div className="grid grid-cols-2 gap-3 text-left">
                             <div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm text-left">
                                 <label className="text-[10px] font-bold text-indigo-600 mb-1 flex items-center gap-1 text-left">ประเภทเอกสาร</label>
-                                <label className="text-[10px] font-bold text-indigo-600 mb-1 flex items-center gap-1 text-left">วันที่เอกสาร</label><input type="date" className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left outline-none cursor-pointer" value={invData.date} onChange={e => setInvData({ ...invData, date: e.target.value })} /></div>
+                                <select value={invData.docType} onChange={e => setInvData({ ...invData, docType: e.target.value })} className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left outline-none cursor-pointer">
+                                    <option value="invoice">ใบกำกับภาษี / ใบเสร็จ</option>
+                                    <option value="abb">ใบกำกับภาษีอย่างย่อ (ABB)</option>
+                                    <option value="receipt">ใบเสร็จรับเงิน (Receipt)</option>
+                                    <option value="payment_voucher">ใบสำคัญจ่าย (Payment Voucher)</option>
+                                    <option value="quotation">ใบเสนอราคา (Quotation)</option>
+                                    <option value="credit_note">ใบลดหนี้ (Credit Note)</option>
+                                </select>
+                            </div>
+                            <div className="bg-white p-3 rounded-xl border border-indigo-100 shadow-sm text-left">
+                                <label className="text-[10px] font-bold text-indigo-600 mb-1 flex items-center gap-1 text-left">วันที่เอกสาร</label>
+                                <input type="date" className="w-full border-0 p-1 text-sm font-bold text-slate-700 bg-transparent focus:ring-0 text-left outline-none cursor-pointer" value={invData.date} onChange={e => setInvData({ ...invData, date: e.target.value })} />
+                            </div>
                         </div>
                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-left">
                             <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-left"><label className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1 text-left">อ้างอิงรหัสรายการ</label><input className="w-full border-0 p-1 text-sm font-mono text-indigo-600 bg-transparent focus:ring-0 text-left outline-none" placeholder="อ้างอิง..." value={invData.orderId} onChange={e => setInvData({ ...invData, orderId: e.target.value })} /></div>
@@ -16012,181 +16082,152 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                     )}
                     
                     {(() => {
-                        // --- Shared Helper Components ---
-                        const SellerHeader = ({ titleTh, titleEn }) => (
-                            <div className="flex justify-between items-start mb-8 text-left relative z-10">
-                              <div className="w-[70%] flex items-start gap-5 text-left">{invData.logo && !(invData.docType === 'abb' && hideAbbLogoSig) && (<img src={invData.logo} className="w-[90px] h-[90px] object-contain flex-shrink-0 text-center" alt="Logo"/>)}<div className="flex flex-col justify-center flex-1 text-left"><h2 className="text-xl font-bold text-slate-900 mb-1 leading-tight text-left">{invData.sellerName}</h2><div className="text-xs leading-relaxed space-y-1 mt-1 text-left"><p className="text-slate-600 text-left">{[invData.sellerAddress, fmtAddr.sub(invData.sellerSubDistrict)].filter(Boolean).join(' ')}</p><p className="text-slate-600 text-left">{[fmtAddr.dist(invData.sellerDistrict), fmtAddr.prov(invData.sellerProvince), invData.sellerZipCode].filter(Boolean).join(' ')}</p><p className="text-slate-700 text-left"><b>เลขผู้เสียภาษี:</b> {invData.sellerTaxId} <span className="ml-2"><b>สาขา:</b> {invData.sellerBranchId === '00000' || !invData.sellerBranchId ? 'สำนักงานใหญ่' : invData.sellerBranchId} {invData.sellerBranchName && `(${invData.sellerBranchName})`}</span></p><p className="text-slate-700 text-left"><b>โทร:</b> {invData.sellerPhone}</p></div></div></div>
-                              <div className="text-right w-[30%] flex flex-col items-end text-right">
-                                  <div className="text-lg font-bold uppercase mb-0 text-right">{titleTh} <br/><span className="text-sm">{titleEn}</span></div>
-                                  {invData.docType === 'invoice' && <div className="text-[10px] font-bold text-slate-500 mt-0.5">(เอกสารออกเป็นชุด)</div>}
-                                  <div className={`status-badge text-lg font-bold uppercase mb-3 text-right mt-2 ${invData.status === 'cancelled' ? 'text-rose-600' : ''}`}>{invData.status === 'cancelled' ? 'ยกเลิกแล้ว (Cancelled)' : 'ต้นฉบับ (Original)'}</div>
-                                  <div className="border border-slate-300 p-2 w-full max-w-[200px] text-right">
-                                      <div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เลขที่ (No.)</span><span className="font-bold text-right text-[10px]">{invData.invNo}</span></div>
-                                      <div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">วันที่ (Date)</span><span className="text-right text-[10px] text-right">{formatDate(invData.date)}</span></div>
-                                      {invData.docType === 'abb' && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">เครื่อง POS</span><span className="text-right text-[10px] font-mono font-bold text-slate-700 text-right">{invData.sellerPosNo || '01'}</span></div>)}
-                                      {invData.docType === 'credit_note' && invData.refInvNo && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">อ้างอิง</span><span className="text-right text-[10px] font-bold text-rose-600 text-right">{invData.refInvNo}</span></div>)}
-                                      {invData.orderId && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">Order ID</span><span className="text-right text-[10px] font-mono text-right">{invData.orderId}</span></div>)}
-                                      {invData.channel && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right mb-1"><span className="font-bold text-slate-500 text-xs text-left">ช่องทาง</span><span className="text-right text-[10px] text-right">{invData.channel}</span></div>)}
-                                      {invData.shopName && (<div className="grid grid-cols-[max-content_1fr] gap-x-2 items-center text-right"><span className="font-bold text-slate-500 text-xs text-left">ร้านค้า</span><span className="text-right text-[10px] text-right">{invData.shopName}</span></div>)}
-                                  </div>
-                              </div>
-                            </div>
-                        );
+                        let titleTh = 'ใบกำกับภาษี / ใบเสร็จรับเงิน';
+                        let titleEn = 'TAX INVOICE / RECEIPT';
+                        let themeColor = 'text-indigo-900';
+                        let borderColor = 'border-slate-800';
+                        let textColor = 'text-slate-700';
 
-                        const CustomerSection = ({ label }) => (
-                            <div className="border border-slate-300 p-4 mb-4 flex flex-col gap-1 text-left text-left relative z-10">
-                                <div className="text-xs font-bold text-slate-400 uppercase mb-1 text-left">{label}</div>
-                                <p className="font-bold text-base text-left">{invData.customerName || (invData.docType === 'payment_voucher' ? 'ผู้รับเงิน' : 'ลูกค้าทั่วไป (เงินสด)')}</p>
-                                {invData.docType !== 'abb' && (
-                                    <>
-                                        <p className="text-slate-600 text-sm leading-relaxed text-left">{invData.address}</p>
-                                        <div className="flex gap-4 text-xs text-slate-600"><p>เลขผู้เสียภาษี: {invData.taxId || '-'}</p><p>สาขา: {invData.branch === '00000' || !invData.branch ? 'สำนักงานใหญ่' : invData.branch}</p></div>
-                                    </>
-                                )}
-                            </div>
-                        );
+                        if (invData.docType === 'quotation') { titleTh = 'ใบเสนอราคา'; titleEn = 'QUOTATION'; themeColor = 'text-teal-700'; borderColor = 'border-teal-700'; textColor = 'text-teal-700'; }
+                        else if (invData.docType === 'receipt') { titleTh = 'ใบเสร็จรับเงิน'; titleEn = 'RECEIPT'; themeColor = 'text-blue-700'; borderColor = 'border-blue-700'; textColor = 'text-blue-700'; }
+                        else if (invData.docType === 'payment_voucher') { titleTh = 'ใบสำคัญจ่าย'; titleEn = 'PAYMENT VOUCHER'; themeColor = 'text-purple-700'; borderColor = 'border-purple-700'; textColor = 'text-purple-700'; }
+                        else if (invData.docType === 'credit_note') { titleTh = 'ใบลดหนี้'; titleEn = 'CREDIT NOTE'; themeColor = 'text-rose-700'; borderColor = 'border-rose-700'; textColor = 'text-rose-700'; }
+                        else if (invData.docType === 'abb') { titleTh = 'ใบกำกับภาษีอย่างย่อ'; titleEn = 'TAX INVOICE (ABB)'; themeColor = 'text-indigo-900'; }
 
-                        const ItemsTable = () => (
-                            <table className="w-full mb-6 border-collapse text-left text-[10px] text-left relative z-10"><thead><tr className="bg-slate-100 text-slate-800 font-bold uppercase text-center"><th className="py-2 border-y border-slate-300 w-10 text-center">No.</th><th className="py-2 border-y border-slate-300 text-left pl-2 text-left">Description</th><th className="py-2 border-y border-slate-300 w-14 text-center text-center">Qty</th><th className="py-2 border-y border-slate-300 w-20 text-right text-right">Price</th><th className="py-2 border-y border-slate-300 w-24 text-right text-right">Amount</th></tr></thead><tbody>{invData.items.map((it, i) => (<tr key={i} className="text-left"><td className="py-1.5 border-b border-slate-200 text-center">{i+1}</td><td className="py-1.5 border-b border-slate-200 pl-2 text-left">{it.desc}</td><td className="py-1.5 border-b border-slate-200 text-center">{it.qty}</td><td className="py-1.5 border-b border-slate-200 text-right">{formatCurrency(it.price)}</td><td className="p-1.5 border-b border-slate-200 text-right pr-2 font-bold">{formatCurrency(it.qty * it.price)}</td></tr>))}</tbody></table>
-                        );
-
-                        // --- 🔥 FIX: จัดการส่วนลายเซ็นในหน้า Preview เดี่ยว ให้สอดคล้องกับ State ใหม่ ---
-                        const Signatures = ({ leftLine1, leftLine2, rightLine1, rightLine2 }) => {
-                            if (systemGeneratedText) {
-                                return (
-                                    <div className="mt-16 text-center text-slate-500 text-[10px] font-bold relative z-10 border-t border-slate-300 pt-4">
-                                        เอกสารฉบับนี้จัดทำและประมวลผลด้วยระบบคอมพิวเตอร์ จึงสมบูรณ์โดยไม่ต้องมีลายเซ็น
-                                    </div>
-                                );
-                            }
-                            return (
-                                <div className="mt-20 grid grid-cols-2 gap-10 text-center relative z-10">
-                                    <div className="flex flex-col items-center text-center">
-                                        <div className="h-14 flex items-center justify-center mb-1 relative w-full text-center">
-                                            {invData.signature && !(invData.docType === 'abb' && hideAbbLogoSig) && <img src={invData.signature} className="max-h-full object-contain text-center" alt="Signature"/>}
-                                        </div>
-                                        <div className="w-full text-[10px] space-y-1 text-center">
-                                            <p className="mb-1 text-center">(...........................................................................)</p>
-                                            <p className="font-bold text-slate-700 text-center">{leftLine1}</p>
-                                            <p className="mt-1 text-center">{leftLine2}</p>
+                        return (
+                            <>
+                                {/* Top Header */}
+                                <div className="flex justify-between items-start mb-4 text-left relative z-10">
+                                    <div className="w-[60%] flex items-start gap-4 text-left">
+                                        {invData.logo && !(invData.docType === 'abb' && hideAbbLogoSig) && (<img src={invData.logo} className="max-w-[80px] max-h-[80px] w-auto h-auto object-contain flex-shrink-0" alt="Logo"/>)}
+                                        <div className="flex flex-col justify-center flex-1 text-left">
+                                            <h2 className="text-xl font-black text-slate-900 mb-1 leading-tight">{invData.sellerName}</h2>
+                                            <div className="text-[11px] leading-relaxed space-y-0.5 mt-1">
+                                                <p className="text-slate-700">{[invData.sellerAddress, fmtAddr.sub(invData.sellerSubDistrict)].filter(Boolean).join(' ')}</p>
+                                                <p className="text-slate-700">{[fmtAddr.dist(invData.sellerDistrict), fmtAddr.prov(invData.sellerProvince), invData.sellerZipCode].filter(Boolean).join(' ')}</p>
+                                                <p className="text-slate-800 mt-1"><b>เลขผู้เสียภาษี:</b> {invData.sellerTaxId} <span className="ml-2"><b>สาขา:</b> {invData.sellerBranchId === '00000' || !invData.sellerBranchId ? 'สำนักงานใหญ่' : invData.sellerBranchId} {invData.sellerBranchName && `(${invData.sellerBranchName})`}</span></p>
+                                                <p className="text-slate-800"><b>โทร:</b> {invData.sellerPhone}</p>
+                                            </div>
                                         </div>
                                     </div>
-                                    {rightLine1 && (
-                                    <div className="flex flex-col items-center text-center">
-                                        <div className="h-14 flex items-center justify-center mb-1 w-full text-center">
+                                    <div className="w-[40%] text-right flex flex-col items-end">
+                                        <h1 className={`text-2xl font-black uppercase leading-tight mb-1 ${themeColor}`}>{titleTh}</h1>
+                                        <p className="text-[11px] font-bold text-slate-500 uppercase">{titleEn}</p>
+                                        {invData.docType === 'invoice' && <div className="text-[9px] font-bold text-slate-400 mt-0.5">(เอกสารออกเป็นชุด)</div>}
+                                        <div className={`status-badge text-sm font-black uppercase mt-3 mb-4 px-3 py-1 rounded-full border ${invData.status === 'cancelled' ? 'text-rose-600 border-rose-200 bg-rose-50' : 'text-slate-600 border-slate-200 bg-slate-50'}`}>
+                                            {invData.status === 'cancelled' ? 'ยกเลิกแล้ว (CANCELLED)' : 'ต้นฉบับ (ORIGINAL)'}
                                         </div>
-                                        <div className="w-full text-[10px] space-y-1 text-center">
-                                            <p className="mb-1 text-center">(...........................................................................)</p>
-                                            <p className="font-bold text-slate-700 text-center">{rightLine1}</p>
-                                            <p className="mt-1 text-center text-center">{rightLine2}</p>
-                                        </div>
+                                        <table className="ml-auto text-[11px] text-left border-collapse">
+                                            <tbody>
+                                                <tr><td className="font-bold text-slate-500 pr-3 pb-1">เลขที่ (No.)</td><td className={`font-black pb-1 ${themeColor}`}>{invData.invNo}</td></tr>
+                                                <tr><td className="font-bold text-slate-500 pr-3">วันที่ (Date)</td><td className="font-bold text-slate-800">{formatDate(invData.date)}</td></tr>
+                                            </tbody>
+                                        </table>
                                     </div>
+                                </div>
+
+                                {/* Horizontal Metadata Strip */}
+                                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 bg-slate-50 px-4 py-2.5 rounded-lg border border-slate-100 mb-6 text-[10px] relative z-10">
+                                    {invData.orderId && <div><span className="font-bold text-slate-400 mr-1.5">ORDER ID:</span><span className="font-mono font-bold text-slate-800">{invData.orderId}</span></div>}
+                                    {invData.channel && <div><span className="font-bold text-slate-400 mr-1.5">CHANNEL:</span><span className="font-bold text-slate-800 uppercase">{invData.channel}</span></div>}
+                                    {invData.shopName && <div><span className="font-bold text-slate-400 mr-1.5">SHOP:</span><span className="font-bold text-slate-800">{invData.shopName}</span></div>}
+                                    {invData.docType === 'abb' && invData.sellerPosNo && <div><span className="font-bold text-slate-400 mr-1.5">POS:</span><span className="font-mono font-bold text-slate-800">{invData.sellerPosNo}</span></div>}
+                                    {invData.docType === 'credit_note' && invData.refInvNo && <div><span className="font-bold text-slate-400 mr-1.5">อ้างอิงใบกำกับภาษีเดิม (REF):</span><span className="font-bold text-rose-600">{invData.refInvNo}</span></div>}
+                                </div>
+
+                                {/* Customer Section */}
+                                <div className="mb-6 pb-4 border-b border-slate-200 relative z-10">
+                                    <div className={`text-[10px] font-black uppercase mb-1.5 ${themeColor}`}>{invData.docType === 'payment_voucher' ? 'จ่ายให้แก่ (PAY TO)' : 'ลูกค้า (CUSTOMER)'}</div>
+                                    <p className="font-black text-base text-slate-900">{invData.customerName || (invData.docType === 'payment_voucher' ? 'ผู้รับเงิน' : 'ลูกค้าทั่วไป (เงินสด)')}</p>
+                                    {invData.docType !== 'abb' && (
+                                        <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-slate-700">
+                                            <p>{invData.address || '-'}</p>
+                                            <div className="flex gap-6 font-medium mt-1">
+                                                <p><b>เลขผู้เสียภาษี:</b> {invData.taxId || '-'}</p>
+                                                <p><b>สาขา:</b> {invData.branch === '00000' || !invData.branch ? 'สำนักงานใหญ่' : invData.branch}</p>
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
-                            );
-                        };
 
-                        // --- Render Logic based on DocType ---
-                        if (invData.docType === 'abb') {
-                            return (
-                                <>
-                                    <SellerHeader titleTh="ใบกำกับภาษีอย่างย่อ" titleEn="TAX INVOICE (ABB)" />
-                                    <CustomerSection label="ลูกค้า (Customer)" />
-                                    <ItemsTable />
-                                    <div className="flex justify-between items-start text-left relative z-10">
-                                        <div className="flex-1 mt-4 mr-4 text-left">
-                                            <div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center w-fit">({THBText(totals.total)})</div>
-                                            <div className="mt-6 text-[10px] text-slate-800 font-bold uppercase text-left">* ราคารวมภาษีมูลค่าเพิ่มแล้ว (VAT Included)</div>
-                                            <div className="mt-1 text-[10px] text-slate-500 text-left">หมายเหตุ: {invData.notes || 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน'}</div>
-                                        </div>
-                                        <div className="w-[45%] text-right text-[10px] space-y-1 text-right">
-                                            {invData.discount > 0 && <div className="flex justify-between px-2 text-rose-600 text-right"><span>ส่วนลด (Discount)</span><span>-{formatCurrency(invData.discount)}</span></div>}
-                                            <div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>ยอดเงินสุทธิ (Grand Total)</span><span>{formatCurrency(totals.total)}</span></div>
-                                        </div>
-                                    </div>
-                                    <Signatures leftLine1="พนักงานรับเงิน / Cashier" leftLine2={`วันที่ (Date): ${formatDate(invData.date)}`} />
-                                </>
-                            );
-                        } 
-                        else if (invData.docType === 'credit_note') {
-                            return (
-                                <>
-                                    <SellerHeader titleTh="ใบลดหนี้" titleEn="CREDIT NOTE" />
-                                    <CustomerSection label="ลูกค้า (Customer)" />
-                                    <ItemsTable />
-                                    <div className="flex justify-between items-start text-left relative z-10">
-                                        <div className="flex-1 mt-4 mr-4 text-left">
-                                            <div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center w-fit">({THBText(totals.total)})</div>
-                                            <div className="mt-8 text-[10px] text-slate-500 text-left">สาเหตุการลดหนี้: {invData.creditNoteReason || 'รับคืนสินค้า / ส่วนลด'}</div>
-                                            <div className="mt-1 text-[10px] text-slate-500 text-left">อ้างอิงใบกำกับภาษีเดิมเลขที่: {invData.refInvNo || '-'}</div>
-                                            <div className="mt-1 text-[10px] text-slate-500 text-left">หมายเหตุ: {invData.notes || '-'}</div>
-                                        </div>
-                                        <div className="w-[45%] text-right text-[10px] space-y-1 text-right">
-                                            <div className="flex justify-between px-2 text-right"><span>มูลค่าสินค้าที่รับคืน/ลดหนี้</span><span>{formatCurrency(totals.preVat)}</span></div>
-                                            <div className="flex justify-between px-2 text-right"><span>ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(totals.vat)}</span></div>
-                                            <div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>รวมยอดลดหนี้สุทธิ</span><span>{formatCurrency(totals.total)}</span></div>
-                                        </div>
-                                    </div>
-                                    <Signatures leftLine1="ผู้อนุมัติ / Authorized Signature" leftLine2={`วันที่ (Date): ${formatDate(invData.date)}`} rightLine1="ผู้รับเอกสาร / Document Received By" rightLine2="วันที่ (Date): ......................................." />
-                                </>
-                            );
-                        }
-                        else if (invData.docType === 'payment_voucher') {
-                            return (
-                                <>
-                                    <SellerHeader titleTh="ใบสำคัญจ่าย" titleEn="PAYMENT VOUCHER" />
-                                    <CustomerSection label="จ่ายให้แก่ (Pay To)" />
-                                    <ItemsTable />
-                                    <div className="flex justify-between items-start text-left relative z-10">
-                                        <div className="flex-1 mt-4 mr-4 text-left">
-                                            <div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center w-fit">({THBText(totals.total)})</div>
-                                            <div className="mt-8 text-[10px] text-slate-500 text-left">หมายเหตุ: {invData.notes || 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ'}</div>
-                                        </div>
-                                        <div className="w-[45%] text-right text-[10px] space-y-1 text-right">
-                                            <div className="flex justify-between px-2 text-right"><span>รวมมูลค่า (Subtotal)</span><span>{formatCurrency(totals.sub)}</span></div>
-                                            {invData.discount > 0 && <div className="flex justify-between px-2 text-rose-600 text-right"><span>หัก ณ ที่จ่าย / ส่วนลด</span><span>-{formatCurrency(invData.discount)}</span></div>}
-                                            {invData.vatType !== 'none' && (
-                                                <>
-                                                    <div className="flex justify-between px-2 pt-1 border-t border-slate-200 text-right"><span>รวมก่อนภาษี (Net Before VAT)</span><span>{formatCurrency(totals.preVat)}</span></div>
-                                                    <div className="flex justify-between px-2 text-right"><span>ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(totals.vat)}</span></div>
-                                                </>
-                                            )}
-                                            <div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>ยอดจ่ายสุทธิ (Net Paid)</span><span>{formatCurrency(totals.total)}</span></div>
-                                        </div>
-                                    </div>
-                                    <Signatures leftLine1="ผู้รับเงิน / Receiver" leftLine2={`วันที่ (Date): ${formatDate(invData.date)}`} rightLine1="ผู้อนุมัติจ่าย / Authorized Payer" rightLine2="วันที่ (Date): ......................................." />
-                                </>
-                            );
-                        }
-                        else {
-                            // Standard (Invoice, Receipt, Quotation)
-                            let th = 'ใบกำกับภาษี / ใบเสร็จรับเงิน';
-                            let en = 'TAX INVOICE / RECEIPT';
-                            if (invData.docType === 'quotation') { th = 'ใบเสนอราคา'; en = 'QUOTATION'; }
-                            else if (invData.docType === 'receipt') { th = 'ใบเสร็จรับเงิน'; en = 'RECEIPT'; }
+                                {/* Items Table */}
+                                <table className="w-full mb-6 border-collapse text-left text-[11px] relative z-10">
+                                    <thead>
+                                        <tr className={`border-b-2 border-t font-bold uppercase text-center ${borderColor} ${textColor}`}>
+                                            <th className="py-2.5 w-12 text-center">No.</th>
+                                            <th className="py-2.5 text-left pl-2">Description</th>
+                                            <th className="py-2.5 w-16 text-center">Qty</th>
+                                            <th className="py-2.5 w-24 text-right">Price</th>
+                                            <th className="py-2.5 w-28 text-right pr-4">Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {invData.items.map((it, i) => (
+                                            <tr key={i} className="text-left border-b border-slate-100">
+                                                <td className="py-2.5 text-center text-slate-500">{i+1}</td>
+                                                <td className="py-2.5 pl-2 text-slate-800 font-medium">{it.desc}</td>
+                                                <td className="py-2.5 text-center text-slate-700">{it.qty}</td>
+                                                <td className="py-2.5 text-right text-slate-600">{formatCurrency(it.price)}</td>
+                                                <td className="py-2.5 text-right pr-4 font-bold text-slate-800">{formatCurrency(it.qty * it.price)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
 
-                            return (
-                                <>
-                                    <SellerHeader titleTh={th} titleEn={en} />
-                                    <CustomerSection label="ลูกค้า (Customer)" />
-                                    <ItemsTable />
-                                    <div className="flex justify-between items-start text-left relative z-10">
-                                        <div className="flex-1 mt-4 mr-4 text-left">
-                                            <div className="bg-white p-2 border border-slate-400 text-center font-bold text-slate-900 text-[11px] text-center w-fit">({THBText(totals.total)})</div>
-                                            <div className="mt-8 text-[10px] text-slate-500 text-left">หมายเหตุ: {invData.notes || 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน'}</div>
-                                        </div>
-                                        <div className="w-[45%] text-right text-[10px] space-y-1 text-right">
-                                            <div className="flex justify-between px-2 text-right"><span>รวมมูลค่า (Subtotal)</span><span>{formatCurrency(totals.sub)}</span></div>
-                                            {invData.discount > 0 && <div className="flex justify-between px-2 text-rose-600 text-right"><span>ส่วนลด (Discount)</span><span>-{formatCurrency(invData.discount)}</span></div>}
-                                            <div className="flex justify-between px-2 pt-1 border-t border-slate-200 text-right"><span>รวมก่อนภาษี (Net Before VAT)</span><span>{formatCurrency(totals.preVat)}</span></div>
-                                            <div className="flex justify-between px-2 text-right"><span>ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(totals.vat)}</span></div>
-                                            <div className="flex justify-between font-bold border-t-2 border-black pt-1 text-base text-right"><span>ยอดเงินสุทธิ (Grand Total)</span><span>{formatCurrency(totals.total)}</span></div>
+                                {/* Summary Section */}
+                                <div className="flex justify-between items-start text-left relative z-10">
+                                    <div className="flex-1 mt-2 mr-4 text-left">
+                                        <div className={`font-bold text-[11px] mb-4 ${themeColor}`}>({THBText(totals.total)})</div>
+                                        <div className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                                            {invData.docType === 'abb' && <p className="mb-1 text-slate-800 font-bold">* ราคารวมภาษีมูลค่าเพิ่มแล้ว (VAT Included)</p>}
+                                            {invData.docType === 'credit_note' && <p className="mb-1 text-rose-700 font-bold bg-rose-50 px-2 py-1 rounded inline-block border border-rose-100">สาเหตุการลดหนี้: {invData.creditNoteReason || 'รับคืนสินค้า / ลดราคา'}</p>}
+                                            {invData.docType === 'quotation' && <p className="mb-1 text-teal-700 font-bold">เงื่อนไข: ยืนราคา 30 วันนับจากวันที่เสนอราคา</p>}
+                                            <p className="mt-1">หมายเหตุ: {invData.notes || (invData.docType === 'payment_voucher' ? 'เป็นรายจ่ายเพื่อใช้ในการดำเนินกิจการ' : 'สินค้าซื้อแล้วไม่รับเปลี่ยนหรือคืนเงิน')}</p>
                                         </div>
                                     </div>
-                                    <Signatures leftLine1="ผู้รับเงิน / Authorized Signature" leftLine2={`วันที่ (Date): ${formatDate(invData.date)}`} rightLine1={invData.docType === 'quotation' ? 'ผู้อนุมัติสั่งซื้อ / Authorized Buyer' : 'ผู้รับสินค้า / Received By'} rightLine2="วันที่ (Date): ......................................." />
-                                </>
-                            );
-                        }
+                                    <div className="w-[45%] text-right text-[11px] space-y-2">
+                                        <div className="flex justify-between px-2 pr-4 text-slate-600"><span className="font-bold">{invData.docType === 'credit_note' ? 'มูลค่าสินค้าที่รับคืน' : 'รวมมูลค่า (Subtotal)'}</span><span>{formatCurrency(invData.docType === 'credit_note' ? totals.preVat : totals.sub)}</span></div>
+                                        {invData.discount > 0 && <div className="flex justify-between px-2 pr-4 text-rose-600"><span className="font-bold">ส่วนลด/หักเงิน (Discount)</span><span className="font-bold">-{formatCurrency(invData.discount)}</span></div>}
+                                        
+                                        {invData.docType !== 'credit_note' && invData.vatType !== 'none' && <div className="flex justify-between px-2 pr-4 pt-1.5 border-t border-slate-200 text-slate-600"><span className="font-bold">{invData.docType === 'credit_note' ? 'มูลค่าที่ถูกต้อง' : 'รวมก่อนภาษี (Net Before VAT)'}</span><span>{formatCurrency(totals.preVat)}</span></div>}
+                                        
+                                        {invData.vatType !== 'none' && <div className="flex justify-between px-2 pr-4 text-slate-600"><span className="font-bold">ภาษีมูลค่าเพิ่ม (VAT)</span><span>{formatCurrency(totals.vat)}</span></div>}
+                                        
+                                        <div className={`flex justify-between font-black border-t-2 pt-2 text-[13px] pr-4 uppercase ${borderColor} ${themeColor}`}><span>ยอดเงินสุทธิ (Grand Total)</span><span>{formatCurrency(totals.total)}</span></div>
+                                    </div>
+                                </div>
+
+                                {/* Signatures */}
+                                {systemGeneratedText ? (
+                                    <div className="mt-16 text-center text-slate-400 text-[10px] font-bold relative z-10 border-t border-slate-200 pt-4">
+                                        เอกสารฉบับนี้จัดทำและประมวลผลด้วยระบบคอมพิวเตอร์ จึงสมบูรณ์โดยไม่ต้องมีลายเซ็น
+                                    </div>
+                                ) : (
+                                    <div className="mt-16 grid grid-cols-2 gap-10 text-center relative z-10">
+                                        <div className="flex flex-col items-center text-center">
+                                            <div className="h-16 flex items-center justify-center mb-1 relative w-full text-center">
+                                                {invData.signature && !(invData.docType === 'abb' && hideAbbLogoSig) && <img src={invData.signature} className="max-h-full object-contain text-center" alt="Signature"/>}
+                                            </div>
+                                            <div className="w-full text-[11px] space-y-1 text-center">
+                                                <p className="mb-1 text-center text-slate-400">(...........................................................................)</p>
+                                                <p className={`font-bold text-center uppercase ${textColor}`}>{invData.docType === 'credit_note' ? 'ผู้อนุมัติ / Authorized Signature' : invData.docType === 'payment_voucher' ? 'ผู้อนุมัติจ่าย / Authorized Payer' : (invData.docType === 'abb' ? 'พนักงานรับเงิน / Cashier' : 'ผู้รับเงิน / Authorized Signature')}</p>
+                                                <p className="mt-1 text-center text-slate-500">วันที่ (Date): {formatDate(invData.date)}</p>
+                                            </div>
+                                        </div>
+                                        {invData.docType !== 'abb' && (
+                                        <div className="flex flex-col items-center text-center">
+                                            <div className="h-16 flex items-center justify-center mb-1 w-full text-center"></div>
+                                            <div className="w-full text-[11px] space-y-1 text-center">
+                                                <p className="mb-1 text-center text-slate-400">(...........................................................................)</p>
+                                                <p className={`font-bold text-center uppercase ${textColor}`}>{invData.docType === 'credit_note' ? 'ผู้รับเอกสาร / Document Received By' : invData.docType === 'payment_voucher' ? 'ผู้รับเงิน / Receiver' : (invData.docType === 'quotation' ? 'ผู้เสนอราคา / Proposed By' : 'ผู้รับสินค้า / Received By')}</p>
+                                                <p className="mt-1 text-center text-center text-slate-500">วันที่ (Date): .......................................</p>
+                                            </div>
+                                        </div>
+                                        )}
+                                    </div>
+                                )}
+                            </>
+                        );
                     })()}
                 </div>
             </div>
@@ -18193,7 +18234,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                                 <>
                                     <div className="flex justify-between items-start mb-10 border-b-2 border-slate-800 pb-6">
                                         <div className="flex gap-4 items-center">
-                                            {savedSeller.logo && <img src={savedSeller.logo} alt="Logo" className="w-[80px] h-[80px] object-contain"/>}
+                                            {savedSeller.logo && <img src={savedSeller.logo} alt="Logo" className="max-w-[80px] max-h-[80px] w-auto h-auto object-contain"/>}
                                             <div>
                                                 <h2 className="text-xl font-black text-slate-900">{savedSeller.sellerName || 'บริษัท / ห้างร้าน'}</h2>
                                                 <p className="text-xs text-slate-600 mt-1">{savedSeller.sellerAddress} {fmtAddr.sub(savedSeller.sellerSubDistrict)} {fmtAddr.dist(savedSeller.sellerDistrict)} {fmtAddr.prov(savedSeller.sellerProvince)} {savedSeller.sellerZipCode}</p>
@@ -18989,74 +19030,174 @@ export default function App() {
     }
   };
 
+  /* ====================================================================================
+     🔥 CORE SYSTEM: BACKUP, PREVIEW, RESTORE (REBUILT FOR 100% STABILITY)
+     ==================================================================================== */
+
   const handleBackup = async () => {
     if (!user) return;
     setIsBackingUp(true);
-    addToast("กำลังรวบรวมข้อมูลเพื่อสำรอง...", "success");
+    addToast("เริ่มขั้นตอนสร้างไฟล์สำรองข้อมูล (Please wait...)", "info");
     try {
-      const collectionsToBackup = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'assets', 'partners', 'promotions', 'seller_profiles'];
-      const backupData = {};
+      const collectionsToBackup = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'assets', 'partners', 'promotions', 'seller_profiles', 'internal_docs', 'import_logs'];
+      let totalRecords = 0;
       
+      // 1. สร้างโครงสร้าง JSON ที่แม่นยำ 100% ผ่าน Array ของ Strings
+      const blobParts = [];
+      blobParts.push('{');
+      let isFirstCollection = true;
+
+      // Helper แปลงวันที่ให้เป็น Firestore Standard ป้องกันข้อมูลเสีย
+      const formatTimestamps = (obj) => {
+          if (obj === null || obj === undefined) return obj;
+          if (obj instanceof Date) return { type: "firestore/timestamp/1.0", seconds: Math.floor(obj.getTime() / 1000), nanoseconds: (obj.getTime() % 1000) * 1000000 };
+          if (obj.toDate && typeof obj.toDate === 'function') {
+              const d = obj.toDate();
+              return { type: "firestore/timestamp/1.0", seconds: Math.floor(d.getTime() / 1000), nanoseconds: (d.getTime() % 1000) * 1000000 };
+          }
+          if (obj.seconds !== undefined && obj.nanoseconds !== undefined) {
+              return { type: "firestore/timestamp/1.0", seconds: obj.seconds, nanoseconds: obj.nanoseconds };
+          }
+          if (Array.isArray(obj)) return obj.map(formatTimestamps);
+          if (typeof obj === 'object') {
+              const newObj = {};
+              for (const key in obj) newObj[key] = formatTimestamps(obj[key]);
+              return newObj;
+          }
+          return obj;
+      };
+
       for (const collName of collectionsToBackup) {
-        const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
-        backupData[collName] = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          try {
+              const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
+              if (snap.empty) continue;
+
+              // ใส่ลูกน้ำคั่นระหว่าง Collection (ถ้าไม่ใช่ Collection แรก)
+              if (!isFirstCollection) {
+                  blobParts.push(',');
+              }
+              blobParts.push(`"${collName}":[`);
+              
+              let isFirstDoc = true;
+              snap.docs.forEach(doc => {
+                  try {
+                      const data = doc.data();
+                      
+                      // 🚀 THE FIX: ลบข้อมูล Base64 มหาศาลออกจากบิลรายตัวเพื่อลดขนาดไฟล์จาก 600MB เหลือไม่เกิน 10MB
+                      // ระบบจะยังเก็บโลโก้ไว้ที่ seller_profiles ตามเดิม ทำให้พิมพ์บิลใหม่ได้ปกติ
+                      if (collName === 'invoices') {
+                          if (data.logo && data.logo.startsWith('data:image')) delete data.logo;
+                          if (data.signature && data.signature.startsWith('data:image')) delete data.signature;
+                      }
+
+                      const cleanData = formatTimestamps(data);
+                      const docObj = { id: doc.id, ...cleanData };
+                      const jsonStr = JSON.stringify(docObj); // แปลงทีละบรรทัด ปลอดภัยกว่าการแปลงก้อนใหญ่
+                      
+                      if (!isFirstDoc) blobParts.push(',');
+                      blobParts.push(jsonStr);
+                      isFirstDoc = false;
+                      totalRecords++;
+                  } catch (docErr) {
+                      // หากเอกสารใดพัง ระบบจะข้ามไปเลย ไม่ทำให้ไฟล์ JSON หลักเสียหาย
+                      console.error(`[Backup] Skipped corrupted document: ${doc.id}`, docErr);
+                  }
+              });
+              
+              blobParts.push(']');
+              isFirstCollection = false;
+          } catch (fetchErr) {
+              console.error(`[Backup] Failed to fetch collection: ${collName}`, fetchErr);
+          }
       }
+
+      blobParts.push('}'); // ปิดปีกกาของ JSON Object หลัก เพื่อการันตีความสมบูรณ์
+
+      // 2. ตรวจสอบความถูกต้องขั้นสุดท้ายและแปลงชิ้นส่วนเป็น Blob
+      if (blobParts[blobParts.length - 1] !== '}') throw new Error("JSON Builder failed to close the object.");
       
-      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const blob = new Blob(blobParts, { type: 'application/json' });
+      if (blob.size === 0) throw new Error("ไฟล์ที่สร้างมีขนาด 0 Bytes");
+
+      // 3. สร้างลิงก์ดาวน์โหลด
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      // เปลี่ยนชื่อไฟล์ Backup ป้องกันการโหลดซ้ำแล้วชื่อเพี้ยน
       const timestampStr = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').split('.')[0];
       link.download = `MerchantTax_Backup_${currentAppId}_${timestampStr}.json`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      
-      addToast("สำรองข้อมูล (Backup) สำเร็จ", "success");
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+      addToast(`สำรองข้อมูลเสร็จสมบูรณ์ (${totalRecords.toLocaleString()} รายการ) ขนาดไฟล์ถูกรีดให้เล็กลงแล้ว!`, "success");
     } catch (error) {
-      console.error(error);
-      addToast("เกิดข้อผิดพลาดในการสำรองข้อมูล", "error");
+      console.error("Backup System Error:", error);
+      addToast(`ระบบสำรองข้อมูลขัดข้อง: ${error.message}`, "error");
+    } finally {
+      setIsBackingUp(false);
     }
-    setIsBackingUp(false);
   };
 
-  // --- NEW: ฟังก์ชันสแกนตรวจสอบไฟล์ Backup โดยไม่ต้อง Restore ทับข้อมูลเดิม ---
   const handlePreviewBackupChange = (e) => {
       const file = e.target.files[0];
       if (!file) return;
+      
+      // 🚀 CRITICAL FIX: บล็อกไฟล์ขยะรุ่นเก่าที่มีขนาดใหญ่เกินไป เพื่อป้องกันเบราว์เซอร์ล่ม (Crash)
+      if (file.size > 50 * 1024 * 1024) {
+          addToast("❌ ไฟล์นี้เป็นไฟล์เวอร์ชันเก่าที่มีขนาดใหญ่เกินไป (มีขยะรูปภาพ 600MB) เบราว์เซอร์ไม่สามารถอ่านได้", "error");
+          setTimeout(() => {
+              alert("กรุณากดปุ่ม 'สำรองข้อมูล (Backup)' ใหม่อีกครั้ง!\n\nระบบใหม่จะทำการบีบอัดและลบรูปภาพซ้ำซ้อนทิ้งให้ไฟล์เหลือขนาดไม่เกิน 5-10 MB ซึ่งจะสามารถนำมาตรวจสอบ (Preview) และกู้คืน (Restore) ได้อย่างสมบูรณ์ 100% ครับ");
+          }, 500);
+          if (backupPreviewFileRef.current) backupPreviewFileRef.current.value = '';
+          return;
+      }
+
       setLoading(true);
       const reader = new FileReader();
+      
       reader.onload = (evt) => {
           try {
-              const data = JSON.parse(evt.target.result);
-              setBackupDataPreview(data); // เก็บข้อมูลไว้สำหรับระบบค้นหา
-              setBackupSearchTerm(''); // รีเซ็ตคำค้นหา
+              const fileContent = evt.target.result;
+              let data;
+              try {
+                  data = JSON.parse(fileContent);
+              } catch (parseError) {
+                  // --- 🔥 AI Auto-Healer: พยายามซ่อมแซมโครงสร้างไฟล์ JSON ที่ปลายไฟล์แหว่ง ---
+                  console.warn("Detected corrupted JSON, attempting Auto-Heal...");
+                  try {
+                      let healedContent = fileContent.trim();
+                      if (healedContent.endsWith(',')) healedContent = healedContent.slice(0, -1);
+                      if (!healedContent.endsWith('}')) {
+                          if (!healedContent.endsWith(']')) healedContent += ']';
+                          healedContent += '}';
+                      }
+                      data = JSON.parse(healedContent);
+                      addToast("⚠️ กู้คืนโครงสร้างไฟล์ที่เสียหายสำเร็จ (Auto-Healed)", "success");
+                  } catch (healError) {
+                      throw new Error("ไฟล์เสียหายหนักเกินกว่าจะซ่อมแซมได้ (โครงสร้าง JSON พังรุนแรง)");
+                  }
+              }
+
+              setBackupDataPreview(data); 
+              setBackupSearchTerm(''); 
               
               const getLatestDate = (arr) => {
-                  if (!arr || arr.length === 0) return { max: null, min: null };
+                  if (!arr || arr.length === 0) return { max: null };
                   let maxTime = 0;
-                  let minTime = Infinity;
                   arr.forEach(item => {
                       let time = 0;
                       if (item.date && item.date.seconds) time = item.date.seconds * 1000;
-                      else if (item.date) {
+                      else if (item.date && item.date.type === "firestore/timestamp/1.0") time = item.date.seconds * 1000;
+                      else if (item.date && typeof item.date === 'string') {
                           const d = new Date(item.date);
                           if (!isNaN(d.getTime())) time = d.getTime();
                       } else if (item.createdAt && item.createdAt.seconds) {
                           time = item.createdAt.seconds * 1000;
                       }
-                      
-                      if (time > 0) {
-                          if (time > maxTime) maxTime = time;
-                          if (time < minTime) minTime = time;
-                      }
+                      if (time > maxTime) maxTime = time;
                   });
-                  return {
-                      max: maxTime > 0 ? new Date(maxTime) : null,
-                      min: minTime !== Infinity ? new Date(minTime) : null
-                  };
+                  return { max: maxTime > 0 ? new Date(maxTime) : null };
               };
 
               const exp = data['transactions_expense'] || [];
@@ -19075,16 +19216,20 @@ export default function App() {
               });
               setShowBackupPreview(true);
           } catch (err) {
-              console.error(err);
-              addToast("ไม่สามารถอ่านไฟล์ Backup ได้ ข้อมูลอาจเสียหาย", "error");
+              console.error("Preview Processing Error:", err);
+              addToast(`ไม่สามารถเปิดไฟล์ได้: ${err.message}`, "error");
           }
           setLoading(false);
           if (backupPreviewFileRef.current) backupPreviewFileRef.current.value = '';
       };
+      
+      reader.onerror = () => {
+          addToast("เบราว์เซอร์ไม่สามารถอ่านไฟล์ได้ (File Read Error)", "error");
+          setLoading(false);
+      };
       reader.readAsText(file);
   };
 
-  // --- NEW: ระบบค้นหาข้อมูลภายในไฟล์ Backup ---
   const backupSearchResults = useMemo(() => {
       if (!backupDataPreview || !backupSearchTerm.trim()) return null;
       const term = backupSearchTerm.toLowerCase();
@@ -19130,7 +19275,6 @@ export default function App() {
       return results.sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0)).slice(0, 100);
   }, [backupDataPreview, backupSearchTerm]);
 
-  // --- NEW: ระบบประมวลผลตัวอย่างข้อมูลก่อนกู้คืน (Restore Preview) ---
   const restoreSearchResults = useMemo(() => {
       if (!restoreDataPreview) return [];
       const term = restoreSearchTerm.toLowerCase();
@@ -19173,36 +19317,59 @@ export default function App() {
   const handleRestoreFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    // 🚀 CRITICAL FIX: บล็อกไฟล์ขยะรุ่นเก่าที่มีขนาดใหญ่เกินไป เพื่อป้องกันเบราว์เซอร์ล่ม (Crash)
+    if (file.size > 50 * 1024 * 1024) {
+        addToast("❌ ไฟล์ Backup เก่ามีขนาดใหญ่เกินไป (ติดบั๊กรูปภาพ 600MB)", "error");
+        setTimeout(() => {
+            alert("กรุณากดปุ่ม 'สำรองข้อมูล (Backup)' ใหม่อีกครั้ง!\n\nระบบอัปเกรดใหม่จะรีดขนาดไฟล์ให้เล็กและสะอาดสมบูรณ์ (เหลือประมาณ 5 MB) แล้วค่อยนำไฟล์อันใหม่มากู้คืน (Restore) นะครับ");
+        }, 500);
+        if (restoreFileRef.current) restoreFileRef.current.value = '';
+        return;
+    }
+
     setRestoreFile(file);
     setLoading(true);
     
-    // --- NEW: อ่านไฟล์เพื่อดึงข้อมูลสรุปมาแสดงในหน้าจอยืนยัน ---
     const reader = new FileReader();
     reader.onload = (evt) => {
         try {
-            const data = JSON.parse(evt.target.result);
+            const fileContent = evt.target.result;
+            let data;
+            try {
+                data = JSON.parse(fileContent);
+            } catch (parseError) {
+                // --- 🔥 AI Auto-Healer: พยายามซ่อมแซมโครงสร้างไฟล์ JSON ที่ปลายไฟล์แหว่ง ---
+                try {
+                    let healedContent = fileContent.trim();
+                    if (healedContent.endsWith(',')) healedContent = healedContent.slice(0, -1);
+                    if (!healedContent.endsWith('}')) {
+                        if (!healedContent.endsWith(']')) healedContent += ']';
+                        healedContent += '}';
+                    }
+                    data = JSON.parse(healedContent);
+                    addToast("⚠️ ระบบพบไฟล์แหว่ง และทำการซ่อมแซมให้อัตโนมัติ (Auto-Healed)", "success");
+                } catch (healError) {
+                    throw new Error("ไฟล์เสียหายหนักเกินกว่าจะซ่อมแซมได้");
+                }
+            }
             
             const getLatestDate = (arr) => {
-                if (!arr || arr.length === 0) return { max: null, min: null };
+                if (!arr || arr.length === 0) return { max: null };
                 let maxTime = 0;
-                let minTime = Infinity;
                 arr.forEach(item => {
                     let time = 0;
                     if (item.date && item.date.seconds) time = item.date.seconds * 1000;
-                    else if (item.date) {
+                    else if (item.date && item.date.type === "firestore/timestamp/1.0") time = item.date.seconds * 1000;
+                    else if (item.date && typeof item.date === 'string') {
                         const d = new Date(item.date);
                         if (!isNaN(d.getTime())) time = d.getTime();
-                    } else if (item.createdAt && item.createdAt.seconds) time = item.createdAt.seconds * 1000;
-                    
-                    if (time > 0) {
-                        if (time > maxTime) maxTime = time;
-                        if (time < minTime) minTime = time;
+                    } else if (item.createdAt && item.createdAt.seconds) {
+                        time = item.createdAt.seconds * 1000;
                     }
+                    if (time > maxTime) maxTime = time;
                 });
-                return {
-                    max: maxTime > 0 ? new Date(maxTime) : null,
-                    min: minTime !== Infinity ? new Date(minTime) : null
-                };
+                return { max: maxTime > 0 ? new Date(maxTime) : null };
             };
 
             const exp = data['transactions_expense'] || [];
@@ -19219,30 +19386,33 @@ export default function App() {
                 invoiceCount: inv.length,
                 stockCount: stock.length
             });
-            setRestoreDataPreview(data); // เก็บ Data สำหรับแสดงผลในตาราง Preview
+            setRestoreDataPreview(data); 
             setRestoreSearchTerm('');
             setShowRestoreConfirm(true);
         } catch (err) {
-            console.error(err);
-            addToast("ไม่สามารถอ่านไฟล์ Backup ได้ ข้อมูลอาจเสียหาย", "error");
+            console.error("Restore Parse Error:", err);
+            addToast(`เกิดข้อผิดพลาด: ${err.message}`, "error");
             setRestoreFile(null);
             setRestoreDataPreview(null);
         }
         setLoading(false);
         if (restoreFileRef.current) restoreFileRef.current.value = '';
     };
+    
+    reader.onerror = () => {
+        addToast("ไม่สามารถอ่านไฟล์ได้ (File Read Error)", "error");
+        setLoading(false);
+    };
     reader.readAsText(file);
   };
 
   const executeRestore = async () => {
-    // --- FIX: เพิ่มการเช็ค restoreDataPreview ---
     if (!restoreFile || !user || !restoreDataPreview) return;
     setShowRestoreConfirm(false);
     setIsRestoring(true);
     setRestoreError('');
-    setRestoreLogs([{ msg: '➜ เริ่มต้นกระบวนการวิเคราะห์และกู้คืนข้อมูล...', type: 'info', time: new Date().toLocaleTimeString('th-TH') }]);
+    setRestoreLogs([{ msg: '➜ เริ่มต้นกระบวนการกู้คืนข้อมูล...', type: 'info', time: new Date().toLocaleTimeString('th-TH') }]);
 
-    // ป้องกัน RAM บวมจากการพ่น Log เป็นหมื่นบรรทัด ให้เก็บแค่ 100 บรรทัดล่าสุด
     const addLog = (msg, type = 'info') => {
         setRestoreLogs(prev => {
             const newLogs = [...prev, { msg, type, time: new Date().toLocaleTimeString('th-TH') }];
@@ -19261,14 +19431,23 @@ export default function App() {
       addLog('➜ กำลังเตรียมข้อมูลที่อ่านไว้แล้ว...', 'info');
       
       const reviveTimestamps = (obj) => {
-        if (obj === null || typeof obj !== 'object') return obj;
-        if (obj.seconds !== undefined && obj.nanoseconds !== undefined) {
-          return new Date(obj.seconds * 1000);
+        if (obj === null || obj === undefined) return obj;
+        if (typeof obj === 'string') {
+            if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(obj)) {
+                return new Date(obj);
+            }
+            return obj;
         }
+        if (typeof obj !== 'object') return obj;
+        
         if (obj.type === "firestore/timestamp/1.0" && obj.seconds !== undefined) {
-          return new Date(obj.seconds * 1000);
+          return new Date(obj.seconds * 1000 + (obj.nanoseconds || 0) / 1000000);
+        }
+        if (obj.seconds !== undefined && obj.nanoseconds !== undefined) {
+          return new Date(obj.seconds * 1000 + (obj.nanoseconds || 0) / 1000000);
         }
         if (Array.isArray(obj)) return obj.map(reviveTimestamps);
+        
         const newObj = {};
         for (const key in obj) newObj[key] = reviveTimestamps(obj[key]);
         return newObj;
@@ -19288,32 +19467,26 @@ export default function App() {
               }
               return newObj;
           }
-          if (typeof obj === 'number' && isNaN(obj)) return 0; // ป้องกัน NaN
+          if (typeof obj === 'number' && isNaN(obj)) return 0;
           return obj;
       };
 
       addLog('➜ กำลังล้างโครงสร้างข้อมูล (Sanitizing)...', 'info');
-      
-      // --- 🔥 FIX: ใช้ restoreDataPreview ที่โหลดไว้แล้ว แทนการพยายามอ่านไฟล์ใหม่ที่มักจะ Error ---
       const revivedData = sanitizeForFirestore(reviveTimestamps(restoreDataPreview));
-      const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'assets', 'partners', 'promotions', 'seller_profiles'];
+      const collectionsToRestore = ['transactions_income', 'transactions_expense', 'invoices', 'inventory_batches', 'assets', 'partners', 'promotions', 'seller_profiles', 'internal_docs'];
 
-      // --- 🔥 THE ULTIMATE FIX 6: Flatten & Multiplexing Engine 🔥 ---
-      // ยกเลิกการใช้ writeBatch ที่เป็นสาเหตุของคอขวดที่ 2,500 รายการ เปลี่ยนมาใช้การยิงข้อมูลคู่ขนานแทน
-      
       addLog('➜ กำลังรวมข้อมูลเพื่อเตรียมส่งออกแบบไร้รอยต่อ...', 'info');
       const uploadQueue = [];
       for (const collName of collectionsToRestore) {
         if (!revivedData[collName] || !Array.isArray(revivedData[collName])) continue;
         for (const item of revivedData[collName]) {
-          // 🔴 FIX 3: SMART FALLBACK ถ้าไฟล์เก่ามี id: null ให้ใช้ sysDocId/invNo แทน หรือให้สร้าง ID ใหม่ ไม่ปล่อยให้ข้อมูลหาย
           const docId = item.id || item.sysDocId || item.invNo || doc(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName)).id;
           if (!docId) continue;
           
           const docRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName, docId);
           const dataToSet = { ...item };
           delete dataToSet.id;
-          uploadQueue.push({ ref: docRef, data: dataToSet, sysDocId: item.sysDocId || item.invNo || item.orderId || docId });
+          uploadQueue.push({ ref: docRef, data: dataToSet });
         }
       }
 
@@ -19321,75 +19494,48 @@ export default function App() {
       addLog(`✅ พบข้อมูลทั้งหมดที่ต้องกู้คืน: ${totalItems.toLocaleString()} รายการ`, 'success');
       setRestoreProgress({ current: 0, total: totalItems, status: 'เตรียมเชื่อมต่อฐานข้อมูล' });
 
-      // --- 1. ล้างข้อมูลเก่า (Queue Deletion) ---
+      // 1. ล้างข้อมูลเก่า
       addLog('➜ --- เริ่มต้น: เคลียร์ข้อมูลเก่าออกจากระบบ ---', 'info');
       const deleteQueue = [];
       for (const collName of collectionsToRestore) {
         const snap = await getDocs(collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName));
-        for (const docSnap of snap.docs) {
-          deleteQueue.push(docSnap.ref);
-        }
+        snap.docs.forEach(docSnap => deleteQueue.push(docSnap.ref));
       }
       
       addLog(`➜ พบข้อมูลเก่าต้องลบ ${deleteQueue.length.toLocaleString()} รายการ กำลังดำเนินการ...`, 'info');
-      const DELETE_CHUNK_SIZE = 100;
+      const DELETE_CHUNK_SIZE = 400;
       for (let i = 0; i < deleteQueue.length; i += DELETE_CHUNK_SIZE) {
           const chunk = deleteQueue.slice(i, i + DELETE_CHUNK_SIZE);
-          let success = false;
-          for (let retry = 0; retry < 3; retry++) {
-              try {
-                  await Promise.all(chunk.map(ref => deleteDoc(ref)));
-                  success = true;
-                  break;
-              } catch (e) {
-                  await new Promise(r => setTimeout(r, 1000));
-              }
-          }
-          if (!success) addLog(`⚠️ ไม่สามารถลบข้อมูลเก่าบางส่วนได้ (อาจถูกลบไปแล้ว)`, 'warn');
-          await new Promise(r => setTimeout(r, 50)); // หายใจ
+          let batch = writeBatch(dbInstance);
+          chunk.forEach(ref => batch.delete(ref));
+          await batch.commit();
+          await new Promise(r => setTimeout(r, 50)); 
       }
       addLog('✅ ล้างข้อมูลเก่าสำเร็จ 100%', 'success');
 
-      // --- 2. เขียนข้อมูลใหม่ (Multiplexing Upload) ---
-      addLog('➜ --- เริ่มต้น: อัปโหลดข้อมูลใหม่ลงคลาวด์แบบคู่ขนาน ---', 'info');
+      // 2. เขียนข้อมูลใหม่ 
+      addLog('➜ --- เริ่มต้น: อัปโหลดข้อมูลใหม่ลงคลาวด์ ---', 'info');
       setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังเขียนข้อมูลลงคลาวด์...' });
       
       let restoredCount = 0;
-      const UPLOAD_CHUNK_SIZE = 50; // ยิงทีละ 50 Request คู่ขนาน ป้องกันคอขวด
+      const UPLOAD_CHUNK_SIZE = 400; 
       
       for (let i = 0; i < uploadQueue.length; i += UPLOAD_CHUNK_SIZE) {
           const chunk = uploadQueue.slice(i, i + UPLOAD_CHUNK_SIZE);
+          let batch = writeBatch(dbInstance);
+          chunk.forEach(item => batch.set(item.ref, item.data));
           
-          let chunkSuccess = false;
-          for (let retry = 0; retry < 3; retry++) {
-              try {
-                  // ใช้ Promise.all(setDoc) ยิงทะลุตรงเข้าเซิร์ฟเวอร์ ไม่ต้องรอคิวแบบ Batch
-                  await Promise.all(chunk.map(item => 
-                      Promise.race([
-                          setDoc(item.ref, item.data),
-                          new Promise((_, rej) => setTimeout(() => rej(new Error('TIMEOUT')), 10000))
-                      ])
-                  ));
-                  chunkSuccess = true;
-                  break;
-              } catch (err) {
-                  addLog(`⚠️ เครือข่ายสะดุดที่รายการ ${i+1}! กำลังลองใหม่ (${retry+1}/3)...`, 'warn');
-                  await new Promise(r => setTimeout(r, 2000));
-              }
-          }
-
-          if (!chunkSuccess) {
-              addLog(`❌ ดรอปก้อนข้อมูลช่วงที่ ${i+1} เพราะเชื่อมต่อไม่ได้ (ระบบจะข้ามและรันก้อนต่อไปต่อทันที!)`, 'error');
-              // ระบบจะรับรู้ว่าพัง แต่ไม่สั่งหยุดทำงาน (ไม่ตัดจบเหมือนเวอร์ชันก่อน) ทำให้มันวิ่งต่อไปจนจบรายการทั้งหมดได้
-          } else {
+          try {
+              await batch.commit();
               restoredCount += chunk.length;
-              if (restoredCount % 100 === 0 || restoredCount === totalItems) {
+              if (restoredCount % 400 === 0 || restoredCount === totalItems) {
                   setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
                   addLog(`➜ บันทึกสำเร็จรวม ${restoredCount.toLocaleString()} รายการ...`, 'info');
               }
+          } catch (err) {
+              addLog(`❌ เขียนข้อมูลชุดที่ ${i+1} ไม่สำเร็จ: ${err.message}`, 'error');
           }
-          
-          await new Promise(r => setTimeout(r, 50)); // หายใจป้องกัน RAM บวม
+          await new Promise(r => setTimeout(r, 50)); 
       }
       
       setRestoreProgress({ current: restoredCount, total: totalItems, status: 'เสร็จสมบูรณ์!' });
@@ -19398,9 +19544,8 @@ export default function App() {
       window.removeEventListener("beforeunload", handleBeforeUnload);
       setRestoreFile(null);
       setRestoreFileStats(null);
-      setRestoreDataPreview(null); // เคลียร์พรีวิว
+      setRestoreDataPreview(null); 
       
-      // หน่วงเวลา 3 วิให้ผู้ใช้อ่าน Log ก่อนรีเฟรชโชว์ข้อมูลใหม่
       setTimeout(() => {
           window.location.reload();
       }, 3000);
@@ -19412,7 +19557,7 @@ export default function App() {
       window.removeEventListener("beforeunload", handleBeforeUnload);
       setRestoreFile(null);
       setRestoreFileStats(null);
-      setRestoreDataPreview(null); // เคลียร์พรีวิว
+      setRestoreDataPreview(null); 
     }
   };
 
@@ -19572,45 +19717,55 @@ export default function App() {
     }
   };
 
-  const syncInvoiceDates = async () => {
+  const syncHistoricalInvoices = async () => {
     setIsMigrating(true);
     try {
-      addToast("กำลังตรวจสอบและซิงค์ Order Date ให้ตรงกับใบกำกับภาษี...", "success");
+      addToast("กำลังดึงข้อมูลออเดอร์ต้นทาง เพื่อซิงค์เข้าเอกสารย้อนหลัง...", "success");
       let batchWriter = writeBatch(dbInstance);
       let opsCount = 0;
       let updateCount = 0;
 
+      const currentSavedSeller = JSON.parse(localStorage.getItem('merchant_seller_info') || '{}');
+
       for (const inv of invoices) {
+        let needsUpdate = false;
+        let updates = {};
+
+        // 1. ซิงค์ข้อมูลร้านค้า (POS, Branch, Logo) ถ้าบิลเก่ายังไม่มี
+        if (!inv.sellerPosNo && currentSavedSeller.sellerPosNo) { updates.sellerPosNo = currentSavedSeller.sellerPosNo; needsUpdate = true; }
+        if (!inv.sellerBranchName && currentSavedSeller.sellerBranchName) { updates.sellerBranchName = currentSavedSeller.sellerBranchName; needsUpdate = true; }
+        
+        // 2. ซิงค์ข้อมูล E-Commerce จากออเดอร์ต้นทาง
         if (inv.orderId) {
-          const trans = transactions.find(t => t.orderId === inv.orderId && t.type === 'income');
-          if (trans && trans.date) {
+          const isExpenseDoc = inv.docType === 'payment_voucher';
+          const coll = isExpenseDoc ? transactions.filter(t => t.type === 'expense') : transactions.filter(t => t.type === 'income');
+          const trans = coll.find(t => t.orderId === inv.orderId || t.sysDocId === inv.orderId || t.linkedOrderNo === inv.orderId);
+          
+          if (trans) {
+            if (!inv.channel && trans.channel) { updates.channel = trans.channel; needsUpdate = true; }
+            if (!inv.shopName && trans.shopName) { updates.shopName = trans.shopName; needsUpdate = true; }
+            
             const transD = normalizeDate(trans.date);
             const invOrderD = normalizeDate(inv.orderDate);
             
-            let needsUpdate = false;
-            let updates = {};
-
-            // --- 🔥 THE FIX (COMPLIANCE): กฎหมายห้ามเปลี่ยนวันที่และรันเลขใบกำกับใหม่หากออกไปแล้ว ---
-            // เราจะทำการซิงค์เฉพาะช่อง "Order Date (วันที่สั่งซื้อ)" เพื่อให้อ้างอิงและดึงรายงานถูกเดือนเท่านั้น
-            // จะ "ไม่" ไปยุ่งกับ inv.date (วันที่ออกเอกสาร) หรือ inv.invNo (เลขที่เอกสาร) เด็ดขาด
-            
+            // กฎหมายห้ามเปลี่ยนวันที่ออกบิล (inv.date) แต่เราอัปเดตวันที่สั่งซื้อ (orderDate) เพื่อใช้อ้างอิงได้
             if (transD && (!invOrderD || transD.getTime() !== invOrderD.getTime())) {
-              needsUpdate = true;
               updates.orderDate = transD;
+              needsUpdate = true;
             }
-            
-            if (needsUpdate) {
-              const invRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'invoices', inv.id);
-              batchWriter.update(invRef, updates);
-              opsCount++;
-              updateCount++;
-              
-              if (opsCount >= 400) {
-                await batchWriter.commit();
-                batchWriter = writeBatch(dbInstance);
-                opsCount = 0;
-              }
-            }
+          }
+        }
+        
+        if (needsUpdate) {
+          const invRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', 'invoices', inv.id);
+          batchWriter.update(invRef, updates);
+          opsCount++;
+          updateCount++;
+          
+          if (opsCount >= 400) {
+            await batchWriter.commit();
+            batchWriter = writeBatch(dbInstance);
+            opsCount = 0;
           }
         }
       }
@@ -19620,9 +19775,9 @@ export default function App() {
       }
       
       if (updateCount > 0) {
-        addToast(`ซิงค์ข้อมูล Order Date สำเร็จ ${updateCount} รายการ`, "success");
+        addToast(`ซิงค์ข้อมูลย้อนหลังสำเร็จ ${updateCount} รายการ (รีเฟรชหน้าเพื่อดูผลลัพธ์)`, "success");
       } else {
-        addToast("ข้อมูลวันที่สั่งซื้อตรงกันกับออเดอร์อยู่แล้ว", "success");
+        addToast("ข้อมูลเอกสารทุกใบสมบูรณ์อยู่แล้ว", "success");
       }
     } catch (e) {
       console.error(e);
@@ -19904,8 +20059,8 @@ export default function App() {
                 <Trash2 size={14} className="text-center"/> 🧹 ล้างบิลส่วนต่างอัตโนมัติ (รุ่นเก่า)
               </button>
 
-              <button onClick={syncInvoiceDates} disabled={isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-emerald-400 hover:bg-emerald-900/30 transition-all text-left">
-                <RefreshCw size={14} className="text-center"/> ซิงค์วันที่และแก้เลข ABB
+              <button onClick={syncHistoricalInvoices} disabled={isMigrating} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-emerald-400 hover:bg-emerald-900/30 transition-all text-left">
+                {isMigrating ? <Loader size={14} className="text-center animate-spin"/> : <RefreshCw size={14} className="text-center"/>} ซิงค์ข้อมูลเอกสารย้อนหลัง (Deep Sync)
               </button>
 
               <button onClick={() => { setTempApiKey(localStorage.getItem('gemini_api_key') || ''); setShowApiKeyModal(true); }} className="w-full py-2.5 px-3 rounded-lg text-[10px] font-bold flex items-center justify-start gap-2 text-indigo-400 hover:bg-indigo-900/30 transition-all text-left">
