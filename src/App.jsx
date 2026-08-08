@@ -14177,11 +14177,16 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
                   const folder = zip.folder(docItem.invNo);
 
-                  const originalBlob = await generatePdfBlob("ต้นฉบับ (Original)");
-                  folder.file(`${docItem.invNo}_Original.pdf`, originalBlob);
+                  if (docItem.docType === 'abb') {
+                      const abbBlob = await generatePdfBlob("ต้นฉบับ (ORIGINAL)");
+                      folder.file(`${docItem.invNo}.pdf`, abbBlob);
+                  } else {
+                      const originalBlob = await generatePdfBlob("ต้นฉบับ (ORIGINAL)");
+                      folder.file(`${docItem.invNo}_Original.pdf`, originalBlob);
 
-                  const copyBlob = await generatePdfBlob("สำเนา (Copy)");
-                  folder.file(`${docItem.invNo}_Copy.pdf`, copyBlob);
+                      const copyBlob = await generatePdfBlob("สำเนา (COPY)");
+                      folder.file(`${docItem.invNo}_Copy.pdf`, copyBlob);
+                  }
 
                   element.style.boxShadow = originalBoxShadow;
                   
@@ -14927,19 +14932,24 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
       };
 
-      showToast("กำลังสร้างไฟล์ Original...", "success");
+      showToast(invData.docType === 'abb' ? "กำลังสร้างไฟล์ PDF..." : "กำลังสร้างไฟล์ Original...", "success");
       const originalBlob = await window.html2pdf().set(opt).from(element).output('blob');
-      zip.file(`${invData.invNo}_Original.pdf`, originalBlob);
 
-      const badge = element.querySelector('.status-badge');
-      const oldText = badge.innerText;
-      badge.innerText = "สำเนา (Copy)";
-      
-      showToast("กำลังสร้างไฟล์ Copy...", "success");
-      const copyBlob = await window.html2pdf().set(opt).from(element).output('blob');
-      zip.file(`${invData.invNo}_Copy.pdf`, copyBlob);
-      
-      badge.innerText = oldText;
+      if (invData.docType === 'abb') {
+          zip.file(`${invData.invNo}.pdf`, originalBlob);
+      } else {
+          zip.file(`${invData.invNo}_Original.pdf`, originalBlob);
+
+          const badge = element.querySelector('.status-badge');
+          const oldText = badge.innerText;
+          badge.innerText = "สำเนา (COPY)";
+          
+          showToast("กำลังสร้างไฟล์ Copy...", "success");
+          const copyBlob = await window.html2pdf().set(opt).from(element).output('blob');
+          zip.file(`${invData.invNo}_Copy.pdf`, copyBlob);
+          
+          badge.innerText = oldText;
+      }
 
       showToast("กำลังรวมไฟล์ ZIP...", "success");
       const content = await zip.generateAsync({ type: "blob" });
