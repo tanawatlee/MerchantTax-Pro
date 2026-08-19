@@ -2195,6 +2195,80 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   const [showTransferList, setShowTransferList] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
 
+  // --- 🔥 NEW: คำนวณสต็อกแบบ Real-time ให้ตรงกับหน้าคลังสินค้า 100% ---
+  const realTimeInventory = useMemo(() => {
+      const map = {};
+      
+      stockBatches.forEach(batch => {
+          const nameKey = batch.productName || 'ไม่ระบุชื่อสินค้า';
+          const skuKey = (batch.sku && batch.sku !== '-') ? batch.sku : '';
+          const groupKey = skuKey ? `${skuKey}::${nameKey}` : nameKey;
+
+          if (!map[groupKey]) { 
+              map[groupKey] = { sku: skuKey || '-', name: nameKey, totalIn: 0, totalOut: 0 }; 
+            }
+          
+          const qty = Number(batch.quantity) || 0;
+          if (qty > 0 || (batch.isAdjustment && !String(batch.adjustReason || '').includes('สต็อกติดลบ'))) {
+              map[groupKey].totalIn += qty;
+          }
+      });
+
+      transactions.forEach(t => {
+         if (t.isCancelled) return;
+
+         if (t.type === 'income') {
+             (t.items || []).forEach(item => {
+                 const cleanName = String(item.desc || '').replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]/gi, '').replace(/\[จัดส่งไม่สำเร็จ\]/gi, '').trim();
+                 if (cleanName.includes('ส่วนต่างยอดรับ') || cleanName.includes('ค่าจัดส่ง')) return;
+
+                 const matchingGroupKeys = Object.keys(map).filter(gKey => 
+                     matchItemToBatch(item.sku, cleanName, map[gKey].sku, map[gKey].name)
+                 );
+
+                 matchingGroupKeys.forEach(gKey => {
+                     map[gKey].totalOut += Math.abs(Number(item.qty) || 0);
+                 });
+             });
+         } else if (t.type === 'expense' && t.category === 'สินค้าเสียหาย/หมดอายุ') {
+             (t.items || []).forEach(item => {
+                 let cleanName = String(item.desc || '');
+                 if (cleanName.includes(':')) cleanName = cleanName.split(':').pop().trim();
+                 
+                 const matchingGroupKeys = Object.keys(map).filter(gKey => 
+                     matchItemToBatch(item.sku, cleanName, map[gKey].sku, map[gKey].name) ||
+                     matchItemToBatch(item.sku, item.desc, map[gKey].sku, map[gKey].name)
+                 );
+
+                 matchingGroupKeys.forEach(gKey => {
+                     map[gKey].totalOut += Math.abs(Number(item.qty) || 0);
+                 });
+             });
+         }
+      });
+
+      Object.values(map).forEach(item => {
+          item.totalQty = item.totalIn - item.totalOut;
+      });
+
+      return map;
+  }, [stockBatches, transactions]);
+
+  const getRealTimeAvailable = (sku, name) => {
+      let available = 0;
+      const cleanName = String(name || '').replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]/gi, '').replace(/\[จัดส่งไม่สำเร็จ\]/gi, '').trim();
+      
+      const matchingKeys = Object.keys(realTimeInventory).filter(gKey => 
+          matchItemToBatch(sku, cleanName, realTimeInventory[gKey].sku, realTimeInventory[gKey].name)
+      );
+      
+      matchingKeys.forEach(k => {
+          available += realTimeInventory[k].totalQty;
+      });
+      
+      return available;
+  };
+
   // --- 🔥 ย้าย Helper Functions สำหรับแยกข้อมูลออกมาไว้ระดับ Component เพื่อให้ Force Import เรียกใช้ได้ ---
   const cleanNum = (val) => { 
       if (typeof val === 'number') return val; 
@@ -2497,24 +2571,14 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
   // --- Grouped Inventory for Dropdown ---
   const groupedInventory = useMemo(() => {
-    const map = {};
-    stockBatches.forEach(batch => {
-      const nameKey = batch.productName || 'ไม่ระบุชื่อสินค้า';
-      const skuKey = (batch.sku && batch.sku !== '-') ? batch.sku : '';
-      const groupKey = skuKey ? `${skuKey}::${nameKey}` : nameKey;
-
-      if (!map[groupKey]) { 
-          map[groupKey] = { groupKey, name: nameKey, sku: batch.sku || '-', totalQty: 0, batches: [] }; 
-      }
-      const remaining = Number(batch.quantity) - Number(batch.sold || 0);
-      
-      // --- 🔥 FIX: เอา Math.max(0) ออก เพื่อให้รองรับยอดติดลบจากใบลดหนี้/โอนย้าย ---
-      map[groupKey].totalQty += remaining;
-      
-      map[groupKey].batches.push({ ...batch, remaining });
-    });
-    return Object.values(map).filter(i => i.totalQty > 0).sort((a,b) => b.totalQty - a.totalQty);
-  }, [stockBatches]);
+      return Object.values(realTimeInventory).map(item => ({
+          groupKey: item.sku !== '-' ? `${item.sku}::${item.name}` : item.name,
+          name: item.name,
+          sku: item.sku,
+          totalQty: item.totalQty,
+          batches: stockBatches.filter(b => matchItemToBatch(item.sku, item.name, b.sku, b.productName))
+      })).filter(i => i.totalQty > 0).sort((a,b) => b.totalQty - a.totalQty);
+  }, [realTimeInventory, stockBatches]);
 
   // --- Handle Quick Transfer ---
   const handleQuickTransfer = async (e) => {
@@ -2607,20 +2671,27 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       const requiredItems = [];
       // 1. รวมยอดจำนวนสินค้าทั้งหมดที่ต้องการหักจากไฟล์ Import
       importedData.forEach(trans => {
+          // ไม่นำยอดออเดอร์ที่ถูกยกเลิก/ส่งไม่สำเร็จมาคิด (ยกเว้นสั่งตัดชำรุด)
+          const isForceCancelled = trans.isCancelled || trans.isDeliveryFailed;
+          const isDiscarded = trans.returnAction === 'discard';
+          if (isForceCancelled && !isDiscarded) return;
+
           (trans.items || []).forEach(item => {
-              const existing = requiredItems.find(r => matchItemToBatch(item.sku, item.desc, r.sku, r.name));
+              const cleanName = String(item.desc || '').replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]/gi, '').replace(/\[จัดส่งไม่สำเร็จ\]/gi, '').trim();
+              if (cleanName.includes('ส่วนต่างยอดรับ') || cleanName.includes('ค่าจัดส่ง')) return;
+
+              const existing = requiredItems.find(r => matchItemToBatch(item.sku, cleanName, r.sku, r.name));
               if (existing) {
                   existing.required += Number(item.qty);
               } else {
-                  requiredItems.push({ sku: item.sku || '-', name: item.desc || '', required: Number(item.qty), available: 0 });
+                  requiredItems.push({ sku: item.sku || '-', name: cleanName, required: Number(item.qty), available: 0 });
               }
           });
       });
 
       // 2. เช็คจำนวนที่มีอยู่จริงในคลัง (รองรับยอดติดลบ)
       requiredItems.forEach(req => {
-          const batches = stockBatches.filter(b => matchItemToBatch(req.sku, req.name, b.sku, b.productName));
-          req.available = batches.reduce((sum, b) => sum + (Number(b.quantity) - Number(b.sold || 0)), 0);
+          req.available = getRealTimeAvailable(req.sku, req.name);
       });
 
       // 3. สรุปปัญหา
@@ -4452,8 +4523,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             ) : (
                                 <div className="flex flex-col gap-1 text-left">
                                     {(it.items || []).map((item, itemIdx) => {
-                                        const batches = stockBatches.filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName));
-                                        const available = batches.reduce((sum, b) => sum + Math.max(0, Number(b.quantity) - Number(b.sold || 0)), 0);
+                                        const cleanName = String(item.desc || '').replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]/gi, '').replace(/\[จัดส่งไม่สำเร็จ\]/gi, '').trim();
+                                        if (cleanName.includes('ส่วนต่างยอดรับ') || cleanName.includes('ค่าจัดส่ง')) return null;
+                                        
+                                        const available = getRealTimeAvailable(item.sku, cleanName);
                                         return (
                                             <div key={itemIdx} className="flex items-center gap-1.5 flex-wrap">
                                                 <span className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold truncate max-w-[120px]" title={item.desc}>
