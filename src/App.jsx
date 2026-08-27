@@ -7981,16 +7981,13 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   };
 
   const filteredInvoices = useMemo(() => {
-    // --- 🔥 FIX: สร้าง Set สำหรับเช็คว่าบิลไหนถูกสร้างมาจาก "รายจ่าย" เพื่อป้องกันการปนกับภาษีขาย ---
     const expenseInvNos = new Set(transactions.filter(t => t.type === 'expense' && t.invoiceNo).map(t => t.invoiceNo));
     const incomeInvNos = new Set(transactions.filter(t => t.type === 'income' && t.invoiceNo).map(t => t.invoiceNo));
 
     return invoices.filter(inv => {
-      // --- FIX: กรองเฉพาะเอกสารภาษีขาย (INV, ABB, CN) เท่านั้น ไม่เอาใบเสนอราคา/ใบเสร็จ/ใบสำคัญจ่ายมารวม ---
       if (inv.docType === 'quotation' || inv.docType === 'receipt' || inv.docType === 'payment_voucher') return false;
-
-      // --- 🔥 FIX: กรองบิลภาษีขายที่ถูกเผลอสร้างมาจาก "รายจ่าย" (เช่น เอาค่าส่งหรือซื้อสินค้ามาออก ABB) ---
       if (expenseInvNos.has(inv.invNo) && !incomeInvNos.has(inv.invNo)) return false;
+      if (inv.status === 'cancelled') return false; // กรองบิลที่ถูกยกเลิกออกไปเลย
 
       const d = normalizeDate(inv.date);
       const start = new Date(startDate);
@@ -8000,8 +7997,28 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       const dateMatch = d >= start && d <= end;
       const branchMatch = selectedBranch === 'all' || (inv.branch || '00000') === selectedBranch;
       return dateMatch && branchMatch;
-    }).sort(sortOldestFirst); // --- FIX: เรียงลำดับจากเก่าไปใหม่ (วันที่ 1 อยู่บนสุด) ตามหลักบัญชี ---
-  }, [invoices, startDate, endDate, selectedBranch]);
+    }).sort(sortOldestFirst); 
+  }, [invoices, transactions, startDate, endDate, selectedBranch]);
+
+  const voidInvoices = useMemo(() => {
+    const expenseInvNos = new Set(transactions.filter(t => t.type === 'expense' && t.invoiceNo).map(t => t.invoiceNo));
+    const incomeInvNos = new Set(transactions.filter(t => t.type === 'income' && t.invoiceNo).map(t => t.invoiceNo));
+
+    return invoices.filter(inv => {
+      if (inv.docType === 'quotation' || inv.docType === 'receipt' || inv.docType === 'payment_voucher') return false;
+      if (expenseInvNos.has(inv.invNo) && !incomeInvNos.has(inv.invNo)) return false;
+      if (inv.status !== 'cancelled') return false; // ดึงเฉพาะบิลที่ถูกยกเลิก
+
+      const d = normalizeDate(inv.date);
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      start.setHours(0,0,0,0);
+      end.setHours(23,59,59,999);
+      const dateMatch = d >= start && d <= end;
+      const branchMatch = selectedBranch === 'all' || (inv.branch || '00000') === selectedBranch;
+      return dateMatch && branchMatch;
+    }).sort(sortOldestFirst); 
+  }, [invoices, transactions, startDate, endDate, selectedBranch]);
 
   const filteredExpenses = useMemo(() => {
     return transactions.filter(t => {
@@ -8249,6 +8266,82 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     }, { base: 0, vat: 0, total: 0 });
   }, [filteredExpenses]);
 
+  // --- 🔥 NEW: Centralized Data Preparation for Purchase Tax (ใช้ร่วมกันทั้ง UI Preview และ Excel Export) ---
+  const purchaseTaxData = useMemo(() => {
+    const seenInvoiceNos = new Set();
+    const duplicateInvoiceNos = new Set();
+    
+    filteredExpenses.forEach(r => {
+      const inv = String(r.taxInvoiceNo || '').trim();
+      if (inv && inv !== '-') {
+          if (seenInvoiceNos.has(inv)) duplicateInvoiceNos.add(inv);
+          seenInvoiceNos.add(inv);
+      }
+    });
+
+    const toFixedNum = (num) => Number(Number(num).toFixed(2));
+
+    return filteredExpenses.map((row) => {
+      const taxDetails = getExpenseTaxDetails(row);
+      const base = toFixedNum(taxDetails.base);
+      const vat = toFixedNum(taxDetails.vat);
+      const total = toFixedNum(taxDetails.total);
+
+      const d = normalizeDate(row.date);
+      const taxPeriodStr = d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` : 'รอตรวจสอบ';
+
+      let expType = 'รอตรวจสอบ';
+      const sysId = String(row.sysDocId || '').toUpperCase();
+      if (sysId.startsWith('COG')) expType = 'ซื้อสินค้า / ต้นทุนสินค้า';
+      else if (sysId.startsWith('FEE')) expType = 'ค่าธรรมเนียม Platform';
+      else if (sysId.startsWith('SHP')) expType = 'ค่าขนส่ง';
+      else if (sysId.startsWith('PKG')) expType = 'บรรจุภัณฑ์';
+      else if (sysId.startsWith('ADS') || sysId.startsWith('ADX')) expType = 'ค่าโฆษณา';
+      else if (sysId.startsWith('OFF')) expType = 'อุปกรณ์สำนักงาน';
+      else if (['EXP', 'RNT', 'SAL', 'TAX', 'DSC', 'DMG', 'SRV', 'COM', 'AFF', 'GAS'].some(p => sysId.startsWith(p))) expType = 'ค่าใช้จ่ายอื่น';
+
+      let vatStatus = 'รอตรวจสอบ';
+      if (row.isNonCreditableVat) vatStatus = 'ภาษีซื้อต้องห้าม';
+      else if (row.isCashBill || row.vatType === 'none') vatStatus = 'เครดิตไม่ได้';
+      else if (row.taxInvoiceNo && row.taxInvoiceNo !== '-' && row.partnerTaxId && row.partnerName) vatStatus = 'เครดิตได้';
+
+      const flags = [];
+      if (!row.taxInvoiceNo || row.taxInvoiceNo === '-' || !row.partnerTaxId || !row.partnerName) flags.push("เอกสารไม่ครบ");
+      if (row.isNonCreditableVat) flags.push("ภาษีซื้อต้องห้าม");
+      if (row.isCancelled) flags.push("รายการยกเลิก");
+
+      const calculatedVat = base * 0.07;
+      if (vatStatus === 'เครดิตได้' && Math.abs(vat - calculatedVat) > 0.05) flags.push("VAT ไม่ตรง 7%");
+
+      const invNo = String(row.taxInvoiceNo || '').trim();
+      if (invNo && invNo !== '-' && duplicateInvoiceNos.has(invNo)) flags.push("ใบกำกับซ้ำ");
+
+      if (d) {
+          const sDate = new Date(startDate); sDate.setHours(0,0,0,0);
+          const eDate = new Date(endDate); eDate.setHours(23,59,59,999);
+          if (d < sDate || d > eDate) flags.push("วันที่อยู่นอกรอบภาษี");
+      }
+
+      if (base === 0 && vat > 0) flags.push("ฐานภาษีเป็น 0 แต่มี VAT");
+      if (base > 0 && vat === 0 && vatStatus === 'เครดิตได้') flags.push("VAT เป็น 0 แต่มีฐานภาษี และควรมี VAT");
+      if (Math.abs(total - (base + vat)) > 0.05) flags.push("ยอดรวมไม่เท่ากับ ฐานภาษี + VAT");
+      if (vatStatus === 'รอตรวจสอบ') flags.push("รอตรวจสอบเอกสาร");
+
+      const remarks = flags.length > 0 ? flags.join(', ') : 'OK';
+
+      return {
+          ...row,
+          taxPeriodStr,
+          expType,
+          base,
+          vat,
+          total,
+          vatStatus,
+          remarks
+      };
+    });
+  }, [filteredExpenses, startDate, endDate]);
+
   const yearlyTrackingData = useMemo(() => {
     const year = parseInt(trackingYear);
     const toFixedNum = (num) => Number(Number(num).toFixed(2));
@@ -8493,14 +8586,21 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   const handleExportExcel = async () => {
     setIsExporting(true);
     if (showToast) showToast("กำลังเตรียมไฟล์...", "success");
-    if (!window.XLSX) { 
+    
+    // --- 🔥 NEW: Load xlsx-js-style instead of basic xlsx for color support ---
+    if (!window.XLSX || !window.XLSX_JS_STYLE_LOADED) { 
       const script = document.createElement('script'); 
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"; 
-      await new Promise((resolve) => { script.onload = resolve; document.body.appendChild(script); }); 
+      script.src = "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"; 
+      await new Promise(res => { 
+          script.onload = () => { window.XLSX_JS_STYLE_LOADED = true; res(); };
+          document.body.appendChild(script); 
+      }); 
     }
+    const XLSX = window.XLSX;
     
     let fileName = ""; 
     let dataRows = [];
+    let purchaseReconRows = null; // --- NEW: Added for Purchase VAT Recon ---
     const toFixedNum = (num) => Number(Number(num).toFixed(2));
     
     const headerRows = [ 
@@ -8514,24 +8614,186 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
       [] 
     ];
 
-    if (reportTab === 'sales') {
+    // --- Styles for Document Types ---
+    const styleABB = { fill: { fgColor: { rgb: "D1FAE5" } }, font: { color: { rgb: "047857" }, bold: true } }; // Green (Emerald)
+    const styleINV = { fill: { fgColor: { rgb: "DBEAFE" } }, font: { color: { rgb: "1D4ED8" }, bold: true } }; // Blue (Indigo)
+    const styleCN = { fill: { fgColor: { rgb: "FEE2E2" } }, font: { color: { rgb: "B91C1C" }, bold: true } }; // Red (Rose)
+
+    if (reportTab === 'sales' || reportTab === 'void_invoices') {
       fileName = `Sales_Tax_Report_${startDate}.xlsx`;
-      const tableHeader = ["ลำดับ", "วันที่", "เลขที่ใบกำกับภาษี", "ชื่อผู้ซื้อสินค้า/ผู้รับบริการ", "เลขผู้เสียภาษี", "สถานประกอบการ", "มูลค่าสินค้า/บริการ", "ภาษีมูลค่าเพิ่ม", "ยอดรวม"];
-      const body = filteredInvoices.map((inv, i) => { 
+      const tableHeader = ["Tax Period", "วันที่", "ประเภทเอกสาร", "สถานะเอกสาร", "เลขที่ใบกำกับภาษี", "Order ID", "ช่องทางการขาย", "ร้านค้า", "ชื่อลูกค้า/ผู้รับบริการ", "เลขผู้เสียภาษี", "สาขา", "ยอดฐานภาษี", "VAT ขาย", "ยอดรวม"];
+      
+      // 1. สร้างชีต Sales Tax Report (บิลปกติ)
+      const bodySales = filteredInvoices.map((inv, i) => { 
         const mult = inv.docType === 'credit_note' ? -1 : 1; 
-        return [ i + 1, formatDate(inv.date), inv.invNo + (inv.docType === 'credit_note' ? " (ใบลดหนี้)" : ""), inv.customerName, inv.taxId || '-', (inv.branch === '00000' || !inv.branch) ? 'สำนักงานใหญ่' : `สาขา ${inv.branch}`, toFixedNum((inv.preVat || 0) * mult), toFixedNum((inv.vat || 0) * mult), toFixedNum((inv.total || 0) * mult) ]; 
+        
+        // --- 🔥 NEW: Apply Thai Names and Colors ---
+        let docTypeObj = { v: 'เต็มรูป (INV)', s: styleINV };
+        if (inv.docType === 'abb') docTypeObj = { v: 'อย่างย่อ (ABB)', s: styleABB };
+        else if (inv.docType === 'credit_note') docTypeObj = { v: 'ใบลดหนี้ (CN)', s: styleCN };
+
+        const docStatus = inv.status === 'cancelled' ? 'CANCEL' : (inv.docType === 'credit_note' ? 'คืนสินค้า' : 'ปกติ');
+        
+        let taxPeriodStr = '';
+        const d = normalizeDate(inv.date);
+        if (d && !isNaN(d.getTime())) {
+            taxPeriodStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        } else {
+            taxPeriodStr = startDate.substring(0,7);
+        }
+
+        const linkedTx = transactions.find(t => (t.orderId === inv.orderId || t.sysDocId === inv.orderId) && t.type === 'income');
+        const finalChannel = inv.channel || linkedTx?.channel || 'หน้าร้าน';
+        const finalShopName = inv.shopName || linkedTx?.shopName || 'ไม่ระบุ';
+        
+        return [ 
+          taxPeriodStr,
+          formatDate(inv.date), 
+          docTypeObj,
+          docStatus,
+          inv.invNo, 
+          inv.orderId || '-', 
+          finalChannel, 
+          finalShopName === 'ไม่ระบุ' ? '-' : finalShopName, 
+          inv.customerName, 
+          inv.taxId || '-', 
+          (inv.branch === '00000' || !inv.branch) ? 'สำนักงานใหญ่' : `สาขา ${inv.branch}`, 
+          toFixedNum((inv.preVat || 0) * mult), 
+          toFixedNum((inv.vat || 0) * mult), 
+          toFixedNum((inv.total || 0) * mult) 
+        ]; 
       });
-      const footer = [ "รวมทั้งสิ้น", "", "", "", "", "", toFixedNum(salesFooter.base), toFixedNum(salesFooter.vat), toFixedNum(salesFooter.total) ];
-      dataRows = [...headerRows, tableHeader, ...body, footer];
+      const footerSales = [ "รวมทั้งสิ้น", "", "", "", "", "", "", "", "", "", "", toFixedNum(salesFooter.base), toFixedNum(salesFooter.vat), toFixedNum(salesFooter.total) ];
+      const salesRows = [...headerRows, tableHeader, ...bodySales, footerSales];
+
+      // 2. สร้างชีต Void (บิลยกเลิก)
+      const bodyVoid = voidInvoices.map((inv, i) => { 
+        let docTypeObj = { v: 'เต็มรูป (INV)', s: styleINV };
+        if (inv.docType === 'abb') docTypeObj = { v: 'อย่างย่อ (ABB)', s: styleABB };
+        else if (inv.docType === 'credit_note') docTypeObj = { v: 'ใบลดหนี้ (CN)', s: styleCN };
+        
+        let taxPeriodStr = '';
+        const d = normalizeDate(inv.date);
+        if (d && !isNaN(d.getTime())) {
+            taxPeriodStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        } else {
+            taxPeriodStr = startDate.substring(0,7);
+        }
+
+        const linkedTx = transactions.find(t => (t.orderId === inv.orderId || t.sysDocId === inv.orderId) && t.type === 'income');
+        const finalChannel = inv.channel || linkedTx?.channel || 'หน้าร้าน';
+        const finalShopName = inv.shopName || linkedTx?.shopName || 'ไม่ระบุ';
+        
+        return [ 
+          taxPeriodStr,
+          formatDate(inv.date), 
+          docTypeObj,
+          'ยกเลิก',
+          inv.invNo, 
+          inv.orderId || '-', 
+          finalChannel, 
+          finalShopName === 'ไม่ระบุ' ? '-' : finalShopName, 
+          inv.customerName, 
+          inv.taxId || '-', 
+          (inv.branch === '00000' || !inv.branch) ? 'สำนักงานใหญ่' : `สาขา ${inv.branch}`, 
+          0, 
+          0, 
+          0 
+        ]; 
+      });
+      const voidRows = [...headerRows, tableHeader, ...bodyVoid];
+
+      // 3. สร้างชีต VAT Reconciliation
+      const taxPeriodValue = startDate ? startDate.substring(0, 7) : '2026-08';
+      const reconRows = [
+          ["เดือนภาษี", "ฐานขายตาม Sales Report", "VAT ขายตาม Sales Report", "ฐานขายตาม ภ.พ.30 (กรอกเอง)", "VAT ขายตาม ภ.พ.30 (กรอกเอง)", "ต่างฐาน", "ต่าง VAT", "สถานะ"],
+          [
+              taxPeriodValue,
+              toFixedNum(salesFooter.base),
+              toFixedNum(salesFooter.vat),
+              0, // ค่าเริ่มต้นสำหรับให้บัญชีกรอก
+              0, // ค่าเริ่มต้นสำหรับให้บัญชีกรอก
+              { t: 'n', f: "B2-D2" }, // สูตรคำนวณต่างฐาน
+              { t: 'n', f: "C2-E2" }, // สูตรคำนวณต่าง VAT
+              { t: 's', f: 'IF(AND(F2=0,G2=0),"OK","CHECK")' } // สูตรเช็คสถานะ
+          ]
+      ];
+
+      try {
+        const wb = XLSX.utils.book_new();
+        
+        const wsSales = XLSX.utils.aoa_to_sheet(salesRows);
+        wsSales['!cols'] = [{wch:10}, {wch:12}, {wch:15}, {wch:10}, {wch:20}, {wch:15}, {wch:15}, {wch:15}, {wch:25}, {wch:15}, {wch:15}, {wch:12}, {wch:12}, {wch:12}];
+        XLSX.utils.book_append_sheet(wb, wsSales, "Sales Tax Report");
+        
+        const wsRecon = XLSX.utils.aoa_to_sheet(reconRows);
+        wsRecon['!cols'] = [{wch:15}, {wch:25}, {wch:25}, {wch:25}, {wch:25}, {wch:15}, {wch:15}, {wch:10}];
+        XLSX.utils.book_append_sheet(wb, wsRecon, "VAT Reconciliation");
+
+        const wsVoid = XLSX.utils.aoa_to_sheet(voidRows);
+        wsVoid['!cols'] = [{wch:10}, {wch:12}, {wch:15}, {wch:10}, {wch:20}, {wch:15}, {wch:15}, {wch:15}, {wch:25}, {wch:15}, {wch:15}, {wch:12}, {wch:12}, {wch:12}];
+        XLSX.utils.book_append_sheet(wb, wsVoid, "Void");
+
+        XLSX.writeFile(wb, fileName);
+        if (showToast) showToast("ส่งออกรายงานทั้ง 3 ชีต สำเร็จ", "success");
+      } catch (e) { 
+        console.error(e);
+        if (showToast) showToast("เกิดข้อผิดพลาดในการส่งออก Excel", "error"); 
+      }
+      setIsExporting(false);
+      return; 
     } else if (reportTab === 'purchase') {
       fileName = `Purchase_Tax_Report_${startDate}.xlsx`;
-      const tableHeader = ["ลำดับ", "วันที่", "เลขระบบ (SYS ID)", "เลขที่ใบกำกับภาษี", "ชื่อผู้ขายสินค้า/ผู้ให้บริการ", "เลขผู้เสียภาษี", "สถานประกอบการ", "มูลค่าสินค้า/บริการ", "ภาษีมูลค่าเพิ่ม", "ยอดรวม"];
-      const body = filteredExpenses.map((row, i) => {
-        const taxDetails = getExpenseTaxDetails(row);
-        return [ i + 1, formatDate(row.date), row.sysDocId || '-', row.taxInvoiceNo || row.orderId || '-', row.partnerName || '-', row.partnerTaxId || '-', (row.partnerBranch === '00000' || !row.partnerBranch) ? 'สำนักงานใหญ่' : `สาขาที่ ${row.partnerBranch}`, toFixedNum(taxDetails.base), toFixedNum(taxDetails.vat), toFixedNum(taxDetails.total) ];
+      // --- 🔥 FIX: จัดลำดับคอลัมน์ใหม่ตามโจทย์ และเอา รายละเอียดรายการ ออก ---
+      const tableHeader = ["ลำดับ", "Tax Period", "วันที่", "ประเภทค่าใช้จ่าย", "เลขระบบ (SYS ID)", "เลขที่ใบกำกับภาษี", "ชื่อผู้ขายสินค้า/ผู้ให้บริการ", "เลขผู้เสียภาษี", "สถานประกอบการ", "มูลค่าสินค้า/บริการ", "ภาษีมูลค่าเพิ่ม", "ยอดรวม", "สถานะ VAT ซื้อ", "หมายเหตุ"];
+      
+      const periodTotals = {};
+
+      const body = purchaseTaxData.map((row, i) => {
+        if (row.taxPeriodStr !== 'รอตรวจสอบ') {
+            if (!periodTotals[row.taxPeriodStr]) periodTotals[row.taxPeriodStr] = { base: 0, vat: 0 };
+            periodTotals[row.taxPeriodStr].base += row.base;
+            periodTotals[row.taxPeriodStr].vat += row.vat;
+        }
+
+        return [ 
+            i + 1, 
+            row.taxPeriodStr, 
+            formatDate(row.date), 
+            row.expType, 
+            row.sysDocId || '-', 
+            row.taxInvoiceNo || row.orderId || '-', 
+            row.partnerName || '-', 
+            row.partnerTaxId || '-', 
+            (row.partnerBranch === '00000' || !row.partnerBranch) ? 'สำนักงานใหญ่' : `สาขาที่ ${row.partnerBranch}`, 
+            row.base, 
+            row.vat, 
+            row.total, 
+            row.vatStatus, 
+            row.remarks 
+        ];
       });
-      const footer = [ "รวมทั้งสิ้น", "", "", "", "", "", "", toFixedNum(purchaseFooter.base), toFixedNum(purchaseFooter.vat), toFixedNum(purchaseFooter.total) ];
+
+      const footer = [ "รวมทั้งสิ้น", "", "", "", "", "", "", "", "", toFixedNum(purchaseFooter.base), toFixedNum(purchaseFooter.vat), toFixedNum(purchaseFooter.total), "", "" ];
       dataRows = [...headerRows, tableHeader, ...body, footer];
+
+      purchaseReconRows = [
+          ["Tax Period", "ฐานซื้อจาก Purchase Report", "VAT ซื้อจาก Purchase Report", "ฐานซื้อตาม ภ.พ.30", "VAT ซื้อตาม ภ.พ.30", "ต่างฐาน", "ต่าง VAT", "Status"]
+      ];
+      let rowIdx = 2;
+      Object.keys(periodTotals).sort().forEach(period => {
+          purchaseReconRows.push([
+              period,
+              periodTotals[period].base,
+              periodTotals[period].vat,
+              0,
+              0,
+              { t: 'n', f: `B${rowIdx}-D${rowIdx}` },
+              { t: 'n', f: `C${rowIdx}-E${rowIdx}` },
+              { t: 's', f: `IF(AND(ROUND(F${rowIdx},2)=0,ROUND(G${rowIdx},2)=0),"OK","CHECK")` }
+          ]);
+          rowIdx++;
+      });
     } else if (reportTab === 'inventory') {
       fileName = `Stock_Movement_${startDate}.xlsx`;
       const tableHeader = ["วันที่", "เลขระบบ (SYS ID)", "เลขใบกำกับ/อ้างอิง", "Product SKU", "รายการสินค้า", "รับ-จำนวน", "รับ-ราคา/หน่วย", "รับ-มูลค่ารวม", "จ่าย-จำนวน", "จ่าย-ต้นทุนรวม", "คงเหลือ-จำนวน", "คงเหลือ-มูลค่ารวม"];
@@ -8590,9 +8852,48 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     }
 
     try {
-      const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
       const wb = window.XLSX.utils.book_new();
+      const ws = window.XLSX.utils.aoa_to_sheet(dataRows);
+      
+      if (reportTab === 'purchase') {
+          ws['!cols'] = [
+              {wch: 5}, {wch: 12}, {wch: 20}, {wch: 12}, {wch: 15},
+              {wch: 20}, {wch: 25}, {wch: 35}, {wch: 15}, {wch: 15},
+              {wch: 15}, {wch: 15}, {wch: 15}, {wch: 15}, {wch: 30}
+          ];
+      }
+      
       window.XLSX.utils.book_append_sheet(wb, ws, "Report");
+      
+      // --- 🔥 NEW: เพิ่มชีต VAT Reconciliation พร้อมฝังสูตร Excel ให้อัตโนมัติ (เฉพาะรายงานภาษีขาย) ---
+      if (reportTab === 'sales') {
+          const taxPeriodValue = startDate ? startDate.substring(0, 7) : '2026-08';
+          const reconRows = [
+              ["เดือนภาษี", "ฐานขายตาม Sales Report", "VAT ขายตาม Sales Report", "ฐานขายตาม ภ.พ.30 (กรอกเอง)", "VAT ขายตาม ภ.พ.30 (กรอกเอง)", "ต่างฐาน", "ต่าง VAT", "สถานะ"],
+              [
+                  taxPeriodValue,
+                  toFixedNum(salesFooter.base),
+                  toFixedNum(salesFooter.vat),
+                  0, // ค่าเริ่มต้นสำหรับให้บัญชีกรอก
+                  0, // ค่าเริ่มต้นสำหรับให้บัญชีกรอก
+                  { t: 'n', f: "B2-D2" }, // สูตรคำนวณต่างฐาน
+                  { t: 'n', f: "C2-E2" }, // สูตรคำนวณต่าง VAT
+                  { t: 's', f: 'IF(AND(F2=0,G2=0),"OK","CHECK")' } // สูตรเช็คสถานะ
+              ]
+          ];
+          const wsRecon = window.XLSX.utils.aoa_to_sheet(reconRows);
+          // จัดความกว้างคอลัมน์ให้สวยงาม
+          wsRecon['!cols'] = [{wch:15}, {wch:25}, {wch:25}, {wch:25}, {wch:25}, {wch:15}, {wch:15}, {wch:10}];
+          window.XLSX.utils.book_append_sheet(wb, wsRecon, "VAT Reconciliation");
+      }
+      
+      // --- 🔥 NEW: เพิ่มชีต VAT Purchase Reconciliation ---
+      if (reportTab === 'purchase' && purchaseReconRows) {
+          const wsPurchaseRecon = window.XLSX.utils.aoa_to_sheet(purchaseReconRows);
+          wsPurchaseRecon['!cols'] = [{wch:15}, {wch:25}, {wch:25}, {wch:25}, {wch:25}, {wch:15}, {wch:15}, {wch:10}];
+          window.XLSX.utils.book_append_sheet(wb, wsPurchaseRecon, "VAT Purchase Reconciliation");
+      }
+
       window.XLSX.writeFile(wb, fileName);
     } catch (e) { showToast("เกิดข้อผิดพลาดในการส่งออก", "error"); }
     setIsExporting(false);
@@ -8705,6 +9006,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
 
       <div className="flex gap-4 flex-wrap no-print text-left">
         <TabBtn id="sales" label="ภาษีขาย (Sales Tax)" icon={<FileText size={18}/>} />
+        <TabBtn id="void_invoices" label="บิลยกเลิก (Void)" icon={<XCircle size={18}/>} />
         <TabBtn id="purchase" label="ภาษีซื้อ (Purchase Tax)" icon={<ShoppingCart size={18}/>} />
         <TabBtn id="inventory" label="คุมสินค้า (Stock)" icon={<Box size={18}/>} />
         <TabBtn id="cancellations" label="รายการยกเลิก/ตีกลับ" icon={<FileMinus size={18}/>} />
@@ -8722,46 +9024,90 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
           </button>
         </div>
         <div className="overflow-x-auto flex-1 custom-scrollbar text-left">
-          {reportTab === 'sales' && (
+          {(reportTab === 'sales' || reportTab === 'void_invoices') && (
             <table className="w-full text-sm text-left">
               <thead className="bg-white text-slate-400 text-[10px] font-bold uppercase sticky top-0 border-b z-10 text-left">
                 <tr>
-                  <th className="p-5 text-left">วันที่</th>
-                  <th className="p-5 text-left">เลขที่ใบกำกับภาษี</th>
-                  <th className="p-5 text-left">ชื่อผู้ซื้อสินค้า/ผู้รับบริการ</th>
-                  <th className="p-5 text-left">เลขผู้เสียภาษี</th>
-                  <th className="p-5 text-left">สถานประกอบการ</th>
-                  <th className="p-5 text-right">มูลค่าสินค้า</th>
-                  <th className="p-5 text-right">ภาษีมูลค่าเพิ่ม</th>
+                  <th className="p-4 text-left">เดือนภาษี / วันที่</th>
+                  <th className="p-4 text-left">ประเภทเอกสาร</th>
+                  <th className="p-4 text-left">สถานะเอกสาร</th>
+                  <th className="p-4 text-left">เลขที่ใบกำกับภาษี</th>
+                  <th className="p-4 text-left">Order ID</th>
+                  <th className="p-4 text-left">ช่องทาง / ร้านค้า</th>
+                  <th className="p-4 text-left">ลูกค้า / ข้อมูลภาษี</th>
+                  <th className="p-4 text-right">ยอดฐานภาษี</th>
+                  <th className="p-4 text-right">VAT ขาย</th>
+                  <th className="p-4 text-right">ยอดรวม</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-left">
-                {filteredInvoices.map((row, i) => {
+                {(reportTab === 'sales' ? filteredInvoices : voidInvoices).map((row, i) => {
                     const isCancelled = row.status === 'cancelled';
-                    const mult = row.docType === 'credit_note' ? -1 : 1;
+                    const mult = isCancelled ? 0 : (row.docType === 'credit_note' ? -1 : 1);
+                    
+                    let taxPeriodStr = '';
+                    const d = normalizeDate(row.date);
+                    if (d && !isNaN(d.getTime())) {
+                        taxPeriodStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                    } else {
+                        taxPeriodStr = startDate.substring(0,7);
+                    }
+
+                    const linkedTx = transactions.find(t => (t.orderId === row.orderId || t.sysDocId === row.orderId) && t.type === 'income');
+                    const finalChannel = row.channel || linkedTx?.channel || 'หน้าร้าน';
+                    const finalShopName = row.shopName || linkedTx?.shopName || 'ไม่ระบุ';
+                    const branchText = row.docType === 'abb' ? '-' : ((row.branch === '00000' || !row.branch) ? 'HQ' : `Br: ${row.branch}`);
+                    
                     return (
-                     <tr key={i} className={`hover:bg-slate-50/80 transition-colors text-left ${isCancelled ? 'opacity-50' : ''}`}>
-                      <td className="p-5 text-xs text-slate-500 whitespace-nowrap text-left">{formatDate(row.date)}</td>
-                      <td className="p-5 font-bold text-slate-800 text-left">
-                          {row.invNo} 
-                          {row.docType === 'credit_note' && <span className="text-rose-500 text-[10px] ml-1">(ลดหนี้)</span>}
-                          {isCancelled && <span className="text-rose-500 text-[10px] ml-1">(ยกเลิก)</span>}
+                     <tr key={i} className={`hover:bg-slate-50/80 transition-colors text-left ${isCancelled ? 'opacity-50 bg-slate-50' : ''}`}>
+                      <td className="p-4 text-xs text-slate-500 whitespace-nowrap text-left align-top">
+                        <p className="font-bold text-slate-700">{taxPeriodStr}</p>
+                        <p className="text-[10px]">{formatDate(row.date)}</p>
                       </td>
-                      <td className="p-5 text-left">{row.customerName}</td>
-                      <td className="p-5 font-mono text-xs text-left">{row.taxId || '-'}</td>
-                      <td className="p-5 text-[10px] font-bold text-slate-500 text-left">{(row.branch === '00000' || !row.branch) ? 'สำนักงานใหญ่' : `สาขาที่ ${row.branch}`}</td>
-                      <td className="p-5 text-right font-medium text-right">{isCancelled ? '0.00' : formatCurrency((row.preVat || 0) * mult)}</td>
-                      <td className="p-5 text-right text-indigo-600 font-bold text-right">{isCancelled ? '0.00' : formatCurrency((row.vat || 0) * mult)}</td>
+                      <td className="p-4 text-left align-top">
+                          <span className={`px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap ${row.docType === 'abb' ? 'bg-emerald-100 text-emerald-700' : row.docType === 'credit_note' ? 'bg-rose-100 text-rose-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                              {row.docType === 'abb' ? 'อย่างย่อ (ABB)' : row.docType === 'credit_note' ? 'ใบลดหนี้ (CN)' : 'เต็มรูป (INV)'}
+                          </span>
+                      </td>
+                      <td className="p-4 text-left align-top">
+                         <span className={`px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap ${isCancelled ? 'bg-rose-100 text-rose-700' : row.docType === 'credit_note' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                            {isCancelled ? 'ยกเลิก (CANCEL)' : row.docType === 'credit_note' ? 'คืนสินค้า' : 'ปกติ'}
+                         </span>
+                      </td>
+                      <td className="p-4 font-bold text-slate-800 text-left font-mono align-top">
+                          {row.invNo} 
+                      </td>
+                      <td className="p-4 font-mono text-indigo-600 font-bold text-left align-top">
+                          {row.orderId || '-'}
+                      </td>
+                      <td className="p-4 text-left align-top">
+                          <div className="flex flex-col gap-1 items-start">
+                              <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] font-bold uppercase whitespace-nowrap">{finalChannel}</span>
+                              {(finalShopName && finalShopName !== 'ไม่ระบุ') && <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[9px] font-bold whitespace-nowrap">{finalShopName}</span>}
+                          </div>
+                      </td>
+                      <td className="p-4 text-left align-top">
+                          <p className="font-bold text-xs truncate max-w-[180px]" title={row.customerName}>{row.customerName}</p>
+                          <p className="font-mono text-[9px] text-slate-500 mt-0.5">TAX: {row.taxId || '-'}</p>
+                          <p className="text-[9px] text-slate-500">{branchText}</p>
+                      </td>
+                      <td className="p-4 text-right font-medium text-slate-600 align-top">{isCancelled ? '0.00' : formatCurrency((row.preVat || 0) * mult)}</td>
+                      <td className="p-4 text-right text-indigo-600 font-bold align-top">{isCancelled ? '0.00' : formatCurrency((row.vat || 0) * mult)}</td>
+                      <td className="p-4 text-right text-slate-800 font-black align-top">{isCancelled ? '0.00' : formatCurrency((row.total || 0) * mult)}</td>
                     </tr>
                     );
                 })}
+                {(reportTab === 'sales' ? filteredInvoices : voidInvoices).length === 0 && (
+                  <tr><td colSpan="9" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารในช่วงเวลานี้</td></tr>
+                )}
               </tbody>
-              {filteredInvoices.length > 0 && (
+              {reportTab === 'sales' && filteredInvoices.length > 0 && (
                 <tfoot className="bg-slate-900 text-white font-bold sticky bottom-0 text-left">
                     <tr>
-                        <td colSpan="5" className="p-5 text-right uppercase tracking-widest text-xs opacity-60 text-right">รวมยอดสุทธิ</td>
-                        <td className="p-5 text-right text-white text-right">{formatCurrency(salesFooter.base)}</td>
-                        <td className="p-5 text-right text-indigo-400 text-right">{formatCurrency(salesFooter.vat)}</td>
+                        <td colSpan="7" className="p-4 text-right uppercase tracking-widest text-xs opacity-60 text-right">รวมยอดสุทธิ</td>
+                        <td className="p-4 text-right text-white text-right">{formatCurrency(salesFooter.base)}</td>
+                        <td className="p-4 text-right text-indigo-400 text-right">{formatCurrency(salesFooter.vat)}</td>
+                        <td className="p-4 text-right text-emerald-400 text-right">{formatCurrency(salesFooter.total)}</td>
                     </tr>
                 </tfoot>
               )}
@@ -8769,49 +9115,62 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
           )}
           
           {reportTab === 'purchase' && (
-            <table className="w-full text-sm text-left">
+            <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-sm text-left whitespace-nowrap">
               <thead className="bg-white text-slate-400 text-[10px] font-bold uppercase sticky top-0 border-b z-10 text-left">
                 <tr>
-                  <th className="p-5 text-left">วันที่</th>
-                  <th className="p-5 text-left">เลขระบบ (SYS ID)</th>
-                  <th className="p-5 text-left">เลขที่ใบกำกับภาษี</th>
-                  <th className="p-5 text-left">ชื่อผู้ขายสินค้า/ผู้ให้บริการ</th>
-                  <th className="p-5 text-left">เลขผู้เสียภาษี</th>
-                  <th className="p-5 text-left">สถานประกอบการ</th>
-                  <th className="p-5 text-right">มูลค่าสินค้า</th>
-                  <th className="p-5 text-right">ภาษีมูลค่าเพิ่ม</th>
+                  {/* --- 🔥 FIX: ปรับเรียงคอลัมน์ UI Preview ให้ตรงกับไฟล์ Excel (ลบรายละเอียดรายการออก) --- */}
+                  <th className="p-4 text-center">ลำดับ</th>
+                  <th className="p-4 text-left">Tax Period</th>
+                  <th className="p-4 text-left">วันที่</th>
+                  <th className="p-4 text-left">ประเภทค่าใช้จ่าย</th>
+                  <th className="p-4 text-left">เลขระบบ (SYS ID)</th>
+                  <th className="p-4 text-left">เลขที่ใบกำกับภาษี</th>
+                  <th className="p-4 text-left">ชื่อผู้ขายสินค้า/ผู้ให้บริการ</th>
+                  <th className="p-4 text-left">เลขผู้เสียภาษี</th>
+                  <th className="p-4 text-left">สถานประกอบการ</th>
+                  <th className="p-4 text-right">มูลค่าสินค้า</th>
+                  <th className="p-4 text-right">ภาษีมูลค่าเพิ่ม</th>
+                  <th className="p-4 text-right">ยอดรวม</th>
+                  <th className="p-4 text-center">สถานะ VAT ซื้อ</th>
+                  <th className="p-4 text-left">หมายเหตุ</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-left">
-                {filteredExpenses.map((row, i) => {
-                  const taxDetails = getExpenseTaxDetails(row);
-                  return (
-                    <tr key={i} className="hover:bg-slate-50/80 transition-colors text-left">
-                      <td className="p-5 text-xs text-slate-500 whitespace-nowrap text-left">{formatDate(row.date)}</td>
-                      <td className="p-5 font-mono text-xs font-bold text-indigo-600 text-left">{row.sysDocId || '-'}</td>
-                      <td className="p-5 font-bold text-slate-800 text-left">{row.taxInvoiceNo || row.orderId || '-'}</td>
-                      <td className="p-5 text-left">
-                        <p className="font-bold text-left">{row.partnerName || '-'}</p>
-                        <p className="text-[10px] text-slate-400 line-clamp-1 text-left">{row.description}</p>
+                {purchaseTaxData.map((row, i) => (
+                    <tr key={i} className={`hover:bg-slate-50/80 transition-colors text-left ${row.remarks !== 'OK' ? 'bg-rose-50/20' : ''}`}>
+                      <td className="p-4 text-center text-xs font-bold text-slate-400">{i + 1}</td>
+                      <td className="p-4 text-xs font-bold text-indigo-600 bg-indigo-50/30 text-left">{row.taxPeriodStr}</td>
+                      <td className="p-4 text-xs text-slate-500 text-left">{formatDate(row.date)}</td>
+                      <td className="p-4 text-xs font-bold text-slate-600 text-left"><span className="bg-slate-100 px-2 py-1 rounded-md border border-slate-200">{row.expType}</span></td>
+                      <td className="p-4 font-mono text-xs font-bold text-indigo-600 text-left">{row.sysDocId || '-'}</td>
+                      <td className="p-4 font-bold text-slate-800 text-left">{row.taxInvoiceNo || row.orderId || '-'}</td>
+                      <td className="p-4 font-bold text-left truncate max-w-[200px]" title={row.partnerName}>{row.partnerName || '-'}</td>
+                      <td className="p-4 font-mono text-xs text-left">{row.partnerTaxId || '-'}</td>
+                      <td className="p-4 text-[10px] font-bold text-slate-500 text-left">{(row.partnerBranch === '00000' || !row.partnerBranch) ? 'สำนักงานใหญ่' : `สาขาที่ ${row.partnerBranch}`}</td>
+                      <td className="p-4 text-right font-medium text-right">{formatCurrency(row.base)}</td>
+                      <td className="p-4 text-right text-rose-500 font-bold text-right">{formatCurrency(row.vat)}</td>
+                      <td className="p-4 text-right font-black text-slate-800">{formatCurrency(row.total)}</td>
+                      <td className="p-4 text-center">
+                          <span className={`px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap ${row.vatStatus === 'เครดิตได้' ? 'bg-emerald-100 text-emerald-700' : row.vatStatus === 'ภาษีซื้อต้องห้าม' ? 'bg-rose-100 text-rose-700' : row.vatStatus === 'เครดิตไม่ได้' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{row.vatStatus}</span>
                       </td>
-                      <td className="p-5 font-mono text-xs text-left">{row.partnerTaxId || '-'}</td>
-                      <td className="p-5 text-[10px] font-bold text-slate-500 text-left">{(row.partnerBranch === '00000' || !row.partnerBranch) ? 'สำนักงานใหญ่' : `สาขาที่ ${row.partnerBranch}`}</td>
-                      <td className="p-5 text-right font-medium text-right">{formatCurrency(taxDetails.base)}</td>
-                      <td className="p-5 text-right text-rose-500 font-bold text-right">{formatCurrency(taxDetails.vat)}</td>
+                      <td className="p-4 text-[10px] text-rose-500 font-bold max-w-[150px] truncate" title={row.remarks}>{row.remarks !== 'OK' ? row.remarks : '-'}</td>
                     </tr>
-                  );
-                })}
+                ))}
               </tbody>
-              {filteredExpenses.length > 0 && (
+              {purchaseTaxData.length > 0 && (
                 <tfoot className="bg-slate-900 text-white font-bold sticky bottom-0 text-left">
                     <tr>
-                        <td colSpan="6" className="p-5 text-right uppercase tracking-widest text-xs opacity-60 text-right">รวมยอดสุทธิ</td>
-                        <td className="p-5 text-right text-white text-right">{formatCurrency(purchaseFooter.base)}</td>
-                        <td className="p-5 text-right text-rose-400 text-right">{formatCurrency(purchaseFooter.vat)}</td>
+                        <td colSpan="9" className="p-4 text-right uppercase tracking-widest text-xs opacity-60 text-right">รวมยอดสุทธิ</td>
+                        <td className="p-4 text-right text-white text-right">{formatCurrency(purchaseFooter.base)}</td>
+                        <td className="p-4 text-right text-rose-400 text-right">{formatCurrency(purchaseFooter.vat)}</td>
+                        <td className="p-4 text-right text-emerald-400 text-right">{formatCurrency(purchaseFooter.total)}</td>
+                        <td colSpan="2" className="p-4"></td>
                     </tr>
                 </tfoot>
               )}
             </table>
+            </div>
           )}
 
           {reportTab === 'inventory' && (
@@ -9133,7 +9492,181 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
 
           {reportTab === 'pit90' && (
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 p-4 md:p-8 text-left">
-               {/* ... existing code ... */}
+                {/* Left Column: Input Settings (Deductions & Expense mode) */}
+                <div className="xl:col-span-1 space-y-6">
+                    <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
+                        <h4 className="font-black text-slate-800 mb-4 flex items-center gap-2"><Settings size={18} className="text-indigo-600"/> 1. รูปแบบการหักค่าใช้จ่าย</h4>
+                        <div className="space-y-3">
+                            <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${expenseMode === 'standard' ? 'bg-indigo-50 border-indigo-200' : 'hover:bg-slate-50 border-slate-200'}`}>
+                                <input type="radio" name="expMode" checked={expenseMode === 'standard'} onChange={() => setExpenseMode('standard')} className="mt-1" />
+                                <div>
+                                    <p className="font-bold text-slate-800 text-sm">หักเหมา 60% (ตามกฎหมาย)</p>
+                                    <p className="text-[10px] text-slate-500 mt-0.5">ไม่ต้องใช้บิลรายจ่าย เหมาะกับธุรกิจที่กำไรขั้นต้น &gt; 40%</p>
+                                    {expenseMode === 'standard' && <p className="text-xs font-black text-indigo-600 mt-1">ใช้สิทธิหัก: {formatCurrency(pitAnalysis.standardExpense)} ฿</p>}
+                                </div>
+                            </label>
+                            <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${expenseMode === 'actual' ? 'bg-indigo-50 border-indigo-200' : 'hover:bg-slate-50 border-slate-200'}`}>
+                                <input type="radio" name="expMode" checked={expenseMode === 'actual'} onChange={() => setExpenseMode('actual')} className="mt-1" />
+                                <div>
+                                    <p className="font-bold text-slate-800 text-sm">หักตามค่าใช้จ่ายจริง</p>
+                                    <p className="text-[10px] text-slate-500 mt-0.5">ใช้บิลรายจ่ายที่บันทึกไว้ในระบบ เหมาะกับธุรกิจต้นทุนสูง</p>
+                                    {expenseMode === 'actual' && <p className="text-xs font-black text-indigo-600 mt-1">ใช้สิทธิหัก: {formatCurrency(pitAnalysis.actualExpense)} ฿</p>}
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
+                        <h4 className="font-black text-slate-800 mb-4 flex items-center gap-2"><User size={18} className="text-emerald-600"/> 2. รายการค่าลดหย่อนภาษี</h4>
+                        <div className="space-y-4">
+                            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                                <span className="text-sm font-bold text-slate-700">ลดหย่อนส่วนตัว (พื้นฐาน)</span>
+                                <span className="font-black text-emerald-600">60,000 ฿</span>
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" checked={pitDeductions.spouse} onChange={e => setPitDeductions({...pitDeductions, spouse: e.target.checked})} className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer" />
+                                <span className="text-sm font-bold text-slate-700">คู่สมรส (ไม่มีเงินได้) +60,000 ฿</span>
+                            </label>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">บุตร (คนละ 30k)</label>
+                                    <input type="number" min="0" value={pitDeductions.children || ''} onChange={e => setPitDeductions({...pitDeductions, children: Number(e.target.value)})} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm font-bold mt-1 outline-none focus:ring-1 focus:ring-emerald-400" placeholder="0" />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">บิดามารดา (คนละ 30k)</label>
+                                    <input type="number" min="0" value={pitDeductions.parents || ''} onChange={e => setPitDeductions({...pitDeductions, parents: Number(e.target.value)})} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm font-bold mt-1 outline-none focus:ring-1 focus:ring-emerald-400" placeholder="0" />
+                                </div>
+                                <div className="col-span-2">
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">ประกันชีวิต (สูงสุด 100k)</label>
+                                    <input type="number" min="0" value={pitDeductions.lifeInsurance || ''} onChange={e => setPitDeductions({...pitDeductions, lifeInsurance: Number(e.target.value)})} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm font-bold mt-1 outline-none focus:ring-1 focus:ring-emerald-400" placeholder="0" />
+                                </div>
+                                <div className="col-span-2">
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">ประกันสังคม (ตามจ่ายจริง)</label>
+                                    <input type="number" min="0" value={pitDeductions.socialSecurity || ''} onChange={e => setPitDeductions({...pitDeductions, socialSecurity: Number(e.target.value)})} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm font-bold mt-1 outline-none focus:ring-1 focus:ring-emerald-400" placeholder="0" />
+                                </div>
+                                <div className="col-span-2">
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">ลดหย่อนอื่นๆ (รวมยอดมา)</label>
+                                    <input type="number" min="0" value={pitDeductions.otherDeductions || ''} onChange={e => setPitDeductions({...pitDeductions, otherDeductions: Number(e.target.value)})} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm font-bold mt-1 outline-none focus:ring-1 focus:ring-emerald-400" placeholder="กองทุน, บริจาค ฯลฯ" />
+                                </div>
+                            </div>
+                            <div className="bg-emerald-50 p-3 rounded-xl flex justify-between items-center border border-emerald-100 mt-2">
+                                <span className="text-xs font-black text-emerald-800 uppercase">รวมหักลดหย่อน</span>
+                                <span className="text-base font-black text-emerald-600">{formatCurrency(pitAnalysis.totalDeductions)} ฿</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Right Column: Calculation & Results */}
+                <div className="xl:col-span-2 space-y-6">
+                    <div className="bg-slate-900 p-8 rounded-[40px] text-white shadow-xl relative overflow-hidden">
+                        <Calculator size={160} className="absolute -right-10 -bottom-10 opacity-10 text-indigo-400" />
+                        <div className="relative z-10">
+                            <h3 className="text-2xl font-black mb-6 flex items-center gap-2"><FileText className="text-indigo-400"/> สรุปการคำนวณภาษีเงินได้ ภ.ง.ด. 90 (แบบจด VAT)</h3>
+                            
+                            <div className="bg-indigo-500/20 border border-indigo-400/30 p-4 rounded-2xl mb-6">
+                                <p className="text-xs text-indigo-200 font-bold flex items-center gap-2"><Info size={14}/> หลักการคำนวณสำหรับร้านค้าจด VAT:</p>
+                                <p className="text-[10px] text-indigo-200/80 mt-1">เงินได้พึงประเมินมาตรา 40(8) จะนำเฉพาะยอดขายสุทธิที่ <b className="text-white">"ไม่รวมภาษีมูลค่าเพิ่ม (VAT Excluded)"</b> มาใช้เป็นฐานคำนวณภาษีบุคคลธรรมดาประจำปี เพื่อไม่ให้เกิดการเก็บภาษีซ้ำซ้อน</p>
+                            </div>
+
+                            <div className="space-y-3 text-sm text-slate-300">
+                                <div className="flex justify-between items-center border-b border-white/10 pb-3">
+                                    <span>เงินได้พึงประเมินรวม (ไม่รวมภาษีขาย)</span>
+                                    <span className="font-bold text-white text-base">{formatCurrency(pitAnalysis.totalIncome)}</span>
+                                </div>
+                                <div className="flex justify-between items-center border-b border-white/10 pb-3 text-rose-300">
+                                    <span>หัก ค่าใช้จ่าย {expenseMode === 'standard' ? '(เหมา 60%)' : '(ตามจริง)'}</span>
+                                    <span className="font-bold">-{formatCurrency(pitAnalysis.usedExpense)}</span>
+                                </div>
+                                <div className="flex justify-between items-center border-b border-white/10 pb-3 text-emerald-300">
+                                    <span>หัก รายการลดหย่อนภาษี</span>
+                                    <span className="font-bold">-{formatCurrency(pitAnalysis.totalDeductions)}</span>
+                                </div>
+                                <div className="flex justify-between items-center py-2 font-black text-lg text-white">
+                                    <span>เงินได้สุทธิ (Net Income)</span>
+                                    <span>{formatCurrency(pitAnalysis.netIncome)}</span>
+                                </div>
+                            </div>
+
+                            <div className="mt-6 bg-slate-800 rounded-2xl p-5 border border-slate-700">
+                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">คำนวณตามขั้นบันได</p>
+                                {pitAnalysis.steps.length > 0 ? (
+                                    <div className="space-y-2">
+                                        {pitAnalysis.steps.map((step, idx) => (
+                                            <div key={idx} className="flex justify-between text-xs text-slate-300">
+                                                <span>ขั้น {step.range} (อัตรา {step.rate})</span>
+                                                <span>{formatCurrency(step.tax)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-xs text-emerald-400 font-bold">เงินได้สุทธิยกเว้นภาษี (0 บาท)</p>
+                                )}
+                                
+                                <div className="mt-4 pt-4 border-t border-slate-600 space-y-2">
+                                    <div className="flex justify-between text-sm">
+                                        <span className="font-bold text-slate-300">ภาษีที่คำนวณได้</span>
+                                        <span className="font-bold text-white">{formatCurrency(pitAnalysis.calculatedTax)}</span>
+                                    </div>
+                                    {pitAnalysis.isGrossTaxApplied && (
+                                        <div className="flex justify-between text-sm text-amber-400">
+                                            <span className="font-bold">ภาษีเหมา 0.5% (รายได้ &gt; 1.2M)</span>
+                                            <span className="font-bold">{formatCurrency(pitAnalysis.grossTax)}</span>
+                                        </div>
+                                    )}
+                                    <div className="flex justify-between text-sm text-emerald-400">
+                                        <span className="font-bold">หัก ภาษีถูกหัก ณ ที่จ่าย (WHT 50 ทวิ)</span>
+                                        <span className="font-bold">-{formatCurrency(pitAnalysis.totalWHT)}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="mt-6 pt-6 border-t-2 border-white/20 flex justify-between items-end">
+                                <div>
+                                    <p className="text-xs font-black uppercase text-slate-400">ยอดภาษี (Tax Payable / Refund)</p>
+                                    <p className={`text-[10px] mt-1 font-bold ${pitAnalysis.payableTax > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                        {pitAnalysis.payableTax > 0 ? 'ต้องชำระภาษีเพิ่มเติม' : 'ชำระเกิน สามารถขอคืนภาษีได้'}
+                                    </p>
+                                </div>
+                                <span className={`text-5xl font-black ${pitAnalysis.payableTax > 0 ? 'text-rose-500' : 'text-emerald-400'}`}>
+                                    {pitAnalysis.payableTax > 0 ? '' : '+'}{formatCurrency(Math.abs(pitAnalysis.payableTax))}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* AI Tax Advisor Card */}
+                    <div className="bg-white border-2 border-indigo-100 rounded-[32px] p-8 shadow-sm relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-bl-[100px] flex items-center justify-center -z-0">
+                            <Sparkles size={48} className="text-indigo-200 translate-x-4 -translate-y-4"/>
+                        </div>
+                        <div className="relative z-10">
+                            <h3 className="text-xl font-black text-indigo-800 flex items-center gap-2 mb-2"><Sparkles className="text-amber-500"/> AI Tax Advisor</h3>
+                            <p className="text-xs text-slate-500 mb-6">ผู้ช่วยวิเคราะห์และวางแผนภาษี เพื่อหาจุดคุ้มทุนในการใช้ค่าใช้จ่ายจริงเทียบกับหักเหมา 60%</p>
+                            
+                            {aiTaxAdvice ? (
+                                <div className="space-y-4 animate-fadeIn">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {aiTaxAdvice.map((advice, idx) => (
+                                            <div key={idx} className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 flex items-start gap-3">
+                                                <div className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-black text-xs shrink-0">{idx + 1}</div>
+                                                <p className="text-sm font-medium text-slate-700 leading-relaxed">{advice}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <button onClick={getTaxAdvice} disabled={isGettingTaxAdvice} className="text-xs font-bold text-indigo-600 underline hover:text-indigo-800">วิเคราะห์ใหม่อีกครั้ง</button>
+                                </div>
+                            ) : (
+                                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center">
+                                    <button onClick={getTaxAdvice} disabled={isGettingTaxAdvice} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 mx-auto disabled:opacity-50">
+                                        {isGettingTaxAdvice ? <Loader size={18} className="animate-spin"/> : <Activity size={18}/>} 
+                                        {isGettingTaxAdvice ? 'AI กำลังคำนวณและวางแผนภาษี...' : 'ให้ AI วิเคราะห์แผนภาษีประจำปี'}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
             </div>
           )}
         </div>
