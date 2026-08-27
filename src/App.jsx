@@ -11848,7 +11848,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               ["รายการเอกสารทั้งหมด (All Document Transactions)"],
               ["ประจำเดือน:", docSummaryMonth],
               [],
-              ["ลำดับ", "วันที่", "เลขที่เอกสาร/อ้างอิง", "ประเภท", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "รายจ่าย (Out)", "หมายเหตุ"]
+              ["ลำดับ", "วันที่", "อ้างอิง (Sys/Order)", "เลขใบกำกับภาษี", "ประเภทเอกสาร", "ประเภท", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "รายจ่าย (Out)", "หมายเหตุ"]
           ];
 
           let index = 1;
@@ -11856,11 +11856,38 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           let sumListOut = 0;
 
           combinedDocSummaryList.forEach(t => {
+              let taxInvNo = '-';
+              let docTypeLabel = '-';
+              
+              if (t.isMissing) {
+                  taxInvNo = '-';
+                  docTypeLabel = 'เอกสารตกหล่น';
+              } else if (t.type === 'income') {
+                  taxInvNo = t.invoiceNo || '-';
+                  if (t.invoiceNo) {
+                      if (t.invoiceNo.startsWith('ABB')) docTypeLabel = 'ใบกำกับภาษีอย่างย่อ';
+                      else if (t.invoiceNo.startsWith('REC')) docTypeLabel = 'ใบเสร็จรับเงิน';
+                      else if (t.invoiceNo.startsWith('INV')) docTypeLabel = 'ใบกำกับภาษี';
+                      else docTypeLabel = 'เอกสารออกระบบ';
+                  } else {
+                      docTypeLabel = 'สลิป/ไม่ระบุ';
+                  }
+              } else if (t.type === 'expense') {
+                  taxInvNo = t.taxInvoiceNo || '-';
+                  if (t.isPurchaseCreditNote) docTypeLabel = 'ใบลดหนี้';
+                  else if (t.expenseDocType === 'receipt' || t.isCashBill) docTypeLabel = 'ใบเสร็จ/บิลเงินสด';
+                  else if (t.expenseDocType === 'no_bill') docTypeLabel = 'ไม่มีบิล';
+                  else if (t.expenseDocType === 'tax_invoice' || (!t.isCashBill && t.taxInvoiceNo)) docTypeLabel = 'ใบกำกับภาษี';
+                  else docTypeLabel = 'ไม่ระบุ';
+              }
+
               if (t.isMissing) {
                   dataRows.push([
                       index++,
                       formatDate(t.date) + ' (Est.)',
                       t.sysDocId,
+                      taxInvNo,
+                      docTypeLabel,
                       t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
                       t.category,
                       '-',
@@ -11879,7 +11906,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   dataRows.push([
                       index++,
                       formatDate(t.date),
-                      t.sysDocId || t.taxInvoiceNo || t.orderId || '-',
+                      t.sysDocId || t.orderId || '-',
+                      taxInvNo,
+                      docTypeLabel,
                       t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
                       t.category || '-',
                       t.partnerName || '-',
@@ -11891,10 +11920,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
           });
 
           const dataTotalRowIdx = dataRows.length;
-          dataRows.push(["", "", "", "", "", "รวมยอดสุทธิ (Grand Total)", sumListIn, sumListOut, ""]);
+          dataRows.push(["", "", "", "", "", "", "รวมยอดสุทธิ (Grand Total)", sumListIn, sumListOut, ""]);
 
           const wsData = XLSX.utils.aoa_to_sheet(dataRows);
-          wsData['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 15 }, { wch: 30 }, { wch: 35 }, { wch: 15 }, { wch: 15 }, { wch: 25 }];
+          wsData['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 10 }, { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 15 }, { wch: 25 }];
           applyTableStyles(wsData, 3, dataTotalRowIdx);
           XLSX.utils.book_append_sheet(wb, wsData, "2. Document List");
 
@@ -11907,16 +11936,27 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   ["รายการเอกสารรายรับ (Income Documents)"],
                   ["ประจำเดือน:", docSummaryMonth],
                   [],
-                  ["ลำดับ", "วันที่", "เลขที่เอกสาร/อ้างอิง", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "หมายเหตุ"]
+                  ["ลำดับ", "วันที่", "อ้างอิง (Sys/Order)", "เลขใบกำกับภาษี", "ประเภทเอกสาร", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "หมายเหตุ"]
               ];
               let sumIncomeSheet = 0;
               incomeDocs.forEach((t, i) => {
+                  let taxInvNo = t.invoiceNo || '-';
+                  let docTypeLabel = 'สลิป/ไม่ระบุ';
+                  if (t.invoiceNo) {
+                      if (t.invoiceNo.startsWith('ABB')) docTypeLabel = 'ใบกำกับภาษีอย่างย่อ';
+                      else if (t.invoiceNo.startsWith('REC')) docTypeLabel = 'ใบเสร็จรับเงิน';
+                      else if (t.invoiceNo.startsWith('INV')) docTypeLabel = 'ใบกำกับภาษี';
+                      else docTypeLabel = 'เอกสารออกระบบ';
+                  }
+                  
                   const amt = (Number(t.total || 0) - Number(t.couponDiscount || 0) - Number(t.cashCoupon || 0) - Number(t.refundAmount || 0) + Number(t.shippingFee || 0));
                   if (!t.isCancelled) sumIncomeSheet += amt;
                   incomeRows.push([
                       i + 1,
                       formatDate(t.date),
-                      t.sysDocId || t.taxInvoiceNo || t.orderId || '-',
+                      t.sysDocId || t.orderId || '-',
+                      taxInvNo,
+                      docTypeLabel,
                       t.category || '-',
                       t.partnerName || '-',
                       amt,
@@ -11925,10 +11965,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               });
 
               const incTotalRowIdx = incomeRows.length;
-              incomeRows.push(["", "", "", "", "รวมรายรับสุทธิ", sumIncomeSheet, ""]);
+              incomeRows.push(["", "", "", "", "", "รวมรายรับสุทธิ", sumIncomeSheet, ""]);
 
               const wsIncome = XLSX.utils.aoa_to_sheet(incomeRows);
-              wsIncome['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 30 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
+              wsIncome['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
               applyTableStyles(wsIncome, 3, incTotalRowIdx);
               XLSX.utils.book_append_sheet(wb, wsIncome, "3. รายรับ (Income)");
           }
@@ -11949,17 +11989,27 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   [`รายการเอกสารรายจ่าย หมวด: ${category}`],
                   ["ประจำเดือน:", docSummaryMonth],
                   [],
-                  ["ลำดับ", "วันที่", "เลขที่เอกสาร/อ้างอิง", "ลูกค้า/คู่ค้า", "รายจ่าย (Out)", "หมายเหตุ"]
+                  ["ลำดับ", "วันที่", "อ้างอิง (Sys/Order)", "เลขใบกำกับภาษี", "ประเภทเอกสาร", "ลูกค้า/คู่ค้า", "รายจ่าย (Out)", "หมายเหตุ"]
               ];
 
               let sumExpenseSheet = 0;
               docsInCat.forEach((t, i) => {
+                  let taxInvNo = t.taxInvoiceNo || '-';
+                  let docTypeLabel = 'ไม่ระบุ';
+                  
+                  if (t.isPurchaseCreditNote) docTypeLabel = 'ใบลดหนี้';
+                  else if (t.expenseDocType === 'receipt' || t.isCashBill) docTypeLabel = 'ใบเสร็จ/บิลเงินสด';
+                  else if (t.expenseDocType === 'no_bill') docTypeLabel = 'ไม่มีบิล';
+                  else if (t.expenseDocType === 'tax_invoice' || (!t.isCashBill && t.taxInvoiceNo)) docTypeLabel = 'ใบกำกับภาษี';
+                  
                   const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
                   if (!t.isCancelled) sumExpenseSheet += amt;
                   catRows.push([
                       i + 1,
                       formatDate(t.date),
-                      t.sysDocId || t.taxInvoiceNo || t.orderId || '-',
+                      t.sysDocId || t.orderId || '-',
+                      taxInvNo,
+                      docTypeLabel,
                       t.partnerName || '-',
                       amt,
                       t.isCancelled ? 'ยกเลิกแล้ว' : 'ปกติ'
@@ -11967,10 +12017,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               });
 
               const expTotalRowIdx = catRows.length;
-              catRows.push(["", "", "", "รวมรายจ่ายสุทธิ", sumExpenseSheet, ""]);
+              catRows.push(["", "", "", "", "รวมรายจ่ายสุทธิ", sumExpenseSheet, ""]);
 
               const wsCat = XLSX.utils.aoa_to_sheet(catRows);
-              wsCat['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
+              wsCat['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
               applyTableStyles(wsCat, 3, expTotalRowIdx);
               
               let sheetName = sanitizeSheetName(category);
@@ -12930,7 +12980,9 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         <thead className="bg-slate-50 text-slate-500 font-bold uppercase sticky top-0 z-10">
                             <tr>
                                 <th className="p-4 border-b border-slate-200 w-24">วันที่</th>
-                                <th className="p-4 border-b border-slate-200">เลขที่เอกสาร/อ้างอิง</th>
+                                <th className="p-4 border-b border-slate-200">อ้างอิง (Sys/Order)</th>
+                                <th className="p-4 border-b border-slate-200">เลขใบกำกับภาษี</th>
+                                <th className="p-4 border-b border-slate-200">ประเภทเอกสาร</th>
                                 <th className="p-4 border-b border-slate-200">หมวดหมู่</th>
                                 <th className="p-4 border-b border-slate-200">ลูกค้า/คู่ค้า</th>
                                 <th className="p-4 border-b border-slate-200 text-right">รายรับ (In)</th>
@@ -12939,6 +12991,31 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                         </thead>
                         <tbody className="divide-y divide-slate-50">
                             {combinedDocSummaryList.map((doc, idx) => {
+                                let taxInvNo = '-';
+                                let docTypeLabel = '-';
+                                
+                                if (doc.isMissing) {
+                                    taxInvNo = '-';
+                                    docTypeLabel = 'เอกสารตกหล่น';
+                                } else if (doc.type === 'income') {
+                                    taxInvNo = doc.invoiceNo || '-';
+                                    if (doc.invoiceNo) {
+                                        if (doc.invoiceNo.startsWith('ABB')) docTypeLabel = 'ใบกำกับภาษีอย่างย่อ';
+                                        else if (doc.invoiceNo.startsWith('REC')) docTypeLabel = 'ใบเสร็จรับเงิน';
+                                        else if (doc.invoiceNo.startsWith('INV')) docTypeLabel = 'ใบกำกับภาษี';
+                                        else docTypeLabel = 'เอกสารออกระบบ';
+                                    } else {
+                                        docTypeLabel = 'สลิป/ไม่ระบุ';
+                                    }
+                                } else if (doc.type === 'expense') {
+                                    taxInvNo = doc.taxInvoiceNo || '-';
+                                    if (doc.isPurchaseCreditNote) docTypeLabel = 'ใบลดหนี้';
+                                    else if (doc.expenseDocType === 'receipt' || doc.isCashBill) docTypeLabel = 'ใบเสร็จ/บิลเงินสด';
+                                    else if (doc.expenseDocType === 'no_bill') docTypeLabel = 'ไม่มีบิล';
+                                    else if (doc.expenseDocType === 'tax_invoice' || (!doc.isCashBill && doc.taxInvoiceNo)) docTypeLabel = 'ใบกำกับภาษี';
+                                    else docTypeLabel = 'ไม่ระบุ';
+                                }
+
                                 if (doc.isMissing) {
                                     return (
                                         <tr key={`missing-${idx}`} className="bg-rose-50/50 hover:bg-rose-50 transition-colors">
@@ -12949,6 +13026,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                             <td className="p-4">
                                                 <p className="font-mono font-bold text-rose-500 line-through opacity-70">{doc.sysDocId}</p>
                                             </td>
+                                            <td className="p-4 text-slate-400">{taxInvNo}</td>
+                                            <td className="p-4 text-rose-500">{docTypeLabel}</td>
                                             <td className="p-4">
                                                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 shadow-sm border border-rose-200">
                                                     {doc.category}
@@ -12968,10 +13047,16 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                 <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
                                     <td className="p-4 text-slate-600 whitespace-nowrap">{formatDate(doc.date)}</td>
                                     <td className="p-4">
-                                        <p className="font-mono font-bold text-indigo-600">{doc.sysDocId || doc.taxInvoiceNo || doc.orderId || '-'}</p>
-                                        {(doc.taxInvoiceNo || doc.orderId) && (doc.sysDocId !== doc.taxInvoiceNo && doc.sysDocId !== doc.orderId) && (
-                                            <p className="text-[10px] text-slate-400 mt-0.5">Ref: {doc.taxInvoiceNo || doc.orderId}</p>
+                                        <p className="font-mono font-bold text-slate-600">{doc.sysDocId || doc.orderId || '-'}</p>
+                                        {(doc.sysDocId && doc.orderId && doc.sysDocId !== doc.orderId) && (
+                                            <p className="text-[10px] text-slate-400 mt-0.5">Ref: {doc.orderId}</p>
                                         )}
+                                    </td>
+                                    <td className="p-4 font-mono font-bold text-indigo-600">{taxInvNo}</td>
+                                    <td className="p-4 text-slate-700 text-[10px] font-bold">
+                                        <span className={`px-2 py-0.5 rounded border shadow-sm ${docTypeLabel.includes('ใบกำกับ') ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : docTypeLabel.includes('ใบเสร็จ') || docTypeLabel.includes('บิลเงินสด') ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                                            {docTypeLabel}
+                                        </span>
                                     </td>
                                     <td className="p-4 text-slate-700">
                                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${doc.type === 'income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
@@ -12985,7 +13070,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                             )})}
                             {combinedDocSummaryList.length === 0 && (
                                 <tr>
-                                    <td colSpan="6" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารที่ตรงกับเงื่อนไขการค้นหาในเดือนที่เลือก</td>
+                                    <td colSpan="8" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารที่ตรงกับเงื่อนไขการค้นหาในเดือนที่เลือก</td>
                                 </tr>
                             )}
                         </tbody>
