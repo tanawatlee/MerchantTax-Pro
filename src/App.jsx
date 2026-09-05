@@ -19560,7 +19560,7 @@ export default function App() {
   const [bulkUpdatePreview, setBulkUpdatePreview] = useState(null);
 
   // --- 🔥 NEW: Dynamic Data Sync Horizon State (ลดเวลาโหลดแอป) ---
-  const [syncHorizon, setSyncHorizon] = useState(12); // ปรับค่าเริ่มต้นเป็น 1 ปี (12 เดือน) ตามการอัปเกรด Performance Engine ใหม่
+  const [syncHorizon, setSyncHorizon] = useState('all'); // ปรับกลับเป็น 'all' เป็นค่าเริ่มต้น เพื่อรับประกันข้อมูลครบ 100%
 
   const handlePreviewBulkUpdate = () => {
       const ids = bulkUpdateInput.split(/[\n,]+/).map(id => id.trim()).filter(id => id);
@@ -19615,7 +19615,7 @@ export default function App() {
     return () => unsubscribe(); 
   }, []);
    
-  // --- 🔥 CRITICAL FIX: Data Fetching Strategy (Performance Optimization) 🔥 ---
+  // --- 🔥 CRITICAL FIX: Data Fetching Strategy (Performance & Completeness Optimization) 🔥 ---
   useEffect(() => {
     if (!user || !currentAppId) return;
     
@@ -19637,44 +19637,32 @@ export default function App() {
             if (loadedCount >= totalToLoad) {
                 setLoading(false);
                 setIsInitialDataLoaded(true);
-                clearTimeout(loadingFallback);
             }
         }
     };
     
-    // --- 🛡️ NEW: ระบบป้องกันหน้าจอค้างตลอดกาล (Timeout Fallback) ---
-    const loadingFallback = setTimeout(() => {
-        setLoading(false);
-        setSyncProgress(100);
-        setIsInitialDataLoaded(true);
-        addToast("ระบบดึงข้อมูลเสร็จสิ้น (บางส่วนอาจถูกซ่อนเพื่อความรวดเร็ว)", "success");
-    }, 10000); // ถ้านานเกิน 10 วินาที บังคับให้หน้าจอใช้งานได้เลย
-
     const path = (coll) => collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', coll);
     
     // --- 🛡️ NEW: ป้องกันกรณีฐานข้อมูล Error แล้วหน้าจอค้าง ---
     const errorFn = (e) => { 
         console.error("Firestore error:", e); 
-        addToast("เกิดข้อผิดพลาดในการดึงข้อมูล (กรุณาเช็คอินเทอร์เน็ตหรือ Index)", "error"); 
+        addToast("เกิดข้อผิดพลาดในการดึงข้อมูลบางส่วน แต่ระบบจะพยายามเปิดให้ใช้งานต่อ", "error"); 
         setLoading(false);
         setIsInitialDataLoaded(true);
-        clearTimeout(loadingFallback);
     };
     
     // 1. กำหนดขอบเขตข้อมูล (Data Horizon) แบบไดนามิกตามที่ผู้ใช้เลือก
-    let dataHorizonDate = new Date();
-    if (syncHorizon === 'all') {
-        dataHorizonDate = new Date(2000, 0, 1);
-    } else {
-        // ถอยหลังไป X เดือน และตั้งเป็นวันที่ 1 ของเดือนนั้น
+    let dataHorizonDate = null;
+    if (syncHorizon !== 'all') {
+        dataHorizonDate = new Date();
         dataHorizonDate.setMonth(dataHorizonDate.getMonth() - syncHorizon);
         dataHorizonDate.setDate(1);
         dataHorizonDate.setHours(0, 0, 0, 0);
     }
 
-    // 2. จำกัดขอบเขตของ Log ประวัติการนำเข้า - อิงตาม Horizon ด้วยแต่สูงสุดไม่เกิน 6 เดือนเพื่อลดโหลด
+    // 2. จำกัดขอบเขตของ Log ประวัติการนำเข้า - อิงตาม Horizon ด้วยแต่สูงสุดไม่เกิน 6-12 เดือนเพื่อลดโหลด
     const logCutoffDate = new Date();
-    logCutoffDate.setMonth(logCutoffDate.getMonth() - Math.min(syncHorizon === 'all' ? 12 : syncHorizon, 6));
+    logCutoffDate.setMonth(logCutoffDate.getMonth() - (syncHorizon === 'all' ? 12 : Math.min(syncHorizon, 6)));
 
     // --- 🚀 PERFORMANCE FIX: เปลี่ยนจาก O(N^2) Array Filter เป็น Parallel Caching ลดเวลาประมวลผล 10 เท่า ---
     let incomeCache = [];
@@ -19684,21 +19672,30 @@ export default function App() {
         setTransactions([...incomeCache, ...expenseCache]);
     };
 
-    // ดึง Transaction ฝั่งรับ และ จ่าย เฉพาะในช่วง Horizon
-    const unsubInc = onSnapshot(query(path('transactions_income'), where('date', '>=', dataHorizonDate)), (s) => {
+    const getQuery = (coll, isLog = false) => {
+        if (isLog) return query(path(coll), where('date', '>=', logCutoffDate));
+        if (dataHorizonDate && (coll === 'transactions_income' || coll === 'transactions_expense' || coll === 'invoices')) {
+            return query(path(coll), where('date', '>=', dataHorizonDate));
+        }
+        return query(path(coll));
+    };
+
+    // ดึง Transaction ฝั่งรับ
+    const unsubInc = onSnapshot(getQuery('transactions_income'), (s) => {
         incomeCache = s.docs.map(d=>({id:d.id, ...d.data(), type:'income', date: normalizeDate(d.data().date)}));
         updateTransactions();
         checkProgress('inc');
     }, errorFn);
     
-    const unsubExp = onSnapshot(query(path('transactions_expense'), where('date', '>=', dataHorizonDate)), (s) => {
+    // ดึง Transaction ฝั่งจ่าย
+    const unsubExp = onSnapshot(getQuery('transactions_expense'), (s) => {
         expenseCache = s.docs.map(d=>({id:d.id, ...d.data(), type:'expense', date: normalizeDate(d.data().date)}));
         updateTransactions();
         checkProgress('exp');
     }, errorFn);
     
-    // ดึง Invoices เฉพาะในช่วง Horizon
-    const unsubInv = onSnapshot(query(path('invoices'), where('date', '>=', dataHorizonDate)), (s) => { 
+    // ดึง Invoices
+    const unsubInv = onSnapshot(getQuery('invoices'), (s) => { 
         setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))); 
         checkProgress('inv');
     }, errorFn);
@@ -19709,7 +19706,7 @@ export default function App() {
         checkProgress('stock');
     }, errorFn);
     
-    // ดึง Assets --- NEW ---
+    // ดึง Assets
     const unsubAssets = onSnapshot(query(path('assets')), (s) => {
         setAssets(s.docs.map(d=>({id:d.id, ...d.data()})));
         checkProgress('assets');
@@ -19721,14 +19718,13 @@ export default function App() {
         checkProgress('promo');
     }, errorFn);
     
-    // Import Logs ดึงแค่ 6 เดือนล่าสุด หรือตามระยะเวลา Sync
-    const unsubLogs = onSnapshot(query(path('import_logs'), where('date', '>=', logCutoffDate)), (s) => {
+    // Import Logs
+    const unsubLogs = onSnapshot(getQuery('import_logs', true), (s) => {
         setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)})));
         checkProgress('logs');
     }, errorFn);
     
     return () => { 
-        clearTimeout(loadingFallback); // เคลียร์เวลาเมื่อเปลี่ยนหน้า
         unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubAssets(); unsubPromo(); unsubLogs(); 
     };
   }, [user, currentAppId, isRestoring, isMigrating, isBackingUp, syncHorizon]);
