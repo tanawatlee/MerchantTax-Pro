@@ -311,18 +311,34 @@ const getExpensePrefix = (category) => {
     }
 };
 
+// --- 🔥 UPGRADED: ฟังก์ชันจับคู่สินค้าที่ฉลาดและยืดหยุ่นขึ้น (ป้องกันสต็อกรวนจากการพิมพ์ผิด) ---
 const matchItemToBatch = (itemSku, itemName, batchSku, batchName) => {
-    const iSku = String(itemSku || '').trim().toLowerCase();
-    const bSku = String(batchSku || '').trim().toLowerCase();
-    const iName = String(itemName || '').trim().toLowerCase();
-    const bName = String(batchName || '').trim().toLowerCase();
+    const cleanStr = (s) => String(s || '')
+        .replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]|\[จัดส่งไม่สำเร็จ\]/gi, '')
+        .replace(/\s+/g, ' ') // ยุบช่องว่างหลายช่องให้เหลือช่องเดียว
+        .trim()
+        .toLowerCase();
+
+    const iSku = cleanStr(itemSku);
+    const bSku = cleanStr(batchSku);
+    const iName = cleanStr(itemName);
+    const bName = cleanStr(batchName);
 
     const hasValidItemSku = iSku !== '' && iSku !== '-';
+    const hasValidBatchSku = bSku !== '' && bSku !== '-';
     
-    if (hasValidItemSku) {
+    // หากมี SKU ทั้งคู่ ให้ยึด SKU เป็นหลัก (แม่นยำที่สุด)
+    if (hasValidItemSku && hasValidBatchSku) {
         return bSku === iSku;
-    } else {
-        return bName === iName;
+    } 
+    // หากไม่มี SKU ให้เทียบจากชื่อสินค้าแทน
+    else {
+        // ให้โอกาสจับคู่ติดมากขึ้น หากชื่อใดชื่อหนึ่งเป็นส่วนซับเซ็ตของอีกชื่อ (เผื่อพิมพ์ตกหล่น)
+        if (iName === bName) return true;
+        if (iName.length > 5 && bName.length > 5) {
+            return iName.includes(bName) || bName.includes(iName);
+        }
+        return false;
     }
 };
 
@@ -2200,12 +2216,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       const map = {};
       
       stockBatches.forEach(batch => {
-          const nameKey = batch.productName || 'ไม่ระบุชื่อสินค้า';
-          const skuKey = (batch.sku && batch.sku !== '-') ? batch.sku : '';
-          const groupKey = skuKey ? `${skuKey}::${nameKey}` : nameKey;
+          const nameKey = String(batch.productName || 'ไม่ระบุชื่อสินค้า').trim();
+          const skuKey = (batch.sku && batch.sku !== '-') ? String(batch.sku).trim() : '';
+          const groupKey = skuKey ? `${skuKey.toLowerCase()}::${nameKey.toLowerCase()}` : nameKey.toLowerCase();
 
           if (!map[groupKey]) { 
-              map[groupKey] = { sku: skuKey || '-', name: nameKey, totalIn: 0, totalOut: 0 }; 
+              map[groupKey] = { 
+                  sku: skuKey || '-', 
+                  name: nameKey, 
+                  totalIn: 0, 
+                  totalOut: 0,
+                  originalKeys: { sku: batch.sku, name: batch.productName }
+              }; 
             }
           
           const qty = Number(batch.quantity) || 0;
@@ -2223,7 +2245,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                  if (cleanName.includes('ส่วนต่างยอดรับ') || cleanName.includes('ค่าจัดส่ง')) return;
 
                  const matchingGroupKeys = Object.keys(map).filter(gKey => 
-                     matchItemToBatch(item.sku, cleanName, map[gKey].sku, map[gKey].name)
+                     matchItemToBatch(item.sku, cleanName, map[gKey].originalKeys.sku, map[gKey].originalKeys.name)
                  );
 
                  matchingGroupKeys.forEach(gKey => {
@@ -2236,8 +2258,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                  if (cleanName.includes(':')) cleanName = cleanName.split(':').pop().trim();
                  
                  const matchingGroupKeys = Object.keys(map).filter(gKey => 
-                     matchItemToBatch(item.sku, cleanName, map[gKey].sku, map[gKey].name) ||
-                     matchItemToBatch(item.sku, item.desc, map[gKey].sku, map[gKey].name)
+                     matchItemToBatch(item.sku, cleanName, map[gKey].originalKeys.sku, map[gKey].originalKeys.name) ||
+                     matchItemToBatch(item.sku, item.desc, map[gKey].originalKeys.sku, map[gKey].originalKeys.name)
                  );
 
                  matchingGroupKeys.forEach(gKey => {
@@ -2259,7 +2281,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       const cleanName = String(name || '').replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]/gi, '').replace(/\[จัดส่งไม่สำเร็จ\]/gi, '').trim();
       
       const matchingKeys = Object.keys(realTimeInventory).filter(gKey => 
-          matchItemToBatch(sku, cleanName, realTimeInventory[gKey].sku, realTimeInventory[gKey].name)
+          matchItemToBatch(sku, cleanName, realTimeInventory[gKey].originalKeys.sku, realTimeInventory[gKey].originalKeys.name)
       );
       
       matchingKeys.forEach(k => {
@@ -11848,7 +11870,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               ["รายการเอกสารทั้งหมด (All Document Transactions)"],
               ["ประจำเดือน:", docSummaryMonth],
               [],
-              ["ลำดับ", "วันที่", "อ้างอิง (Sys/Order)", "เลขใบกำกับภาษี", "ประเภทเอกสาร", "ประเภท", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "รายจ่าย (Out)", "หมายเหตุ"]
+              ["ลำดับ", "วันที่", "อ้างอิง (Sys/Order)", "เลขใบกำกับภาษี", "ประเภทเอกสาร", "ประเภท", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "รายจ่าย (Out)", "ไฟล์ในระบบ", "ตรวจสอบแล้ว", "หมายเหตุ"]
           ];
 
           let index = 1;
@@ -11893,6 +11915,8 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       '-',
                       null,
                       null,
+                      '-',
+                      '',
                       'เอกสารตกหล่น (Missing)'
                   ]);
               } else {
@@ -11914,16 +11938,18 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       t.partnerName || '-',
                       t.type === 'income' ? amt : null,
                       t.type === 'expense' ? amt : null,
+                      t.attachmentUrl ? '✅ มีไฟล์' : '❌ ไม่มี',
+                      '',
                       t.isCancelled ? 'ยกเลิกแล้ว' : 'ปกติ'
                   ]);
               }
           });
 
           const dataTotalRowIdx = dataRows.length;
-          dataRows.push(["", "", "", "", "", "", "รวมยอดสุทธิ (Grand Total)", sumListIn, sumListOut, ""]);
+          dataRows.push(["", "", "", "", "", "", "รวมยอดสุทธิ (Grand Total)", sumListIn, sumListOut, "", "", ""]);
 
           const wsData = XLSX.utils.aoa_to_sheet(dataRows);
-          wsData['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 10 }, { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 15 }, { wch: 25 }];
+          wsData['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 10 }, { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 25 }];
           applyTableStyles(wsData, 3, dataTotalRowIdx);
           XLSX.utils.book_append_sheet(wb, wsData, "2. Document List");
 
@@ -11936,7 +11962,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   ["รายการเอกสารรายรับ (Income Documents)"],
                   ["ประจำเดือน:", docSummaryMonth],
                   [],
-                  ["ลำดับ", "วันที่", "อ้างอิง (Sys/Order)", "เลขใบกำกับภาษี", "ประเภทเอกสาร", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "หมายเหตุ"]
+                  ["ลำดับ", "วันที่", "อ้างอิง (Sys/Order)", "เลขใบกำกับภาษี", "ประเภทเอกสาร", "หมวดหมู่", "ลูกค้า/คู่ค้า", "รายรับ (In)", "ไฟล์ในระบบ", "ตรวจสอบแล้ว", "หมายเหตุ"]
               ];
               let sumIncomeSheet = 0;
               incomeDocs.forEach((t, i) => {
@@ -11960,15 +11986,17 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       t.category || '-',
                       t.partnerName || '-',
                       amt,
+                      t.attachmentUrl ? '✅ มีไฟล์' : '❌ ไม่มี',
+                      '',
                       t.isCancelled ? 'ยกเลิกแล้ว' : 'ปกติ'
                   ]);
               });
 
               const incTotalRowIdx = incomeRows.length;
-              incomeRows.push(["", "", "", "", "", "รวมรายรับสุทธิ", sumIncomeSheet, ""]);
+              incomeRows.push(["", "", "", "", "", "รวมรายรับสุทธิ", sumIncomeSheet, "", "", ""]);
 
               const wsIncome = XLSX.utils.aoa_to_sheet(incomeRows);
-              wsIncome['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
+              wsIncome['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 25 }, { wch: 35 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 20 }];
               applyTableStyles(wsIncome, 3, incTotalRowIdx);
               XLSX.utils.book_append_sheet(wb, wsIncome, "3. รายรับ (Income)");
           }
@@ -11989,7 +12017,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                   [`รายการเอกสารรายจ่าย หมวด: ${category}`],
                   ["ประจำเดือน:", docSummaryMonth],
                   [],
-                  ["ลำดับ", "วันที่", "อ้างอิง (Sys/Order)", "เลขใบกำกับภาษี", "ประเภทเอกสาร", "ลูกค้า/คู่ค้า", "รายจ่าย (Out)", "หมายเหตุ"]
+                  ["ลำดับ", "วันที่", "อ้างอิง (Sys/Order)", "เลขใบกำกับภาษี", "ประเภทเอกสาร", "ลูกค้า/คู่ค้า", "รายจ่าย (Out)", "ไฟล์ในระบบ", "ตรวจสอบแล้ว", "หมายเหตุ"]
               ];
 
               let sumExpenseSheet = 0;
@@ -12012,15 +12040,17 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       docTypeLabel,
                       t.partnerName || '-',
                       amt,
+                      t.attachmentUrl ? '✅ มีไฟล์' : '❌ ไม่มี',
+                      '',
                       t.isCancelled ? 'ยกเลิกแล้ว' : 'ปกติ'
                   ]);
               });
 
               const expTotalRowIdx = catRows.length;
-              catRows.push(["", "", "", "", "รวมรายจ่ายสุทธิ", sumExpenseSheet, ""]);
+              catRows.push(["", "", "", "", "รวมรายจ่ายสุทธิ", sumExpenseSheet, "", "", ""]);
 
               const wsCat = XLSX.utils.aoa_to_sheet(catRows);
-              wsCat['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 35 }, { wch: 15 }, { wch: 20 }];
+              wsCat['!cols'] = [{ wch: 8 }, { wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 35 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 20 }];
               applyTableStyles(wsCat, 3, expTotalRowIdx);
               
               let sheetName = sanitizeSheetName(category);
@@ -12987,6 +13017,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                 <th className="p-4 border-b border-slate-200">ลูกค้า/คู่ค้า</th>
                                 <th className="p-4 border-b border-slate-200 text-right">รายรับ (In)</th>
                                 <th className="p-4 border-b border-slate-200 text-right">รายจ่าย (Out)</th>
+                                <th className="p-4 border-b border-slate-200 text-center">ไฟล์แนบ</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
@@ -13036,6 +13067,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                             <td className="p-4 text-slate-400">-</td>
                                             <td className="p-4 text-right text-slate-400">-</td>
                                             <td className="p-4 text-right text-slate-400">-</td>
+                                            <td className="p-4 text-center text-slate-400">-</td>
                                         </tr>
                                     );
                                 }
@@ -13066,11 +13098,22 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     <td className="p-4 text-slate-700 truncate max-w-[200px]" title={doc.partnerName}>{doc.partnerName || '-'}</td>
                                     <td className="p-4 text-right font-bold text-emerald-600">{doc.type === 'income' ? formatCurrency(amt) : '-'}</td>
                                     <td className="p-4 text-right font-bold text-rose-600">{doc.type === 'expense' ? formatCurrency(amt) : '-'}</td>
+                                    <td className="p-4 text-center">
+                                        {doc.attachmentUrl ? (
+                                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-md border border-blue-100 shadow-sm w-fit mx-auto">
+                                                <Cloud size={12}/> มีไฟล์
+                                            </span>
+                                        ) : (
+                                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-md border border-slate-200 w-fit mx-auto">
+                                                <X size={12}/> ไม่มี
+                                            </span>
+                                        )}
+                                    </td>
                                 </tr>
                             )})}
                             {combinedDocSummaryList.length === 0 && (
                                 <tr>
-                                    <td colSpan="8" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารที่ตรงกับเงื่อนไขการค้นหาในเดือนที่เลือก</td>
+                                    <td colSpan="9" className="p-10 text-center text-slate-400 font-bold">ไม่พบเอกสารที่ตรงกับเงื่อนไขการค้นหาในเดือนที่เลือก</td>
                                 </tr>
                             )}
                         </tbody>
@@ -14866,12 +14909,13 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                       return pdf.output('blob');
                   };
 
-                  const folder = zip.folder(docItem.invNo);
-
                   if (docItem.docType === 'abb') {
                       const abbBlob = await generatePdfBlob("ต้นฉบับ (ORIGINAL)");
-                      folder.file(`${docItem.invNo}.pdf`, abbBlob);
+                      // นำไฟล์ ABB ใส่รวมกันในหน้าแรกของ ZIP โดยไม่ต้องสร้าง Folder
+                      zip.file(`${docItem.invNo}.pdf`, abbBlob);
                   } else {
+                      // สร้าง Folder ย่อยสำหรับเอกสารประเภทอื่น เพื่อแยกต้นฉบับและสำเนา
+                      const folder = zip.folder(docItem.invNo);
                       const originalBlob = await generatePdfBlob("ต้นฉบับ (ORIGINAL)");
                       folder.file(`${docItem.invNo}_Original.pdf`, originalBlob);
 
@@ -19609,8 +19653,22 @@ export default function App() {
     if (isRestoring || isMigrating || isBackingUp) return; 
 
     setLoading(true);
+    
+    // --- 🛡️ NEW: ระบบป้องกันหน้าจอค้างตลอดกาล (Timeout Fallback) ---
+    const loadingFallback = setTimeout(() => {
+        setLoading(false);
+        addToast("ระบบดึงข้อมูลเสร็จสิ้น (บางส่วนอาจถูกซ่อนเพื่อความรวดเร็ว)", "success");
+    }, 5000); // ถ้านานเกิน 5 วินาที บังคับให้หน้าจอใช้งานได้เลย
+
     const path = (coll) => collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', coll);
-    const errorFn = (e) => { console.error("Firestore error:", e); addToast("Sync Error", "error"); };
+    
+    // --- 🛡️ NEW: ป้องกันกรณีฐานข้อมูล Error แล้วหน้าจอค้าง ---
+    const errorFn = (e) => { 
+        console.error("Firestore error:", e); 
+        addToast("เกิดข้อผิดพลาดในการดึงข้อมูล (กรุณาเช็คอินเทอร์เน็ตหรือ Index)", "error"); 
+        setLoading(false);
+        clearTimeout(loadingFallback);
+    };
     
     // 1. กำหนดขอบเขตข้อมูล (Data Horizon) แบบไดนามิกตามที่ผู้ใช้เลือก
     let dataHorizonDate = new Date();
@@ -19650,6 +19708,7 @@ export default function App() {
     const unsubInv = onSnapshot(query(path('invoices'), where('date', '>=', dataHorizonDate)), (s) => { 
         setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))); 
         setLoading(false); // เลิกหมุนเมื่อบิลขายโหลดเสร็จ
+        clearTimeout(loadingFallback); // ยกเลิกการนับเวลาถอยหลัง
     }, errorFn);
     
     // 🚨 ข้อยกเว้นสำคัญ: สต็อกสินค้า (inventory_batches) ต้องดึงมา "ทั้งหมด" ห้ามตัดเวลาทิ้งเด็ดขาด เพราะสินค้าเก่าอาจยังขายไม่หมด
@@ -19664,7 +19723,10 @@ export default function App() {
     // Import Logs ดึงแค่ 6 เดือนล่าสุด หรือตามระยะเวลา Sync
     const unsubLogs = onSnapshot(query(path('import_logs'), where('date', '>=', logCutoffDate)), (s) => setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)}))), errorFn);
     
-    return () => { unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubAssets(); unsubPromo(); unsubLogs(); };
+    return () => { 
+        clearTimeout(loadingFallback); // เคลียร์เวลาเมื่อเปลี่ยนหน้า
+        unsubInc(); unsubExp(); unsubInv(); unsubStock(); unsubAssets(); unsubPromo(); unsubLogs(); 
+    };
   }, [user, currentAppId, isRestoring, isMigrating, isBackingUp, syncHorizon]);
 
   const forceDeleteById = async () => {
