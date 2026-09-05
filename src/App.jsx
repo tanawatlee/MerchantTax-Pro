@@ -592,13 +592,21 @@ const decryptPdfFallback = async (arrayBuffer, password) => {
 };
 
 // --- Shared UI Components ---
-function LoadingScreen() {
+function LoadingScreen({ progress, message = 'กำลังเตรียมฐานข้อมูลระบบ...' }) {
   return (
     <div className="flex flex-col items-center justify-center w-full h-full bg-slate-50 text-indigo-600 font-sarabun text-center fixed inset-0 z-[9999]">
-      <div className="bg-white p-8 rounded-[40px] shadow-xl flex flex-col items-center">
+      <div className="bg-white p-8 rounded-[40px] shadow-xl flex flex-col items-center w-80 max-w-[90%]">
         <Loader className="animate-spin mb-4 text-indigo-600" size={48} />
-        <p className="text-lg font-bold">กำลังเตรียมฐานข้อมูลระบบ...</p>
-        <p className="text-xs text-slate-400 mt-2">Connecting to Merchant Services</p>
+        <p className="text-lg font-bold">{message}</p>
+        {progress !== undefined && (
+            <div className="w-full mt-4 flex flex-col items-center gap-2 animate-fadeIn">
+                <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                    <div className="bg-indigo-600 h-full transition-all duration-300 ease-out" style={{ width: `${progress}%` }}></div>
+                </div>
+                <p className="text-xs font-black text-indigo-500">{progress}%</p>
+            </div>
+        )}
+        <p className="text-[10px] text-slate-400 mt-2">Connecting to Merchant Services</p>
       </div>
     </div>
   );
@@ -19478,6 +19486,8 @@ export default function App() {
   const [assets, setAssets] = useState([]); // --- NEW: เพิ่ม State สำหรับ Assets ---
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(true);
+  const [isInitialDataLoaded, setIsInitialDataLoaded] = useState(false); // NEW: State เช็คว่าโหลดครั้งแรกเสร็จหรือยัง
+  const [syncProgress, setSyncProgress] = useState(0); // NEW: State เก็บเปอร์เซ็นต์การโหลด
   const [currentAppId, setCurrentAppId] = useState(localStorage.getItem('merchant_app_id') || CONSTANTS.IDS.PROD);
   const [toasts, setToasts] = useState([]);
   const [preFillInvoice, setPreFillInvoice] = useState(null);
@@ -19583,53 +19593,13 @@ export default function App() {
   };
 
   const executeBulkUpdate = async () => {
-      if (!bulkUpdatePreview || !user) return;
-      setIsBulkUpdating(true);
-      try {
-          let batchWriter = writeBatch(dbInstance);
-          let opsCount = 0;
-          let updatedCount = 0;
-
-          const allDocs = [...bulkUpdatePreview.incomes, ...bulkUpdatePreview.expenses];
-
-          for (const item of allDocs) {
-              const collName = item.type === 'income' ? 'transactions_income' : 'transactions_expense';
-              const docRef = doc(dbInstance, 'artifacts', currentAppId, 'public', 'data', collName, item.id);
-
-              batchWriter.update(docRef, {
-                  shopName: bulkUpdateShop,
-                  channel: bulkUpdateChannel,
-                  updatedAt: serverTimestamp()
-              });
-
-              opsCount++;
-              if (item.type === 'income') updatedCount++;
-
-              if (opsCount >= 400) {
-                  await batchWriter.commit();
-                  batchWriter = writeBatch(dbInstance);
-                  opsCount = 0;
-              }
-          }
-
-          if (opsCount > 0) {
-              await batchWriter.commit();
-          }
-
-          addToast(`อัปเดตข้อมูลสำเร็จ ${updatedCount} ออเดอร์ (รวมบิลที่เกี่ยวข้อง)`, "success");
-          setShowBulkUpdateModal(false);
-          setBulkUpdateInput('');
-          setBulkUpdatePreview(null);
-      } catch (error) {
-          console.error(error);
-          addToast(`เกิดข้อผิดพลาด: ${error.message}`, "error");
-      }
+// ... inside App component ...
       setIsBulkUpdating(false);
   };
 
   const addToast = (message, type = 'success') => { const id = Date.now() + Math.random(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000); };
   const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
-  const toggleAppMode = () => { const ids = Object.values(CONSTANTS.IDS); const nextId = ids[(ids.indexOf(currentAppId) + 1) % ids.length]; setCurrentAppId(nextId); localStorage.setItem('merchant_app_id', nextId); addToast(`ฐานข้อมูล: ${nextId}`, "success"); };
+  const toggleAppMode = () => { const ids = Object.values(CONSTANTS.IDS); const nextId = ids[(ids.indexOf(currentAppId) + 1) % ids.length]; setIsInitialDataLoaded(false); setCurrentAppId(nextId); localStorage.setItem('merchant_app_id', nextId); addToast(`ฐานข้อมูล: ${nextId}`, "success"); };
 
   useEffect(() => {
     if (terminalRef.current) {
@@ -19653,12 +19623,32 @@ export default function App() {
     if (isRestoring || isMigrating || isBackingUp) return; 
 
     setLoading(true);
+    setSyncProgress(0); // รีเซ็ต % การโหลดใหม่
+    
+    let loadedFlags = { inc: false, exp: false, inv: false, stock: false, assets: false, promo: false, logs: false };
+    let totalToLoad = 7;
+    
+    const checkProgress = (key) => {
+        if (!loadedFlags[key]) {
+            loadedFlags[key] = true;
+            const loadedCount = Object.values(loadedFlags).filter(Boolean).length;
+            const pct = Math.round((loadedCount / totalToLoad) * 100);
+            setSyncProgress(pct);
+            if (loadedCount >= totalToLoad) {
+                setLoading(false);
+                setIsInitialDataLoaded(true);
+                clearTimeout(loadingFallback);
+            }
+        }
+    };
     
     // --- 🛡️ NEW: ระบบป้องกันหน้าจอค้างตลอดกาล (Timeout Fallback) ---
     const loadingFallback = setTimeout(() => {
         setLoading(false);
+        setSyncProgress(100);
+        setIsInitialDataLoaded(true);
         addToast("ระบบดึงข้อมูลเสร็จสิ้น (บางส่วนอาจถูกซ่อนเพื่อความรวดเร็ว)", "success");
-    }, 5000); // ถ้านานเกิน 5 วินาที บังคับให้หน้าจอใช้งานได้เลย
+    }, 10000); // ถ้านานเกิน 10 วินาที บังคับให้หน้าจอใช้งานได้เลย
 
     const path = (coll) => collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', coll);
     
@@ -19667,6 +19657,7 @@ export default function App() {
         console.error("Firestore error:", e); 
         addToast("เกิดข้อผิดพลาดในการดึงข้อมูล (กรุณาเช็คอินเทอร์เน็ตหรือ Index)", "error"); 
         setLoading(false);
+        setIsInitialDataLoaded(true);
         clearTimeout(loadingFallback);
     };
     
@@ -19697,31 +19688,44 @@ export default function App() {
     const unsubInc = onSnapshot(query(path('transactions_income'), where('date', '>=', dataHorizonDate)), (s) => {
         incomeCache = s.docs.map(d=>({id:d.id, ...d.data(), type:'income', date: normalizeDate(d.data().date)}));
         updateTransactions();
+        checkProgress('inc');
     }, errorFn);
     
     const unsubExp = onSnapshot(query(path('transactions_expense'), where('date', '>=', dataHorizonDate)), (s) => {
         expenseCache = s.docs.map(d=>({id:d.id, ...d.data(), type:'expense', date: normalizeDate(d.data().date)}));
         updateTransactions();
+        checkProgress('exp');
     }, errorFn);
     
     // ดึง Invoices เฉพาะในช่วง Horizon
     const unsubInv = onSnapshot(query(path('invoices'), where('date', '>=', dataHorizonDate)), (s) => { 
         setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))); 
-        setLoading(false); // เลิกหมุนเมื่อบิลขายโหลดเสร็จ
-        clearTimeout(loadingFallback); // ยกเลิกการนับเวลาถอยหลัง
+        checkProgress('inv');
     }, errorFn);
     
     // 🚨 ข้อยกเว้นสำคัญ: สต็อกสินค้า (inventory_batches) ต้องดึงมา "ทั้งหมด" ห้ามตัดเวลาทิ้งเด็ดขาด เพราะสินค้าเก่าอาจยังขายไม่หมด
-    const unsubStock = onSnapshot(query(path('inventory_batches')), (s) => setStockBatches(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
+    const unsubStock = onSnapshot(query(path('inventory_batches')), (s) => {
+        setStockBatches(s.docs.map(d=>({id:d.id, ...d.data()})));
+        checkProgress('stock');
+    }, errorFn);
     
     // ดึง Assets --- NEW ---
-    const unsubAssets = onSnapshot(query(path('assets')), (s) => setAssets(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
+    const unsubAssets = onSnapshot(query(path('assets')), (s) => {
+        setAssets(s.docs.map(d=>({id:d.id, ...d.data()})));
+        checkProgress('assets');
+    }, errorFn);
 
     // คู่ค้าและโปรโมชั่น (ข้อมูลน้อย ดึงทั้งหมดได้)
-    const unsubPromo = onSnapshot(query(path('promotions')), (s) => setPromotions(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
+    const unsubPromo = onSnapshot(query(path('promotions')), (s) => {
+        setPromotions(s.docs.map(d=>({id:d.id, ...d.data()})));
+        checkProgress('promo');
+    }, errorFn);
     
     // Import Logs ดึงแค่ 6 เดือนล่าสุด หรือตามระยะเวลา Sync
-    const unsubLogs = onSnapshot(query(path('import_logs'), where('date', '>=', logCutoffDate)), (s) => setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)}))), errorFn);
+    const unsubLogs = onSnapshot(query(path('import_logs'), where('date', '>=', logCutoffDate)), (s) => {
+        setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)})));
+        checkProgress('logs');
+    }, errorFn);
     
     return () => { 
         clearTimeout(loadingFallback); // เคลียร์เวลาเมื่อเปลี่ยนหน้า
@@ -20742,13 +20746,14 @@ export default function App() {
     }
   };
 
-  if (authLoading) return <LoadingScreen />;
+  if (authLoading) return <LoadingScreen message="กำลังตรวจสอบสิทธิ์ผู้ใช้งาน..." />;
   if (!user) return (
     <>
       <ToastContainer toasts={toasts} removeToast={removeToast} />
       <LoginScreen authInstance={authInstance} addToast={addToast} />
     </>
   );
+  if (!isInitialDataLoaded) return <LoadingScreen progress={syncProgress} message="กำลังซิงค์ข้อมูลจากระบบคลาวด์..." />;
 
   return (
     <div className="flex w-full h-screen bg-slate-50 font-sarabun text-slate-800 overflow-hidden text-left">
@@ -20866,7 +20871,7 @@ export default function App() {
                     </select>
                 </div>
 
-                {loading && <div className="text-[10px] font-black text-indigo-600 flex items-center gap-2 bg-indigo-50 px-4 py-1.5 rounded-full border border-indigo-100 animate-pulse text-left"><Loader size={12} className="animate-spin text-center"/> SYNCING</div>}
+                {loading && <div className="text-[10px] font-black text-indigo-600 flex items-center gap-2 bg-indigo-50 px-4 py-1.5 rounded-full border border-indigo-100 animate-pulse text-left"><Loader size={12} className="animate-spin text-center"/> SYNCING {syncProgress}%</div>}
                 
                 <button onClick={() => window.location.reload()} className="text-[10px] font-bold text-slate-500 hover:text-indigo-600 flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm hover:shadow-md hover:border-indigo-200 transition-all">
                     <RefreshCw size={12}/> รีเฟรชซิงค์ข้อมูล
