@@ -14852,8 +14852,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       }
 
       try {
-          // 🔥 FIX: ปรับลดการแบ่งไฟล์ (Chunk) เหลือ 20 รายการต่อ ZIP เพื่อให้ไฟล์แตกออกเป็น 2-3 ไฟล์ย่อย
-          const CHUNK_SIZE = 20; 
+          // 🔥 FIX: ปรับการแบ่งไฟล์ (Chunk) เป็น 100 รายการต่อ ZIP ตามความต้องการ
+          const CHUNK_SIZE = 100; 
           const totalChunks = Math.ceil(docsToDownload.length / CHUNK_SIZE);
           const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
 
