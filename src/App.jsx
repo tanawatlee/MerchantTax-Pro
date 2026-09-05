@@ -14852,8 +14852,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       }
 
       try {
-          // 🔥 NEW: ระบบแบ่งโหลดอัตโนมัติ (Auto-Chunking) ทีละ 50 ออเดอร์
-          const CHUNK_SIZE = 50; 
+          // 🔥 FIX: ปรับการแบ่งไฟล์ (Chunk) เป็น 100 รายการต่อ ZIP ตามที่ผู้ใช้ต้องการ
+          const CHUNK_SIZE = 100; 
           const totalChunks = Math.ceil(docsToDownload.length / CHUNK_SIZE);
           const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
 
