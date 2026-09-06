@@ -19704,8 +19704,8 @@ export default function App() {
         updateTransactions();
     }, errorFn);
     
-    // ดึง Invoices เฉพาะในช่วง Horizon
-    const unsubInv = onSnapshot(query(path('invoices'), where('date', '>=', dataHorizonDate)), (s) => { 
+    // --- 🔥 THE FIX: ปลดล็อกตัวกรองเวลา ดึง Invoices ทั้งหมดเพื่อให้ Dashboard และ Running Number ทำงานถูกต้อง 100% ---
+    const unsubInv = onSnapshot(query(path('invoices')), (s) => { 
         setInvoices(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().date)}))); 
         setLoading(false); // เลิกหมุนเมื่อบิลขายโหลดเสร็จ
         clearTimeout(loadingFallback); // ยกเลิกการนับเวลาถอยหลัง
