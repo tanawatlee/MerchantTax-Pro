@@ -10641,6 +10641,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       // Soft Delete: เปลี่ยนสถานะเป็น isCancelled: true แทนการลบทิ้งถาวร
       batchWriter.set(docRef, {
           isCancelled: true,
+          returnAction: cancelStockAction,
           cancelledAt: serverTimestamp()
       }, { merge: true });
 
@@ -13520,7 +13521,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                             <span className="px-2 py-1 rounded-md text-[9px] font-black bg-indigo-50 text-indigo-600 uppercase border border-indigo-200 whitespace-nowrap">{t.shopName}</span>
                                         )}
                                     </div>
-                                    {t.isCancelled && <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200 w-fit">ยกเลิกแล้ว</span>}
+                                    {t.isCancelled && (
+                                        <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-black uppercase border w-fit mt-1 ${t.returnAction === 'discard' ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-rose-100 text-rose-700 border-rose-200'}`}>
+                                            {t.returnAction === 'discard' ? '🗑️ ยกเลิก (ตัดชำรุด)' : '📦 ยกเลิก (คืนคลัง)'}
+                                        </span>
+                                    )}
                                 </div>
                             </td>
 
@@ -13536,7 +13541,11 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                                     
                                     <div className="flex items-center gap-2 flex-wrap">
                                         {t.isPurchaseCreditNote && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-fuchsia-100 text-fuchsia-700 border border-fuchsia-200 flex items-center gap-0.5"><TrendingDown size={8}/> ใบลดหนี้ฝั่งซื้อ (คืนของ)</span>}
-                                        {t.isCancelled && !t.isReturned && <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">ยกเลิกแล้ว</span>}
+                                        {t.isCancelled && !t.isReturned && (
+                                            <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase border ${t.returnAction === 'discard' ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-rose-100 text-rose-700 border-rose-200'}`}>
+                                                {t.returnAction === 'discard' ? '🗑️ ยกเลิก (ตัดชำรุด)' : '📦 ยกเลิก (คืนคลัง)'}
+                                            </span>
+                                        )}
                                         
                                         {/* --- 🔥 NEW: แสดงเหตุผลการยกเลิกในหน้าประวัติเอกสาร --- */}
                                         {t.cancelReason && <span className="px-1.5 py-0.5 rounded text-[8px] font-black text-rose-600 bg-rose-50 border border-rose-100 truncate max-w-[150px]">เหตุผล: {t.cancelReason}</span>}
