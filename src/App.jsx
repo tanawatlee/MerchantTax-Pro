@@ -9722,6 +9722,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
   const [viewItem, setViewItem] = useState(null);
   const [cancelConfirmId, setCancelConfirmId] = useState(null); // แก้ไขชื่อ State สำหรับยกเลิกรายการ
+  const [cancelStockAction, setCancelStockAction] = useState('restock'); // --- 🔥 NEW: ตัวเลือกว่าจะคืนคลังหรือตัดทิ้ง ---
   const [hardDeleteConfirmId, setHardDeleteConfirmId] = useState(null); // NEW: State สำหรับลบถาวร
   const [showPartnerModal, setShowPartnerModal] = useState(false);
   const [showStockSelectModal, setShowStockSelectModal] = useState(false);
@@ -10650,7 +10651,10 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
               if (lot?.id) batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
           });
       } else if (cancelConfirmId.type === 'income') {
-          // สำหรับรายรับ หากยกเลิก ให้ดึงสต็อกกลับเข้าคลังอัตโนมัติ
+          let totalDamagedCost = 0;
+          let damagedItemsForDoc = [];
+
+          // สำหรับรายรับ หากยกเลิก ให้ดึงสต็อกกลับเข้าคลังอัตโนมัติ หรือ ตัดชำรุด
           if (cancelConfirmId.items) {
               for (const item of cancelConfirmId.items) {
                   let toReturn = Number(item.qty);
@@ -10660,20 +10664,109 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     .filter(b => matchItemToBatch(item.sku, item.desc, b.sku, b.productName) && Number(b.sold) > 0)
                     .sort(sortNewestFirst);
 
+                  let itemCostForDamage = 0;
+
                   for (const lot of affectedLots) {
                       if (toReturn <= 0) break;
                       if (!lot?.id) continue;
                       const canTakeBack = Math.min(toReturn, Number(lot.sold));
-                      batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                      
+                      if (cancelStockAction === 'restock') {
+                          batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                      } else {
+                          // ถ้าตัดชำรุด ไม่ต้องเปลี่ยนยอด sold ในสต็อก (ให้ถือว่าของออกไปแล้ว) แต่เก็บมูลค่าทุนมาลงบัญชีรายจ่าย
+                          itemCostForDamage += canTakeBack * (Number(lot.costPerUnit) || 0);
+                      }
                       toReturn -= canTakeBack;
                   }
+
+                  if (cancelStockAction === 'discard') {
+                      totalDamagedCost += itemCostForDamage;
+                      damagedItemsForDoc.push({ 
+                          desc: `[ชำรุดตีกลับ] ${item.desc}`, 
+                          sku: item.sku || '-', 
+                          qty: Number(item.qty), 
+                          buyPrice: item.qty > 0 ? itemCostForDamage / Number(item.qty) : 0, 
+                          sellPrice: 0 
+                      });
+                  }
               }
+          }
+
+          // --- 🔥 SMART AUTO-CN: สร้างใบลดหนี้อัตโนมัติ หากออเดอร์นี้เคยออกบิลไปแล้ว ---
+          if (cancelConfirmId.invoiceNo) {
+              const origInv = invoices.find(i => i.invNo === cancelConfirmId.invoiceNo);
+              if (origInv) {
+                  const cnDocDate = new Date();
+                  const cnNo = generateDateBasedDocId(invoices, 'CN-', cnDocDate, 'invNo');
+                  
+                  const cnRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'));
+                  const cnPayload = {
+                      ...origInv,
+                      docType: 'credit_note',
+                      refInvNo: origInv.invNo,
+                      invNo: cnNo,
+                      date: cnDocDate,
+                      creditNoteReason: 'ลูกค้ายกเลิก/ตีกลับ (สร้างอัตโนมัติจากหน้าระบบบันทึกขาย)',
+                      status: 'paid', // ถือว่าใบลดหนี้สมบูรณ์
+                      createdAt: serverTimestamp(),
+                      updatedAt: serverTimestamp()
+                  };
+                  delete cnPayload.id; // ห้ามเซฟทับ id เดิม
+                  batchWriter.set(cnRef, cnPayload);
+              }
+          }
+
+          // --- 🔥 NEW: สร้างใบตัดจำหน่ายและบิลรายจ่ายอัตโนมัติ หากเลือก "ตัดชำรุด" ---
+          if (cancelStockAction === 'discard' && totalDamagedCost > 0) {
+              const actionDate = new Date();
+              const dmgSysDocId = `DMG-${formatDateISO(actionDate).replace(/-/g,'')}-${Math.floor(Math.random()*10000).toString().padStart(4,'0')}`;
+              
+              const dmgRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
+              batchWriter.set(dmgRef, {
+                  docNo: dmgSysDocId,
+                  docType: 'write_off',
+                  date: actionDate,
+                  requestedBy: 'System (Auto Void)',
+                  approvedBy: 'System',
+                  notes: `ออเดอร์ถูกยกเลิก/ตีกลับ และสินค้าชำรุด: ${cancelConfirmId.orderId || cancelConfirmId.sysDocId}`,
+                  reason: 'ลูกค้ายกเลิก/ตีกลับ (สินค้าเสียหาย)',
+                  items: damagedItemsForDoc,
+                  totalCost: totalDamagedCost,
+                  status: 'completed',
+                  userId: user.uid,
+                  createdAt: serverTimestamp()
+              });
+
+              const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+              batchWriter.set(expRef, {
+                  sysDocId: dmgSysDocId,
+                  type: 'expense',
+                  category: 'สินค้าเสียหาย/หมดอายุ',
+                  description: `ตัดจำหน่ายสินค้าชำรุด (ออเดอร์ยกเลิก/ตีกลับ): ${cancelConfirmId.orderId || cancelConfirmId.sysDocId}`,
+                  items: damagedItemsForDoc,
+                  total: totalDamagedCost,
+                  grandTotal: totalDamagedCost,
+                  date: actionDate,
+                  userId: user.uid,
+                  createdAt: serverTimestamp(),
+                  status: 'paid',
+                  partnerName: 'Internal (ตัดจำหน่าย)',
+                  partnerBranch: '00000',
+                  isFromReconciliation: true,
+                  linkedOrderId: dmgRef.id,
+                  linkedOrderNo: dmgSysDocId,
+                  channel: cancelConfirmId.channel || '',
+                  shopName: cancelConfirmId.shopName || 'ไม่ระบุ',
+                  isTaxOnly: false
+              });
           }
       }
 
       await batchWriter.commit();
-      showToast("ยกเลิกรายการและคืนยอดสต็อกเรียบร้อย", "success"); 
+      showToast("ยกเลิกรายการและอัปเดตระบบภาษีเรียบร้อย", "success"); 
       setCancelConfirmId(null); 
+      setCancelStockAction('restock'); // คืนค่าเริ่มต้น
     } catch (e) { 
       console.error("Cancel Transaction Error:", e);
       showToast(`ไม่สามารถยกเลิกรายการได้: ${e.message}`, "error"); 
@@ -13822,13 +13915,46 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     <XCircle size={32}/>
                 </div>
                 <h3 className="text-xl font-bold mb-2 text-center text-slate-800">ยืนยันการยกเลิกรายการ (Void)?</h3>
-                <p className="text-xs text-slate-400 mb-8 text-center leading-relaxed">
+                <p className="text-xs text-slate-400 mb-4 text-center leading-relaxed">
                     ระบบจะทำเครื่องหมายรายการ <b className="text-slate-600">{cancelConfirmId.sysDocId || 'นี้'}</b> เป็น "ยกเลิกแล้ว"<br/>
-                    และทำการดึงสต็อกสินค้ากลับคืนเข้าคลังให้อัตโนมัติ<br/>
+                    {cancelStockAction === 'restock' ? 'และทำการดึงสต็อกสินค้ากลับคืนเข้าคลังให้อัตโนมัติ' : 'และทำการตัดชำรุด นำต้นทุนไปลงเป็นรายจ่ายบริษัท'}<br/>
                     <span className="font-bold text-rose-600">*เลขเอกสารจะยังคงอยู่เพื่อการตรวจสอบบัญชี</span>
                 </p>
-                <div className="flex gap-3 text-center">
-                    <button onClick={()=>setCancelConfirmId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ปิด</button>
+
+                {/* --- 🔥 NEW: ตัวเลือกการจัดการสต็อกสินค้าตีกลับ --- */}
+                {cancelConfirmId.type === 'income' && (
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 mt-2 mb-4 text-left">
+                        <p className="text-xs font-bold text-slate-700 mb-2">การจัดการสต็อกสินค้าตีกลับ/ยกเลิก:</p>
+                        <div className="space-y-2">
+                            <label className={`flex items-start gap-2 p-3 rounded-xl border cursor-pointer transition-colors ${cancelStockAction === 'restock' ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200'}`}>
+                                <input type="radio" name="cancelStockAction" checked={cancelStockAction === 'restock'} onChange={() => setCancelStockAction('restock')} className="mt-0.5 w-4 h-4 text-indigo-600" />
+                                <div>
+                                    <p className="text-sm font-bold text-indigo-700 leading-tight">📦 คืนเข้าคลัง</p>
+                                    <p className="text-[10px] text-slate-500 mt-0.5">สภาพสมบูรณ์ นำกลับมาขายใหม่ได้</p>
+                                </div>
+                            </label>
+                            <label className={`flex items-start gap-2 p-3 rounded-xl border cursor-pointer transition-colors ${cancelStockAction === 'discard' ? 'bg-rose-50 border-rose-200' : 'bg-white border-slate-200'}`}>
+                                <input type="radio" name="cancelStockAction" checked={cancelStockAction === 'discard'} onChange={() => setCancelStockAction('discard')} className="mt-0.5 w-4 h-4 text-rose-600" />
+                                <div>
+                                    <p className="text-sm font-bold text-rose-700 leading-tight">🗑️ ตัดชำรุด (เสียหาย)</p>
+                                    <p className="text-[10px] text-slate-500 mt-0.5">นำต้นทุนไปลงเป็นรายจ่ายบริษัทอัตโนมัติ</p>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                )}
+
+                {/* --- 🔥 NEW: แสดงแจ้งเตือนล่วงหน้าว่าจะมีการสร้างใบลดหนี้อัตโนมัติ --- */}
+                {cancelConfirmId.type === 'income' && cancelConfirmId.invoiceNo && (
+                    <div className="bg-rose-100 text-rose-700 p-3 rounded-xl mb-6 text-xs font-bold border border-rose-200 text-left">
+                        <AlertTriangle className="inline mr-1" size={14} />
+                        ออเดอร์นี้มีการออกใบกำกับภาษี ({cancelConfirmId.invoiceNo}) ไปแล้ว<br/>
+                        ระบบจะทำการสร้าง "ใบลดหนี้ (CN)" ให้อัตโนมัติ!
+                    </div>
+                )}
+
+                <div className="flex gap-3 text-center mt-6">
+                    <button onClick={()=>{setCancelConfirmId(null); setCancelStockAction('restock');}} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-600 text-center hover:bg-slate-200 transition-colors">ปิด</button>
                     <button onClick={handleCancelTransaction} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 text-center hover:bg-rose-700 transition-colors">ยืนยันยกเลิก</button>
                 </div>
             </div>
