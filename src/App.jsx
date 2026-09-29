@@ -404,7 +404,7 @@ const calculatePromotions = (currentItems, allPromotions) => {
     return { totalDiscount, newFreeItems, appliedNames: [...new Set(appliedNames)] };
 };
 
-// --- 🔥 UPGRADED: AI Core Engine (Gemini 3.5 Flash) ---
+// --- 🔥 UPGRADED: AI Core Engine (Smart Backoff & Turbo Speed) ---
 const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
     const userApiKey = localStorage.getItem('gemini_api_key');
     
@@ -412,13 +412,12 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
         throw new Error("API_KEY_MISSING");
     }
 
-    // --- 🔥 FIX: ใช้โมเดลล่าสุดของปี 2026 (Gemini 3.5 Flash) แทนโมเดล 1.5 ที่ถูกปิดตัวไปแล้ว ---
-    const modelName = "gemini-3.5-flash"; 
+    // 🚀 FIX: อัปเกรดเป็น Gemini 3 Flash Preview (โมเดลล่าสุด เสถียรและเร็วที่สุด)
+    const modelName = "gemini-3-flash-preview"; 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${userApiKey.trim()}`;
 
     const parts = [{ text: prompt }];
     
-    // โหลดรูปภาพและระบุ MimeType อัตโนมัติ
     if (imageBase64) {
         const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
         const mimeType = imageBase64.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
@@ -428,19 +427,20 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
     const payload = { 
         contents: [{ role: "user", parts }],
         generationConfig: {
-            temperature: 0.3, // ปรับค่า 0.3 ให้ AI เน้นความแม่นยำของตัวเลข ลดการเดาสุ่ม
-            topK: 40,
+            temperature: 0.1, // โฟกัสการสกัดข้อมูลให้แม่นยำที่สุด
+            topK: 32,
             topP: 0.95
         }
     };
     
-    // บังคับให้ AI ส่งข้อมูลกลับมาเป็น JSON ตามโครงสร้างเป๊ะๆ
     if (isJson) {
         payload.generationConfig.responseMimeType = "application/json";
     }
     
-    let delay = 1000;
-    for (let i = 0; i < 5; i++) {
+    let delay = 2000; 
+    const maxRetries = 3; 
+
+    for (let i = 0; i < maxRetries; i++) {
         try {
             const res = await fetch(url, { 
                 method: 'POST', 
@@ -448,40 +448,49 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
                 body: JSON.stringify(payload) 
             });
             
-            // อ่านข้อความ Error จากฝั่ง Google โดยตรงเพื่อนำมาแสดงผล
             if (!res.ok) {
                 const errorData = await res.json().catch(() => ({}));
-                throw new Error(`[API Error ${res.status}] ${errorData?.error?.message || res.statusText}`);
+                const errMsg = errorData?.error?.message || res.statusText;
+                throw new Error(`[API Error ${res.status}] ${errMsg}`);
             }
             
             const data = await res.json();
             let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
             
             if (isJson) {
-                // ล้างอักขระขยะที่ AI อาจพ่นแถมมา เพื่อป้องกัน JSON.parse พัง
-                text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-                return JSON.parse(text);
+                // 🚀 FIX: ป้องกันระบบล่มด้วย Try-Catch ระดับลึก และทำความสะอาด JSON
+                text = text.replace(/[\`]{3}json/gi, '').replace(/[\`]{3}/g, '').trim();
+                try {
+                    return JSON.parse(text);
+                } catch (parseErr) {
+                    console.error("AI JSON Parse Error:", text);
+                    throw new Error("AI จัดเรียงข้อมูลผิดพลาด กรุณาลองสแกนใหม่อีกครั้ง");
+                }
             }
             return text;
         } catch (e) {
             console.warn(`[Gemini AI] Attempt ${i + 1} Failed:`, e.message);
             
-            if (e.message.includes('API_KEY_MISSING')) {
-                throw new Error("กรุณาตั้งค่า API Key ของคุณในเมนู 'เครื่องมือขั้นสูง' ก่อนใช้งาน AI");
+            if (e.message.includes('[API Error 429]')) {
+                const match = e.message.match(/retry in ([\d\.]+)s/);
+                const waitSecs = match && match[1] ? Math.ceil(parseFloat(match[1])) : 60;
+                throw new Error(`คิว AI เต็ม (โควต้าฟรีจำกัด 15 ครั้ง/นาที) กรุณารอ ${waitSecs} วินาที`);
             }
-            if (e.message.includes('[API Error 400]')) {
-                throw new Error(`ส่งข้อมูลไม่สำเร็จ (HTTP 400) กรุณาตรวจสอบรูปภาพหรือข้อมูล: ${e.message}`);
-            }
-            if (e.message.includes('[API Error 403]')) {
-                throw new Error(`API Key ไม่ถูกต้อง หรือไม่มีสิทธิ์การใช้งาน (HTTP 403)`);
-            }
-            if (e.message.includes('[API Error 404]')) {
-                throw new Error(`ไม่พบโมเดล AI ในระบบ (HTTP 404): ${e.message}`);
+
+            if (e.message.includes('API_KEY_MISSING')) throw new Error("กรุณาตั้งค่า API Key ก่อนใช้งาน");
+            if (e.message.includes('[API Error 400]')) throw new Error("ข้อมูลรูปภาพไม่ถูกต้อง หรือรูปภาพมีขนาดใหญ่เกินไป");
+            if (e.message.includes('[API Error 403]')) throw new Error("API Key ไม่ถูกต้อง");
+            if (e.message.includes('[API Error 404]')) throw new Error("ไม่พบระบบ AI รุ่นที่ระบุ");
+            
+            if (i === maxRetries - 1) {
+                if (e.message.includes('[API Error 503]')) {
+                    throw new Error(`เซิร์ฟเวอร์ AI ใช้งานเยอะเกินไปชั่วคราว กรุณากดใหม่ครับ`);
+                }
+                throw e; // โยน Error ภาษาไทยที่แปลแล้วออกไปให้แสดงใน Toast
             }
             
-            if (i === 4) throw e;
             await new Promise(r => setTimeout(r, delay));
-            delay *= 2; 
+            delay *= 1.5; 
         }
     }
 };
@@ -5230,6 +5239,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
 function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // --- 🔥 NEW: Search Input State (พิมพ์ให้เสร็จก่อนค่อยค้นหา ป้องกันการหน่วง) ---
+  const [searchInput, setSearchInput] = useState('');
+
   const [viewHistory, setViewHistory] = useState(null);
   const [showAddStockModal, setShowAddStockModal] = useState(false);
   const [deleteStockConfirm, setDeleteStockConfirm] = useState(null);
@@ -6447,8 +6460,8 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     setIsProcessing(false);
   };
 
-  // --- 🔥 REBUILT: คำนวณ Inventory ใหม่แบบ Real-time (การันตีว่ายอดตรงกัน 100% เสมอ) ---
-  const inventory = useMemo(() => {
+  // --- 🔥 REBUILT & OPTIMIZED: แยกการคำนวณฐานข้อมูลออกจากการกรองคำค้นหา (ลดอาการค้างตอนพิมพ์) ---
+  const baseInventory = useMemo(() => {
       const map = {};
       
       const start = stockStartDate ? new Date(stockStartDate) : null;
@@ -6563,7 +6576,11 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
           item.batches = sortedBatches;
       });
 
-      const result = Object.values(map).filter(item => 
+      return Object.values(map);
+  }, [stockBatches, stockStartDate, stockEndDate, transactions]);
+
+  const inventory = useMemo(() => {
+      const result = baseInventory.filter(item => 
           item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
           item.sku.toLowerCase().includes(searchTerm.toLowerCase())
       );
@@ -6587,7 +6604,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
       }
       
       return filteredResult.sort((a,b) => b.totalQty - a.totalQty);
-  }, [stockBatches, searchTerm, stockStartDate, stockEndDate, transactions, stockSortType, stockQuickFilter]);
+  }, [baseInventory, searchTerm, stockSortType, stockQuickFilter]);
 
   const stockTotalPages = Math.max(1, Math.ceil(inventory.length / stockItemsPerPage));
   const currentStockData = useMemo(() => {
@@ -7006,7 +7023,31 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
               <div className="flex items-center gap-3 w-full lg:w-1/2">
                   <div className="relative w-full text-left">
                     <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
-                    <input className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-100 outline-none text-slate-800 shadow-inner transition-all" placeholder="ค้นชื่อสินค้า หรือ SKU..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}/>
+                    <input 
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-16 py-2 text-sm focus:ring-2 focus:ring-indigo-100 outline-none text-slate-800 shadow-inner transition-all" 
+                        placeholder="พิมพ์ค้นหาชื่อ หรือ SKU... (กด Enter หรือคลิกค้นหา)" 
+                        value={searchInput} 
+                        onChange={(e) => {
+                            setSearchInput(e.target.value);
+                            // คืนค่าการค้นหาทันทีหากผู้ใช้ลบข้อความทิ้งจนหมด
+                            if (e.target.value === '') setSearchTerm('');
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                setSearchTerm(searchInput);
+                            }
+                        }}
+                    />
+                    {searchInput && searchInput !== searchTerm && (
+                        <button onClick={() => setSearchTerm(searchInput)} className="absolute right-2 top-1.5 text-[10px] font-bold bg-indigo-600 text-white px-2.5 py-1 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">
+                            ค้นหา
+                        </button>
+                    )}
+                    {searchTerm && searchInput === searchTerm && (
+                        <button onClick={() => {setSearchInput(''); setSearchTerm('');}} className="absolute right-3 top-2.5 text-slate-400 hover:text-rose-500 transition-colors">
+                            <X size={14}/>
+                        </button>
+                    )}
                   </div>
               </div>
               
@@ -8202,8 +8243,8 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     const sub = Number(row.total) || 0;
     const disc = Number(row.couponDiscount) || 0; 
     
-    // --- 🔥 NEW: รองรับการคำนวณยอดติดลบของใบลดหนี้ฝั่งซื้อ ---
-    const isNegative = sub < 0;
+    // --- 🔥 FIX: รองรับการคำนวณยอดติดลบของใบลดหนี้ฝั่งซื้อ (Purchase Credit Note) ---
+    const isNegative = sub < 0 || row.isPurchaseCreditNote === true;
     const absSub = Math.abs(sub);
     const absDisc = Math.abs(disc);
     const baseAmt = Math.max(0, absSub - absDisc) * (isNegative ? -1 : 1);
@@ -8233,7 +8274,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     return { base, vat, total };
   };
 
-  // --- 🔥 FIX: แก้ไขบั๊กทศนิยม 6 สตางค์ โดยบังคับปัดเศษ 2 ตำแหน่ง "รายบิล" ก่อนนำมาบวกสะสม (ให้ตรงกับ Excel 100%) ---
+  // --- 🔥 FIX: แก้ไขบั๊กทศนิยม 6 สตางค์ โดยบังคับปัดเศษ 2 ตำแหน่ง "รายบิล" ก่อนนำมาบวกสะสม ---
   const vatAnalysis = useMemo(() => {
     const toFixedNum = (num) => Number(Number(num).toFixed(2));
 
@@ -20890,7 +20931,15 @@ export default function App() {
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_STYLES }} />
       <ToastContainer toasts={toasts} removeToast={removeToast} />
       <aside className="w-72 bg-slate-900 text-white flex flex-col border-r border-slate-800 shadow-2xl h-full shrink-0 text-left">
-        <div className="p-8 border-b border-slate-800 flex items-center gap-3 text-left"><div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-center"><Wallet size={20} className="text-white text-center"/></div><h1 className="text-xl font-bold tracking-tight text-left">MerchantTax</h1></div>
+        <div className="p-8 border-b border-slate-800 flex items-center gap-3 text-left">
+            <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-center shrink-0">
+                <Wallet size={20} className="text-white text-center"/>
+            </div>
+            <div className="flex flex-col">
+                <h1 className="text-xl font-bold tracking-tight text-left leading-tight">MerchantTax</h1>
+                <span className="text-[10px] font-mono text-indigo-400 font-bold tracking-widest mt-0.5">v1.6.0 (Stable)</span>
+            </div>
+        </div>
         <nav className="p-6 space-y-4 flex-1 overflow-y-auto text-left">
             <NavButton active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard');}} icon={<PieChart size={18} />} label="แดชบอร์ด" />
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Analytics & Accounting</p>
