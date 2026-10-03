@@ -7982,6 +7982,21 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     setEndDate(formatDateISO(end));
   };
 
+  // --- NEW: Helper for Month Picker Buttons ---
+  const changeReportMonth = (offset) => {
+      let baseDate = new Date();
+      if (startDate && endDate) {
+          const s = new Date(startDate);
+          const e = new Date(endDate);
+          if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
+              baseDate = s;
+          }
+      }
+      baseDate.setMonth(baseDate.getMonth() + offset);
+      setStartDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1)));
+      setEndDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0)));
+  };
+
   const handleDeleteRecord = async () => {
     if (!deleteConfirm?.id) {
         showToast("ไม่พบข้อมูลรายการ (ไม่มี ID)", "error");
@@ -8969,7 +8984,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   );
 
   return (
-    <div className="space-y-6 animate-fadeIn text-left font-sarabun w-full min-h-full pb-10">
+    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
       
       {/* Top Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-2 border-b pb-4 gap-4 text-left no-print">
@@ -8996,9 +9011,37 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
           
           <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200 shrink-0 w-full xl:w-auto overflow-x-auto">
               <Calendar size={14} className="text-slate-400 ml-2 shrink-0"/>
-              <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0"/>
+              <button onClick={() => changeReportMonth(-1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronDown className="rotate-90" size={14}/></button>
+              <input 
+                  type="month" 
+                  value={(() => {
+                      if (startDate && endDate) {
+                          const s = new Date(startDate);
+                          const e = new Date(endDate);
+                          if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
+                              return `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}`;
+                          }
+                      }
+                      return '';
+                  })()}
+                  onChange={e => {
+                      const val = e.target.value;
+                      if (!val) { setStartDate(''); setEndDate(''); return; }
+                      const [year, month] = val.split('-');
+                      setStartDate(formatDateISO(new Date(year, month - 1, 1)));
+                      setEndDate(formatDateISO(new Date(year, month, 0)));
+                  }}
+                  className="bg-white border border-slate-200 rounded-md text-xs font-bold outline-none text-indigo-700 cursor-pointer focus:ring-1 focus:ring-indigo-200 px-1"
+                  title="เลือกทั้งเดือน"
+              />
+              <button onClick={() => changeReportMonth(1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronUp className="rotate-90" size={14}/></button>
+              <span className="text-slate-300 mx-1">|</span>
+              <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0 p-0"/>
               <span className="text-slate-300"><ArrowRight size={12}/></span>
-              <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0"/>
+              <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0 p-0"/>
+              {(startDate || endDate) && (
+                  <button onClick={()=>{setStartDate(''); setEndDate('');}} className="p-1 text-slate-400 hover:text-rose-500 transition-colors ml-1" title="ล้างตัวกรองวันที่"><X size={14}/></button>
+              )}
           </div>
       </div>
 
@@ -10611,17 +10654,80 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
   useEffect(() => { if (!user) return; const unsub = onSnapshot(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners'), (snap) => { setPartners(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); return () => unsub(); }, [user, appId]);
 
+  // --- 🔥 FIX: อัปเกรดระบบคำนวณสต็อกแบบ Real-time (IN-OUT) ให้ตรงกับหน้าคลังสินค้า 100% ---
   const uniqueInventory = useMemo(() => {
     const map = {};
+    
+    // 1. IN (ดึงยอดรับเข้าจากสต็อก)
     stockBatches.forEach(batch => {
-      const name = batch.productName; if (!name) return;
-      const remaining = Number(batch.quantity) - Number(batch.sold || 0);
-      if (!map[name]) map[name] = { name, sku: batch.sku || '-', qty: 0, sellPrice: batch.sellPrice || 0, category: batch.category || '' };
-      map[name].qty += Math.max(0, remaining);
-      if (batch.sellPrice > 0) map[name].sellPrice = batch.sellPrice;
+        const nameKey = String(batch.productName || 'ไม่ระบุชื่อสินค้า').trim();
+        const skuKey = (batch.sku && batch.sku !== '-') ? String(batch.sku).trim() : '';
+        const groupKey = skuKey ? `${skuKey.toLowerCase()}::${nameKey.toLowerCase()}` : nameKey.toLowerCase();
+
+        if (!map[groupKey]) { 
+            map[groupKey] = { 
+                name: nameKey,
+                sku: skuKey || '-',
+                qty: 0,
+                totalIn: 0,
+                totalOut: 0,
+                sellPrice: batch.sellPrice || 0,
+                category: batch.category || '',
+                originalKeys: { sku: batch.sku, name: batch.productName }
+            }; 
+        }
+        
+        const qty = Number(batch.quantity) || 0;
+        // นับยอดรับเข้า (ข้าม Dummy Batch ที่ระบบสร้างเพื่อแก้ติดลบ)
+        if (qty > 0 || (batch.isAdjustment && !String(batch.adjustReason || '').includes('สต็อกติดลบ'))) {
+            map[groupKey].totalIn += qty;
+        }
+        if (batch.sellPrice > 0) map[groupKey].sellPrice = batch.sellPrice;
     });
-    return Object.values(map);
-  }, [stockBatches]);
+
+    // 2. OUT (ดึงยอดขายออก/ชำรุด จากบิลออเดอร์จริง)
+    transactions.forEach(t => {
+       if (t.isCancelled) return;
+
+       if (t.type === 'income') {
+           (t.items || []).forEach(item => {
+               const cleanName = String(item.desc || '').replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]/gi, '').replace(/\[จัดส่งไม่สำเร็จ\]/gi, '').trim();
+               if (cleanName.includes('ส่วนต่างยอดรับ') || cleanName.includes('ค่าจัดส่ง')) return;
+
+               const matchingGroupKeys = Object.keys(map).filter(gKey => 
+                   matchItemToBatch(item.sku, cleanName, map[gKey].originalKeys.sku, map[gKey].originalKeys.name)
+               );
+
+               matchingGroupKeys.forEach(gKey => {
+                   map[gKey].totalOut += Math.abs(Number(item.qty) || 0);
+               });
+           });
+       } else if (t.type === 'expense' && t.category === 'สินค้าเสียหาย/หมดอายุ') {
+           (t.items || []).forEach(item => {
+               let cleanName = String(item.desc || '');
+               if (cleanName.includes(':')) cleanName = cleanName.split(':').pop().trim();
+               
+               const matchingGroupKeys = Object.keys(map).filter(gKey => 
+                   matchItemToBatch(item.sku, cleanName, map[gKey].originalKeys.sku, map[gKey].originalKeys.name) ||
+                   matchItemToBatch(item.sku, item.desc, map[gKey].originalKeys.sku, map[gKey].originalKeys.name)
+               );
+
+               matchingGroupKeys.forEach(gKey => {
+                   map[gKey].totalOut += Math.abs(Number(item.qty) || 0);
+               });
+           });
+       }
+    });
+
+    // 3. หักลบเพื่อหาคงเหลือ (Real-time Balance)
+    const result = [];
+    Object.values(map).forEach(item => {
+        item.qty = item.totalIn - item.totalOut;
+        result.push(item);
+    });
+
+    return result;
+  }, [stockBatches, transactions]);
 
   const filteredStock = useMemo(() => {
     return uniqueInventory.filter(item => 
@@ -18125,6 +18231,9 @@ function PitCalculator({ transactions, invoices, showToast }) {
   });
   const [expenseMode, setExpenseMode] = useState('standard'); // 'standard' = 60%, 'actual' = ตามจริง
   const [activeAuditTab, setActiveAuditTab] = useState('vat'); // 'vat', 'nonVat', 'pending', 'expense'
+  
+  // --- 🔥 NEW: State สำหรับสลับเกณฑ์บัญชี ---
+  const [accountingBasis, setAccountingBasis] = useState('cash'); // 'cash' (เกณฑ์เงินสด) หรือ 'accrual' (เกณฑ์สิทธิ์)
 
   // คำนวณช่วงเวลาที่เลือก
   const dateRange = useMemo(() => {
@@ -18152,6 +18261,40 @@ function PitCalculator({ transactions, invoices, showToast }) {
     return { start, end };
   }, [period, selectedMonth]);
 
+  // ฟังก์ชันป้องกันปัญหาทศนิยมและปัดเศษ 2 ตำแหน่ง
+  const toFixedNum = (num) => Number(Math.round((Number(num) + Number.EPSILON) * 100) / 100);
+
+  // ฟังก์ชันคำนวณรายละเอียด VAT สำหรับรายจ่าย
+  const getExpenseTaxDetails = (row) => {
+    const sub = Number(row.total) || 0;
+    const disc = Number(row.couponDiscount) || 0;
+    const isNegative = sub < 0 || row.isPurchaseCreditNote === true;
+    const absSub = Math.abs(sub);
+    const absDisc = Math.abs(disc);
+    const baseAmt = Math.max(0, absSub - absDisc) * (isNegative ? -1 : 1);
+
+    let vat = 0, base = 0, total = 0;
+
+    if (row.vatType === 'excluded') {
+        const manualVat = row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : null;
+        const finalManualVat = manualVat !== null ? (isNegative && manualVat > 0 ? -manualVat : manualVat) : null;
+        vat = row.isNonCreditableVat ? 0 : (finalManualVat !== null ? finalManualVat : baseAmt * 0.07);
+        base = baseAmt;
+        total = baseAmt + vat;
+    } else if (row.vatType === 'none') {
+        vat = 0;
+        base = baseAmt;
+        total = baseAmt;
+    } else { // included or legacy default
+        const manualVat = row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : null;
+        const finalManualVat = manualVat !== null ? (isNegative && manualVat > 0 ? -manualVat : manualVat) : null;
+        vat = row.isNonCreditableVat ? 0 : (finalManualVat !== null ? finalManualVat : baseAmt * 7 / 107);
+        base = row.isNonCreditableVat ? baseAmt : baseAmt - vat; // หัก VAT ออกเพื่อให้ได้ฐานทุนจริงๆ
+        total = baseAmt;
+    }
+    return { base, vat, total };
+  };
+
   // ประมวลผลดึงข้อมูล และแยกประเภท
   const auditData = useMemo(() => {
     const { start, end } = dateRange;
@@ -18176,22 +18319,55 @@ function PitCalculator({ transactions, invoices, showToast }) {
 
     transactions.forEach(t => {
       if (t.isCancelled) return;
-      const d = normalizeDate(t.date);
+      
+      // --- 🔥 NEW: Logic ตัดสินใจใช้วันที่ตามเกณฑ์ที่เลือก ---
+      let effectiveDate = normalizeDate(t.date);
+      let isQualified = true;
+      
+      if (accountingBasis === 'cash') {
+          if (t.type === 'income') {
+              effectiveDate = t.settlementDate ? normalizeDate(t.settlementDate) : effectiveDate;
+              // ถ้ายังไม่ได้รับเงิน ให้ตัดออกจากการคำนวณ
+              if (t.paymentStatus !== 'settled' && t.status !== 'paid') isQualified = false;
+          } else if (t.type === 'expense' && t.category !== 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') {
+              // ถ้ารายจ่ายยังไม่จ่ายเงิน ให้ตัดออกจากการคำนวณ
+              if (t.status === 'unpaid') isQualified = false;
+          }
+      }
+      
+      if (!isQualified) return;
+
+      const d = effectiveDate;
       if (!d || d < start || d > end) return;
 
       if (t.type === 'income') {
-        const amt = Number(t.total) || 0; // ฐานรายได้พึงประเมิน
+        // ยึดรายได้พึงประเมิน 40(8) ตามยอด Total ของ Order ก่อนหักค่าธรรมเนียม
+        const amt = toFixedNum(t.total || 0); 
         const linkedInvs = issuedDocsMap[t.orderId] || issuedDocsMap[t.sysDocId];
         
         let hasVatDoc = false;
         let hasNonVatDoc = false;
         let refInvNo = '-';
+        let docTypeLabel = 'ไม่ระบุ';
+        let preVat = 0;
+        let vat = 0;
+        let totalVal = amt;
+        let taxId = t.partnerTaxId || '-';
 
         if (linkedInvs && linkedInvs.length > 0) {
           const mainInv = linkedInvs.find(i => i.docType === 'invoice' || i.docType === 'abb') || linkedInvs[0];
           refInvNo = mainInv.invNo;
+          taxId = mainInv.taxId || taxId;
+          preVat = toFixedNum(mainInv.preVat || 0);
+          vat = toFixedNum(mainInv.vat || 0);
+          totalVal = toFixedNum(mainInv.total || amt); 
           
-          // เช็คว่าเอกสารนั้นมี VAT หรือไม่
+          if (mainInv.docType === 'invoice') docTypeLabel = 'ใบกำกับภาษีเต็มรูป';
+          else if (mainInv.docType === 'abb') docTypeLabel = 'ใบกำกับภาษีอย่างย่อ (ABB)';
+          else if (mainInv.docType === 'receipt') docTypeLabel = 'ใบเสร็จรับเงิน';
+          else if (mainInv.docType === 'credit_note') docTypeLabel = 'ใบลดหนี้';
+          else docTypeLabel = mainInv.docType || 'ไม่ระบุ';
+
           if ((mainInv.docType === 'invoice' || mainInv.docType === 'abb') && Number(mainInv.vat) > 0) {
             hasVatDoc = true;
           } else {
@@ -18200,11 +18376,16 @@ function PitCalculator({ transactions, invoices, showToast }) {
         }
 
         const record = {
-          date: d,
+          date: d, // ใช้วันที่ที่ผ่านการปรับตามเกณฑ์แล้ว
           sysDocId: t.sysDocId || t.orderId,
           refInvNo,
           customer: t.partnerName || 'ลูกค้าทั่วไป',
-          amount: amt
+          taxId: taxId,
+          amount: amt,       
+          docTypeLabel,      
+          preVat,            
+          vat,               
+          total: totalVal    
         };
 
         if (hasVatDoc) {
@@ -18219,17 +18400,42 @@ function PitCalculator({ transactions, invoices, showToast }) {
         }
 
       } else if (t.type === 'expense' && t.category !== 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') {
-        const amt = Number(t.grandTotal !== undefined ? t.grandTotal : t.total) || 0;
+        const amt = toFixedNum(t.grandTotal !== undefined ? t.grandTotal : t.total);
+        const taxDetails = getExpenseTaxDetails(t);
+        
+        let docTypeLabel = 'ไม่ระบุ';
+        if (t.isPurchaseCreditNote) docTypeLabel = 'ใบลดหนี้ (CN)';
+        else if (t.expenseDocType === 'receipt' || t.isCashBill) docTypeLabel = 'ใบเสร็จ/บิลเงินสด';
+        else if (t.expenseDocType === 'no_bill') docTypeLabel = 'ไม่มีบิล';
+        else if (t.expenseDocType === 'tax_invoice' || (!t.isCashBill && t.taxInvoiceNo)) docTypeLabel = 'ใบกำกับภาษีเต็มรูป';
+
+        let vatStatus = 'เครดิตได้';
+        if (t.isNonCreditableVat) vatStatus = 'ภาษีซื้อต้องห้าม';
+        else if (t.isCashBill || t.vatType === 'none') vatStatus = 'ไม่มี VAT';
+        else if (!t.taxInvoiceNo || t.taxInvoiceNo === '-') vatStatus = 'รอใบกำกับ';
+
         result.expenses.push({
-          date: d,
-          sysDocId: t.sysDocId || t.taxInvoiceNo || '-',
+          date: d, // ใช้วันที่ที่ผ่านการปรับตามเกณฑ์แล้ว
+          sysDocId: t.sysDocId || '-',
+          taxInvoiceNo: t.taxInvoiceNo || '-',
+          docTypeLabel,
+          vatStatus,
           category: t.category,
           partner: t.partnerName || '-',
-          amount: amt
+          taxId: t.partnerTaxId || '-',
+          amount: amt,
+          base: toFixedNum(taxDetails.base), // เก็บยอดฐานสำหรับหักค่าใช้จ่าย
+          vat: toFixedNum(taxDetails.vat)
         });
-        result.totalActualExpense += amt;
+        
+        result.totalActualExpense += toFixedNum(taxDetails.base);
       }
     });
+
+    result.totalVatIncome = toFixedNum(result.totalVatIncome);
+    result.totalNonVatIncome = toFixedNum(result.totalNonVatIncome);
+    result.totalPendingIncome = toFixedNum(result.totalPendingIncome);
+    result.totalActualExpense = toFixedNum(result.totalActualExpense);
 
     result.vatSales.sort((a,b) => b.date - a.date);
     result.nonVatSales.sort((a,b) => b.date - a.date);
@@ -18237,14 +18443,14 @@ function PitCalculator({ transactions, invoices, showToast }) {
     result.expenses.sort((a,b) => b.date - a.date);
 
     return result;
-  }, [transactions, invoices, dateRange]);
+  }, [transactions, invoices, dateRange, accountingBasis]);
 
-  const totalAssessableIncome = auditData.totalVatIncome + auditData.totalNonVatIncome + auditData.totalPendingIncome;
-  const standardExpenseDeduction = totalAssessableIncome * 0.6;
+  const totalAssessableIncome = toFixedNum(auditData.totalVatIncome + auditData.totalNonVatIncome + auditData.totalPendingIncome);
+  const standardExpenseDeduction = toFixedNum(totalAssessableIncome * 0.6);
   const usedExpenseDeduction = expenseMode === 'standard' ? standardExpenseDeduction : auditData.totalActualExpense;
-  const personalDeduction = 60000; // หักลดหย่อนส่วนตัวขั้นพื้นฐาน
+  const personalDeduction = 60000; 
   
-  const netIncome = Math.max(0, totalAssessableIncome - usedExpenseDeduction - personalDeduction);
+  const netIncome = Math.max(0, toFixedNum(totalAssessableIncome - usedExpenseDeduction - personalDeduction));
 
   let calculatedTax = 0;
   const brackets = [
@@ -18265,51 +18471,238 @@ function PitCalculator({ transactions, invoices, showToast }) {
       }
   }
 
-  // ภาษีเหมา 0.5%
-  const grossTax = totalAssessableIncome > 120000 ? totalAssessableIncome * 0.005 : 0;
+  const grossTax = totalAssessableIncome > 120000 ? toFixedNum(totalAssessableIncome * 0.005) : 0;
   const finalTaxPayable = Math.max(calculatedTax, grossTax);
 
   const handleExportAuditExcel = async () => {
-    if (!window.XLSX) {
-      const script = document.createElement('script');
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-      await new Promise(res => { script.onload = res; document.head.appendChild(script); });
+    if (showToast) showToast("กำลังเตรียมไฟล์รายงานการตรวจสอบ...", "success");
+    
+    if (!window.XLSX || !window.XLSX_JS_STYLE_LOADED) {
+        const script = document.createElement('script');
+        script.src = "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
+        await new Promise(res => {
+            script.onload = () => { window.XLSX_JS_STYLE_LOADED = true; res(); };
+            document.body.appendChild(script);
+        });
     }
 
-    const wb = window.XLSX.utils.book_new();
+    const XLSX = window.XLSX;
+    const wb = XLSX.utils.book_new();
+    const dateRangeStr = `${dateRange.start.toLocaleDateString('th-TH')} ถึง ${dateRange.end.toLocaleDateString('th-TH')}`;
 
-    const createSheet = (dataArray, title, isExpense = false) => {
-        const rows = [
-            [title],
-            ["ช่วงเวลา:", `${dateRange.start.toLocaleDateString('th-TH')} ถึง ${dateRange.end.toLocaleDateString('th-TH')}`],
-            [],
-            isExpense 
-                ? ["วันที่", "เลขที่อ้างอิง", "หมวดหมู่", "ผู้ขาย/ร้านค้า", "ยอดรายจ่าย (฿)"] 
-                : ["วันที่", "Order ID (ระบบ)", "เลขใบกำกับ/ใบเสร็จ", "ลูกค้า", "ยอดรายได้ (฿)"]
-        ];
-
-        let sum = 0;
-        dataArray.forEach(r => {
-            sum += r.amount;
-            rows.push(isExpense 
-                ? [formatDate(r.date), r.sysDocId, r.category, r.partner, r.amount]
-                : [formatDate(r.date), r.sysDocId, r.refInvNo, r.customer, r.amount]
-            );
-        });
-        rows.push(["", "", "", "รวมสุทธิ", sum]);
-
-        const ws = window.XLSX.utils.aoa_to_sheet(rows);
-        ws['!cols'] = [{wch: 15}, {wch: 20}, {wch: 20}, {wch: 30}, {wch: 15}];
-        return ws;
+    const applyHeaderStyle = (ws, headerRowIndex) => {
+        if (!ws['!ref']) return;
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+            const cellRef = XLSX.utils.encode_cell({ r: headerRowIndex, c: C });
+            if (!ws[cellRef]) continue;
+            if (!ws[cellRef].s) ws[cellRef].s = {};
+            ws[cellRef].s.fill = { fgColor: { rgb: "1E3A8A" } }; 
+            ws[cellRef].s.font = { color: { rgb: "FFFFFF" }, bold: true };
+            ws[cellRef].s.alignment = { horizontal: "center", vertical: "center" };
+        }
     };
 
-    window.XLSX.utils.book_append_sheet(wb, createSheet(auditData.vatSales, "รายได้ - ออกใบกำกับภาษี (VAT)"), "VAT Sales");
-    window.XLSX.utils.book_append_sheet(wb, createSheet(auditData.nonVatSales, "รายได้ - ออกใบเสร็จ (Non-VAT)"), "Non-VAT Sales");
-    window.XLSX.utils.book_append_sheet(wb, createSheet(auditData.pendingSales, "รายได้ - ยังไม่ออกเอกสาร"), "Pending Sales");
-    window.XLSX.utils.book_append_sheet(wb, createSheet(auditData.expenses, "รายจ่ายเพื่อการดำเนินงาน", true), "Expenses");
+    const formatMoneyCols = (ws, startRow, colIndices) => {
+        if (!ws['!ref']) return;
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        for(let R = startRow; R <= range.e.r; ++R) {
+            for(let C of colIndices) {
+                const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+                if(ws[cellRef] && ws[cellRef].t === 'n') {
+                    if(!ws[cellRef].s) ws[cellRef].s = {};
+                    ws[cellRef].z = '#,##0.00';
+                }
+            }
+        }
+    };
 
-    window.XLSX.writeFile(wb, `PIT_Audit_Report_${Date.now()}.xlsx`);
-    showToast("ส่งออกข้อมูล Audit Trail สำเร็จ", "success");
+    const expenseCategoryMap = {};
+    let totalTaxDeductibleExpense = 0;
+    auditData.expenses.forEach(r => {
+        const cat = r.category || 'อื่นๆ';
+        if (!expenseCategoryMap[cat]) expenseCategoryMap[cat] = 0;
+        expenseCategoryMap[cat] += r.base; 
+        totalTaxDeductibleExpense += r.base;
+    });
+
+    const expenseCategoriesSorted = Object.keys(expenseCategoryMap)
+        .map(k => ({ name: k, value: expenseCategoryMap[k] }))
+        .sort((a, b) => b.value - a.value);
+
+    // ==========================================
+    // 1. Sheet: สรุปภาพรวม (Summary)
+    // ==========================================
+    const summaryRows = [
+        ["สรุปภาพรวมการคำนวณภาษีเงินได้บุคคลธรรมดา (ภ.ง.ด.)"],
+        ["เกณฑ์การคำนวณ:", accountingBasis === 'cash' ? "เกณฑ์เงินสด (รับเงินจริง)" : "เกณฑ์สิทธิ์ (สั่งซื้อ)"],
+        ["รอบระยะเวลา:", dateRangeStr],
+        ["วันที่ดึงข้อมูล:", formatDate(new Date())],
+        [],
+        ["1. สรุปรายได้พึงประเมิน (มาตรา 40(8))"],
+        ["   - รายได้จากใบกำกับภาษี (VAT):", auditData.totalVatIncome],
+        ["   - รายได้จากบิลเงินสด (Non-VAT):", auditData.totalNonVatIncome],
+        ["   - รายได้ที่ยังไม่ออกเอกสาร (Pending):", auditData.totalPendingIncome],
+        ["รวมรายได้พึงประเมินทั้งสิ้น:", totalAssessableIncome],
+        [],
+        ["2. สรุปค่าใช้จ่าย (แยกหมวดหมู่ *ใช้ยอดก่อน VAT ตามหลักสรรพากร)"]
+    ];
+
+    expenseCategoriesSorted.forEach(c => {
+        summaryRows.push([`   - ${c.name}:`, c.value]);
+    });
+
+    summaryRows.push(
+        ["รวมค่าใช้จ่ายตามจริงทั้งสิ้น:", totalTaxDeductibleExpense],
+        [`   - ค่าใช้จ่ายเหมา (60%):`, standardExpenseDeduction],
+        [`รูปแบบหักค่าใช้จ่ายที่เลือก (${expenseMode === 'standard' ? 'เหมา 60%' : 'ตามจริง'}):`, usedExpenseDeduction],
+        [],
+        ["3. การคำนวณภาษี"],
+        ["รวมรายได้พึงประเมิน:", totalAssessableIncome],
+        ["หัก ค่าใช้จ่าย:", -usedExpenseDeduction],
+        ["หัก ลดหย่อนส่วนตัวพื้นฐาน:", -personalDeduction],
+        ["เงินได้สุทธิ (Net Income):", netIncome],
+        [],
+        ["ภาษีที่ต้องชำระ (ประมาณการ):", finalTaxPayable]
+    );
+
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+    wsSummary['!cols'] = [{ wch: 60 }, { wch: 25 }]; 
+    
+    if (wsSummary['!ref']) {
+        const sRange = XLSX.utils.decode_range(wsSummary['!ref']);
+        for (let R = sRange.s.r; R <= sRange.e.r; ++R) {
+            const cellRef = XLSX.utils.encode_cell({ r: R, c: 0 });
+            if (wsSummary[cellRef] && typeof wsSummary[cellRef].v === 'string') {
+                if (['สรุปภาพรวม', 'เกณฑ์', '1.', '2.', '3.', 'รวมรายได้', 'รวมค่าใช้จ่าย', 'รูปแบบหัก', 'เงินได้สุทธิ', 'ภาษีที่ต้อง'].some(kw => wsSummary[cellRef].v.includes(kw))) {
+                    if (!wsSummary[cellRef].s) wsSummary[cellRef].s = {};
+                    wsSummary[cellRef].s.font = { bold: true, color: { rgb: "1E3A8A" } };
+                    if (R === 0) wsSummary[cellRef].s.font.sz = 14;
+                }
+            }
+            const valCellRef = XLSX.utils.encode_cell({ r: R, c: 1 });
+            if (wsSummary[valCellRef] && typeof wsSummary[valCellRef].v === 'number') {
+                 if (!wsSummary[valCellRef].s) wsSummary[valCellRef].s = {};
+                 wsSummary[valCellRef].s.alignment = { horizontal: "right" };
+                 wsSummary[valCellRef].z = '#,##0.00';
+            }
+        }
+    }
+    XLSX.utils.book_append_sheet(wb, wsSummary, "1. สรุป ภ.ง.ด.");
+
+    const dateColName = `วันที่${accountingBasis === 'cash' ? '(รับ/จ่ายเงิน)' : '(ทำรายการ)'}`;
+
+    // ==========================================
+    // 2. Sheet: รายได้ - ใบกำกับภาษี (VAT)
+    // ==========================================
+    const vatSalesRows = [
+        ["รายงานที่มารายได้ - ใบกำกับภาษี (VAT Sales)"],
+        ["รอบระยะเวลา:", dateRangeStr],
+        [],
+        ["ลำดับ", dateColName, "เลขระบบ (Sys ID)", "เลขที่ใบกำกับภาษี", "ประเภทเอกสาร", "ชื่อลูกค้า/บริษัท", "เลขประจำตัวผู้เสียภาษี", "มูลค่าสินค้า/บริการ (฿)", "ภาษีมูลค่าเพิ่ม (฿)", "ยอดรวมทั้งสิ้น (฿)", "ยอดรายได้ 40(8) (฿)"]
+    ];
+    let sumPreVat = 0, sumVat = 0, sumTotal = 0, sumIncome = 0;
+    auditData.vatSales.forEach((r, i) => {
+        sumPreVat += r.preVat; sumVat += r.vat; sumTotal += r.total; sumIncome += r.amount;
+        vatSalesRows.push([ i + 1, formatDate(r.date), r.sysDocId, r.refInvNo, r.docTypeLabel, r.customer, r.taxId, r.preVat, r.vat, r.total, r.amount ]);
+    });
+    vatSalesRows.push(["", "", "", "", "", "รวมสุทธิ", "", sumPreVat, sumVat, sumTotal, sumIncome]);
+    const wsVat = XLSX.utils.aoa_to_sheet(vatSalesRows);
+    wsVat['!cols'] = [{wch: 8}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 25}, {wch: 30}, {wch: 20}, {wch: 20}, {wch: 20}, {wch: 20}, {wch: 20}];
+    applyHeaderStyle(wsVat, 3);
+    formatMoneyCols(wsVat, 4, [7, 8, 9, 10]);
+    XLSX.utils.book_append_sheet(wb, wsVat, "2. รายได้ (VAT)");
+
+    // ==========================================
+    // 3. Sheet: รายได้ - บิลเงินสด (Non-VAT)
+    // ==========================================
+    const nonVatRows = [
+        ["รายงานที่มารายได้ - บิลเงินสด/ใบเสร็จรับเงิน (Non-VAT Sales)"],
+        ["รอบระยะเวลา:", dateRangeStr],
+        [],
+        ["ลำดับ", dateColName, "เลขระบบ (Sys ID)", "เลขที่ใบเสร็จ/อ้างอิง", "ประเภทเอกสาร", "ชื่อลูกค้า", "ยอดรายได้ 40(8) (฿)"]
+    ];
+    let sumNonVatIncome = 0;
+    auditData.nonVatSales.forEach((r, i) => {
+        sumNonVatIncome += r.amount;
+        nonVatRows.push([ i + 1, formatDate(r.date), r.sysDocId, r.refInvNo, r.docTypeLabel, r.customer, r.amount ]);
+    });
+    nonVatRows.push(["", "", "", "", "", "รวมสุทธิ", sumNonVatIncome]);
+    const wsNonVat = XLSX.utils.aoa_to_sheet(nonVatRows);
+    wsNonVat['!cols'] = [{wch: 8}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 25}, {wch: 30}, {wch: 20}];
+    applyHeaderStyle(wsNonVat, 3);
+    formatMoneyCols(wsNonVat, 4, [6]);
+    XLSX.utils.book_append_sheet(wb, wsNonVat, "3. รายได้ (Non-VAT)");
+
+    // ==========================================
+    // 4. Sheet: รายได้ - ยังไม่ออกเอกสาร (Pending)
+    // ==========================================
+    const pendingRows = [
+        ["รายงานที่มารายได้ - ยังไม่ออกเอกสารภาษี (Pending Sales)"],
+        ["รอบระยะเวลา:", dateRangeStr],
+        [],
+        ["ลำดับ", dateColName, "เลขระบบ (Sys ID)", "Order ID / อ้างอิง", "ชื่อลูกค้า", "ยอดรายได้ 40(8) (฿)"]
+    ];
+    let sumPendingIncome = 0;
+    auditData.pendingSales.forEach((r, i) => {
+        sumPendingIncome += r.amount;
+        pendingRows.push([ i + 1, formatDate(r.date), r.sysDocId, r.refInvNo, r.customer, r.amount ]);
+    });
+    pendingRows.push(["", "", "", "", "รวมสุทธิ", sumPendingIncome]);
+    const wsPending = XLSX.utils.aoa_to_sheet(pendingRows);
+    wsPending['!cols'] = [{wch: 8}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 30}, {wch: 20}];
+    applyHeaderStyle(wsPending, 3);
+    formatMoneyCols(wsPending, 4, [5]);
+    XLSX.utils.book_append_sheet(wb, wsPending, "4. รายได้ (Pending)");
+
+    // ==========================================
+    // 5+. Sheets: รายจ่ายแยกตามหมวดหมู่ (Expenses by Category)
+    // ==========================================
+    const sanitizeSheetName = (name) => name.replace(/[\\/*?:\[\]]/g, '_').substring(0, 26);
+    let sheetIndex = 5;
+
+    // กรองหมวดหมู่ที่มีการใช้งานจริง
+    const activeExpenseCategories = [...new Set(auditData.expenses.map(r => r.category || 'อื่นๆ'))];
+
+    activeExpenseCategories.forEach((category) => {
+        const docsInCat = auditData.expenses.filter(r => (r.category || 'อื่นๆ') === category);
+        if (docsInCat.length === 0) return;
+
+        const catRows = [
+            [`รายงานที่มารายจ่ายบริษัท - หมวดหมู่: ${category}`],
+            ["รอบระยะเวลา:", dateRangeStr],
+            [],
+            ["ลำดับ", dateColName, "เลขระบบ (Sys ID)", "เลขที่ใบกำกับภาษี/ใบเสร็จ", "ประเภทเอกสาร", "ชื่อผู้ขาย/ผู้ให้บริการ", "เลขประจำตัวผู้เสียภาษี", "สถานะ VAT ซื้อ", "ฐานภาษี (ต้นทุนใช้หัก) (฿)", "ภาษีมูลค่าเพิ่ม (฿)", "ยอดรวมสุทธิจากบิล (฿)"]
+        ];
+
+        let sumExpBase = 0, sumExpVat = 0, sumExpTotal = 0;
+        docsInCat.forEach((r, i) => {
+            sumExpBase += r.base; sumExpVat += r.vat; sumExpTotal += r.amount;
+            catRows.push([ i + 1, formatDate(r.date), r.sysDocId, r.taxInvoiceNo, r.docTypeLabel, r.partner, r.taxId, r.vatStatus, r.base, r.vat, r.amount ]);
+        });
+        catRows.push(["", "", "", "", "", "", "", "รวมสุทธิ", sumExpBase, sumExpVat, sumExpTotal]);
+
+        const wsCat = XLSX.utils.aoa_to_sheet(catRows);
+        wsCat['!cols'] = [{wch: 8}, {wch: 15}, {wch: 20}, {wch: 25}, {wch: 20}, {wch: 30}, {wch: 20}, {wch: 15}, {wch: 25}, {wch: 15}, {wch: 20}];
+        
+        applyHeaderStyle(wsCat, 3);
+        formatMoneyCols(wsCat, 4, [8, 9, 10]);
+
+        // ป้องกันชื่อชีตซ้ำ และจำกัดความยาว
+        let sheetName = sanitizeSheetName(category);
+        let finalSheetName = `${sheetIndex}. ${sheetName}`;
+        let counter = 1;
+        while(wb.SheetNames.includes(finalSheetName)) {
+            finalSheetName = `${sheetIndex}. ${sheetName}`.substring(0, 28) + `_${counter}`;
+            counter++;
+        }
+
+        XLSX.utils.book_append_sheet(wb, wsCat, finalSheetName);
+        sheetIndex++;
+    });
+
+    window.XLSX.writeFile(wb, `PIT_Audit_Report_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
+    if (showToast) showToast("ส่งออกข้อมูล Audit Trail แบบละเอียดและแยกชีตหมวดหมู่รายจ่ายเรียบร้อย", "success");
   };
 
   return (
@@ -18322,6 +18715,11 @@ function PitCalculator({ transactions, invoices, showToast }) {
         
         <div className="flex flex-wrap items-center gap-3">
             <div className="flex bg-slate-100 p-1.5 rounded-xl border border-slate-200">
+                <button onClick={() => setAccountingBasis('accrual')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${accountingBasis === 'accrual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>เกณฑ์สิทธิ์ (สั่งซื้อ)</button>
+                <button onClick={() => setAccountingBasis('cash')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${accountingBasis === 'cash' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>เกณฑ์เงินสด (รับเงินจริง)</button>
+            </div>
+            <div className="w-px h-8 bg-slate-200 hidden md:block mx-1"></div>
+            <div className="flex bg-slate-100 p-1.5 rounded-xl border border-slate-200">
                 <button onClick={() => setPeriod('half1')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${period === 'half1' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ครึ่งปีแรก (ภ.ง.ด.94)</button>
                 <button onClick={() => setPeriod('half2')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${period === 'half2' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ครึ่งปีหลัง</button>
                 <button onClick={() => setPeriod('year')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${period === 'year' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>เต็มปี (ภ.ง.ด.90)</button>
@@ -18332,6 +18730,19 @@ function PitCalculator({ transactions, invoices, showToast }) {
             )}
         </div>
       </div>
+      
+      {accountingBasis === 'cash' && (
+          <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex items-start gap-3 shadow-sm animate-fadeIn">
+              <Info className="text-emerald-600 shrink-0 mt-0.5" size={20}/>
+              <div className="text-emerald-800 text-sm">
+                  <p className="font-bold mb-1">โหมดเกณฑ์เงินสด (Cash Basis)</p>
+                  <p className="text-xs opacity-90 leading-relaxed">
+                      ตามกฎหมายกรมสรรพากร การยื่นภาษี ภ.ง.ด. (บุคคลธรรมดา) จะต้องยึดตาม <b>"วันที่รับเงินเข้ากระเป๋าจริง"</b> <br/>
+                      ระบบจะทำการดึงเฉพาะยอดบิลที่สถานะ <b>"จ่าย/รับเงินแล้ว"</b> และใช้วันที่รับเงิน (Settlement Date) ในการคัดกรองรอบภาษีให้คุณอัตโนมัติ
+                  </p>
+              </div>
+          </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* ข้อมูลรายได้ */}
@@ -18352,7 +18763,7 @@ function PitCalculator({ transactions, invoices, showToast }) {
                   <p className="text-xs text-amber-600/80 font-bold mt-1">{auditData.pendingSales.length} รายการ</p>
               </div>
 
-              <div className="sm:col-span-3 bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
+              <div className="sm:col-span-3 bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm flex flex-col h-full min-h-[450px]">
                   <div className="flex justify-between items-center mb-4">
                       <h3 className="font-black text-slate-800 flex items-center gap-2"><List size={18} className="text-indigo-600"/> ตรวจสอบที่มารายการ (Audit Trail)</h3>
                       <button onClick={handleExportAuditExcel} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm border border-emerald-200 flex items-center gap-1.5">
@@ -18360,39 +18771,126 @@ function PitCalculator({ transactions, invoices, showToast }) {
                       </button>
                   </div>
                   
-                  <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit mb-4">
-                      <button onClick={() => setActiveAuditTab('vat')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${activeAuditTab === 'vat' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ใบกำกับภาษี ({auditData.vatSales.length})</button>
-                      <button onClick={() => setActiveAuditTab('nonVat')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${activeAuditTab === 'nonVat' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>บิลเงินสด ({auditData.nonVatSales.length})</button>
-                      <button onClick={() => setActiveAuditTab('pending')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${activeAuditTab === 'pending' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ยังไม่ออกเอกสาร ({auditData.pendingSales.length})</button>
-                      <button onClick={() => setActiveAuditTab('expense')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${activeAuditTab === 'expense' ? 'bg-rose-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายจ่ายบริษัท ({auditData.expenses.length})</button>
+                  <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit mb-4 overflow-x-auto">
+                      <button onClick={() => setActiveAuditTab('vat')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${activeAuditTab === 'vat' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ใบกำกับภาษี ({auditData.vatSales.length})</button>
+                      <button onClick={() => setActiveAuditTab('nonVat')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${activeAuditTab === 'nonVat' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>บิลเงินสด ({auditData.nonVatSales.length})</button>
+                      <button onClick={() => setActiveAuditTab('pending')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${activeAuditTab === 'pending' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ยังไม่ออกเอกสาร ({auditData.pendingSales.length})</button>
+                      <button onClick={() => setActiveAuditTab('expense')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${activeAuditTab === 'expense' ? 'bg-rose-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายจ่ายบริษัท ({auditData.expenses.length})</button>
                   </div>
 
-                  <div className="overflow-x-auto max-h-[300px] border border-slate-100 rounded-2xl custom-scrollbar">
-                      <table className="w-full text-xs text-left">
-                          <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200">
-                              <tr>
-                                  <th className="p-3 pl-4">วันที่</th>
-                                  <th className="p-3">Order ID / อ้างอิง</th>
-                                  <th className="p-3">{activeAuditTab === 'expense' ? 'หมวดหมู่' : 'เลขใบกำกับ/ใบเสร็จ'}</th>
-                                  <th className="p-3">{activeAuditTab === 'expense' ? 'ผู้ขาย/ร้านค้า' : 'ลูกค้า'}</th>
-                                  <th className="p-3 text-right pr-4">ยอดเงิน (฿)</th>
-                              </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                              {(activeAuditTab === 'vat' ? auditData.vatSales : activeAuditTab === 'nonVat' ? auditData.nonVatSales : activeAuditTab === 'pending' ? auditData.pendingSales : auditData.expenses).map((r, i) => (
-                                  <tr key={i} className="hover:bg-slate-50 transition-colors">
-                                      <td className="p-3 pl-4 font-medium text-slate-600">{formatDate(r.date)}</td>
-                                      <td className="p-3 font-mono font-bold text-indigo-600">{r.sysDocId}</td>
-                                      <td className="p-3 font-bold text-slate-700">{activeAuditTab === 'expense' ? r.category : r.refInvNo}</td>
-                                      <td className="p-3 truncate max-w-[150px]" title={r.customer || r.partner}>{r.customer || r.partner}</td>
-                                      <td className={`p-3 text-right pr-4 font-black ${activeAuditTab === 'expense' ? 'text-rose-500' : 'text-slate-800'}`}>{formatCurrency(r.amount)}</td>
+                  <div className="overflow-x-auto border border-slate-100 rounded-2xl custom-scrollbar flex-1 h-[300px]">
+                      {activeAuditTab === 'expense' ? (
+                          <table className="w-full text-xs text-left whitespace-nowrap">
+                              <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                                  <tr>
+                                      <th className="p-3 pl-4">วันที่{accountingBasis === 'cash' ? '(จ่ายเงิน)' : ''}</th>
+                                      <th className="p-3">เลขระบบ / เลขใบกำกับ</th>
+                                      <th className="p-3">ประเภทเอกสาร / หมวดหมู่</th>
+                                      <th className="p-3">ผู้ขาย/ร้านค้า (Tax ID)</th>
+                                      <th className="p-3 text-right">ยอดก่อน VAT (ฐาน)</th>
+                                      <th className="p-3 text-right text-rose-500">VAT</th>
+                                      <th className="p-3 text-right pr-4">ยอดรวม (฿)</th>
                                   </tr>
-                              ))}
-                              {(activeAuditTab === 'vat' ? auditData.vatSales : activeAuditTab === 'nonVat' ? auditData.nonVatSales : activeAuditTab === 'pending' ? auditData.pendingSales : auditData.expenses).length === 0 && (
-                                  <tr><td colSpan="5" className="p-8 text-center text-slate-400 font-bold">ไม่พบข้อมูลในหมวดหมู่นี้</td></tr>
-                              )}
-                          </tbody>
-                      </table>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                  {auditData.expenses.map((r, i) => (
+                                      <tr key={i} className="hover:bg-rose-50/30 transition-colors">
+                                          <td className="p-3 pl-4 font-medium text-slate-600">{formatDate(r.date)}</td>
+                                          <td className="p-3">
+                                              <p className="font-mono font-bold text-slate-700">{r.sysDocId}</p>
+                                              <p className="text-[10px] text-indigo-600 font-mono mt-0.5">Tax Inv: {r.taxInvoiceNo}</p>
+                                          </td>
+                                          <td className="p-3">
+                                              <span className={`px-1.5 py-0.5 rounded border text-[9px] font-bold ${
+                                                  r.docTypeLabel.includes('ใบกำกับ') ? 'bg-indigo-50 text-indigo-700 border-indigo-200' :
+                                                  r.docTypeLabel.includes('บิลเงินสด') ? 'bg-teal-50 text-teal-700 border-teal-200' :
+                                                  r.docTypeLabel.includes('ใบลดหนี้') ? 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' :
+                                                  'bg-slate-100 text-slate-600 border-slate-200'
+                                              }`}>{r.docTypeLabel}</span>
+                                              <p className="text-[10px] text-slate-500 mt-1">{r.category}</p>
+                                          </td>
+                                          <td className="p-3">
+                                              <p className="truncate max-w-[150px] font-bold" title={r.partner}>{r.partner}</p>
+                                              <p className="text-[9px] text-slate-400 font-mono">Tax ID: {r.taxId}</p>
+                                          </td>
+                                          <td className="p-3 text-right font-medium text-slate-600">{formatCurrency(r.base)}</td>
+                                          <td className="p-3 text-right">
+                                              <p className="font-bold text-rose-500">{formatCurrency(r.vat)}</p>
+                                              {r.vatStatus !== 'เครดิตได้' && <p className="text-[9px] text-rose-400 mt-0.5">({r.vatStatus})</p>}
+                                          </td>
+                                          <td className="p-3 text-right pr-4 font-black text-rose-600">{formatCurrency(r.amount)}</td>
+                                      </tr>
+                                  ))}
+                                  {auditData.expenses.length === 0 && (
+                                      <tr><td colSpan="7" className="p-8 text-center text-slate-400 font-bold">ไม่พบข้อมูลรายจ่ายในหมวดหมู่นี้</td></tr>
+                                  )}
+                              </tbody>
+                          </table>
+                      ) : activeAuditTab === 'vat' ? (
+                          <table className="w-full text-xs text-left whitespace-nowrap">
+                              <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                                  <tr>
+                                      <th className="p-3 pl-4">วันที่{accountingBasis === 'cash' ? '(รับเงิน)' : ''}</th>
+                                      <th className="p-3">เลขที่ใบกำกับภาษี</th>
+                                      <th className="p-3">ประเภทเอกสาร</th>
+                                      <th className="p-3">ชื่อลูกค้า / รหัสภาษี</th>
+                                      <th className="p-3 text-right">มูลค่าสินค้า</th>
+                                      <th className="p-3 text-right text-indigo-500">VAT</th>
+                                      <th className="p-3 text-right pr-4">ยอดรวม (฿)</th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                  {auditData.vatSales.map((r, i) => (
+                                      <tr key={i} className="hover:bg-indigo-50/30 transition-colors">
+                                          <td className="p-3 pl-4 font-medium text-slate-600">{formatDate(r.date)}</td>
+                                          <td className="p-3">
+                                              <p className="font-mono font-bold text-indigo-600">{r.refInvNo}</p>
+                                              <p className="text-[9px] text-slate-400 mt-0.5">Ref: {r.sysDocId}</p>
+                                          </td>
+                                          <td className="p-3 font-bold text-slate-700">
+                                              <span className={`px-1.5 py-0.5 rounded border text-[9px] font-bold ${r.docTypeLabel.includes('อย่างย่อ') ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}`}>{r.docTypeLabel}</span>
+                                          </td>
+                                          <td className="p-3">
+                                              <p className="truncate max-w-[150px] font-bold text-slate-700" title={r.customer}>{r.customer}</p>
+                                              <p className="text-[9px] font-mono text-slate-500 mt-0.5">Tax ID: {r.taxId}</p>
+                                          </td>
+                                          <td className="p-3 text-right font-medium text-slate-600">{formatCurrency(r.preVat)}</td>
+                                          <td className="p-3 text-right font-bold text-indigo-500">{formatCurrency(r.vat)}</td>
+                                          <td className="p-3 text-right pr-4 font-black text-slate-800">{formatCurrency(r.total)}</td>
+                                      </tr>
+                                  ))}
+                                  {auditData.vatSales.length === 0 && (
+                                      <tr><td colSpan="7" className="p-8 text-center text-slate-400 font-bold">ไม่พบข้อมูลในหมวดหมู่นี้</td></tr>
+                                  )}
+                              </tbody>
+                          </table>
+                      ) : (
+                          <table className="w-full text-xs text-left whitespace-nowrap">
+                              <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                                  <tr>
+                                      <th className="p-3 pl-4">วันที่{accountingBasis === 'cash' ? '(รับเงิน)' : ''}</th>
+                                      <th className="p-3">Order ID / อ้างอิง</th>
+                                      <th className="p-3">เลขใบกำกับ/ใบเสร็จ</th>
+                                      <th className="p-3">ลูกค้า</th>
+                                      <th className="p-3 text-right pr-4">ยอดเงิน (฿)</th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                  {(activeAuditTab === 'nonVat' ? auditData.nonVatSales : auditData.pendingSales).map((r, i) => (
+                                      <tr key={i} className="hover:bg-slate-50 transition-colors">
+                                          <td className="p-3 pl-4 font-medium text-slate-600">{formatDate(r.date)}</td>
+                                          <td className="p-3 font-mono font-bold text-indigo-600">{r.sysDocId}</td>
+                                          <td className="p-3 font-bold text-slate-700">{r.refInvNo}</td>
+                                          <td className="p-3 truncate max-w-[150px]" title={r.customer}>{r.customer}</td>
+                                          <td className="p-3 text-right pr-4 font-black text-slate-800">{formatCurrency(r.amount)}</td>
+                                      </tr>
+                                  ))}
+                                  {(activeAuditTab === 'nonVat' ? auditData.nonVatSales : auditData.pendingSales).length === 0 && (
+                                      <tr><td colSpan="5" className="p-8 text-center text-slate-400 font-bold">ไม่พบข้อมูลในหมวดหมู่นี้</td></tr>
+                                  )}
+                              </tbody>
+                          </table>
+                      )}
                   </div>
               </div>
           </div>
@@ -18710,6 +19208,55 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
     return () => unsub();
   }, [user, appId]);
 
+  // --- 🔥 NEW: รวบรวมเอกสารภายในจากทั้ง internal_docs และ transactions_expense เพื่อดึงประวัติมาให้ครบ ---
+  const combinedHistory = useMemo(() => {
+      const docsMap = new Map();
+
+      // 1. ใส่รายการจากคอลเลกชัน internal_docs
+      internalDocs.forEach(doc => {
+          docsMap.set(doc.docNo || doc.id, {
+              ...doc,
+              source: 'internal_docs'
+          });
+      });
+
+      // 2. ดึงรายการจาก transactions_expense ที่เกี่ยวข้องแต่ไม่มีใน internal_docs
+      transactions.filter(t => t.type === 'expense' && !t.isCancelled).forEach(t => {
+          // ถ้ามี linkedOrderNo และมีใน docsMap แล้ว ให้ข้าม
+          if (t.linkedOrderNo && docsMap.has(t.linkedOrderNo)) return;
+
+          // ถ้าเป็นรายการ "สินค้าเสียหาย/หมดอายุ" หรือเลขระบบขึ้นต้นด้วย DMG
+          if (t.category === 'สินค้าเสียหาย/หมดอายุ' || String(t.sysDocId).startsWith('DMG-')) {
+              docsMap.set(t.sysDocId || t.id, {
+                  id: t.id,
+                  docNo: t.sysDocId || '-',
+                  docType: 'write_off',
+                  date: normalizeDate(t.date),
+                  description: t.description,
+                  totalCost: t.total || t.grandTotal,
+                  items: t.items,
+                  source: 'transactions'
+              });
+          }
+          // ใบรับรองแทนใบเสร็จ
+          else if (t.expenseDocType === 'no_bill' || String(t.sysDocId).startsWith('SUB-')) {
+               docsMap.set(t.sysDocId || t.id, {
+                  id: t.id,
+                  docNo: t.sysDocId || '-',
+                  docType: 'substitute_receipt',
+                  date: normalizeDate(t.date),
+                  payee: t.partnerName,
+                  description: t.description,
+                  totalCost: t.total || t.grandTotal,
+                  items: t.items,
+                  source: 'transactions'
+              });
+          }
+      });
+
+      return Array.from(docsMap.values()).sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0));
+  }, [internalDocs, transactions]);
+
   // --- Substitute Receipt Functions ---
   const handleAddSubItem = () => {
       setSubForm(prev => ({ ...prev, items: [...prev.items, { desc: '', qty: 1, price: '' }] }));
@@ -18821,21 +19368,191 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
   };
 
   // --- Write-off Functions ---
-  const handleGenerateWriteOff = async (e) => {
-      e.preventDefault();
-      // โค้ดส่วนนี้เตรียมไว้สำหรับการพัฒนาแท็บตัดชำรุดแบบเลือกสต็อก
-      showToast("ระบบตัดชำรุด สามารถใช้งานผ่านหน้า 'คลังสินค้า FIFO' > เลือกสินค้า > กดปุ่ม ⇄ (ปรับปรุงสต็อก) ได้เลยครับ ระบบจะสร้างเอกสารให้อัตโนมัติ", "info");
-      setActiveTab('history');
+  const handleAddWriteOffItem = () => {
+      setWriteOffForm(prev => ({ ...prev, items: [...prev.items, { sku: '', desc: '', qty: 1, cost: 0 }] }));
   };
 
-  const handleDeleteDoc = async (id) => {
-      if (!window.confirm("ยืนยันการลบเอกสารภายในรายการนี้?\n\n*หมายเหตุ: หากเอกสารนี้ถูกโยงกับรายจ่าย คุณต้องไปลบรายจ่ายในหน้า 'ประวัติรายการ' ออกด้วยตนเอง")) return;
-      try {
-          await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs', id));
-          showToast("ลบเอกสารสำเร็จ", "success");
-      } catch (err) {
-          showToast("ลบเอกสารไม่สำเร็จ", "error");
+  const handleRemoveWriteOffItem = (index) => {
+      if (writeOffForm.items.length <= 1) return;
+      setWriteOffForm(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
+  };
+
+  const handleUpdateWriteOffItem = (index, field, value) => {
+      setWriteOffForm(prev => {
+          const newItems = [...prev.items];
+          newItems[index][field] = value;
+          return { ...prev, items: newItems };
+      });
+  };
+
+  const handleGenerateWriteOff = async (e) => {
+      e.preventDefault();
+      if (!user) return;
+      if (writeOffForm.items.some(i => !i.desc || !i.qty)) {
+          return showToast("กรุณากรอกข้อมูลรายการให้ครบถ้วน", "error");
       }
+
+      setIsProcessing(true);
+      try {
+          const totalCost = writeOffForm.items.reduce((sum, item) => sum + (Number(item.qty) * Number(item.cost)), 0);
+          const actionDate = normalizeDate(writeOffForm.date);
+          const dateStr = formatDateISO(actionDate).replace(/-/g, '');
+          
+          const intPrefix = `DMG-${dateStr}-`;
+          const intNums = internalDocs.filter(d => d.docNo?.startsWith(intPrefix)).map(d => parseInt(d.docNo.replace(intPrefix, ''), 10)).filter(n => !isNaN(n));
+          const nextIntNum = intNums.length > 0 ? Math.max(...intNums) + 1 : 1;
+          const docNo = `${intPrefix}${String(nextIntNum).padStart(4, '0')}`;
+
+          const batchWriter = writeBatch(dbInstance);
+
+          // 1. สร้างเอกสารภายใน
+          const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
+          batchWriter.set(docRef, {
+              docNo,
+              docType: 'write_off',
+              date: actionDate,
+              reason: writeOffForm.reason,
+              approver: writeOffForm.approver,
+              description: `ตัดจำหน่ายสินค้า: ${writeOffForm.reason}`,
+              items: writeOffForm.items.map(i => ({ ...i, qty: Number(i.qty), cost: Number(i.cost) })),
+              totalCost,
+              userId: user.uid,
+              createdAt: serverTimestamp(),
+              status: 'completed'
+          });
+
+          // 2. สร้างรายการรายจ่ายลงบัญชีหลักอัตโนมัติ
+          const expPrefix = getExpensePrefix('สินค้าเสียหาย/หมดอายุ');
+          const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), expPrefix, actionDate, 'sysDocId');
+
+          const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+          batchWriter.set(expRef, {
+              sysDocId: expSysDocId,
+              type: 'expense',
+              category: 'สินค้าเสียหาย/หมดอายุ',
+              description: `[ใบตัดจำหน่าย] ${writeOffForm.items.map(i => i.desc).join(', ')}`,
+              items: writeOffForm.items.map(i => ({
+                  desc: i.desc, qty: Number(i.qty), unit: 'ชิ้น', buyPrice: Number(i.cost), sellPrice: 0, sku: i.sku || '-', category: 'สินค้าเสียหาย/หมดอายุ'
+              })),
+              total: totalCost,
+              grandTotal: totalCost,
+              date: actionDate,
+              userId: user.uid,
+              createdAt: serverTimestamp(),
+              status: 'paid',
+              partnerName: 'Internal (ตัดจำหน่าย)',
+              partnerBranch: '00000',
+              isFromReconciliation: true,
+              isTaxOnly: false,
+              channel: 'หน้าร้าน',
+              shopName: CONSTANTS.SHOPS[0],
+              linkedOrderNo: docNo
+          });
+
+          // 3. ตัดสต็อก
+          for (const item of writeOffForm.items) {
+              let needed = Number(item.qty);
+              if (needed <= 0) continue;
+              
+              const cleanName = String(item.desc || '').trim();
+              const targetBatches = stockBatches
+                  .filter(b => matchItemToBatch(item.sku, cleanName, b.sku, b.productName))
+                  .sort(sortClosestToDateThenOldest(actionDate));
+
+              for (let i = 0; i < targetBatches.length; i++) {
+                  if (needed <= 0) break;
+                  const b = targetBatches[i];
+                  const remaining = Number(b.quantity) - Number(b.sold || 0);
+                  
+                  let take = 0;
+                  if (i === targetBatches.length - 1) {
+                      take = needed;
+                  } else {
+                      take = Math.min(needed, Math.max(0, remaining));
+                  }
+                  
+                  if (take > 0) {
+                      const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
+                      batchWriter.update(batchRef, { sold: increment(take) });
+                      needed -= take;
+                  }
+              }
+
+              if (needed > 0) {
+                  const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
+                  batchWriter.set(dummyRef, {
+                      productName: cleanName,
+                      sku: item.sku || '-',
+                      category: 'อื่นๆ',
+                      quantity: 0,
+                      costPerUnit: 0, 
+                      sellPrice: 0,
+                      date: actionDate,
+                      sold: needed,
+                      userId: user.uid,
+                      createdAt: serverTimestamp(),
+                      paymentStatus: 'paid',
+                      isAdjustment: true,
+                      adjustReason: 'สต็อกติดลบ (ตัดจำหน่าย)'
+                  });
+              }
+          }
+
+          await batchWriter.commit();
+          showToast("สร้างใบตัดจำหน่าย ตัดสต็อก และลงบัญชีรายจ่ายสำเร็จ", "success");
+          
+          setWriteOffForm({
+              date: formatDateISO(new Date()), reason: 'สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)',
+              approver: '', items: [{ sku: '', desc: '', qty: 1, cost: 0 }]
+          });
+          setActiveTab('history');
+
+      } catch (err) {
+          console.error(err);
+          showToast("เกิดข้อผิดพลาดในการสร้างเอกสาร", "error");
+      }
+      setIsProcessing(false);
+  };
+
+  const handleDeleteDoc = async (docItem) => {
+      if (!window.confirm(`ยืนยันการลบเอกสาร ${docItem.docNo}?\n\n*ระบบจะลบข้อมูลเอกสารและรายจ่ายบัญชีที่เกี่ยวข้องออกจากระบบอย่างถาวร`)) return;
+      setIsProcessing(true);
+      try {
+          const batchWriter = writeBatch(dbInstance);
+
+          if (docItem.source === 'internal_docs') {
+              // ลบเอกสารจาก internal_docs
+              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs', docItem.id));
+              
+              // ค้นหารายจ่ายที่เกี่ยวข้อง (linkedOrderNo = docNo)
+              const expTrans = transactions.find(t => t.linkedOrderNo === docItem.docNo);
+              if (expTrans) {
+                  batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', expTrans.id));
+                  
+                  // ถ้ารายจ่ายนั้นมีการตัดสต็อก ให้ลบสต็อกที่ถูกสร้างขึ้น
+                  const relatedLots = stockBatches.filter(b => b.parentExpenseId === expTrans.id);
+                  relatedLots.forEach(lot => {
+                      batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
+                  });
+              }
+          } else if (docItem.source === 'transactions') {
+              // ลบรายจ่ายจาก transactions_expense
+              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', docItem.id));
+              
+              // ลบสต็อกที่เกี่ยวข้อง
+              const relatedLots = stockBatches.filter(b => b.parentExpenseId === docItem.id);
+              relatedLots.forEach(lot => {
+                  batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
+              });
+          }
+
+          await batchWriter.commit();
+          showToast("ลบเอกสารและข้อมูลบัญชีที่เกี่ยวข้องสำเร็จ", "success");
+      } catch (err) {
+          console.error(err);
+          showToast("เกิดข้อผิดพลาดในการลบเอกสาร", "error");
+      }
+      setIsProcessing(false);
   };
 
   return (
@@ -18973,19 +19690,69 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
               )}
 
               {activeTab === 'write_off' && (
-                  <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm p-6 md:p-8 animate-fadeIn text-center flex flex-col items-center justify-center min-h-[400px]">
-                      <div className="w-20 h-20 bg-orange-50 rounded-full flex items-center justify-center text-orange-500 mb-4 shadow-inner border border-orange-100">
-                          <ArrowRightLeft size={36}/>
+                  <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm p-6 md:p-8 animate-fadeIn">
+                      <div className="border-b border-slate-100 pb-5 mb-6">
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Trash2 className="text-orange-600"/> ใบตัดจำหน่ายสินค้า</h3>
+                          <p className="text-xs text-slate-500 mt-1">สำหรับบันทึกสินค้าชำรุด สูญหาย หรือหมดอายุ เพื่อนำต้นทุนไปลงเป็นรายจ่ายบริษัท และตัดสต็อกออกอัตโนมัติ</p>
                       </div>
-                      <h3 className="text-xl font-black text-slate-800 mb-2">ระบบตัดจำหน่ายสินค้า ย้ายไปรวมกับ "คลังสินค้า" แล้ว</h3>
-                      <p className="text-sm text-slate-500 max-w-md mx-auto leading-relaxed mb-6">
-                          เพื่อให้การจัดการสต็อกและการลงบัญชีสมบูรณ์แบบ 100% <br/>
-                          กรุณาไปที่เมนู <b>"คลังสินค้า FIFO"</b> ค้นหาสินค้าที่ชำรุด แล้วกดปุ่ม <b>"ปรับปรุงสต็อก (⇄)"</b> 
-                          ระบบจะสร้างเอกสารตัดชำรุดและลงบิลรายจ่ายให้อัตโนมัติครับ
-                      </p>
-                      <button onClick={() => { /* Option to switch tab if integrated, else just guide */ showToast("กรุณาเลือกเมนู 'คลังสินค้า FIFO' ที่แถบด้านซ้ายมือ", "info"); }} className="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-orange-200 transition-colors flex items-center gap-2">
-                          <Box size={18}/> รับทราบ นำฉันไปที่นั่น
-                      </button>
+
+                      <form onSubmit={handleGenerateWriteOff} className="space-y-6">
+                          {/* Row 1: Date & Reason */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div>
+                                  <label className="text-xs font-bold text-slate-600 mb-1.5 block">วันที่บันทึกตัดจำหน่าย</label>
+                                  <input type="date" required value={writeOffForm.date} onChange={e=>setWriteOffForm({...writeOffForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 transition-all text-slate-700"/>
+                              </div>
+                              <div>
+                                  <label className="text-xs font-bold text-slate-600 mb-1.5 block">สาเหตุการตัดจำหน่าย</label>
+                                  <select value={writeOffForm.reason} onChange={e=>setWriteOffForm({...writeOffForm, reason: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 transition-all text-slate-700 cursor-pointer">
+                                      <option value="สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)">สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)</option>
+                                      <option value="สินค้าหมดอายุ/เสื่อมสภาพ">สินค้าหมดอายุ/เสื่อมสภาพ</option>
+                                      <option value="นำไปใช้ในกิจการ/เป็นตัวอย่างสินค้า">นำไปใช้ในกิจการ/เป็นตัวอย่างสินค้า</option>
+                                      <option value="ยอดตรวจนับจริงต่ำกว่าระบบ (ยอดขาด)">ยอดตรวจนับจริงต่ำกว่าระบบ (ยอดขาด)</option>
+                                      <option value="อื่นๆ">อื่นๆ</option>
+                                  </select>
+                              </div>
+                          </div>
+
+                          {/* Row 3: Items */}
+                          <div>
+                              <div className="flex justify-between items-center mb-3">
+                                  <h4 className="text-sm font-bold text-slate-700">รายการสินค้าที่ต้องการตัดสต็อก</h4>
+                                  <button type="button" onClick={handleAddWriteOffItem} className="text-[10px] bg-orange-50 text-orange-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-orange-100 transition-colors">
+                                      <PlusCircle size={12}/> เพิ่มรายการ
+                                  </button>
+                              </div>
+                              <div className="space-y-2">
+                                  {writeOffForm.items.map((item, idx) => (
+                                      <div key={idx} className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+                                          <input type="text" value={item.sku} onChange={e=>handleUpdateWriteOffItem(idx, 'sku', e.target.value)} placeholder="SKU" className="w-full sm:w-24 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-mono outline-none focus:border-orange-400 focus:bg-white transition-colors" />
+                                          <input required type="text" value={item.desc} onChange={e=>handleUpdateWriteOffItem(idx, 'desc', e.target.value)} placeholder="ชื่อสินค้า..." className="w-full sm:flex-1 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:border-orange-400 focus:bg-white transition-colors" />
+                                          <div className="flex gap-2 w-full sm:w-auto">
+                                              <input required type="number" min="1" value={item.qty} onChange={e=>handleUpdateWriteOffItem(idx, 'qty', e.target.value)} placeholder="จำนวน" className="w-20 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold text-center outline-none focus:border-orange-400 focus:bg-white transition-colors" />
+                                              <input required type="number" min="0" step="0.01" value={item.cost} onChange={e=>handleUpdateWriteOffItem(idx, 'cost', e.target.value)} placeholder="ราคาทุน/ชิ้น" className="w-28 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold text-right outline-none focus:border-orange-400 focus:bg-white transition-colors" />
+                                              <button type="button" onClick={() => handleRemoveWriteOffItem(idx)} disabled={writeOffForm.items.length === 1} className="p-2.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-xl transition-all disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:border-transparent shrink-0">
+                                                  <Trash2 size={16}/>
+                                              </button>
+                                          </div>
+                                      </div>
+                                  ))}
+                              </div>
+                          </div>
+
+                          {/* Row 4: Approver */}
+                          <div className="pt-4 border-t border-slate-100">
+                              <label className="text-[10px] font-bold text-slate-500 uppercase">ผู้อนุมัติ / ผู้ตรวจนับ</label>
+                              <input type="text" value={writeOffForm.approver} onChange={e=>setWriteOffForm({...writeOffForm, approver: e.target.value})} placeholder="ระบุชื่อผู้มีอำนาจอนุมัติการตัดสต็อก..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs outline-none focus:border-orange-400 mt-1 shadow-sm"/>
+                          </div>
+
+                          <div className="pt-2">
+                              <button type="submit" disabled={isProcessing} className="w-full bg-orange-500 hover:bg-orange-600 text-white py-4 rounded-xl font-black text-lg shadow-xl shadow-orange-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
+                                  {isProcessing ? <Loader className="animate-spin" size={20}/> : <Save size={20}/>}
+                                  ยืนยันการตัดจำหน่าย (หักสต็อกทันที)
+                              </button>
+                          </div>
+                      </form>
                   </div>
               )}
 
@@ -18993,7 +19760,7 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                   <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden flex flex-col animate-fadeIn">
                       <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
                           <h3 className="font-bold text-slate-800 flex items-center gap-2"><History className="text-emerald-600"/> ประวัติเอกสารภายใน</h3>
-                          <span className="text-[10px] font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded-md">{internalDocs.length} รายการ</span>
+                          <span className="text-[10px] font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded-md">{combinedHistory.length} รายการ</span>
                       </div>
                       <div className="overflow-x-auto custom-scrollbar">
                           <table className="w-full text-xs text-left">
@@ -19007,8 +19774,8 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                                   </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-50">
-                                  {internalDocs.map((doc, idx) => (
-                                      <tr key={doc.id} className="hover:bg-slate-50/80 transition-colors">
+                                  {combinedHistory.map((doc, idx) => (
+                                      <tr key={`${doc.source}-${doc.id}`} className="hover:bg-slate-50/80 transition-colors">
                                           <td className="p-4 pl-6">
                                               <p className="font-bold text-slate-700">{formatDate(doc.date)}</p>
                                               <p className="text-[10px] font-mono font-bold text-indigo-600 mt-0.5">{doc.docNo}</p>
@@ -19026,13 +19793,13 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
                                               {formatCurrency(doc.totalCost)}
                                           </td>
                                           <td className="p-4 text-center">
-                                              <button onClick={() => handleDeleteDoc(doc.id)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-100" title="ลบเอกสาร">
+                                              <button onClick={() => handleDeleteDoc(doc)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-100" title="ลบเอกสารและรายจ่ายบัญชีที่เกี่ยวข้อง">
                                                   <Trash2 size={16}/>
                                               </button>
                                           </td>
                                       </tr>
                                   ))}
-                                  {internalDocs.length === 0 && (
+                                  {combinedHistory.length === 0 && (
                                       <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลเอกสารภายใน</td></tr>
                                   )}
                               </tbody>
