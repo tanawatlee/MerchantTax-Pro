@@ -11037,7 +11037,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
   };
   const removeLineItem = (index) => { if (formData.items.length === 1) return; const newItems = formData.items.filter((_, i) => i !== index); setFormData({ ...formData, items: newItems }); };
-  const updateLineItem = (index, field, value) => { const newItems = [...formData.items]; newItems[index][field] = value; setFormData({ ...formData, items: newItems }); };
+  const updateItem = (index, field, value) => { const newItems = [...formData.items]; newItems[index][field] = value; setFormData({ ...formData, items: newItems }); };
 
   const handleAutoApplyPromo = () => {
       // ลบรายการแถมเดิมออกก่อนคำนวณใหม่ (Idempotent)
@@ -17131,8 +17131,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                       <input className={`w-full sm:flex-[3] bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-slate-800 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none transition-colors text-left ${isFreeItem ? 'text-emerald-700 font-bold border-emerald-300' : ''}`} value={it.desc} onChange={e=>updateItem(i,'desc',e.target.value)} placeholder="รายละเอียดสินค้า / รายการ" />
                       
                       <div className="flex w-full sm:w-auto gap-2">
-                          <input className={`w-full sm:w-20 bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-center font-black outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-colors ${isFreeItem ? 'text-emerald-800 border-emerald-300 bg-emerald-50' : 'text-slate-800'}`} type="number" placeholder="จำนวน" value={it.qty} onChange={e=>updateItem(i,'qty',Number(e.target.value))} />
-                          <input className={`w-full sm:w-28 bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-right font-black outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-colors ${isFreeItem ? 'text-emerald-600 border-emerald-300 bg-emerald-50' : 'text-slate-800'}`} type="number" placeholder="ราคา/ชิ้น" value={it.price} onChange={e=>updateItem(i,'price',Number(e.target.value))} disabled={isFreeItem}/>
+                          <input className={`w-full sm:w-20 bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-center font-black outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-colors ${isFreeItem ? 'text-emerald-800 border-emerald-300 bg-emerald-50' : 'text-slate-800'}`} type="number" placeholder="จำนวน" value={it.qty} onChange={e=>updateItem(i,'qty',e.target.value)} />
+                          <input className={`w-full sm:w-28 bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-right font-black outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-colors ${isFreeItem ? 'text-emerald-600 border-emerald-300 bg-emerald-50' : 'text-slate-800'}`} type="number" step="0.01" placeholder="ราคา/ชิ้น" value={it.price} onChange={e=>updateItem(i,'price',e.target.value)} disabled={isFreeItem}/>
                       </div>
 
                       <div className="flex gap-2 w-full sm:w-auto shrink-0 justify-end">
@@ -21840,26 +21840,46 @@ export default function App() {
                       <table className="w-full text-xs text-left">
                           <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
                               <tr>
-                                  <th className="p-3 pl-4">วันที่ / เลขบิล</th>
-                                  <th className="p-3">หมวดหมู่ / อ้างอิง Order</th>
-                                  <th className="p-3 text-right pr-4">ยอดเงิน (฿)</th>
+                                  <th className="p-3 pl-4">วันที่ / Order ID</th>
+                                  <th className="p-3">รายการสินค้า</th>
+                                  <th className="p-3 text-right">ค่าธรรมเนียม</th>
+                                  <th className="p-3 text-right pr-4">ยอดสุทธิ (Net)</th>
                               </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
-                              {ghostRecords.slice(0, 50).map((t, idx) => (
+                              {/* แสดดงแค่ 50 รายการแรกเพื่อไม่ให้ Modal หน่วง */}
+                              {importedData.slice(0, 50).map((it, idx) => (
                                   <tr key={idx} className="hover:bg-white transition-colors">
                                       <td className="p-3 pl-4">
-                                          <p className="font-bold text-slate-700">{formatDate(t.date)}</p>
-                                          <p className="text-[10px] font-mono text-slate-500 font-bold mt-0.5 bg-slate-200 px-1.5 py-0.5 rounded w-fit">{t.sysDocId || '-'}</p>
+                                          <p className="font-bold text-slate-700">{formatDate(it.newSettlementDate || it.date)}</p>
+                                          <p className="text-[10px] font-mono text-indigo-500 mt-0.5 mb-1">{it.orderId}</p>
+                                          {/* --- 🔥 NEW: Badge แยกสถานะอัปเดต vs สร้างใหม่ ในโหมดกระทบยอด --- */}
+                                          {importMode === 'update_settled' && (
+                                              it.isNewFromForceImport ? (
+                                                  <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit" title="รายการนี้ถูกสร้างใหม่จากการกด Force Import">
+                                                      ✨ สร้างใหม่ (Force)
+                                                  </span>
+                                              ) : (
+                                                  <span className="bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit" title="ข้อมูลจะถูกอัปเดตทับรายการเดิมในระบบ">
+                                                      ✏️ อัปเดตทับ
+                                                  </span>
+                                              )
+                                          )}
                                       </td>
                                       <td className="p-3">
-                                          <p className="font-bold text-slate-600 bg-amber-100 px-2 py-0.5 rounded border border-amber-200 w-fit mb-1">
-                                              {t.category}
-                                          </p>
-                                          <p className="text-[10px] text-slate-500 truncate max-w-[250px]">Ref: {t.linkedOrderNo || t.orderId || '-'}</p>
+                                          <div className="max-h-16 overflow-y-auto custom-scrollbar pr-2">
+                                              {(it.items || []).map((item, itemIdx) => (
+                                                  <p key={itemIdx} className="text-[10px] text-slate-600 truncate max-w-[250px]" title={item.desc}>
+                                                      • {item.desc} <span className="font-bold text-slate-400">x{item.qty}</span>
+                                                  </p>
+                                              ))}
+                                          </div>
                                       </td>
-                                      <td className={`p-3 text-right pr-4 font-black ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-500'}`}>
-                                          {t.type === 'income' ? '+' : '-'}{formatCurrency(t.total || t.grandTotal)}
+                                      <td className="p-3 text-right font-bold text-rose-500">
+                                          -{formatCurrency(it.newPlatformFee !== undefined ? it.newPlatformFee : (it.platformFee || 0))}
+                                      </td>
+                                      <td className="p-3 text-right pr-4 font-black text-slate-800">
+                                          {formatCurrency(it.actualSettledAmt !== undefined ? it.actualSettledAmt : (it.grandTotal || it.total))}
                                       </td>
                                   </tr>
                               ))}
