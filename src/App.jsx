@@ -18553,19 +18553,19 @@ function PitCalculator({ transactions, invoices, showToast }) {
         result.totalActualExpense += toFixedNum(taxDetails.base);
       }
     });
+        result.totalVatIncome = toFixedNum(result.totalVatIncome);
+        result.totalNonVatIncome = toFixedNum(result.totalNonVatIncome);
+        result.totalPendingIncome = toFixedNum(result.totalPendingIncome);
+        result.totalActualExpense = toFixedNum(result.totalActualExpense);
 
-    result.totalVatIncome = toFixedNum(result.totalVatIncome);
-    result.totalNonVatIncome = toFixedNum(result.totalNonVatIncome);
-    result.totalPendingIncome = toFixedNum(result.totalPendingIncome);
-    result.totalActualExpense = toFixedNum(result.totalActualExpense);
+        // --- FIX: เปลี่ยนการเรียงลำดับเอกสารจากเก่าไปใหม่ (Chronological Order) สำหรับหน้ารายงานและ Export ---
+        result.vatSales.sort((a,b) => a.date - b.date);
+        result.nonVatSales.sort((a,b) => a.date - b.date);
+        result.pendingSales.sort((a,b) => a.date - b.date);
+        result.expenses.sort((a,b) => a.date - b.date);
 
-    result.vatSales.sort((a,b) => b.date - a.date);
-    result.nonVatSales.sort((a,b) => b.date - a.date);
-    result.pendingSales.sort((a,b) => b.date - a.date);
-    result.expenses.sort((a,b) => b.date - a.date);
-
-    return result;
-  }, [transactions, invoices, dateRange, accountingBasis]);
+        return result;
+      }, [transactions, invoices, dateRange, accountingBasis]);
 
   const totalAssessableIncome = toFixedNum(auditData.totalVatIncome + auditData.totalNonVatIncome + auditData.totalPendingIncome);
   const standardExpenseDeduction = toFixedNum(totalAssessableIncome * 0.6);
