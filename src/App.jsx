@@ -80,6 +80,14 @@ const GLOBAL_STYLES = `
     .print-break { page-break-after: always; break-after: page; }
     .no-print { display: none !important; } 
   }
+  
+  @keyframes orb-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-12px); }
+  }
+  .animate-orb-float {
+    animation: orb-float 4s ease-in-out infinite;
+  }
 `;
 
 const fbaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
@@ -19969,6 +19977,307 @@ function InternalDocGenerator({ user, transactions, stockBatches, showToast, app
   );
 }
 
+// --- 🔥 NEW: Smart Hologram Orb (Pet AI) Component ---
+function SmartHologramOrb({ transactions = [], stockBatches = [], invoices = [] }) {
+  const [pos, setPos] = useState({ x: window.innerWidth - 120, y: window.innerHeight - 120 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
+  const [mousePos, setMousePos] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const [selectedAlert, setSelectedAlert] = useState(null); 
+  
+  // --- 🔥 NEW: State สำหรับเก็บ ID รายการที่ผู้ใช้กด "ซ่อน/รับทราบแล้ว" ---
+  const [ignoredAlertIds, setIgnoredAlertIds] = useState(() => {
+      try { return JSON.parse(localStorage.getItem('merchant_ignored_alerts') || '[]'); }
+      catch (e) { return []; }
+  });
+  
+  const orbRef = useRef(null);
+  const dragRef = useRef({ startX: 0, startY: 0, orbX: 0, orbY: 0 });
+
+  // ฟังก์ชันสำหรับกดซ่อนการแจ้งเตือน
+  const handleIgnoreItem = (itemId, e) => {
+      e.stopPropagation();
+      const newIgnored = [...ignoredAlertIds, itemId];
+      setIgnoredAlertIds(newIgnored);
+      localStorage.setItem('merchant_ignored_alerts', JSON.stringify(newIgnored));
+      
+      if (selectedAlert) {
+          const remainingItems = selectedAlert.items.filter(it => it.id !== itemId);
+          if (remainingItems.length === 0) {
+              setSelectedAlert(null); // ปิดหน้าต่างถ้ากดซ่อนจนหมดแล้ว
+          } else {
+              setSelectedAlert(prev => ({ ...prev, items: remainingItems }));
+          }
+      }
+  };
+
+  // --- Logic การแจ้งเตือนอัจฉริยะ (Smart Alerts) พร้อมข้อมูลเชิงลึก ---
+  const alerts = useMemo(() => {
+    const issues = [];
+    
+    // 1. ตรวจสอบสต็อกติดลบ (กรองตัวที่กดซ่อนออก)
+    const negativeStock = stockBatches.filter(b => (Number(b.quantity) - Number(b.sold || 0)) < 0 && !ignoredAlertIds.includes(b.id));
+    if (negativeStock.length > 0) {
+        issues.push({
+            id: 'negative_stock',
+            title: `พบสินค้าสต็อกติดลบ ${negativeStock.length} รายการ`,
+            items: negativeStock.map(b => ({
+                id: b.id,
+                ref: b.sku && b.sku !== '-' ? b.sku : (b.id?.substring(0,8) || '-'),
+                name: b.productName,
+                desc: `ติดลบ ${Math.abs(Number(b.quantity) - Number(b.sold || 0))} ชิ้น`
+            }))
+        });
+    }
+
+    // 2. ตรวจสอบใบกำกับภาษีข้อมูลไม่ครบถ้วน
+    const badInvoices = invoices.filter(inv => inv.status !== 'cancelled' && inv.docType === 'invoice' && (!inv.taxId || !inv.customerName || !inv.address) && !ignoredAlertIds.includes(inv.id));
+    if (badInvoices.length > 0) {
+        issues.push({
+            id: 'bad_invoices',
+            title: `ใบกำกับภาษีข้อมูลไม่ครบ ${badInvoices.length} ใบ (ขาด ชื่อ/ที่อยู่/Tax ID)`,
+            items: badInvoices.map(inv => ({
+                id: inv.id,
+                ref: inv.invNo,
+                name: inv.customerName || 'ไม่ระบุชื่อลูกค้า',
+                desc: `ขาด: ${[!inv.taxId && 'Tax ID', !inv.customerName && 'ชื่อลูกค้า', !inv.address && 'ที่อยู่'].filter(Boolean).join(', ')}`
+            }))
+        });
+    }
+
+    // 3. ตรวจสอบรายจ่ายที่ขอคืน VAT ได้ แต่ไม่มีเลขใบกำกับ
+    // 🔥 FIX: ยกเว้นหมวด 'สินค้าเสียหาย/หมดอายุ' หรือรายการที่มาจากระบบกระทบยอดอัตโนมัติ (isFromReconciliation) 
+    const badExpenses = transactions.filter(t => 
+        t.type === 'expense' && 
+        !t.isCancelled && 
+        t.category !== 'สินค้าเสียหาย/หมดอายุ' &&
+        !t.isFromReconciliation &&
+        !t.isNonCreditableVat && 
+        !t.isCashBill && 
+        t.vatType !== 'none' && 
+        (!t.taxInvoiceNo || t.taxInvoiceNo === '-') &&
+        !ignoredAlertIds.includes(t.id)
+    );
+    if (badExpenses.length > 0) {
+        issues.push({
+            id: 'bad_expenses',
+            title: `รายจ่ายเคลม VAT ขาดเลขใบกำกับ ${badExpenses.length} รายการ`,
+            items: badExpenses.map(t => {
+                const formatCurrencyLocal = (amount) => new Intl.NumberFormat('th-TH', { style: 'decimal', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(amount) || 0);
+                return {
+                    id: t.id,
+                    ref: t.sysDocId || t.id,
+                    name: t.category,
+                    desc: `ยอดรวม: ${formatCurrencyLocal(t.grandTotal || t.total)} ฿`
+                };
+            })
+        });
+    }
+
+    return issues;
+  }, [transactions, stockBatches, invoices, ignoredAlertIds]);
+
+  const hasAlert = alerts.length > 0;
+
+  // --- Eye Tracking Logic (ดวงตามองตามเมาส์) ---
+  useEffect(() => {
+    const handleGlobalMouseMove = (e) => {
+      setMousePos({ x: e.clientX, y: e.clientY });
+    };
+    window.addEventListener('mousemove', handleGlobalMouseMove);
+    return () => window.removeEventListener('mousemove', handleGlobalMouseMove);
+  }, []);
+
+  // --- Drag & Physics Logic (ระบบอุ้มลูกแก้วโฮโลแกรม) ---
+  const handlePointerDown = (e) => {
+    setIsDragging(true);
+    dragRef.current = {
+      startX: e.clientX || e.touches?.[0]?.clientX,
+      startY: e.clientY || e.touches?.[0]?.clientY,
+      orbX: pos.x,
+      orbY: pos.y
+    };
+    e.preventDefault(); // ป้องกันการลากคลุม Text
+  };
+
+  useEffect(() => {
+    const handlePointerMove = (e) => {
+      if (!isDragging) return;
+      const currentX = e.clientX || e.touches?.[0]?.clientX;
+      const currentY = e.clientY || e.touches?.[0]?.clientY;
+      const dx = currentX - dragRef.current.startX;
+      const dy = currentY - dragRef.current.startY;
+      
+      let newX = dragRef.current.orbX + dx;
+      let newY = dragRef.current.orbY + dy;
+      
+      // ล็อกให้อยู่ในกรอบหน้าจอ
+      newX = Math.max(0, Math.min(newX, window.innerWidth - 80));
+      newY = Math.max(0, Math.min(newY, window.innerHeight - 80));
+      
+      setPos({ x: newX, y: newY });
+    };
+
+    const handlePointerUp = () => {
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      window.addEventListener('mousemove', handlePointerMove);
+      window.addEventListener('mouseup', handlePointerUp);
+      window.addEventListener('touchmove', handlePointerMove, { passive: false });
+      window.addEventListener('touchend', handlePointerUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handlePointerMove);
+      window.removeEventListener('mouseup', handlePointerUp);
+      window.removeEventListener('touchmove', handlePointerMove);
+      window.removeEventListener('touchend', handlePointerUp);
+    };
+  }, [isDragging, pos.x, pos.y]);
+
+  // คำนวณองศาเพื่อขยับดวงตา (Inner Core)
+  let eyeOffsetX = 0;
+  let eyeOffsetY = 0;
+  if (orbRef.current) {
+    const rect = orbRef.current.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const dx = mousePos.x - centerX;
+    const dy = mousePos.y - centerY;
+    const angle = Math.atan2(dy, dx);
+    const dist = Math.min(12, Math.sqrt(dx * dx + dy * dy) / 10); // ขยับได้สูงสุด 12px
+    eyeOffsetX = Math.cos(angle) * dist;
+    eyeOffsetY = Math.sin(angle) * dist;
+  }
+
+  // กำหนดสีและสไตล์ตามสถานะ
+  const orbColor = hasAlert ? 'from-rose-500 to-red-700 shadow-rose-500/50' : 'from-indigo-500 to-blue-600 shadow-indigo-500/50';
+  const ringColor = hasAlert ? 'border-rose-400' : 'border-indigo-400';
+
+  return (
+    <div 
+       className="fixed z-[5000]"
+       style={{ left: pos.x, top: pos.y }}
+    >
+        {/* --- Pop-up แจ้งเตือน AI --- */}
+        <div className={`absolute bottom-full mb-4 right-0 w-80 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-3xl p-5 shadow-2xl text-white transition-all duration-300 origin-bottom-right ${isOpen ? 'scale-100 opacity-100' : 'scale-0 opacity-0 pointer-events-none'}`}>
+            <div className="flex justify-between items-center mb-3 border-b border-slate-700 pb-3">
+                <span className="font-bold text-sm flex items-center gap-2">
+                    <Sparkles size={16} className={hasAlert ? "text-rose-400" : "text-cyan-400"}/> 
+                    AI Health Monitor
+                </span>
+                <button onClick={() => setIsOpen(false)} className="text-slate-400 hover:text-white transition-colors"><X size={16}/></button>
+            </div>
+            {hasAlert ? (
+                <ul className="space-y-3 text-xs">
+                    {alerts.map((a, i) => (
+                        <li 
+                            key={i} 
+                            onClick={() => setSelectedAlert(a)}
+                            className="flex items-start gap-2 text-rose-100 bg-rose-500/10 p-2.5 rounded-xl border border-rose-500/30 shadow-sm leading-relaxed cursor-pointer hover:bg-rose-500/20 transition-all group text-left"
+                        >
+                            <AlertTriangle size={16} className="shrink-0 text-rose-500 mt-0.5" />
+                            <div className="flex-1">
+                                <span className="block font-bold">{a.title}</span>
+                                <span className="text-[10px] text-rose-300 opacity-70 group-hover:opacity-100 flex items-center gap-1 mt-1 transition-opacity">
+                                    คลิกดูรายละเอียด <ChevronRight size={10}/>
+                                </span>
+                            </div>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                <div className="flex flex-col items-center justify-center py-4 text-emerald-400">
+                    <CheckCircle size={32} className="mb-2 opacity-80" />
+                    <p className="text-xs font-bold text-center leading-relaxed">ระบบปกติดี 100%<br/>ไม่พบเอกสารหรือสต็อกที่มีปัญหา</p>
+                </div>
+            )}
+        </div>
+
+        {/* --- Modal แสดงรายละเอียดปัญหา (Drill-down Details) --- */}
+        {selectedAlert && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[10000] flex items-center justify-center p-4 text-left">
+                <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
+                    <div className="flex justify-between items-start mb-4 border-b border-slate-100 pb-4">
+                        <div className="text-left">
+                            <h3 className="text-lg font-black text-rose-600 flex items-center gap-2"><AlertTriangle/> รายละเอียดปัญหาที่พบ</h3>
+                            <p className="text-xs text-slate-500 mt-1">{selectedAlert.title}</p>
+                        </div>
+                        <button onClick={() => setSelectedAlert(null)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={16}/></button>
+                    </div>
+                    
+                    <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 mb-4">
+                        <p className="text-[10px] font-bold text-amber-700 leading-relaxed flex items-start gap-1.5">
+                            <Info size={14} className="shrink-0 mt-0.5"/>
+                            คัดลอก "รหัสอ้างอิง" เพื่อไปค้นหาและแก้ไข หรือกดปุ่ม "ซ่อน" ด้านหลังรหัสเพื่อปิดการแจ้งเตือนรายการนี้ถาวร
+                        </p>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2 pb-2">
+                        {selectedAlert.items.map((item, idx) => (
+                            <div key={idx} className="bg-rose-50 border border-rose-100 p-4 rounded-2xl flex flex-col text-left shadow-sm hover:border-rose-300 transition-colors">
+                                <div className="flex justify-between items-start mb-2">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-mono font-black text-rose-700 text-sm bg-white px-2.5 py-0.5 rounded-lg border border-rose-200 shadow-sm select-all cursor-text">{item.ref}</span>
+                                        <button onClick={(e) => handleIgnoreItem(item.id, e)} className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 hover:bg-slate-100 hover:text-slate-800 px-2 py-1 rounded-md transition-colors flex items-center gap-1 shadow-sm" title="รับทราบและซ่อนการแจ้งเตือนนี้">
+                                            <EyeOff size={12}/> ซ่อน
+                                        </button>
+                                    </div>
+                                    <span className="text-[10px] font-black bg-rose-600 text-white px-2 py-0.5 rounded shadow-sm">{item.desc}</span>
+                                </div>
+                                <p className="text-xs font-bold text-slate-700 mt-1 line-clamp-2">{item.name}</p>
+                            </div>
+                        ))}
+                    </div>
+                    
+                    <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
+                        <button onClick={() => setSelectedAlert(null)} className="px-6 py-3.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors text-sm w-full shadow-lg">รับทราบ และปิดหน้าต่าง</button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* --- ตัวลูกแก้ว (The Orb) --- */}
+        <div 
+           ref={orbRef}
+           onMouseDown={handlePointerDown}
+           onTouchStart={handlePointerDown}
+           onClick={() => !isDragging && setIsOpen(!isOpen)}
+           className={`w-20 h-20 rounded-full cursor-grab active:cursor-grabbing relative transition-transform duration-300 ${isDragging ? 'scale-90' : 'hover:scale-105 animate-orb-float'}`}
+        >
+            {/* Outer Hologram Rings */}
+            <div className={`absolute inset-[-4px] rounded-full border border-dashed ${ringColor} opacity-40 animate-[spin_10s_linear_infinite]`}></div>
+            <div className={`absolute inset-[-8px] rounded-full border-2 ${ringColor} opacity-20 animate-ping`} style={{ animationDuration: hasAlert ? '1.5s' : '3s' }}></div>
+            
+            {/* Core Sphere */}
+            <div className={`w-full h-full rounded-full bg-gradient-to-br ${orbColor} shadow-2xl backdrop-blur-md flex items-center justify-center overflow-hidden border border-white/30`}>
+                
+                {/* Inner Cyber-Eye */}
+                <div 
+                   className="w-10 h-10 rounded-full bg-slate-900/40 shadow-inner flex items-center justify-center transition-transform duration-75 ease-out"
+                   style={{ transform: `translate(${eyeOffsetX}px, ${eyeOffsetY}px)` }}
+                >
+                    <div className={`w-4 h-4 rounded-full ${hasAlert ? 'bg-rose-400 shadow-[0_0_15px_rgba(2fb,113,133,0.8)]' : 'bg-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.8)]'} animate-pulse`}></div>
+                </div>
+
+                {/* Glass Reflection Highlight */}
+                <div className="absolute top-1 left-2 w-8 h-4 bg-white/40 rounded-full rotate-[-40deg] blur-[1px]"></div>
+                <div className="absolute bottom-2 right-2 w-4 h-2 bg-white/20 rounded-full rotate-[-40deg] blur-[1px]"></div>
+            </div>
+
+            {/* Alert Badge */}
+            {hasAlert && (
+                <div className="absolute -top-2 -right-2 w-7 h-7 bg-rose-600 text-white text-[11px] font-black rounded-full flex items-center justify-center border-[3px] border-slate-50 shadow-lg shadow-rose-600/50 animate-bounce pointer-events-none">
+                    {alerts.length}
+                </div>
+            )}
+        </div>
+    </div>
+  );
+}
+
 // --- Main App Component ---
 export default function App() {
   const [user, setUser] = useState(null);
@@ -21386,6 +21695,9 @@ export default function App() {
         </header>
         <div className="flex-1 overflow-auto p-6 lg:p-10 relative bg-[#f8fafc] text-left">{renderContent()}</div>
       </main>
+
+      {/* --- วาง Smart Hologram Orb ตรงนี้เพื่อให้ลอยอยู่เหนือทุกสิ่งตลอดเวลา --- */}
+      <SmartHologramOrb transactions={transactions} stockBatches={stockBatches} invoices={invoices} />
 
       {/* API Key Modal */}
       {showApiKeyModal && (
