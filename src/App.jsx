@@ -80,14 +80,6 @@ const GLOBAL_STYLES = `
     .print-break { page-break-after: always; break-after: page; }
     .no-print { display: none !important; } 
   }
-  
-  @keyframes orb-float {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-12px); }
-  }
-  .animate-orb-float {
-    animation: orb-float 4s ease-in-out infinite;
-  }
 `;
 
 const fbaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
@@ -412,7 +404,7 @@ const calculatePromotions = (currentItems, allPromotions) => {
     return { totalDiscount, newFreeItems, appliedNames: [...new Set(appliedNames)] };
 };
 
-// --- 🔥 UPGRADED: AI Core Engine (Smart Backoff & Turbo Speed) ---
+// --- 🔥 UPGRADED: AI Core Engine (Gemini 3.5 Flash) ---
 const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
     const userApiKey = localStorage.getItem('gemini_api_key');
     
@@ -420,12 +412,13 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
         throw new Error("API_KEY_MISSING");
     }
 
-    // 🚀 FIX: อัปเกรดเป็น Gemini 3 Flash Preview (โมเดลล่าสุด เสถียรและเร็วที่สุด)
-    const modelName = "gemini-3-flash-preview"; 
+    // --- 🔥 FIX: ใช้โมเดลล่าสุดของปี 2026 (Gemini 3.5 Flash) แทนโมเดล 1.5 ที่ถูกปิดตัวไปแล้ว ---
+    const modelName = "gemini-3.5-flash"; 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${userApiKey.trim()}`;
 
     const parts = [{ text: prompt }];
     
+    // โหลดรูปภาพและระบุ MimeType อัตโนมัติ
     if (imageBase64) {
         const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
         const mimeType = imageBase64.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
@@ -435,20 +428,19 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
     const payload = { 
         contents: [{ role: "user", parts }],
         generationConfig: {
-            temperature: 0.1, // โฟกัสการสกัดข้อมูลให้แม่นยำที่สุด
-            topK: 32,
+            temperature: 0.3, // ปรับค่า 0.3 ให้ AI เน้นความแม่นยำของตัวเลข ลดการเดาสุ่ม
+            topK: 40,
             topP: 0.95
         }
     };
     
+    // บังคับให้ AI ส่งข้อมูลกลับมาเป็น JSON ตามโครงสร้างเป๊ะๆ
     if (isJson) {
         payload.generationConfig.responseMimeType = "application/json";
     }
     
-    let delay = 2000; 
-    const maxRetries = 3; 
-
-    for (let i = 0; i < maxRetries; i++) {
+    let delay = 1000;
+    for (let i = 0; i < 5; i++) {
         try {
             const res = await fetch(url, { 
                 method: 'POST', 
@@ -456,49 +448,40 @@ const callGeminiAPI = async (prompt, isJson = true, imageBase64 = null) => {
                 body: JSON.stringify(payload) 
             });
             
+            // อ่านข้อความ Error จากฝั่ง Google โดยตรงเพื่อนำมาแสดงผล
             if (!res.ok) {
                 const errorData = await res.json().catch(() => ({}));
-                const errMsg = errorData?.error?.message || res.statusText;
-                throw new Error(`[API Error ${res.status}] ${errMsg}`);
+                throw new Error(`[API Error ${res.status}] ${errorData?.error?.message || res.statusText}`);
             }
             
             const data = await res.json();
             let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
             
             if (isJson) {
-                // 🚀 FIX: ป้องกันระบบล่มด้วย Try-Catch ระดับลึก และทำความสะอาด JSON
-                text = text.replace(/[\`]{3}json/gi, '').replace(/[\`]{3}/g, '').trim();
-                try {
-                    return JSON.parse(text);
-                } catch (parseErr) {
-                    console.error("AI JSON Parse Error:", text);
-                    throw new Error("AI จัดเรียงข้อมูลผิดพลาด กรุณาลองสแกนใหม่อีกครั้ง");
-                }
+                // ล้างอักขระขยะที่ AI อาจพ่นแถมมา เพื่อป้องกัน JSON.parse พัง
+                text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+                return JSON.parse(text);
             }
             return text;
         } catch (e) {
             console.warn(`[Gemini AI] Attempt ${i + 1} Failed:`, e.message);
             
-            if (e.message.includes('[API Error 429]')) {
-                const match = e.message.match(/retry in ([\d\.]+)s/);
-                const waitSecs = match && match[1] ? Math.ceil(parseFloat(match[1])) : 60;
-                throw new Error(`คิว AI เต็ม (โควต้าฟรีจำกัด 15 ครั้ง/นาที) กรุณารอ ${waitSecs} วินาที`);
+            if (e.message.includes('API_KEY_MISSING')) {
+                throw new Error("กรุณาตั้งค่า API Key ของคุณในเมนู 'เครื่องมือขั้นสูง' ก่อนใช้งาน AI");
             }
-
-            if (e.message.includes('API_KEY_MISSING')) throw new Error("กรุณาตั้งค่า API Key ก่อนใช้งาน");
-            if (e.message.includes('[API Error 400]')) throw new Error("ข้อมูลรูปภาพไม่ถูกต้อง หรือรูปภาพมีขนาดใหญ่เกินไป");
-            if (e.message.includes('[API Error 403]')) throw new Error("API Key ไม่ถูกต้อง");
-            if (e.message.includes('[API Error 404]')) throw new Error("ไม่พบระบบ AI รุ่นที่ระบุ");
-            
-            if (i === maxRetries - 1) {
-                if (e.message.includes('[API Error 503]')) {
-                    throw new Error(`เซิร์ฟเวอร์ AI ใช้งานเยอะเกินไปชั่วคราว กรุณากดใหม่ครับ`);
-                }
-                throw e; // โยน Error ภาษาไทยที่แปลแล้วออกไปให้แสดงใน Toast
+            if (e.message.includes('[API Error 400]')) {
+                throw new Error(`ส่งข้อมูลไม่สำเร็จ (HTTP 400) กรุณาตรวจสอบรูปภาพหรือข้อมูล: ${e.message}`);
+            }
+            if (e.message.includes('[API Error 403]')) {
+                throw new Error(`API Key ไม่ถูกต้อง หรือไม่มีสิทธิ์การใช้งาน (HTTP 403)`);
+            }
+            if (e.message.includes('[API Error 404]')) {
+                throw new Error(`ไม่พบโมเดล AI ในระบบ (HTTP 404): ${e.message}`);
             }
             
+            if (i === 4) throw e;
             await new Promise(r => setTimeout(r, delay));
-            delay *= 1.5; 
+            delay *= 2; 
         }
     }
 };
@@ -668,6 +651,198 @@ function StatCard({ title, value, color, icon, subtitle, trend }) {
       </div>
     </div>
   );
+}
+
+// --- M.A.R.G.I.N. Intelligence Core (J.A.R.V.I.S. Style AI Assistant) ---
+function MarginAIAssistant({ transactions, stockBatches, user }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [messages, setMessages] = useState([
+        { id: 1, role: 'ai', text: 'สวัสดีครับบอส ผม **M.A.R.G.I.N. AI** ผู้ช่วยจัดการภาษีและวิเคราะห์ข้อมูลธุรกิจของคุณ\n\nระบบเชื่อมต่อฐานข้อมูลเรียบร้อยแล้ว มีอะไรให้ผมช่วยวิเคราะห์วันนี้ไหมครับ?' }
+    ]);
+    const [inputText, setInputText] = useState('');
+    const [isTyping, setIsTyping] = useState(false);
+    const messagesEndRef = useRef(null);
+
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    };
+
+    useEffect(() => {
+        if (isOpen) scrollToBottom();
+    }, [messages, isOpen]);
+
+    const getBusinessContext = () => {
+        const today = new Date();
+        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        let todaySales = 0, monthSales = 0, todayOrders = 0;
+        let todayExpense = 0, monthExpense = 0;
+
+        (transactions || []).forEach(t => {
+            if (t.isCancelled) return;
+            const d = normalizeDate(t.date);
+            if (d) {
+                if (t.type === 'income') {
+                    if (d.toDateString() === today.toDateString()) { todaySales += (t.grandTotal || t.total); todayOrders++; }
+                    if (d >= startOfMonth) { monthSales += (t.grandTotal || t.total); }
+                } else if (t.type === 'expense') {
+                    if (d.toDateString() === today.toDateString()) { todayExpense += (t.grandTotal || t.total); }
+                    if (d >= startOfMonth) { monthExpense += (t.grandTotal || t.total); }
+                }
+            }
+        });
+
+        const lowStockItems = (stockBatches || []).filter(b => (b.quantity - (b.sold || 0)) < 5 && (b.quantity - (b.sold || 0)) > 0);
+        const lowStockCount = lowStockItems.length;
+        const lowStockNames = lowStockItems.slice(0, 3).map(i => i.productName).join(', ');
+
+        return `[INTERNAL DATA STREAM]
+- วันที่ปัจจุบัน: ${formatDate(today)}
+- ยอดขายวันนี้: ${formatCurrency(todaySales)} บาท (${todayOrders} ออเดอร์)
+- รายจ่ายวันนี้: ${formatCurrency(todayExpense)} บาท
+- ยอดขายสะสมเดือนนี้: ${formatCurrency(monthSales)} บาท
+- รายจ่ายสะสมเดือนนี้: ${formatCurrency(monthExpense)} บาท
+- สินค้าใกล้หมดสต็อก (<5 ชิ้น): ${lowStockCount} รายการ ${lowStockCount > 0 ? `(เช่น ${lowStockNames})` : ''}
+- ผู้สั่งการ: ${user ? 'Admin/CFO' : 'Guest'}
+[INSTRUCTION] คุณคือ M.A.R.G.I.N. (Merchant Analytics & Revenue Growth Intelligence Network) AI อัจฉริยะแบบ J.A.R.V.I.S. แต่สื่อสารในโทนสุภาพ มืออาชีพ กระชับ เป็นที่ปรึกษาการเงิน เน้นตัวเลข และใช้การจัดรูปแบบข้อความแบบเน้นคำ (ใช้ **bold** สำหรับตัวเลขหรือคีย์เวิร์ด)`;
+    };
+
+    const handleSend = async (textToSend = inputText) => {
+        if (!textToSend.trim() || isTyping) return;
+        
+        const userMsg = { id: Date.now(), role: 'user', text: textToSend.trim() };
+        setMessages(prev => [...prev, userMsg]);
+        setInputText('');
+        setIsTyping(true);
+
+        try {
+            const context = getBusinessContext();
+            const chatHistory = messages.slice(-5).map(m => `${m.role === 'ai' ? 'M.A.R.G.I.N:' : 'USER:'} ${m.text}`).join('\n');
+            const prompt = `${context}\n\n[CHAT HISTORY]\n${chatHistory}\n\nUSER: ${textToSend.trim()}\nM.A.R.G.I.N:`;
+            
+            const responseText = await callGeminiAPI(prompt, false);
+            
+            setMessages(prev => [...prev, { id: Date.now() + 1, role: 'ai', text: responseText }]);
+        } catch (error) {
+            console.error(error);
+            setMessages(prev => [...prev, { 
+                id: Date.now() + 1, 
+                role: 'ai', 
+                text: `[System Error] ขออภัยครับบอส ไม่สามารถเชื่อมต่อแกนสมองหลักได้: ${error.message || 'โปรดตรวจสอบ API Key'}` 
+            }]);
+        }
+        setIsTyping(false);
+    };
+
+    const handleClear = () => {
+        setMessages([{ id: Date.now(), role: 'ai', text: 'ระบบเคลียร์ความจำเรียบร้อยแล้วครับ พร้อมรับคำสั่งใหม่เสมอครับบอส' }]);
+    };
+
+    const formatRichText = (text) => {
+        if (!text) return null;
+        return text.split('\n').map((line, i) => (
+            <span key={i} className="block mb-1.5 last:mb-0">
+                {line.split(/(\*\*.*?\*\*)/g).map((part, j) => {
+                    if (part.startsWith('**') && part.endsWith('**')) {
+                        return <strong key={j} className="text-indigo-700 font-black">{part.slice(2, -2)}</strong>;
+                    }
+                    return part;
+                })}
+            </span>
+        ));
+    };
+
+    const quickPrompts = [
+        "สรุปยอดขายวันนี้", "เช็คสินค้าใกล้หมด", "วิเคราะห์กำไรเดือนนี้", "แนะนำวิธีประหยัดภาษี"
+    ];
+
+    return (
+        <div className="fixed bottom-6 right-6 z-[9999] flex flex-col items-end pointer-events-none font-sarabun">
+            {/* Seamless App-Integrated Chat Window */}
+            {isOpen && (
+                <div className="w-[340px] md:w-[420px] h-[550px] bg-white border border-slate-200 rounded-[32px] shadow-[0_20px_50px_rgba(79,70,229,0.15)] mb-4 flex flex-col overflow-hidden pointer-events-auto transition-all animate-in slide-in-from-bottom-5">
+                    {/* Header */}
+                    <div className="bg-indigo-50/80 backdrop-blur-md p-5 border-b border-indigo-100 flex justify-between items-center shrink-0">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-md text-white">
+                                <Sparkles size={20} />
+                            </div>
+                            <div>
+                                <h3 className="font-black text-indigo-900 text-sm tracking-wide">M.A.R.G.I.N. AI</h3>
+                                <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest flex items-center gap-1.5 mt-0.5">
+                                    <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span> Data Connected
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button onClick={handleClear} title="เริ่มบทสนทนาใหม่" className="text-slate-400 hover:text-indigo-600 bg-white p-2 rounded-xl shadow-sm border border-slate-200 transition-all"><RefreshCw size={14}/></button>
+                            <button onClick={() => setIsOpen(false)} title="ซ่อนหน้าต่าง" className="text-slate-400 hover:text-rose-500 bg-white p-2 rounded-xl shadow-sm border border-slate-200 transition-all"><X size={14}/></button>
+                        </div>
+                    </div>
+
+                    {/* Messages Area */}
+                    <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar bg-slate-50/50">
+                        {messages.map(msg => (
+                            <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-[85%] text-xs leading-relaxed p-3.5 shadow-sm ${
+                                    msg.role === 'user' 
+                                    ? 'text-white bg-indigo-600 rounded-t-2xl rounded-bl-2xl font-medium' 
+                                    : 'text-slate-700 bg-white border border-slate-200 rounded-t-2xl rounded-br-2xl'
+                                }`}>
+                                    {formatRichText(msg.text)}
+                                </div>
+                            </div>
+                        ))}
+                        {isTyping && (
+                            <div className="flex justify-start">
+                                <div className="text-indigo-500 bg-white border border-slate-200 shadow-sm rounded-t-2xl rounded-br-2xl p-3.5 text-xs flex items-center gap-2 font-bold">
+                                    <Loader size={14} className="animate-spin"/> <span>กำลังประมวลผลข้อมูล...</span>
+                                </div>
+                            </div>
+                        )}
+                        <div ref={messagesEndRef} />
+                    </div>
+
+                    {/* Quick Prompts */}
+                    <div className="flex gap-2 p-3 overflow-x-auto custom-scrollbar bg-white border-t border-slate-100 shrink-0">
+                        {quickPrompts.map((pt, i) => (
+                            <button key={i} onClick={() => handleSend(pt)} disabled={isTyping} className="text-[10px] font-bold whitespace-nowrap bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-xl hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-all disabled:opacity-50 shadow-sm">
+                                {pt}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Input Area */}
+                    <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="flex items-center p-3 bg-white border-t border-slate-100 shrink-0 gap-2">
+                        <input 
+                            type="text" 
+                            value={inputText}
+                            onChange={(e) => setInputText(e.target.value)}
+                            placeholder="พิมพ์ถาม AI ที่นี่..."
+                            className="bg-slate-50 text-slate-700 border border-slate-200 rounded-2xl p-3 w-full text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all shadow-inner"
+                            disabled={isTyping}
+                        />
+                        <button type="submit" disabled={!inputText.trim() || isTyping} className="bg-indigo-600 text-white rounded-2xl w-12 h-11 flex items-center justify-center shadow-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0">
+                            <Zap size={16}/>
+                        </button>
+                    </form>
+                </div>
+            )}
+
+            {/* Smart Integrated App Button */}
+            <button onClick={() => setIsOpen(!isOpen)} className="pointer-events-auto relative group w-[64px] h-[64px] rounded-full flex items-center justify-center bg-indigo-600 text-white shadow-[0_8px_30px_rgb(79,70,229,0.4)] transition-all duration-300 hover:scale-105 active:scale-95 border-4 border-white">
+               {/* Soft pulsing background to show it's alive */}
+               <div className="absolute inset-0 rounded-full animate-ping opacity-20 bg-indigo-400"></div>
+               
+               {/* Icon */}
+               <Sparkles size={26} className="relative z-10" />
+               
+               {/* Unread / Attention Dot */}
+               {!isOpen && (
+                   <span className="absolute top-0 right-0 w-4 h-4 bg-rose-500 rounded-full border-2 border-white animate-bounce shadow-sm"></span>
+               )}
+            </button>
+        </div>
+    );
 }
 
 // --- Login Component ---
@@ -1689,33 +1864,6 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
     return { data: Object.values(mData), maxPerf, maxCash };
   }, [transactions, selectedChannel, selectedShop, stockBatches]);
 
-  // --- 🔥 NEW: คำนวณสัดส่วนยอดขายตามช่องทาง (Sales by Channel) ---
-  const channelSales = useMemo(() => {
-    const salesMap = {};
-    transactions.filter(t => t.type === 'income' && !t.isCancelled && !t.isFromReconciliation).forEach(t => {
-        if (selectedChannel !== 'all' && (t.channel || 'หน้าร้าน').toUpperCase() !== selectedChannel.toUpperCase()) return;
-        if (selectedShop !== 'all' && String(t.shopName || 'ไม่ระบุ').toLowerCase() !== String(selectedShop).toLowerCase()) return;
-        if (selectedMonth !== 'all') {
-            const d = normalizeDate(t.date);
-            if (!d) return;
-            const tMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-            if (tMonth !== selectedMonth) return;
-        }
-
-        const ch = t.channel || 'หน้าร้าน';
-        if (!salesMap[ch]) salesMap[ch] = 0;
-        
-        const itemSubtotal = (t.items || []).reduce((sum, item) => sum + (Number(item.qty) * Number(item.sellPrice || item.price || 0)), 0);
-        const discount = Number(t.couponDiscount || 0) + Number(t.refundAmount || 0) + Number(t.cashCoupon || 0);
-        salesMap[ch] += Math.max(0, itemSubtotal - discount);
-    });
-    
-    const total = Object.values(salesMap).reduce((a, b) => a + b, 0);
-    return Object.entries(salesMap)
-        .map(([name, value]) => ({ name, value, pct: total > 0 ? (value / total) * 100 : 0 }))
-        .sort((a, b) => b.value - a.value);
-  }, [transactions, selectedChannel, selectedShop, selectedMonth]);
-
   const topSellers = useMemo(() => {
     const salesMap = {};
     transactions.filter(t => t.type === 'income' && !t.isCancelled && !t.isFromReconciliation).forEach(t => {
@@ -2059,78 +2207,33 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     </div>
                 </div>
 
-                {/* --- 🔥 NEW: Advanced Graphics Dashboard (Performance) --- */}
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mt-6">
-                    <div className="xl:col-span-2 bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 w-full flex flex-col">
-                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-2">
-                            <h3 className="font-black text-slate-800 flex items-center gap-2"><BarChart2 className="text-indigo-600"/> แนวโน้มผลประกอบการ 6 เดือนย้อนหลัง</h3>
-                            <div className="flex items-center gap-3 text-[10px] font-bold bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100">
-                                <span className="flex items-center gap-1"><div className="w-2.5 h-2.5 bg-indigo-500 rounded-sm shadow-sm"></div> ยอดขาย</span>
-                                <span className="flex items-center gap-1"><div className="w-2.5 h-2.5 bg-rose-400 rounded-sm shadow-sm"></div> รายจ่าย</span>
-                                <span className="flex items-center gap-1"><div className="w-2.5 h-2.5 bg-emerald-400 rounded-sm shadow-sm"></div> กำไรสุทธิ</span>
-                            </div>
-                        </div>
-                        
-                        <div className="flex-1 flex items-end gap-2 sm:gap-4 min-h-[220px] mt-2 pt-4 border-l border-b border-slate-200 relative">
-                            {/* Y-Axis Grid Lines */}
-                            <div className="absolute inset-0 flex flex-col justify-between pointer-events-none opacity-10">
-                                <div className="w-full h-px bg-slate-400"></div>
-                                <div className="w-full h-px bg-slate-400"></div>
-                                <div className="w-full h-px bg-slate-400"></div>
-                                <div className="w-full h-px bg-slate-400"></div>
-                            </div>
-                            
-                            {monthlyStats.data.map((m, idx) => {
-                                const maxVal = monthlyStats.maxPerf > 0 ? monthlyStats.maxPerf : 1;
-                                const salesH = Math.max(0, (m.perfSales / maxVal) * 100);
-                                const expH = Math.max(0, (m.perfExpTotal / maxVal) * 100);
-                                const netH = Math.max(0, (m.perfNet / maxVal) * 100);
-                                return (
-                                    <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full group relative z-10">
-                                        {/* Interactive Tooltip */}
-                                        <div className="absolute -top-24 bg-slate-900 text-white text-[10px] p-3 rounded-2xl opacity-0 group-hover:opacity-100 pointer-events-none transition-all shadow-xl z-50 min-w-[140px] left-1/2 transform -translate-x-1/2 translate-y-2 group-hover:translate-y-0">
-                                            <p className="font-bold text-center mb-2 text-slate-300 border-b border-slate-700 pb-1">{m.name}</p>
-                                            <div className="flex justify-between items-center"><span className="text-indigo-300 flex items-center gap-1"><div className="w-1.5 h-1.5 bg-indigo-400 rounded-full"></div> ขาย:</span> <span className="font-bold">{formatCurrency(m.perfSales)}</span></div>
-                                            <div className="flex justify-between items-center"><span className="text-rose-300 flex items-center gap-1"><div className="w-1.5 h-1.5 bg-rose-400 rounded-full"></div> จ่าย:</span> <span className="font-bold">{formatCurrency(m.perfExpTotal)}</span></div>
-                                            <div className="flex justify-between items-center"><span className="text-emerald-300 flex items-center gap-1"><div className="w-1.5 h-1.5 bg-emerald-400 rounded-full"></div> กำไร:</span> <span className="font-bold">{formatCurrency(m.perfNet)}</span></div>
-                                        </div>
-                                        
-                                        {/* Bar Charts */}
-                                        <div className="flex items-end gap-0.5 sm:gap-1 w-full justify-center h-full">
-                                            <div className="w-full max-w-[20px] bg-indigo-500 rounded-t-md transition-all duration-500 hover:brightness-110 cursor-pointer shadow-sm" style={{height: `${salesH}%`, minHeight: '2px'}}></div>
-                                            <div className="w-full max-w-[20px] bg-rose-400 rounded-t-md transition-all duration-500 hover:brightness-110 cursor-pointer shadow-sm" style={{height: `${expH}%`, minHeight: '2px'}}></div>
-                                            <div className="w-full max-w-[20px] bg-emerald-400 rounded-t-md transition-all duration-500 hover:brightness-110 cursor-pointer shadow-sm" style={{height: `${netH}%`, minHeight: '2px'}}></div>
-                                        </div>
-                                        <p className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-3 whitespace-nowrap">{m.name}</p>
-                                    </div>
-                                )
-                            })}
-                        </div>
-                    </div>
-
-                    {/* Sales by Channel Visual */}
-                    <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 w-full flex flex-col">
-                        <h3 className="font-black text-slate-800 mb-6 flex items-center gap-2"><PieChart className="text-purple-600"/> สัดส่วนยอดขาย (Channels)</h3>
-                        <div className="space-y-5 flex-1 overflow-y-auto custom-scrollbar pr-2">
-                            {channelSales.length > 0 ? channelSales.map((ch, idx) => (
-                                <div key={idx} className="group cursor-pointer">
-                                    <div className="flex justify-between text-xs font-bold mb-1.5">
-                                        <span className="text-slate-700 flex items-center gap-1.5">
-                                            <span className="w-2.5 h-2.5 rounded-full bg-purple-500 shadow-sm group-hover:scale-125 transition-transform"></span> {ch.name}
-                                        </span>
-                                        <span className="text-purple-600 font-black">{formatCurrency(ch.value)} <span className="text-[9px] text-slate-400 font-medium">({ch.pct.toFixed(1)}%)</span></span>
-                                    </div>
-                                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden shadow-inner">
-                                        <div className="bg-gradient-to-r from-purple-400 to-purple-600 h-2.5 rounded-full transition-all duration-1000 ease-out group-hover:brightness-110" style={{width: `${ch.pct}%`}}></div>
-                                    </div>
-                                </div>
-                            )) : (
-                                <div className="flex flex-col items-center justify-center py-10 text-slate-300 h-full">
-                                    <PieChart size={40} className="opacity-20 mb-3"/>
-                                    <p className="text-xs font-bold">ไม่มีข้อมูลช่องทางขาย</p>
-                                </div>
-                            )}
-                        </div>
+                <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 w-full mt-6">
+                    <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Calendar className="text-indigo-600"/> สรุปผลประกอบการรายเดือนย้อนหลัง (Performance Summary)</h3>
+                    <div className="overflow-x-auto custom-scrollbar">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-400">
+                                <tr>
+                                    <th className="p-4 rounded-tl-2xl border-b border-slate-100">เดือน (Month)</th>
+                                    <th className="p-4 text-right border-b border-slate-100 text-indigo-600">ยอดขายรวม (Sales)</th>
+                                    <th className="p-4 text-right border-b border-slate-100 text-rose-500">รายจ่าย (Expense)</th>
+                                    <th className="p-4 text-right rounded-tr-2xl border-b border-slate-100 text-emerald-600">กำไรสุทธิ (Net Profit)</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                                {[...monthlyStats.data].reverse().map((m, i) => (
+                                    <tr key={i} className="hover:bg-indigo-50/30 transition-colors group">
+                                        <td className="p-4 font-bold text-slate-700">{m.name}</td>
+                                        <td className="p-4 text-right font-black text-indigo-600">{formatCurrency(m.perfSales)}</td>
+                                        <td className="p-4 text-right font-bold text-rose-500">{formatCurrency(m.perfExpTotal)}</td>
+                                        <td className="p-4 text-right font-black">
+                                            <span className={m.perfNet >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                                                {m.perfNet > 0 ? '+' : ''}{formatCurrency(m.perfNet)}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -2195,51 +2298,33 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
                     </div>
                 </div>
 
-                {/* --- 🔥 NEW: Advanced Graphics Dashboard (Cash Flow) --- */}
                 <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 w-full mt-6">
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-2">
-                        <h3 className="font-black text-slate-800 flex items-center gap-2"><BarChart2 className="text-emerald-600"/> แนวโน้มกระแสเงินสด 6 เดือนย้อนหลัง</h3>
-                        <div className="flex items-center gap-3 text-[10px] font-bold bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100">
-                            <span className="flex items-center gap-1"><div className="w-2.5 h-2.5 bg-emerald-400 rounded-sm shadow-sm"></div> เงินเข้า (In)</span>
-                            <span className="flex items-center gap-1"><div className="w-2.5 h-2.5 bg-rose-400 rounded-sm shadow-sm"></div> เงินออก (Out)</span>
-                            <span className="flex items-center gap-1"><div className="w-2.5 h-2.5 bg-indigo-500 rounded-sm shadow-sm"></div> เงินสดสุทธิ</span>
-                        </div>
-                    </div>
-                    
-                    <div className="flex items-end gap-2 sm:gap-4 min-h-[250px] mt-2 pt-4 border-l border-b border-slate-200 relative">
-                        {/* Y-Axis Grid Lines */}
-                        <div className="absolute inset-0 flex flex-col justify-between pointer-events-none opacity-10">
-                            <div className="w-full h-px bg-slate-400"></div>
-                            <div className="w-full h-px bg-slate-400"></div>
-                            <div className="w-full h-px bg-slate-400"></div>
-                            <div className="w-full h-px bg-slate-400"></div>
-                        </div>
-                        
-                        {monthlyStats.data.map((m, idx) => {
-                            const maxVal = monthlyStats.maxCash > 0 ? monthlyStats.maxCash : 1;
-                            const inH = Math.max(0, (m.cashIn / maxVal) * 100);
-                            const outH = Math.max(0, (m.cashOut / maxVal) * 100);
-                            const netH = Math.max(0, (m.cashNet / maxVal) * 100);
-                            return (
-                                <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full group relative z-10">
-                                    {/* Interactive Tooltip */}
-                                    <div className="absolute -top-24 bg-slate-900 text-white text-[10px] p-3 rounded-2xl opacity-0 group-hover:opacity-100 pointer-events-none transition-all shadow-xl z-50 min-w-[140px] left-1/2 transform -translate-x-1/2 translate-y-2 group-hover:translate-y-0">
-                                        <p className="font-bold text-center mb-2 text-slate-300 border-b border-slate-700 pb-1">{m.name}</p>
-                                        <div className="flex justify-between items-center"><span className="text-emerald-300 flex items-center gap-1"><div className="w-1.5 h-1.5 bg-emerald-400 rounded-full"></div> รับเข้า:</span> <span className="font-bold">{formatCurrency(m.cashIn)}</span></div>
-                                        <div className="flex justify-between items-center"><span className="text-rose-300 flex items-center gap-1"><div className="w-1.5 h-1.5 bg-rose-400 rounded-full"></div> จ่ายออก:</span> <span className="font-bold">{formatCurrency(m.cashOut)}</span></div>
-                                        <div className="flex justify-between items-center"><span className="text-indigo-300 flex items-center gap-1"><div className="w-1.5 h-1.5 bg-indigo-500 rounded-full"></div> สุทธิ:</span> <span className="font-bold">{formatCurrency(m.cashNet)}</span></div>
-                                    </div>
-                                    
-                                    {/* Bar Charts */}
-                                    <div className="flex items-end gap-0.5 sm:gap-1 w-full justify-center h-full">
-                                        <div className="w-full max-w-[28px] bg-emerald-400 rounded-t-md transition-all duration-500 hover:brightness-110 cursor-pointer shadow-sm" style={{height: `${inH}%`, minHeight: '2px'}}></div>
-                                        <div className="w-full max-w-[28px] bg-rose-400 rounded-t-md transition-all duration-500 hover:brightness-110 cursor-pointer shadow-sm" style={{height: `${outH}%`, minHeight: '2px'}}></div>
-                                        <div className="w-full max-w-[28px] bg-indigo-500 rounded-t-md transition-all duration-500 hover:brightness-110 cursor-pointer shadow-sm" style={{height: `${netH}%`, minHeight: '2px'}}></div>
-                                    </div>
-                                    <p className="text-[9px] sm:text-[10px] font-bold text-slate-500 mt-3 whitespace-nowrap">{m.name}</p>
-                                </div>
-                            )
-                        })}
+                    <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><Wallet className="text-emerald-600"/> สรุปกระแสเงินสดรายเดือนย้อนหลัง (Cash Flow Summary)</h3>
+                    <div className="overflow-x-auto custom-scrollbar">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-slate-50 text-[10px] font-bold uppercase text-slate-400">
+                                <tr>
+                                    <th className="p-4 rounded-tl-2xl border-b border-slate-100">เดือนที่รับเงิน (Month)</th>
+                                    <th className="p-4 text-right border-b border-slate-100 text-emerald-600">เงินเข้าแล้ว (Cash In)</th>
+                                    <th className="p-4 text-right border-b border-slate-100 text-rose-500">จ่ายออกแล้ว (Cash Out)</th>
+                                    <th className="p-4 text-right rounded-tr-2xl border-b border-slate-100 text-indigo-600">กระแสเงินสดสุทธิ (Net Cash)</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                                {[...monthlyStats.data].reverse().map((m, i) => (
+                                    <tr key={i} className="hover:bg-indigo-50/30 transition-colors group">
+                                        <td className="p-4 font-bold text-slate-700">{m.name}</td>
+                                        <td className="p-4 text-right font-black text-emerald-600">{formatCurrency(m.cashIn)}</td>
+                                        <td className="p-4 text-right font-bold text-rose-500">{formatCurrency(m.cashOut)}</td>
+                                        <td className="p-4 text-right font-black">
+                                            <span className={m.cashNet >= 0 ? 'text-indigo-600' : 'text-rose-600'}>
+                                                {m.cashNet > 0 ? '+' : ''}{formatCurrency(m.cashNet)}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -2251,7 +2336,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
 function DataImporter({ appId, showToast, user, stockBatches, transactions, importLogs }) {
   const [importerTab, setImporterTab] = useState('import'); // 'import', 'logs'
   const [platform, setPlatform] = useState('shopee');
-  const [importMode, setImportMode] = useState('new_pending'); // 'new_pending', 'new_settled', 'update_settled'
+  const [importMode, setImportMode] = useState('new_pending'); // 'new_pending', 'new_settled', 'update_settled', 'update_cancelled'
   const [importedData, setImportedData] = useState([]);
   
   // NEW: เพิ่ม state สำหรับเลือกแท็บพรีวิวระหว่างยอดปกติ กับ ยอดตีคืน/ยกเลิก
@@ -2795,7 +2880,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
   // --- Stock Validation System ---
   const stockValidation = useMemo(() => {
-      if (importedData.length === 0 || importMode === 'update_settled') return null;
+      if (importedData.length === 0 || importMode === 'update_settled' || importMode === 'update_cancelled') return null;
 
       const requiredItems = [];
       // 1. รวมยอดจำนวนสินค้าทั้งหมดที่ต้องการหักจากไฟล์ Import
@@ -2848,6 +2933,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
     shopee: {
         orderId: ['หมายเลขคำสั่งซื้อ', 'Order ID'],
         status: ['สถานะการสั่งซื้อ', 'Order Status'],
+        returnStatus: ['สถานะการคืนเงินหรือคืนสินค้า', 'Return/Refund Status'],
         cancelReason: ['เหตุผลในการยกเลิกคำสั่งซื้อ', 'Cancel Reason'],
         orderDate: ['เวลาที่ทำการสั่งซื้อ', 'วันที่ทำการสั่งซื้อ', 'Order Creation Date'],
         settleDate: ['วันที่โอนชำระเงินสำเร็จ', 'เวลาการชำระสินค้า', 'Payment Time', 'เวลาชำระเงิน'],
@@ -3054,6 +3140,83 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         // ดึงยอดที่สมบูรณ์ 100% ไปใช้แสดงผล
         const exactExcelTotalFees = detailedStats.feeComm + detailedStats.feeServ + detailedStats.feeInfra + detailedStats.feeTrans;
         const exactExcelTotalSettled = detailedStats.totalSettled;
+
+        if (importMode === 'update_cancelled') {
+            const matchedMap = {};
+            let skippedCount = 0;
+            let notFoundCount = 0;
+            let alreadyCancelledCount = 0;
+
+            const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
+
+            raw.forEach(row => {
+                const rawOrderId = findVal(row, schema.orderId);
+                const orderId = cleanStrForMatch(rawOrderId);
+                if (!orderId) { skippedCount++; return; }
+
+                const statusStr = String(findVal(row, schema.status) || '').toLowerCase();
+                const cancelReason = String(findVal(row, schema.cancelReason) || '');
+                const returnStatusStr = String(findVal(row, schema.returnStatus) || '');
+                const refundAmtRow = getRowValAbs(row, schema.refundAmount);
+
+                const isCancelledRow = statusStr.includes('ยกเลิก') || statusStr.includes('cancel') ||
+                                       statusStr.includes('ไม่สำเร็จ') || statusStr.includes('ตีกลับ') ||
+                                       statusStr.includes('คืน') || statusStr.includes('refund') || statusStr.includes('return') ||
+                                       refundAmtRow > 0 ||
+                                       returnStatusStr.includes('คำขอได้รับการยอมรับแล้ว');
+
+                if (!isCancelledRow) { skippedCount++; return; } // ข้ามถ้าไม่ใช่รายการยกเลิก
+
+                const existingTrans = transactions.find(t => cleanStrForMatch(t.orderId) === orderId && t.type === 'income');
+
+                if (existingTrans) {
+                    if (existingTrans.isCancelled) {
+                        alreadyCancelledCount++;
+                        currentSkippedDetails.push({
+                            orderId: orderId, product: '-', qty: 0, statusFromFile: statusStr,
+                            reason: 'ออเดอร์นี้ถูกยกเลิกในระบบแล้ว', rawData: row
+                        });
+                    } else {
+                        if (!matchedMap[existingTrans.id]) {
+                            matchedMap[existingTrans.id] = {
+                                ...existingTrans,
+                                isUpdateMode: true,
+                                needsCancellation: true,
+                                cancelReasonFromFile: cancelReason || statusStr,
+                                newRefundAmount: refundAmtRow,
+                                hasInvoice: !!(existingTrans.invoiceNo && String(existingTrans.invoiceNo).trim() !== '')
+                            };
+                        }
+                    }
+                } else {
+                    notFoundCount++;
+                    currentSkippedDetails.push({
+                        orderId: orderId, product: '-', qty: 0, statusFromFile: statusStr,
+                        reason: 'ไม่พบออเดอร์ตั้งต้นในระบบ', rawData: row
+                    });
+                }
+            });
+
+            const matched = Object.values(matchedMap);
+            setImportedData(matched);
+            setStats({
+                totalRows: raw.length, processed: matched.length, skipped: skippedCount,
+                totalAmount: matched.reduce((sum, m) => sum + (m.grandTotal || m.total || 0), 0),
+                totalActualSettled: 0, totalDiffShort: 0, totalDiffSurplus: 0, totalFees: 0,
+                duplicates: 0, deliveryFailed: 0, cancelled: matched.length, skippedQty: 0,
+                detailedSummary: detailedStats
+            });
+            setSkippedDetailsData(currentSkippedDetails);
+            setDeliveryFailedDetailsData([]);
+            setDiscrepancyDetailsData([]);
+
+            if (matched.length > 0) {
+                showToast(`พบออเดอร์ที่ถูกยกเลิก/ตีกลับ ${matched.length} รายการ (รอการอัปเดต)`, 'success');
+            } else {
+                showToast(`ไม่พบออเดอร์ยกเลิก (ไม่มีในระบบ ${notFoundCount}, ยกเลิกไปแล้ว ${alreadyCancelledCount})`, 'error');
+            }
+            return;
+        }
         
         if (importMode === 'update_settled') {
             const matchedMap = {}; 
@@ -3319,6 +3482,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const orderId = cleanStrForMatch(rawOrderId);
           const status = String(findVal(row, schema.status) || '').toLowerCase();
           const cancelReason = String(findVal(row, schema.cancelReason) || '').toLowerCase();
+          const returnStatusStr = String(findVal(row, schema.returnStatus) || '');
           
           const rawQty = findVal(row, schema.qty);
           const qty = (rawQty !== undefined && rawQty !== '') ? Math.max(1, Math.abs(cleanNum(rawQty))) : 1;
@@ -3340,7 +3504,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const rowTotalFees = transFee + comm + serv + affiliateRow + infra;
 
           const refundAmtRow = getRowValAbs(row, schema.refundAmount); 
-          let isReturnedRow = status.includes('คืน') || status.includes('refund') || status.includes('return');
+          let isReturnedRow = status.includes('คืน') || status.includes('refund') || status.includes('return') || returnStatusStr.includes('คำขอได้รับการยอมรับแล้ว');
           
           if (status.includes('สามารถยื่น') || status.includes('ได้รับสินค้าแล้ว')) {
               isReturnedRow = false; 
@@ -3653,13 +3817,138 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           return `${fullPrefix}${String(nextNum).padStart(5, '0')}`;
       };
 
-      if (importMode === 'update_settled') {
+      if (importMode === 'update_settled' || importMode === 'update_cancelled') {
           let count = 0;
           let reconcileOpsCount = 0;
 
           for (const item of importedData) {
-              // --- 🔥 THE FIX: ถ้าเป็นออเดอร์ใหม่ที่กด Force Import เข้ามา ให้สร้าง Record ใหม่เหมือนโหมดนำเข้า 1, 2 เลย ---
-              if (item.isNewFromForceImport) {
+              if (item.needsCancellation) {
+                  // --- โหมด 4: จัดการรายการยกเลิก/ตีกลับ ---
+                  const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
+                  count++;
+
+                  batch.update(ref, {
+                      isCancelled: true,
+                      cancelReason: item.cancelReasonFromFile || 'ยกเลิกจากไฟล์อัปเดต',
+                      cancelledAt: serverTimestamp(),
+                      updatedAt: serverTimestamp(),
+                      returnAction: item.returnAction || 'restock' // ใช้ค่าที่เลือกจาก Dropdown
+                  });
+                  reconcileOpsCount++;
+
+                  let totalDamagedCost = 0;
+                  let damagedItemsForDoc = [];
+
+                  // คืนสต็อก หรือ ตัดชำรุด
+                  if (item.items) {
+                      for (const lItem of item.items) {
+                          let toReturn = Number(lItem.qty);
+                          if (isNaN(toReturn) || toReturn <= 0) continue;
+                          
+                          const affectedLots = stockBatches
+                              .filter(b => matchItemToBatch(lItem.sku, lItem.desc, b.sku, b.productName) && Number(b.sold) > 0)
+                              .sort(sortNewestFirst);
+
+                          let itemCostForDamage = 0;
+
+                          for (const lot of affectedLots) {
+                              if (toReturn <= 0) break;
+                              const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                              
+                              if ((item.returnAction || 'restock') === 'restock') {
+                                  const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id);
+                                  batch.update(batchRef, { sold: increment(-canTakeBack) });
+                                  reconcileOpsCount++;
+                              } else {
+                                  // เก็บต้นทุนของล็อตนั้นๆ เพื่อนำไปลงบัญชีรายจ่ายการชำรุด
+                                  itemCostForDamage += canTakeBack * (Number(lot.costPerUnit) || 0);
+                              }
+                              toReturn -= canTakeBack;
+                          }
+
+                          // ถ้าระบุตัดชำรุด ให้รวมยอดไปสร้างบิล
+                          if ((item.returnAction || 'restock') === 'discard') {
+                              totalDamagedCost += itemCostForDamage;
+                              damagedItemsForDoc.push({ 
+                                  desc: `[ชำรุดตีกลับ] ${lItem.desc}`, 
+                                  sku: lItem.sku || '-', 
+                                  qty: Number(lItem.qty), 
+                                  buyPrice: lItem.qty > 0 ? itemCostForDamage / Number(lItem.qty) : 0, 
+                                  sellPrice: 0 
+                              });
+                          }
+                      }
+                  }
+
+                  // สร้างใบลดหนี้อัตโนมัติหากมีการออกใบกำกับภาษีไปแล้ว
+                  if (item.invoiceNo) {
+                      const origInv = invoices.find(i => i.invNo === item.invoiceNo);
+                      if (origInv) {
+                          const cnDocDate = new Date();
+                          const cnNoFast = `CN-${formatDateISO(cnDocDate).replace(/-/g, '')}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+                          const cnRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'));
+                          batch.set(cnRef, {
+                              ...origInv,
+                              docType: 'credit_note',
+                              refInvNo: origInv.invNo,
+                              invNo: cnNoFast,
+                              date: cnDocDate,
+                              creditNoteReason: item.cancelReasonFromFile || 'ลูกค้ายกเลิก/ตีกลับ (อัปเดตจากไฟล์)',
+                              status: 'paid',
+                              createdAt: serverTimestamp(),
+                              updatedAt: serverTimestamp()
+                          });
+                          reconcileOpsCount++;
+                      }
+                  }
+
+                  // สร้างใบตัดจำหน่ายและบิลรายจ่ายอัตโนมัติ หากเลือก "ตัดชำรุด"
+                  if ((item.returnAction || 'restock') === 'discard' && totalDamagedCost > 0) {
+                      const actionDate = new Date();
+                      const dmgSysDocId = `DMG-${formatDateISO(actionDate).replace(/-/g,'')}-${Math.floor(Math.random()*10000).toString().padStart(4,'0')}`;
+
+                      const dmgRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
+                      batch.set(dmgRef, {
+                          docNo: dmgSysDocId,
+                          docType: 'write_off',
+                          date: actionDate,
+                          requestedBy: 'System (Auto Void File)',
+                          approvedBy: 'System',
+                          notes: `ออเดอร์ถูกยกเลิก/ตีกลับ และสินค้าชำรุด: ${item.orderId || '-'}`,
+                          reason: 'ลูกค้ายกเลิก/ตีกลับ (สินค้าเสียหาย)',
+                          items: damagedItemsForDoc,
+                          totalCost: totalDamagedCost,
+                          status: 'completed',
+                          userId: user.uid,
+                          createdAt: serverTimestamp()
+                      });
+                      reconcileOpsCount++;
+
+                      const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                      batch.set(expRef, {
+                          sysDocId: dmgSysDocId,
+                          type: 'expense',
+                          category: 'สินค้าเสียหาย/หมดอายุ',
+                          description: `ตัดจำหน่ายสินค้าชำรุด (ออเดอร์ยกเลิก/ตีกลับ): ${item.orderId || '-'}`,
+                          items: damagedItemsForDoc,
+                          total: totalDamagedCost,
+                          grandTotal: totalDamagedCost,
+                          date: actionDate,
+                          userId: user.uid,
+                          createdAt: serverTimestamp(),
+                          status: 'paid',
+                          partnerName: 'Internal (ตัดจำหน่าย)',
+                          partnerBranch: '00000',
+                          isFromReconciliation: true,
+                          linkedOrderId: dmgRef.id,
+                          linkedOrderNo: dmgSysDocId,
+                          channel: item.channel || '',
+                          shopName: item.shopName || 'ไม่ระบุ',
+                          isTaxOnly: false
+                      });
+                      reconcileOpsCount++;
+                  }
+              } else if (item.isNewFromForceImport) {
                   const sysDocId = getNextDateBasedSysDocId('income', 'INC-', item.date || new Date());
                   const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income')); 
                   
@@ -3801,7 +4090,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           }
 
           setShowImportPreviewModal(false); // ปิดหน้า Preview
-          showToast(`กระทบยอดรับเงินสำเร็จ ${count} รายการ (บันทึกทับยอดรับเงินเดิม)`, "success");
+          showToast(importMode === 'update_cancelled' ? `อัปเดตยกเลิก/ตีกลับสำเร็จ ${count} รายการ (คืนสต็อกแล้ว)` : `กระทบยอดรับเงินสำเร็จ ${count} รายการ (บันทึกทับยอดรับเงินเดิม)`, "success");
           setImportedData([]);
           setLoading(false);
           return;
@@ -4038,18 +4327,22 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 <h4 className="font-bold text-indigo-800">ตั้งค่าการนำเข้าข้อมูล (Import Mode)</h4>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <button onClick={()=>handleModeChange('new_pending')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'new_pending' ? 'border-indigo-600 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
-                    <p className="font-black text-indigo-700 text-sm mb-1">1. นำเข้าออเดอร์ใหม่ (รอเงินเข้า)</p>
-                    <p className="text-xs text-slate-500 leading-relaxed">สร้างรายการขายใหม่ และตั้งสถานะเป็น <span className="text-orange-600 font-bold">"รอเงินโอนจากแพลตฟอร์ม"</span></p>
+                    <p className="font-black text-indigo-700 text-sm mb-1">1. นำเข้าใหม่ (รอเงิน)</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">สร้างรายการขายใหม่ สถานะ <span className="text-orange-600 font-bold">รอเงินโอน</span></p>
                 </button>
                 <button onClick={()=>handleModeChange('new_settled')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'new_settled' ? 'border-emerald-500 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
-                    <p className="font-black text-emerald-700 text-sm mb-1">2. นำเข้าออเดอร์ใหม่ (รับเงินแล้ว)</p>
-                    <p className="text-xs text-slate-500 leading-relaxed">สร้างรายการขายใหม่ และตั้งสถานะเป็น <span className="text-emerald-600 font-bold">"รับเงินเข้าบัญชีเรียบร้อยแล้ว"</span> ทันที</p>
+                    <p className="font-black text-emerald-700 text-sm mb-1">2. นำเข้าใหม่ (รับเงินแล้ว)</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">สร้างรายการขายใหม่ สถานะ <span className="text-emerald-600 font-bold">รับเงินเรียบร้อย</span></p>
                 </button>
                 <button onClick={()=>handleModeChange('update_settled')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'update_settled' ? 'border-amber-500 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
-                    <p className="font-black text-amber-700 text-sm mb-1">3. กระทบยอด (Reconcile)</p>
-                    <p className="text-xs text-slate-500 leading-relaxed">อัปเดตออเดอร์เดิมที่ค้างอยู่ ให้เปลี่ยนสถานะเป็น <span className="text-amber-600 font-bold">"รับเงินแล้ว"</span> (ไม่สร้างรายการซ้ำ)</p>
+                    <p className="font-black text-amber-700 text-sm mb-1">3. อัปเดตรับเงิน (Settle)</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">อัปเดตออเดอร์เดิมที่ค้างอยู่ ให้เป็น <span className="text-amber-600 font-bold">รับเงินแล้ว</span></p>
+                </button>
+                <button onClick={()=>handleModeChange('update_cancelled')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'update_cancelled' ? 'border-rose-500 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
+                    <p className="font-black text-rose-700 text-sm mb-1">4. อัปเดตยกเลิก/ตีกลับ</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">อัปเดตให้เป็น <span className="text-rose-600 font-bold">ยกเลิก</span> (คืนสต็อก/ออกใบลดหนี้ให้อัตโนมัติ)</p>
                 </button>
             </div>
 
@@ -4119,10 +4412,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       <button 
                         onClick={() => setShowImportPreviewModal(true)} 
                         disabled={loading} 
-                        className={`text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50 text-center ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100'}`}
+                        className={`text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50 text-center ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : importMode === 'update_cancelled' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-100' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100'}`}
                       >
                         {loading ? <Loader className="animate-spin" size={14}/> : <CheckCircle size={14}/>}
-                        {importMode === 'update_settled' ? 'ยืนยันการรับเงิน (Settle)' : 'บันทึกและเปิดใช้งาน (Activate)'}
+                        {importMode === 'update_settled' ? 'ยืนยันการรับเงิน (Settle)' : importMode === 'update_cancelled' ? 'ยืนยันอัปเดตเป็นยกเลิก (Void)' : 'บันทึกและเปิดใช้งาน (Activate)'}
                       </button>
                   </div>
                 )}
@@ -4630,6 +4923,27 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             {it.isUpdateMode ? (
                                 it.isAlreadyCancelled ? (
                                     <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded text-[10px] font-bold">อัปเดตค่าธรรมเนียม (ยกเลิก)</span>
+                                ) : it.needsCancellation ? (
+                                    <div className="flex flex-col gap-1 items-start">
+                                        <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1"><XCircle size={10}/> รออัปเดตเป็นยกเลิก/คืนของ</span>
+                                        <select 
+                                            value={it.returnAction || 'restock'} 
+                                            onChange={(e) => {
+                                                const newData = [...importedData];
+                                                newData[idx].returnAction = e.target.value;
+                                                setImportedData(newData);
+                                            }}
+                                            className="bg-white border border-rose-200 text-rose-700 text-[10px] rounded p-1 outline-none focus:ring-1 focus:ring-rose-400 font-bold mt-1 w-full max-w-[140px] cursor-pointer"
+                                        >
+                                            <option value="restock">📦 คืนเข้าคลัง (ขายใหม่)</option>
+                                            <option value="discard">🗑️ ตัดชำรุด (ลงบิลรายจ่าย)</option>
+                                        </select>
+                                        {it.hasInvoice ? (
+                                            <span className="bg-fuchsia-100 text-fuchsia-700 px-2 py-0.5 rounded text-[9px] font-bold">สร้างใบลดหนี้ (CN) อัตโนมัติ</span>
+                                        ) : (
+                                            <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[9px] font-bold">ยังไม่ออกใบกำกับภาษี</span>
+                                        )}
+                                    </div>
                                 ) : it.needsReturn ? (
                                     <div className="flex flex-col gap-1 items-start">
                                         <span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 w-fit"><ArrowRightLeft size={10}/> อัปเดตคืนสินค้า</span>
@@ -4743,8 +5057,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                               <tr key={log.id} className="hover:bg-slate-50 transition-colors">
                                   <td className="p-4 font-bold text-slate-700">{formatDate(log.date)}</td>
                                   <td className="p-4">
-                                      <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${log.mode === 'update_settled' ? 'bg-amber-100 text-amber-700' : log.mode === 'new_settled' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
-                                          {log.mode === 'update_settled' ? 'กระทบยอดรับเงิน' : log.mode === 'new_settled' ? 'นำเข้าแบบรับเงินแล้ว' : 'นำเข้าแบบรอเงินเข้า'}
+                                      <span className={`px-2 py-1 rounded-md text-[10px] font-bold ${log.mode === 'update_settled' ? 'bg-amber-100 text-amber-700' : log.mode === 'update_cancelled' ? 'bg-rose-100 text-rose-700' : log.mode === 'new_settled' ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                                          {log.mode === 'update_settled' ? 'กระทบยอดรับเงิน' : log.mode === 'update_cancelled' ? 'อัปเดตยกเลิก/ตีกลับ' : log.mode === 'new_settled' ? 'นำเข้าแบบรับเงินแล้ว' : 'นำเข้าแบบรอเงินเข้า'}
                                       </span>
                                   </td>
                                   <td className="p-4 text-center font-black text-emerald-600">{log.stats?.processed || 0}</td>
@@ -5321,10 +5635,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                     <button 
                         onClick={saveToFirebase} 
                         disabled={loading} 
-                        className={`flex-[2] py-4 text-white rounded-2xl font-black text-sm shadow-xl flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:hover:scale-100 ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
+                        className={`flex-[2] py-4 text-white rounded-2xl font-black text-sm shadow-xl flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:hover:scale-100 ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200' : importMode === 'update_cancelled' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
                     >
                         {loading ? <Loader className="animate-spin" size={18}/> : <Save size={18}/>} 
-                        {loading ? 'กำลังบันทึกข้อมูล...' : (importMode === 'update_settled' ? 'ยืนยันบันทึกการกระทบยอด' : 'ยืนยันบันทึกข้อมูลเข้าระบบ')}
+                        {loading ? 'กำลังบันทึกข้อมูล...' : (importMode === 'update_settled' ? 'ยืนยันบันทึกการกระทบยอด' : importMode === 'update_cancelled' ? 'ยืนยันอัปเดตสถานะและคืนคลัง' : 'ยืนยันบันทึกข้อมูลเข้าระบบ')}
                     </button>
                 </div>
             </div>
@@ -8080,21 +8394,6 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     setEndDate(formatDateISO(end));
   };
 
-  // --- NEW: Helper for Month Picker Buttons ---
-  const changeReportMonth = (offset) => {
-      let baseDate = new Date();
-      if (startDate && endDate) {
-          const s = new Date(startDate);
-          const e = new Date(endDate);
-          if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
-              baseDate = s;
-          }
-      }
-      baseDate.setMonth(baseDate.getMonth() + offset);
-      setStartDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth(), 1)));
-      setEndDate(formatDateISO(new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0)));
-  };
-
   const handleDeleteRecord = async () => {
     if (!deleteConfirm?.id) {
         showToast("ไม่พบข้อมูลรายการ (ไม่มี ID)", "error");
@@ -9082,7 +9381,7 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
   );
 
   return (
-    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
+    <div className="space-y-6 animate-fadeIn text-left font-sarabun w-full min-h-full pb-10">
       
       {/* Top Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-2 border-b pb-4 gap-4 text-left no-print">
@@ -9109,37 +9408,9 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
           
           <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200 shrink-0 w-full xl:w-auto overflow-x-auto">
               <Calendar size={14} className="text-slate-400 ml-2 shrink-0"/>
-              <button onClick={() => changeReportMonth(-1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronDown className="rotate-90" size={14}/></button>
-              <input 
-                  type="month" 
-                  value={(() => {
-                      if (startDate && endDate) {
-                          const s = new Date(startDate);
-                          const e = new Date(endDate);
-                          if (s.getDate() === 1 && e.getDate() === new Date(s.getFullYear(), s.getMonth() + 1, 0).getDate() && s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()) {
-                              return `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}`;
-                          }
-                      }
-                      return '';
-                  })()}
-                  onChange={e => {
-                      const val = e.target.value;
-                      if (!val) { setStartDate(''); setEndDate(''); return; }
-                      const [year, month] = val.split('-');
-                      setStartDate(formatDateISO(new Date(year, month - 1, 1)));
-                      setEndDate(formatDateISO(new Date(year, month, 0)));
-                  }}
-                  className="bg-white border border-slate-200 rounded-md text-xs font-bold outline-none text-indigo-700 cursor-pointer focus:ring-1 focus:ring-indigo-200 px-1"
-                  title="เลือกทั้งเดือน"
-              />
-              <button onClick={() => changeReportMonth(1)} className="p-1 bg-white rounded-md hover:bg-indigo-50 hover:text-indigo-600 shadow-sm transition-colors text-slate-500"><ChevronUp className="rotate-90" size={14}/></button>
-              <span className="text-slate-300 mx-1">|</span>
-              <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0 p-0"/>
+              <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0"/>
               <span className="text-slate-300"><ArrowRight size={12}/></span>
-              <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0 p-0"/>
-              {(startDate || endDate) && (
-                  <button onClick={()=>{setStartDate(''); setEndDate('');}} className="p-1 text-slate-400 hover:text-rose-500 transition-colors ml-1" title="ล้างตัวกรองวันที่"><X size={14}/></button>
-              )}
+              <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="bg-transparent border-0 text-xs font-bold outline-none text-slate-700 w-28 cursor-pointer focus:ring-0"/>
           </div>
       </div>
 
@@ -10752,80 +11023,17 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
   useEffect(() => { if (!user) return; const unsub = onSnapshot(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'partners'), (snap) => { setPartners(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); return () => unsub(); }, [user, appId]);
 
-  // --- 🔥 FIX: อัปเกรดระบบคำนวณสต็อกแบบ Real-time (IN-OUT) ให้ตรงกับหน้าคลังสินค้า 100% ---
   const uniqueInventory = useMemo(() => {
     const map = {};
-    
-    // 1. IN (ดึงยอดรับเข้าจากสต็อก)
     stockBatches.forEach(batch => {
-        const nameKey = String(batch.productName || 'ไม่ระบุชื่อสินค้า').trim();
-        const skuKey = (batch.sku && batch.sku !== '-') ? String(batch.sku).trim() : '';
-        const groupKey = skuKey ? `${skuKey.toLowerCase()}::${nameKey.toLowerCase()}` : nameKey.toLowerCase();
-
-        if (!map[groupKey]) { 
-            map[groupKey] = { 
-                name: nameKey,
-                sku: skuKey || '-',
-                qty: 0,
-                totalIn: 0,
-                totalOut: 0,
-                sellPrice: batch.sellPrice || 0,
-                category: batch.category || '',
-                originalKeys: { sku: batch.sku, name: batch.productName }
-            }; 
-        }
-        
-        const qty = Number(batch.quantity) || 0;
-        // นับยอดรับเข้า (ข้าม Dummy Batch ที่ระบบสร้างเพื่อแก้ติดลบ)
-        if (qty > 0 || (batch.isAdjustment && !String(batch.adjustReason || '').includes('สต็อกติดลบ'))) {
-            map[groupKey].totalIn += qty;
-        }
-        if (batch.sellPrice > 0) map[groupKey].sellPrice = batch.sellPrice;
+      const name = batch.productName; if (!name) return;
+      const remaining = Number(batch.quantity) - Number(batch.sold || 0);
+      if (!map[name]) map[name] = { name, sku: batch.sku || '-', qty: 0, sellPrice: batch.sellPrice || 0, category: batch.category || '' };
+      map[name].qty += Math.max(0, remaining);
+      if (batch.sellPrice > 0) map[name].sellPrice = batch.sellPrice;
     });
-
-    // 2. OUT (ดึงยอดขายออก/ชำรุด จากบิลออเดอร์จริง)
-    transactions.forEach(t => {
-       if (t.isCancelled) return;
-
-       if (t.type === 'income') {
-           (t.items || []).forEach(item => {
-               const cleanName = String(item.desc || '').replace(/\[แถมฟรี\]|\[ของแจก\/โปรโมท\]/gi, '').replace(/\[จัดส่งไม่สำเร็จ\]/gi, '').trim();
-               if (cleanName.includes('ส่วนต่างยอดรับ') || cleanName.includes('ค่าจัดส่ง')) return;
-
-               const matchingGroupKeys = Object.keys(map).filter(gKey => 
-                   matchItemToBatch(item.sku, cleanName, map[gKey].originalKeys.sku, map[gKey].originalKeys.name)
-               );
-
-               matchingGroupKeys.forEach(gKey => {
-                   map[gKey].totalOut += Math.abs(Number(item.qty) || 0);
-               });
-           });
-       } else if (t.type === 'expense' && t.category === 'สินค้าเสียหาย/หมดอายุ') {
-           (t.items || []).forEach(item => {
-               let cleanName = String(item.desc || '');
-               if (cleanName.includes(':')) cleanName = cleanName.split(':').pop().trim();
-               
-               const matchingGroupKeys = Object.keys(map).filter(gKey => 
-                   matchItemToBatch(item.sku, cleanName, map[gKey].originalKeys.sku, map[gKey].originalKeys.name) ||
-                   matchItemToBatch(item.sku, item.desc, map[gKey].originalKeys.sku, map[gKey].originalKeys.name)
-               );
-
-               matchingGroupKeys.forEach(gKey => {
-                   map[gKey].totalOut += Math.abs(Number(item.qty) || 0);
-               });
-           });
-       }
-    });
-
-    // 3. หักลบเพื่อหาคงเหลือ (Real-time Balance)
-    const result = [];
-    Object.values(map).forEach(item => {
-        item.qty = item.totalIn - item.totalOut;
-        result.push(item);
-    });
-
-    return result;
-  }, [stockBatches, transactions]);
+    return Object.values(map);
+  }, [stockBatches]);
 
   const filteredStock = useMemo(() => {
     return uniqueInventory.filter(item => 
@@ -11135,7 +11343,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
   };
   const removeLineItem = (index) => { if (formData.items.length === 1) return; const newItems = formData.items.filter((_, i) => i !== index); setFormData({ ...formData, items: newItems }); };
-  const updateItem = (index, field, value) => { const newItems = [...formData.items]; newItems[index][field] = value; setFormData({ ...formData, items: newItems }); };
+  const updateLineItem = (index, field, value) => { const newItems = [...formData.items]; newItems[index][field] = value; setFormData({ ...formData, items: newItems }); };
 
   const handleAutoApplyPromo = () => {
       // ลบรายการแถมเดิมออกก่อนคำนวณใหม่ (Idempotent)
@@ -11197,11 +11405,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
 
   const financialSummary = useMemo(() => {
     const subTotal = formData.items.reduce((sum, item) => sum + ((formData.type === 'income' ? Number(item.sellPrice) : Number(item.buyPrice)) * (Number(item.qty) || 0)), 0);
-    
-    // --- 🔥 NEW: แยกยอดส่วนตัวออกจากฐานภาษี ---
-    const personalSubTotal = formData.items.filter(it => it.desc.startsWith('[ส่วนตัว]')).reduce((sum, item) => sum + ((formData.type === 'income' ? Number(item.sellPrice) : Number(item.buyPrice)) * (Number(item.qty) || 0)), 0);
-    const businessSubTotal = subTotal - personalSubTotal;
-
     const transFee = parseFloat(formData.transactionFee) || 0;
     const infraFee = parseFloat(formData.infrastructureFee) || 0;
     const commFee = parseFloat(formData.commissionFee) || 0;
@@ -11219,27 +11422,27 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
     let trueVatBase = 0;
 
     if (formData.type === 'income') {
-        let vatBase = businessSubTotal + shippingFee - couponDisc;
+        let vatBase = subTotal + shippingFee - couponDisc;
         if (formData.vatType === 'excluded') {
             vatAmount = vatBase * 0.07;
             trueVatBase = vatBase;
-            grandTotal = (vatBase * 1.07) + personalSubTotal - totalFees - cashCpn - wht;
+            grandTotal = (vatBase * 1.07) - totalFees - cashCpn - wht;
         } else if (formData.vatType === 'included') {
             vatAmount = vatBase * 7 / 107;
             trueVatBase = vatBase * 100 / 107;
-            grandTotal = businessSubTotal + personalSubTotal - totalFees - cashCpn - wht;
+            grandTotal = vatBase - totalFees - cashCpn - wht;
         } else {
             trueVatBase = vatBase;
-            grandTotal = businessSubTotal + personalSubTotal - totalFees - cashCpn - wht;
+            grandTotal = vatBase - totalFees - cashCpn - wht;
         }
     } else {
-        let vatBase = businessSubTotal - couponDisc;
+        let vatBase = subTotal - couponDisc;
         let manualVat = (formData.manualVatAmount !== undefined && formData.manualVatAmount !== '') ? Number(formData.manualVatAmount) : null;
         if (formData.vatType === 'excluded') {
             let vatAmt = manualVat !== null ? manualVat : vatBase * 0.07;
             vatAmount = vatAmt;
             trueVatBase = vatBase;
-            grandTotal = vatBase + vatAmt + personalSubTotal - cashCpn - wht;
+            grandTotal = vatBase + vatAmt - cashCpn - wht;
         } else if (formData.vatType === 'included') {
             vatAmount = manualVat !== null ? manualVat : vatBase * 7 / 107;
             trueVatBase = vatBase - vatAmount;
@@ -11250,7 +11453,7 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
         }
     }
     
-    return { subTotal, businessSubTotal, personalSubTotal, totalFees, totalDiscounts, wht, grandTotal, shippingFee, vatAmount, trueVatBase };
+    return { subTotal, totalFees, totalDiscounts, wht, grandTotal, shippingFee, vatAmount, trueVatBase };
   }, [formData]);
 
   const handleSubmit = async (e) => {
@@ -11353,65 +11556,19 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
       }
       
       const batchWriter = writeBatch(dbInstance);
-
-      // --- 🔥 NEW: Split-on-Save Logic (ระบบแยกบิลของใช้ส่วนตัวเบื้องหลัง) ---
-      const personalItems = dataToSave.items ? dataToSave.items.filter(it => it.desc.startsWith('[ส่วนตัว]')) : [];
-      const businessItems = dataToSave.items ? dataToSave.items.filter(it => !it.desc.startsWith('[ส่วนตัว]')) : [];
-      
-      let personalDocId = null;
-
-      if (personalItems.length > 0 && !formData.id && formData.type === 'expense') {
-          // ถ้ามีของส่วนตัวปนมา และเป็นการสร้างรายจ่ายใหม่ ให้แยกบิล
-          const personalTotal = personalItems.reduce((s, it) => s + (Number(it.buyPrice) * Number(it.qty)), 0);
-          
-          // แก้ไข dataToSave หลักให้เหลือเฉพาะของบริษัท
-          dataToSave.items = businessItems;
-          dataToSave.total = financialSummary.businessSubTotal;
-          dataToSave.grandTotal = financialSummary.grandTotal - personalTotal;
-          dataToSave.description = businessItems.map(i => i.desc).join(', ');
-
-          // สร้างบิลส่วนตัวแยกต่างหาก
-          const personalRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', coll));
-          const pSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), 'EXP-', formData.date, 'sysDocId') + '-P';
-          
-          batchWriter.set(personalRef, {
-              sysDocId: pSysDocId,
-              type: 'expense',
-              category: 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ',
-              description: personalItems.map(i => i.desc).join(', '),
-              items: personalItems,
-              total: personalTotal,
-              grandTotal: personalTotal,
-              date: normalizeDate(formData.date),
-              userId: user.uid,
-              createdAt: serverTimestamp(),
-              status: formData.status === 'unpaid' ? 'unpaid' : 'paid',
-              partnerName: formData.partnerName || 'ส่วนตัว (เจ้าของกิจการ)',
-              partnerBranch: '00000',
-              isFromReconciliation: false,
-              isCashBill: true,
-              vatType: 'none',
-              channel: formData.channel || 'หน้าร้าน',
-              shopName: formData.shopName || CONSTANTS.SHOPS[0],
-              linkedOrderNo: sysDocId // อ้างอิงกลับไปยังบิลหลัก
-          });
-          personalDocId = personalRef.id;
-      }
-      // ------------------------------------
-
       batchWriter.set(mainRef, dataToSave, { merge: true });
 
       if (!formData.id) {
           // --- CREATE MODE: Normal Stock Logic ---
           if (formData.type === 'expense' && formData.category === 'ต้นทุนสินค้า') {
-            for (const item of dataToSave.items) {
-                if (String(item.desc).startsWith('[ของแจก/โปรโมท]') || String(item.desc).startsWith('[ส่วนตัว]')) continue;
+            for (const item of formData.items) {
+                if (String(item.desc).startsWith('[ของแจก/โปรโมท]')) continue;
 
                 // 🔴 FIX: หากเป็นใบลดหนี้ ให้จำนวนที่รับเข้าคลังเป็น "ติดลบ" (ตัดออกจากคลัง)
                 const actualQty = formData.isPurchaseCreditNote ? -Math.abs(Number(item.qty)) : Number(item.qty);
 
                 const itemTotal = Number(item.buyPrice) * Number(item.qty);
-                const proportion = financialSummary.businessSubTotal !== 0 ? (itemTotal / financialSummary.businessSubTotal) : 0;
+                const proportion = subTotal !== 0 ? (itemTotal / subTotal) : 0;
                 const itemDiscount = totalDiscounts * proportion;
                 
                 let itemAmountForCost = itemTotal - itemDiscount;
@@ -12860,60 +13017,50 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                     {formData.items.map((item, index) => {
                       const isFreeItemIncome = formData.type === 'income' && item.desc.startsWith('[แถมฟรี]');
                       const isGiveawayExpense = formData.type === 'expense' && item.desc.startsWith('[ของแจก/โปรโมท]');
-                      const isPersonalExpense = formData.type === 'expense' && item.desc.startsWith('[ส่วนตัว]');
-                      const isSpecialItem = isFreeItemIncome || isGiveawayExpense || isPersonalExpense;
+                      const isSpecialItem = isFreeItemIncome || isGiveawayExpense;
                       
                       return (
-                      <tr key={index} className={`group transition-colors ${isFreeItemIncome ? 'bg-emerald-50/70 border-emerald-100' : isGiveawayExpense ? 'bg-orange-50/70 border-orange-100' : isPersonalExpense ? 'bg-pink-50/70 border-pink-100' : 'hover:bg-slate-50/50'} text-left p-3 rounded-2xl border border-slate-200 shadow-sm block sm:table-row mb-3 sm:mb-0`}>
-                        <td className="py-4 pl-2 text-left block sm:table-cell border-b sm:border-0">
-                          <div className="relative text-left flex items-center gap-2">
-                            <span className="text-xs font-black text-slate-400 w-5 text-center hidden sm:block">{index+1}.</span>
-                            <input value={item.desc} onChange={e=>updateItem(index, 'desc', e.target.value)} className={`w-full bg-transparent p-2 rounded-xl text-sm font-bold border border-slate-200 focus:ring-2 outline-none ${isFreeItemIncome ? 'text-emerald-700' : isGiveawayExpense ? 'text-orange-700' : isPersonalExpense ? 'text-pink-700' : 'text-slate-700'} text-left`} placeholder="รายละเอียดสินค้า / รายการ"/>
+                      <tr key={index} className={`group transition-colors ${isFreeItemIncome ? 'bg-emerald-50/70 border-emerald-100' : isGiveawayExpense ? 'bg-orange-50/70 border-orange-100' : 'hover:bg-slate-50/50'} text-left`}>
+                        <td className="py-4 pl-2 text-left">
+                          <div className="relative text-left">
+                            <input value={item.desc} onChange={e=>updateLineItem(index, 'desc', e.target.value)} className={`w-full bg-transparent p-2 rounded-xl text-sm font-bold border-0 focus:ring-0 outline-none ${isFreeItemIncome ? 'text-emerald-700' : isGiveawayExpense ? 'text-orange-700' : 'text-slate-700'} text-left`} placeholder="ชื่อสินค้าหรือบริการ..."/>
                             {!isSpecialItem && (
                                 <button type="button" onClick={()=>setShowStockSelectModal(index)} className="absolute -top-3 right-0 text-[9px] text-indigo-600 font-black opacity-0 group-hover:opacity-100 transition-opacity uppercase bg-white border px-2 py-0.5 rounded-full shadow-sm text-center">Pick from Stock</button>
                             )}
                           </div>
                         </td>
-                        <td className="py-4 text-center block sm:table-cell border-b sm:border-0">
-                          <div className="flex justify-start sm:justify-center text-center">
-                            <input type="number" value={item.qty} onChange={e=>updateItem(index, 'qty', e.target.value)} className={`w-full sm:w-20 p-2 rounded-xl border border-slate-200 text-sm text-center font-black outline-none focus:ring-2 focus:ring-indigo-100 text-center ${isFreeItemIncome ? 'bg-emerald-100/50 text-emerald-800' : isGiveawayExpense ? 'bg-orange-100/50 text-orange-800' : isPersonalExpense ? 'bg-pink-100/50 text-pink-800' : 'bg-white text-slate-800 focus:bg-white'}`} placeholder="จำนวน"/>
+                        <td className="py-4 text-center">
+                          <div className="flex justify-center text-center">
+                            <input type="number" value={item.qty} onChange={e=>updateLineItem(index, 'qty', e.target.value)} className={`w-20 p-2 rounded-xl border-0 text-sm text-center font-black outline-none focus:ring-2 focus:ring-indigo-100 text-center ${isFreeItemIncome ? 'bg-emerald-100/50 text-emerald-800' : isGiveawayExpense ? 'bg-orange-100/50 text-orange-800' : 'bg-slate-100/50 text-slate-800 focus:bg-white'}`}/>
                           </div>
                         </td>
-                        <td className="py-4 text-right block sm:table-cell border-b sm:border-0">
+                        <td className="py-4 text-right">
                           <div className="relative flex items-center justify-end text-right">
-                            <span className={`absolute left-3 font-bold text-xs text-left ${isFreeItemIncome ? 'text-emerald-400' : isGiveawayExpense ? 'text-orange-400' : isPersonalExpense ? 'text-pink-400' : 'text-slate-400'}`}>฿</span>
-                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className={`w-full p-2 rounded-xl border border-slate-200 text-sm text-right font-black outline-none pl-8 focus:ring-2 focus:ring-indigo-100 text-right ${isFreeItemIncome ? 'bg-transparent text-emerald-600' : isGiveawayExpense ? 'bg-transparent text-orange-600' : isPersonalExpense ? 'bg-transparent text-pink-600' : 'bg-white text-slate-800 focus:bg-white'}`} disabled={isSpecialItem} placeholder="ราคา/ชิ้น"/>
+                            <span className={`absolute left-3 font-bold text-xs text-left ${isFreeItemIncome ? 'text-emerald-400' : isGiveawayExpense ? 'text-orange-400' : 'text-slate-400'}`}>฿</span>
+                            <input type="number" value={formData.type === 'income' ? item.sellPrice : item.buyPrice} onChange={e=>updateLineItem(index, formData.type === 'income' ? 'sellPrice' : 'buyPrice', e.target.value)} className={`w-full p-2 rounded-xl border-0 text-sm text-right font-black outline-none pl-8 focus:ring-2 focus:ring-indigo-100 text-right ${isFreeItemIncome ? 'bg-transparent text-emerald-600' : isGiveawayExpense ? 'bg-transparent text-orange-600' : 'bg-slate-100/50 text-slate-800 focus:bg-white'}`} disabled={isSpecialItem}/>
                           </div>
                         </td>
-                        <td className="py-4 text-right pr-2 text-right block sm:table-cell border-b sm:border-0">
-                          <p className={`font-black text-sm text-right ${isFreeItemIncome ? 'text-emerald-600' : isGiveawayExpense ? 'text-orange-600' : isPersonalExpense ? 'text-pink-600' : 'text-slate-900'}`}>{formatCurrency((formData.type === 'income' ? item.sellPrice : item.buyPrice) * item.qty)}</p>
+                        <td className="py-4 text-right pr-2 text-right">
+                          <p className={`font-black text-sm text-right ${isFreeItemIncome ? 'text-emerald-600' : isGiveawayExpense ? 'text-orange-600' : 'text-slate-900'}`}>{formatCurrency((formData.type === 'income' ? item.sellPrice : item.buyPrice) * item.qty)}</p>
                         </td>
-                        <td className="py-4 text-center block sm:table-cell">
-                          <div className="flex gap-2 w-full sm:w-auto shrink-0 justify-end">
-                              {/* --- 🔥 NEW: ปุ่มของใช้ส่วนตัว (Split-on-Save) --- */}
-                              {formData.type === 'expense' && (
-                                  <button type="button" onClick={() => {
-                                      updateItem(index, 'desc', item.desc.startsWith('[ส่วนตัว]') ? item.desc.replace('[ส่วนตัว] ', '').replace('[ส่วนตัว]', '').trim() : `[ส่วนตัว] ${item.desc}`);
-                                  }} className={`p-2.5 transition-colors rounded-xl font-bold text-[10px] flex items-center gap-1 ${item.desc.startsWith('[ส่วนตัว]') ? 'text-pink-600 bg-pink-100 border border-pink-200' : 'text-slate-500 hover:text-pink-600 hover:bg-pink-50 bg-white border border-slate-200 shadow-sm'}`} title="ตั้งเป็นของใช้ส่วนตัว (ไม่นำไปคิด VAT)">
-                                      <User size={16}/> <span className="sm:hidden">ส่วนตัว</span>
-                                  </button>
-                              )}
+                        <td className="py-4 text-center">
+                          <div className="flex gap-1 justify-center">
                               <button type="button" onClick={() => {
                                   if (formData.type === 'income') {
-                                      updateItem(index, 'desc', isFreeItemIncome ? item.desc.replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').trim() : `[แถมฟรี] ${item.desc}`);
+                                      updateLineItem(index, 'desc', isFreeItemIncome ? item.desc.replace('[แถมฟรี] ', '').replace('[แถมฟรี]', '').trim() : `[แถมฟรี] ${item.desc}`);
                                       if (!isFreeItemIncome) {
-                                          updateItem(index, 'sellPrice', 0);
+                                          updateLineItem(index, 'sellPrice', 0);
                                       }
                                   } else {
-                                      updateItem(index, 'desc', isGiveawayExpense ? item.desc.replace('[ของแจก/โปรโมท] ', '').replace('[ของแจก/โปรโมท]', '').trim() : `[ของแจก/โปรโมท] ${item.desc}`);
+                                      updateLineItem(index, 'desc', isGiveawayExpense ? item.desc.replace('[ของแจก/โปรโมท] ', '').replace('[ของแจก/โปรโมท]', '').trim() : `[ของแจก/โปรโมท] ${item.desc}`);
                                       if (!isGiveawayExpense) {
-                                          updateItem(index, 'buyPrice', 0);
+                                          updateLineItem(index, 'buyPrice', 0);
                                       }
                                   }
-                              }} className={`p-2.5 transition-colors rounded-xl font-bold text-[10px] flex items-center gap-1 ${isFreeItemIncome ? 'text-emerald-600 bg-emerald-100 border border-emerald-200' : isGiveawayExpense ? 'text-orange-600 bg-orange-100 border border-orange-200' : 'text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 bg-white border border-slate-200 shadow-sm'}`} title={formData.type === 'income' ? "ตั้งเป็นของแถมให้ลูกค้า" : "ตั้งเป็นของซื้อมาแจก/โปรโมท"}>
-                                  <Gift size={16}/> <span className="sm:hidden">ของแจก</span>
+                              }} className={`p-2 transition-colors rounded-lg ${isFreeItemIncome ? 'text-emerald-600 bg-emerald-100' : isGiveawayExpense ? 'text-orange-600 bg-orange-100' : 'text-slate-400 hover:text-emerald-500 hover:bg-emerald-50'}`} title={formData.type === 'income' ? "ตั้งเป็นของแถมให้ลูกค้า" : "ตั้งเป็นของซื้อมาแจก/โปรโมท"}>
+                                  <Gift size={16}/>
                               </button>
-                              <button type="button" onClick={()=>removeLineItem(index)} className="text-rose-500 p-2.5 bg-white border border-slate-200 shadow-sm hover:bg-rose-50 hover:border-rose-300 rounded-xl transition-colors font-bold text-[10px] flex items-center gap-1" disabled={formData.items.length === 1} title="ลบรายการนี้"><Trash2 size={16}/> <span className="sm:hidden">ลบ</span></button>
+                              <button type="button" onClick={()=>removeLineItem(index)} className="p-2 text-rose-300 hover:bg-rose-50 hover:text-rose-600 rounded-lg transition-colors disabled:opacity-0 text-center" disabled={formData.items.length === 1} title="ลบรายการนี้"><Trash2 size={16}/></button>
                           </div>
                         </td>
                       </tr>
@@ -12951,12 +13098,6 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                               <span className="opacity-80 text-left">มูลค่าสินค้าที่เสียภาษี (VAT Base)</span>
                               <span className="font-bold text-right">{formatCurrency(financialSummary.trueVatBase)}</span>
                           </div>
-                          {financialSummary.personalSubTotal > 0 && (
-                              <div className="flex justify-between items-center text-[10px] text-pink-300 mt-0.5 text-left">
-                                  <span className="opacity-80 text-left">* หักยอดของใช้ส่วนตัวออกแล้ว</span>
-                                  <span className="font-bold text-right">-{formatCurrency(financialSummary.personalSubTotal)}</span>
-                              </div>
-                          )}
                           <div className="flex justify-between items-center text-sm text-indigo-300 mt-2 text-left">
                               <span className="opacity-80 text-left">{formData.vatType === 'included' ? 'ภาษีมูลค่าเพิ่ม 7% (รวมในยอด)' : '+ ภาษีมูลค่าเพิ่ม 7% (แยกเพิ่ม)'}</span>
                               {formData.type === 'expense' ? (
@@ -17229,8 +17370,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                       <input className={`w-full sm:flex-[3] bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-slate-800 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none transition-colors text-left ${isFreeItem ? 'text-emerald-700 font-bold border-emerald-300' : ''}`} value={it.desc} onChange={e=>updateItem(i,'desc',e.target.value)} placeholder="รายละเอียดสินค้า / รายการ" />
                       
                       <div className="flex w-full sm:w-auto gap-2">
-                          <input className={`w-full sm:w-20 bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-center font-black outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-colors ${isFreeItem ? 'text-emerald-800 border-emerald-300 bg-emerald-50' : 'text-slate-800'}`} type="number" placeholder="จำนวน" value={it.qty} onChange={e=>updateItem(i,'qty',e.target.value)} />
-                          <input className={`w-full sm:w-28 bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-right font-black outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-colors ${isFreeItem ? 'text-emerald-600 border-emerald-300 bg-emerald-50' : 'text-slate-800'}`} type="number" step="0.01" placeholder="ราคา/ชิ้น" value={it.price} onChange={e=>updateItem(i,'price',e.target.value)} disabled={isFreeItem}/>
+                          <input className={`w-full sm:w-20 bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-center font-black outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-colors ${isFreeItem ? 'text-emerald-800 border-emerald-300 bg-emerald-50' : 'text-slate-800'}`} type="number" placeholder="จำนวน" value={it.qty} onChange={e=>updateItem(i,'qty',Number(e.target.value))} />
+                          <input className={`w-full sm:w-28 bg-white border border-slate-200 rounded-xl p-2.5 text-sm shadow-sm text-right font-black outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-colors ${isFreeItem ? 'text-emerald-600 border-emerald-300 bg-emerald-50' : 'text-slate-800'}`} type="number" placeholder="ราคา/ชิ้น" value={it.price} onChange={e=>updateItem(i,'price',Number(e.target.value))} disabled={isFreeItem}/>
                       </div>
 
                       <div className="flex gap-2 w-full sm:w-auto shrink-0 justify-end">
@@ -17425,154 +17566,6 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
             </div>
         </>
       )}
-    </div>
-  );
-}
-
-function PricingCalculator({ stockBatches, transactions, showToast, appId, user }) {
-  const [cost, setCost] = useState('');
-  const [platformFeePct, setPlatformFeePct] = useState('12');
-  const [desiredProfit, setDesiredProfit] = useState('');
-  const [isVatRegistered, setIsVatRegistered] = useState(true);
-  const [shippingFee, setShippingFee] = useState('0'); 
-  const [otherExpenses, setOtherExpenses] = useState('0'); 
-
-  const calculation = useMemo(() => {
-    const c = Number(cost) || 0;
-    const p = Number(desiredProfit) || 0;
-    const feePct = (Number(platformFeePct) || 0) / 100;
-    const s = Number(shippingFee) || 0;
-    const o = Number(otherExpenses) || 0;
-    const vatPct = isVatRegistered ? 0.07 : 0; 
-
-    const fixedCosts = c + p + s + o;
-    const variablePct = feePct + vatPct;
-
-    if (variablePct >= 1) {
-        return { error: 'ค่าธรรมเนียมและ VAT รวมกันเกิน 100% ไม่สามารถคำนวณได้' };
-    }
-
-    const minSalePrice = fixedCosts / (1 - variablePct);
-    const platformFeeAmt = minSalePrice * feePct;
-    const vatAmt = minSalePrice * vatPct;
-
-    return {
-        minSalePrice,
-        platformFeeAmt,
-        vatAmt,
-        cost: c,
-        profit: p,
-        shipping: s,
-        other: o
-    };
-  }, [cost, platformFeePct, desiredProfit, isVatRegistered, shippingFee, otherExpenses]);
-
-  // ฟังก์ชันจัดรูปแบบสกุลเงิน ภายในคอมโพเนนต์เพื่อป้องกัน Error
-  const formatCurrencyLocal = (amount) => {
-    const val = parseFloat(amount);
-    return new Intl.NumberFormat('th-TH', { style: 'decimal', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(isNaN(val) ? 0 : val);
-  };
-
-  return (
-    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full pb-10">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-2">
-        <div>
-          <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><Calculator className="text-indigo-600"/> เครื่องมือตั้งราคา (Pricing Calculator)</h2>
-          <p className="text-sm text-slate-500 mt-1">คำนวณราคาขายขั้นต่ำ (Reverse Engineering) เพื่อให้ได้กำไรตามเป้าหมาย โดยไม่ขาดทุนจากค่าธรรมเนียมและ VAT</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="bg-white p-6 md:p-8 rounded-[32px] border border-slate-100 shadow-sm space-y-5">
-            <h3 className="font-bold text-lg text-slate-800 border-b pb-3 flex items-center gap-2"><Settings size={20} className="text-indigo-600"/> ตัวแปรต้นทุนและกำไร</h3>
-            
-            <div className="space-y-4">
-                <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase">1. ต้นทุนสินค้า (บาท)</label>
-                    <input type="number" value={cost} onChange={e=>setCost(e.target.value)} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-lg font-black text-indigo-700 outline-none focus:ring-2 focus:ring-indigo-100" placeholder="0.00" />
-                </div>
-                
-                <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase">2. กำไรสุทธิที่ต้องการ (บาท)</label>
-                    <input type="number" value={desiredProfit} onChange={e=>setDesiredProfit(e.target.value)} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-lg font-black text-emerald-600 outline-none focus:ring-2 focus:ring-emerald-100" placeholder="0.00" />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                    <div>
-                        <label className="text-xs font-bold text-slate-500 uppercase">ค่าแพ็ค/กล่อง (บาท)</label>
-                        <input type="number" value={otherExpenses} onChange={e=>setOtherExpenses(e.target.value)} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100" placeholder="0.00" />
-                    </div>
-                    <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase">ค่าส่งที่ร้านออกเอง (บาท)</label>
-                        <input type="number" value={shippingFee} onChange={e=>setShippingFee(e.target.value)} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-100" placeholder="0.00" />
-                    </div>
-                </div>
-
-                <div className="pt-4 border-t border-slate-100">
-                    <label className="text-xs font-bold text-slate-500 uppercase">หักค่าธรรมเนียม Platform (%)</label>
-                    <input type="number" value={platformFeePct} onChange={e=>setPlatformFeePct(e.target.value)} className="w-full mt-1 bg-orange-50 border border-orange-200 rounded-xl p-3 text-lg font-black text-orange-600 outline-none focus:ring-2 focus:ring-orange-100" placeholder="12" />
-                    <p className="text-[10px] text-orange-500 mt-1">* Shopee/Lazada/TikTok มักจะอยู่ระหว่าง 10-15%</p>
-                </div>
-
-                <label className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-100 rounded-2xl cursor-pointer hover:bg-blue-100 transition-colors">
-                    <input type="checkbox" checked={isVatRegistered} onChange={e=>setIsVatRegistered(e.target.checked)} className="w-5 h-5 rounded text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer" />
-                    <div>
-                        <p className="font-bold text-blue-800">กิจการจด VAT (ภาษีมูลค่าเพิ่ม 7%)</p>
-                        <p className="text-[10px] text-blue-600 mt-0.5">ระบบจะคำนวณเผื่อหัก VAT ออกจากราคาขายให้ทันที</p>
-                    </div>
-                </label>
-            </div>
-        </div>
-
-        <div className="bg-slate-900 rounded-[32px] p-6 md:p-8 text-white shadow-xl relative overflow-hidden flex flex-col justify-between">
-            <TrendingUp size={160} className="absolute -right-10 -bottom-10 opacity-10 text-emerald-400 pointer-events-none" />
-            <div className="relative z-10 space-y-6">
-                <h3 className="text-xl font-black mb-2 flex items-center gap-2"><CheckCircle className="text-emerald-400"/> สรุปราคาขายที่แนะนำ</h3>
-                
-                {calculation.error ? (
-                    <div className="bg-rose-500/20 border border-rose-500 p-4 rounded-xl text-rose-300 font-bold">
-                        {calculation.error}
-                    </div>
-                ) : (
-                    <>
-                        <div className="text-center bg-slate-800 p-6 rounded-3xl border border-slate-700">
-                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">ต้องตั้งราคาขายอย่างน้อย (บาท)</p>
-                            <p className="text-5xl font-black text-emerald-400">{formatCurrencyLocal(calculation.minSalePrice)}</p>
-                        </div>
-
-                        <div className="space-y-3 text-sm text-slate-300">
-                            <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                                <span>1. ต้นทุนสินค้า (Cost)</span>
-                                <span className="font-bold">{formatCurrencyLocal(calculation.cost)}</span>
-                            </div>
-                            <div className="flex justify-between items-center border-b border-white/10 pb-2 text-emerald-300">
-                                <span>2. กำไรสุทธิ (Net Profit)</span>
-                                <span className="font-bold">{formatCurrencyLocal(calculation.profit)}</span>
-                            </div>
-                            <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                                <span>3. ค่าแพ็ค & ค่าส่ง</span>
-                                <span className="font-bold">{formatCurrencyLocal(calculation.shipping + calculation.other)}</span>
-                            </div>
-                            <div className="flex justify-between items-center border-b border-white/10 pb-2 text-orange-300">
-                                <span>4. ค่าธรรมเนียม Platform ({platformFeePct}%)</span>
-                                <span className="font-bold">{formatCurrencyLocal(calculation.platformFeeAmt)}</span>
-                            </div>
-                            {isVatRegistered && (
-                                <div className="flex justify-between items-center border-b border-white/10 pb-2 text-blue-300">
-                                    <span>5. ภาษีขาย VAT (7% ของราคาขาย)</span>
-                                    <span className="font-bold">{formatCurrencyLocal(calculation.vatAmt)}</span>
-                                </div>
-                            )}
-                            <div className="flex justify-between items-center pt-2 font-black text-white text-lg">
-                                <span>รวมราคาขาย (Sale Price)</span>
-                                <span>{formatCurrencyLocal(calculation.minSalePrice)}</span>
-                            </div>
-                        </div>
-                    </>
-                )}
-            </div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -18321,1959 +18314,1744 @@ function PromotionManager({ appId, promotions, showToast, user, stockBatches, tr
   );
 }
 
-function PitCalculator({ transactions, invoices, showToast }) {
-  const [period, setPeriod] = useState('year'); // 'half1', 'half2', 'year', 'month'
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
-  const [expenseMode, setExpenseMode] = useState('standard'); // 'standard' = 60%, 'actual' = ตามจริง
-  const [activeAuditTab, setActiveAuditTab] = useState('vat'); // 'vat', 'nonVat', 'pending', 'expense'
-  
-  // --- 🔥 NEW: State สำหรับสลับเกณฑ์บัญชี ---
-  const [accountingBasis, setAccountingBasis] = useState('cash'); // 'cash' (เกณฑ์เงินสด) หรือ 'accrual' (เกณฑ์สิทธิ์)
-
-  // คำนวณช่วงเวลาที่เลือก
-  const dateRange = useMemo(() => {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    let start, end;
-    
-    if (period === 'half1') {
-      start = new Date(currentYear, 0, 1);
-      end = new Date(currentYear, 5, 30, 23, 59, 59);
-    } else if (period === 'half2') {
-      start = new Date(currentYear, 6, 1);
-      end = new Date(currentYear, 11, 31, 23, 59, 59);
-    } else if (period === 'year') {
-      start = new Date(currentYear, 0, 1);
-      end = new Date(currentYear, 11, 31, 23, 59, 59);
-    } else if (period === 'month' && selectedMonth) {
-      const [y, m] = selectedMonth.split('-');
-      start = new Date(y, m - 1, 1);
-      end = new Date(y, m, 0, 23, 59, 59);
-    } else {
-      start = new Date(currentYear, 0, 1);
-      end = new Date(currentYear, 11, 31, 23, 59, 59);
-    }
-    return { start, end };
-  }, [period, selectedMonth]);
-
-  // ฟังก์ชันป้องกันปัญหาทศนิยมและปัดเศษ 2 ตำแหน่ง
-  const toFixedNum = (num) => Number(Math.round((Number(num) + Number.EPSILON) * 100) / 100);
-
-  // ฟังก์ชันคำนวณรายละเอียด VAT สำหรับรายจ่าย
-  const getExpenseTaxDetails = (row) => {
-    const sub = Number(row.total) || 0;
-    const disc = Number(row.couponDiscount) || 0;
-    const isNegative = sub < 0 || row.isPurchaseCreditNote === true;
-    const absSub = Math.abs(sub);
-    const absDisc = Math.abs(disc);
-    const baseAmt = Math.max(0, absSub - absDisc) * (isNegative ? -1 : 1);
-
-    let vat = 0, base = 0, total = 0;
-
-    if (row.vatType === 'excluded') {
-        const manualVat = row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : null;
-        const finalManualVat = manualVat !== null ? (isNegative && manualVat > 0 ? -manualVat : manualVat) : null;
-        vat = row.isNonCreditableVat ? 0 : (finalManualVat !== null ? finalManualVat : baseAmt * 0.07);
-        base = baseAmt;
-        total = baseAmt + vat;
-    } else if (row.vatType === 'none') {
-        vat = 0;
-        base = baseAmt;
-        total = baseAmt;
-    } else { // included or legacy default
-        const manualVat = row.manualVatAmount !== undefined && row.manualVatAmount !== '' ? Number(row.manualVatAmount) : null;
-        const finalManualVat = manualVat !== null ? (isNegative && manualVat > 0 ? -manualVat : manualVat) : null;
-        vat = row.isNonCreditableVat ? 0 : (finalManualVat !== null ? finalManualVat : baseAmt * 7 / 107);
-        base = row.isNonCreditableVat ? baseAmt : baseAmt - vat; // หัก VAT ออกเพื่อให้ได้ฐานทุนจริงๆ
-        total = baseAmt;
-    }
-    return { base, vat, total };
-  };
-
-  // ประมวลผลดึงข้อมูล และแยกประเภท
-  const auditData = useMemo(() => {
-    const { start, end } = dateRange;
-    const result = {
-      vatSales: [],
-      nonVatSales: [],
-      pendingSales: [],
-      expenses: [],
-      totalVatIncome: 0,
-      totalNonVatIncome: 0,
-      totalPendingIncome: 0,
-      totalActualExpense: 0
-    };
-
-    const issuedDocsMap = {};
-    invoices.forEach(inv => {
-      if (inv.status !== 'cancelled') {
-        if (inv.orderId) {
-          if (!issuedDocsMap[inv.orderId]) issuedDocsMap[inv.orderId] = [];
-          issuedDocsMap[inv.orderId].push(inv);
-        }
-        if (inv.invNo) {
-          if (!issuedDocsMap[inv.invNo]) issuedDocsMap[inv.invNo] = [];
-          issuedDocsMap[inv.invNo].push(inv);
-        }
-      }
-    });
-
-    transactions.forEach(t => {
-      if (t.isCancelled) return;
-      
-      // --- 🔥 NEW: Logic ตัดสินใจใช้วันที่ตามเกณฑ์ที่เลือก ---
-      let effectiveDate = normalizeDate(t.date);
-      let isQualified = true;
-      
-      if (accountingBasis === 'cash') {
-          if (t.type === 'income') {
-              effectiveDate = t.settlementDate ? normalizeDate(t.settlementDate) : effectiveDate;
-              // ถ้ายังไม่ได้รับเงิน ให้ตัดออกจากการคำนวณ
-              if (t.paymentStatus !== 'settled' && t.status !== 'paid') isQualified = false;
-          } else if (t.type === 'expense' && t.category !== 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') {
-              // ถ้ารายจ่ายยังไม่จ่ายเงิน ให้ตัดออกจากการคำนวณ
-              if (t.status === 'unpaid') isQualified = false;
-          }
-      }
-      
-      if (!isQualified) return;
-
-      const d = effectiveDate;
-      if (!d || d < start || d > end) return;
-
-      if (t.type === 'income') {
-        // ยึดรายได้พึงประเมิน 40(8) ตามยอด Total ของ Order ก่อนหักค่าธรรมเนียม
-        const amt = toFixedNum(t.total || 0); 
-        
-        // --- 🔥 FIX: จับคู่อ้างอิง (Mapping) ให้สมบูรณ์แบบที่สุด ยึดจาก invoiceNo ภายในตัว Transaction ด้วย ---
-        let linkedInvs = null;
-        if (t.invoiceNo && issuedDocsMap[t.invoiceNo]) linkedInvs = issuedDocsMap[t.invoiceNo];
-        else if (t.orderId && issuedDocsMap[t.orderId]) linkedInvs = issuedDocsMap[t.orderId];
-        else if (t.sysDocId && issuedDocsMap[t.sysDocId]) linkedInvs = issuedDocsMap[t.sysDocId];
-        
-        let hasVatDoc = false;
-        let hasNonVatDoc = false;
-        let refInvNo = t.invoiceNo && t.invoiceNo !== '-' ? t.invoiceNo : '-';
-        let docTypeLabel = 'ไม่ระบุ';
-        let preVat = 0;
-        let vat = 0;
-        let totalVal = amt;
-        let taxId = t.partnerTaxId || '-';
-
-        if (linkedInvs && linkedInvs.length > 0) {
-          const mainInv = linkedInvs.find(i => i.docType === 'invoice' || i.docType === 'abb') || linkedInvs[0];
-          refInvNo = mainInv.invNo;
-          taxId = mainInv.taxId || taxId;
-          preVat = toFixedNum(mainInv.preVat || 0);
-          vat = toFixedNum(mainInv.vat || 0);
-          totalVal = toFixedNum(mainInv.total || amt); 
-          
-          if (mainInv.docType === 'invoice') docTypeLabel = 'ใบกำกับภาษีเต็มรูป';
-          else if (mainInv.docType === 'abb') docTypeLabel = 'ใบกำกับภาษีอย่างย่อ (ABB)';
-          else if (mainInv.docType === 'receipt') docTypeLabel = 'ใบเสร็จรับเงิน';
-          else if (mainInv.docType === 'credit_note') docTypeLabel = 'ใบลดหนี้';
-          else docTypeLabel = mainInv.docType || 'ไม่ระบุ';
-
-          // --- 🔥 FIX: ให้ยึดจากประเภทเอกสารเป็นหลัก (ไม่ล็อกว่า VAT ต้อง > 0) ---
-          if (mainInv.docType === 'invoice' || mainInv.docType === 'abb') {
-            hasVatDoc = true;
-          } else {
-            hasNonVatDoc = true;
-          }
-        } else if (t.invoiceNo && t.invoiceNo !== '-') {
-          // กรณีมีชื่อ invoiceNo แปะมาแต่หาบิลในระบบไม่เจอ ให้ตีความจากตัวอักษรนำหน้า
-          if (t.invoiceNo.startsWith('ABB')) { hasVatDoc = true; docTypeLabel = 'ใบกำกับภาษีอย่างย่อ (ABB)'; }
-          else if (t.invoiceNo.startsWith('INV')) { hasVatDoc = true; docTypeLabel = 'ใบกำกับภาษีเต็มรูป'; }
-          else if (t.invoiceNo.startsWith('REC')) { hasNonVatDoc = true; docTypeLabel = 'ใบเสร็จรับเงิน'; }
-          else { hasNonVatDoc = true; docTypeLabel = 'เอกสารออกระบบ'; }
-
-          // ประมาณการฐานภาษี
-          if (t.vatType === 'excluded') {
-              vat = amt * 0.07;
-              preVat = amt;
-              totalVal = amt + vat;
-          } else if (t.vatType === 'included') {
-              vat = amt * 7 / 107;
-              preVat = amt - vat;
-              totalVal = amt;
-          } else {
-              preVat = amt;
-              totalVal = amt;
-          }
-        }
-
-        const record = {
-          date: d, // ใช้วันที่ที่ผ่านการปรับตามเกณฑ์แล้ว
-          sysDocId: t.sysDocId || t.orderId,
-          refInvNo,
-          customer: t.partnerName || 'ลูกค้าทั่วไป',
-          taxId: taxId,
-          amount: amt,       
-          docTypeLabel,      
-          preVat,            
-          vat,               
-          total: totalVal    
-        };
-
-        if (hasVatDoc) {
-          result.vatSales.push(record);
-          result.totalVatIncome += amt;
-        } else if (hasNonVatDoc) {
-          result.nonVatSales.push(record);
-          result.totalNonVatIncome += amt;
-        } else {
-          result.pendingSales.push(record);
-          result.totalPendingIncome += amt;
-        }
-
-      } else if (t.type === 'expense' && t.category !== 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') {
-        const amt = toFixedNum(t.grandTotal !== undefined ? t.grandTotal : t.total);
-        const taxDetails = getExpenseTaxDetails(t);
-        
-        let docTypeLabel = 'ไม่ระบุ';
-        if (t.isPurchaseCreditNote) docTypeLabel = 'ใบลดหนี้ (CN)';
-        else if (t.expenseDocType === 'receipt' || t.isCashBill) docTypeLabel = 'ใบเสร็จ/บิลเงินสด';
-        else if (t.expenseDocType === 'no_bill') docTypeLabel = 'ไม่มีบิล';
-        else if (t.expenseDocType === 'tax_invoice' || (!t.isCashBill && t.taxInvoiceNo)) docTypeLabel = 'ใบกำกับภาษีเต็มรูป';
-
-        let vatStatus = 'เครดิตได้';
-        if (t.isNonCreditableVat) vatStatus = 'ภาษีซื้อต้องห้าม';
-        else if (t.isCashBill || t.vatType === 'none') vatStatus = 'ไม่มี VAT';
-        else if (!t.taxInvoiceNo || t.taxInvoiceNo === '-') vatStatus = 'รอใบกำกับ';
-
-        result.expenses.push({
-          date: d, // ใช้วันที่ที่ผ่านการปรับตามเกณฑ์แล้ว
-          sysDocId: t.sysDocId || '-',
-          taxInvoiceNo: t.taxInvoiceNo || '-',
-          docTypeLabel,
-          vatStatus,
-          category: t.category,
-          partner: t.partnerName || '-',
-          taxId: t.partnerTaxId || '-',
-          amount: amt,
-          base: toFixedNum(taxDetails.base), // เก็บยอดฐานสำหรับหักค่าใช้จ่าย
-          vat: toFixedNum(taxDetails.vat)
-        });
-        
-        result.totalActualExpense += toFixedNum(taxDetails.base);
-      }
-    });
-        result.totalVatIncome = toFixedNum(result.totalVatIncome);
-        result.totalNonVatIncome = toFixedNum(result.totalNonVatIncome);
-        result.totalPendingIncome = toFixedNum(result.totalPendingIncome);
-        result.totalActualExpense = toFixedNum(result.totalActualExpense);
-
-        // --- FIX: เปลี่ยนการเรียงลำดับเอกสารจากเก่าไปใหม่ (Chronological Order) สำหรับหน้ารายงานและ Export ---
-        result.vatSales.sort((a,b) => a.date - b.date);
-        result.nonVatSales.sort((a,b) => a.date - b.date);
-        result.pendingSales.sort((a,b) => a.date - b.date);
-        result.expenses.sort((a,b) => a.date - b.date);
-
-        return result;
-      }, [transactions, invoices, dateRange, accountingBasis]);
-
-  const totalAssessableIncome = toFixedNum(auditData.totalVatIncome + auditData.totalNonVatIncome + auditData.totalPendingIncome);
-  const standardExpenseDeduction = toFixedNum(totalAssessableIncome * 0.6);
-  const usedExpenseDeduction = expenseMode === 'standard' ? standardExpenseDeduction : auditData.totalActualExpense;
-  const personalDeduction = 60000; 
-  
-  const netIncome = Math.max(0, toFixedNum(totalAssessableIncome - usedExpenseDeduction - personalDeduction));
-
-  let calculatedTax = 0;
-  const brackets = [
-      { min: 0, max: 150000, rate: 0, cap: 150000 },
-      { min: 150000, max: 300000, rate: 0.05, cap: 150000 },
-      { min: 300000, max: 500000, rate: 0.10, cap: 200000 },
-      { min: 500000, max: 750000, rate: 0.15, cap: 250000 },
-      { min: 750000, max: 1000000, rate: 0.20, cap: 250000 },
-      { min: 1000000, max: 2000000, rate: 0.25, cap: 1000000 },
-      { min: 2000000, max: 5000000, rate: 0.30, cap: 3000000 },
-      { min: 5000000, max: Infinity, rate: 0.35, cap: Infinity }
-  ];
-
-  for (const b of brackets) {
-      if (netIncome > b.min) {
-          const amountInBracket = Math.min(netIncome - b.min, b.cap);
-          calculatedTax += amountInBracket * b.rate;
-      }
-  }
-
-  const grossTax = totalAssessableIncome > 120000 ? toFixedNum(totalAssessableIncome * 0.005) : 0;
-  const finalTaxPayable = Math.max(calculatedTax, grossTax);
-
-  const handleExportAuditExcel = async () => {
-    if (showToast) showToast("กำลังเตรียมไฟล์รายงานการตรวจสอบ...", "success");
-    
-    if (!window.XLSX || !window.XLSX_JS_STYLE_LOADED) {
-        const script = document.createElement('script');
-        script.src = "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
-        await new Promise(res => {
-            script.onload = () => { window.XLSX_JS_STYLE_LOADED = true; res(); };
-            document.body.appendChild(script);
-        });
-    }
-
-    const XLSX = window.XLSX;
-    const wb = XLSX.utils.book_new();
-    const dateRangeStr = `${dateRange.start.toLocaleDateString('th-TH')} ถึง ${dateRange.end.toLocaleDateString('th-TH')}`;
-
-    const applyHeaderStyle = (ws, headerRowIndex) => {
-        if (!ws['!ref']) return;
-        const range = XLSX.utils.decode_range(ws['!ref']);
-        for (let C = range.s.c; C <= range.e.c; ++C) {
-            const cellRef = XLSX.utils.encode_cell({ r: headerRowIndex, c: C });
-            if (!ws[cellRef]) continue;
-            if (!ws[cellRef].s) ws[cellRef].s = {};
-            ws[cellRef].s.fill = { fgColor: { rgb: "1E3A8A" } }; 
-            ws[cellRef].s.font = { color: { rgb: "FFFFFF" }, bold: true };
-            ws[cellRef].s.alignment = { horizontal: "center", vertical: "center" };
-        }
-    };
-
-    const formatMoneyCols = (ws, startRow, colIndices) => {
-        if (!ws['!ref']) return;
-        const range = XLSX.utils.decode_range(ws['!ref']);
-        for(let R = startRow; R <= range.e.r; ++R) {
-            for(let C of colIndices) {
-                const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
-                if(ws[cellRef] && ws[cellRef].t === 'n') {
-                    if(!ws[cellRef].s) ws[cellRef].s = {};
-                    ws[cellRef].z = '#,##0.00';
-                }
-            }
-        }
-    };
-
-    const expenseCategoryMap = {};
-    let totalTaxDeductibleExpense = 0;
-    auditData.expenses.forEach(r => {
-        const cat = r.category || 'อื่นๆ';
-        if (!expenseCategoryMap[cat]) expenseCategoryMap[cat] = 0;
-        expenseCategoryMap[cat] += r.base; 
-        totalTaxDeductibleExpense += r.base;
-    });
-
-    const expenseCategoriesSorted = Object.keys(expenseCategoryMap)
-        .map(k => ({ name: k, value: expenseCategoryMap[k] }))
-        .sort((a, b) => b.value - a.value);
-
-    // ==========================================
-    // 1. Sheet: สรุปภาพรวม (Summary)
-    // ==========================================
-    const summaryRows = [
-        ["สรุปภาพรวมการคำนวณภาษีเงินได้บุคคลธรรมดา (ภ.ง.ด.)"],
-        ["เกณฑ์การคำนวณ:", accountingBasis === 'cash' ? "เกณฑ์เงินสด (รับเงินจริง)" : "เกณฑ์สิทธิ์ (สั่งซื้อ)"],
-        ["รอบระยะเวลา:", dateRangeStr],
-        ["วันที่ดึงข้อมูล:", formatDate(new Date())],
-        [],
-        ["1. สรุปรายได้พึงประเมิน (มาตรา 40(8))"],
-        ["   - รายได้จากใบกำกับภาษี (VAT):", auditData.totalVatIncome],
-        ["   - รายได้จากบิลเงินสด (Non-VAT):", auditData.totalNonVatIncome],
-        ["   - รายได้ที่ยังไม่ออกเอกสาร (Pending):", auditData.totalPendingIncome],
-        ["รวมรายได้พึงประเมินทั้งสิ้น:", totalAssessableIncome],
-        [],
-        ["2. สรุปค่าใช้จ่าย (แยกหมวดหมู่ *ใช้ยอดก่อน VAT ตามหลักสรรพากร)"]
-    ];
-
-    expenseCategoriesSorted.forEach(c => {
-        summaryRows.push([`   - ${c.name}:`, c.value]);
-    });
-
-    summaryRows.push(
-        ["รวมค่าใช้จ่ายตามจริงทั้งสิ้น:", totalTaxDeductibleExpense],
-        [`   - ค่าใช้จ่ายเหมา (60%):`, standardExpenseDeduction],
-        [`รูปแบบหักค่าใช้จ่ายที่เลือก (${expenseMode === 'standard' ? 'เหมา 60%' : 'ตามจริง'}):`, usedExpenseDeduction],
-        [],
-        ["3. การคำนวณภาษี"],
-        ["รวมรายได้พึงประเมิน:", totalAssessableIncome],
-        ["หัก ค่าใช้จ่าย:", -usedExpenseDeduction],
-        ["หัก ลดหย่อนส่วนตัวพื้นฐาน:", -personalDeduction],
-        ["เงินได้สุทธิ (Net Income):", netIncome],
-        [],
-        ["ภาษีที่ต้องชำระ (ประมาณการ):", finalTaxPayable]
-    );
-
-    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
-    wsSummary['!cols'] = [{ wch: 60 }, { wch: 25 }]; 
-    
-    if (wsSummary['!ref']) {
-        const sRange = XLSX.utils.decode_range(wsSummary['!ref']);
-        for (let R = sRange.s.r; R <= sRange.e.r; ++R) {
-            const cellRef = XLSX.utils.encode_cell({ r: R, c: 0 });
-            if (wsSummary[cellRef] && typeof wsSummary[cellRef].v === 'string') {
-                if (['สรุปภาพรวม', 'เกณฑ์', '1.', '2.', '3.', 'รวมรายได้', 'รวมค่าใช้จ่าย', 'รูปแบบหัก', 'เงินได้สุทธิ', 'ภาษีที่ต้อง'].some(kw => wsSummary[cellRef].v.includes(kw))) {
-                    if (!wsSummary[cellRef].s) wsSummary[cellRef].s = {};
-                    wsSummary[cellRef].s.font = { bold: true, color: { rgb: "1E3A8A" } };
-                    if (R === 0) wsSummary[cellRef].s.font.sz = 14;
-                }
-            }
-            const valCellRef = XLSX.utils.encode_cell({ r: R, c: 1 });
-            if (wsSummary[valCellRef] && typeof wsSummary[valCellRef].v === 'number') {
-                 if (!wsSummary[valCellRef].s) wsSummary[valCellRef].s = {};
-                 wsSummary[valCellRef].s.alignment = { horizontal: "right" };
-                 wsSummary[valCellRef].z = '#,##0.00';
-            }
-        }
-    }
-    XLSX.utils.book_append_sheet(wb, wsSummary, "1. สรุป ภ.ง.ด.");
-
-    const dateColName = `วันที่${accountingBasis === 'cash' ? '(รับ/จ่ายเงิน)' : '(ทำรายการ)'}`;
-
-    // ==========================================
-    // 2. Sheet: รายได้ - ใบกำกับภาษี (VAT)
-    // ==========================================
-    const vatSalesRows = [
-        ["รายงานที่มารายได้ - ใบกำกับภาษี (VAT Sales)"],
-        ["รอบระยะเวลา:", dateRangeStr],
-        [],
-        ["ลำดับ", dateColName, "เลขระบบ (Sys ID)", "เลขที่ใบกำกับภาษี", "ประเภทเอกสาร", "ชื่อลูกค้า/บริษัท", "เลขประจำตัวผู้เสียภาษี", "มูลค่าสินค้า/บริการ (฿)", "ภาษีมูลค่าเพิ่ม (฿)", "ยอดรวมทั้งสิ้น (฿)", "ยอดรายได้ 40(8) (฿)"]
-    ];
-    let sumPreVat = 0, sumVat = 0, sumTotal = 0, sumIncome = 0;
-    auditData.vatSales.forEach((r, i) => {
-        sumPreVat += r.preVat; sumVat += r.vat; sumTotal += r.total; sumIncome += r.amount;
-        vatSalesRows.push([ i + 1, formatDate(r.date), r.sysDocId, r.refInvNo, r.docTypeLabel, r.customer, r.taxId, r.preVat, r.vat, r.total, r.amount ]);
-    });
-    vatSalesRows.push(["", "", "", "", "", "รวมสุทธิ", "", sumPreVat, sumVat, sumTotal, sumIncome]);
-    const wsVat = XLSX.utils.aoa_to_sheet(vatSalesRows);
-    wsVat['!cols'] = [{wch: 8}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 25}, {wch: 30}, {wch: 20}, {wch: 20}, {wch: 20}, {wch: 20}, {wch: 20}];
-    applyHeaderStyle(wsVat, 3);
-    formatMoneyCols(wsVat, 4, [7, 8, 9, 10]);
-    XLSX.utils.book_append_sheet(wb, wsVat, "2. รายได้ (VAT)");
-
-    // ==========================================
-    // 3. Sheet: รายได้ - บิลเงินสด (Non-VAT)
-    // ==========================================
-    const nonVatRows = [
-        ["รายงานที่มารายได้ - บิลเงินสด/ใบเสร็จรับเงิน (Non-VAT Sales)"],
-        ["รอบระยะเวลา:", dateRangeStr],
-        [],
-        ["ลำดับ", dateColName, "เลขระบบ (Sys ID)", "เลขที่ใบเสร็จ/อ้างอิง", "ประเภทเอกสาร", "ชื่อลูกค้า", "ยอดรายได้ 40(8) (฿)"]
-    ];
-    let sumNonVatIncome = 0;
-    auditData.nonVatSales.forEach((r, i) => {
-        sumNonVatIncome += r.amount;
-        nonVatRows.push([ i + 1, formatDate(r.date), r.sysDocId, r.refInvNo, r.docTypeLabel, r.customer, r.amount ]);
-    });
-    nonVatRows.push(["", "", "", "", "", "รวมสุทธิ", sumNonVatIncome]);
-    const wsNonVat = XLSX.utils.aoa_to_sheet(nonVatRows);
-    wsNonVat['!cols'] = [{wch: 8}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 25}, {wch: 30}, {wch: 20}];
-    applyHeaderStyle(wsNonVat, 3);
-    formatMoneyCols(wsNonVat, 4, [6]);
-    XLSX.utils.book_append_sheet(wb, wsNonVat, "3. รายได้ (Non-VAT)");
-
-    // ==========================================
-    // 4. Sheet: รายได้ - ยังไม่ออกเอกสาร (Pending)
-    // ==========================================
-    const pendingRows = [
-        ["รายงานที่มารายได้ - ยังไม่ออกเอกสารภาษี (Pending Sales)"],
-        ["รอบระยะเวลา:", dateRangeStr],
-        [],
-        ["ลำดับ", dateColName, "เลขระบบ (Sys ID)", "Order ID / อ้างอิง", "ชื่อลูกค้า", "ยอดรายได้ 40(8) (฿)"]
-    ];
-    let sumPendingIncome = 0;
-    auditData.pendingSales.forEach((r, i) => {
-        sumPendingIncome += r.amount;
-        pendingRows.push([ i + 1, formatDate(r.date), r.sysDocId, r.refInvNo, r.customer, r.amount ]);
-    });
-    pendingRows.push(["", "", "", "", "รวมสุทธิ", sumPendingIncome]);
-    const wsPending = XLSX.utils.aoa_to_sheet(pendingRows);
-    wsPending['!cols'] = [{wch: 8}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 30}, {wch: 20}];
-    applyHeaderStyle(wsPending, 3);
-    formatMoneyCols(wsPending, 4, [5]);
-    XLSX.utils.book_append_sheet(wb, wsPending, "4. รายได้ (Pending)");
-
-    // ==========================================
-    // 5+. Sheets: รายจ่ายแยกตามหมวดหมู่ (Expenses by Category)
-    // ==========================================
-    const sanitizeSheetName = (name) => name.replace(/[\\/*?:\[\]]/g, '_').substring(0, 26);
-    let sheetIndex = 5;
-
-    // กรองหมวดหมู่ที่มีการใช้งานจริง
-    const activeExpenseCategories = [...new Set(auditData.expenses.map(r => r.category || 'อื่นๆ'))];
-
-    activeExpenseCategories.forEach((category) => {
-        const docsInCat = auditData.expenses.filter(r => (r.category || 'อื่นๆ') === category);
-        if (docsInCat.length === 0) return;
-
-        const catRows = [
-            [`รายงานที่มารายจ่ายบริษัท - หมวดหมู่: ${category}`],
-            ["รอบระยะเวลา:", dateRangeStr],
-            [],
-            ["ลำดับ", dateColName, "เลขระบบ (Sys ID)", "เลขที่ใบกำกับภาษี/ใบเสร็จ", "ประเภทเอกสาร", "ชื่อผู้ขาย/ผู้ให้บริการ", "เลขประจำตัวผู้เสียภาษี", "สถานะ VAT ซื้อ", "ฐานภาษี (ต้นทุนใช้หัก) (฿)", "ภาษีมูลค่าเพิ่ม (฿)", "ยอดรวมสุทธิจากบิล (฿)"]
-        ];
-
-        let sumExpBase = 0, sumExpVat = 0, sumExpTotal = 0;
-        docsInCat.forEach((r, i) => {
-            sumExpBase += r.base; sumExpVat += r.vat; sumExpTotal += r.amount;
-            catRows.push([ i + 1, formatDate(r.date), r.sysDocId, r.taxInvoiceNo, r.docTypeLabel, r.partner, r.taxId, r.vatStatus, r.base, r.vat, r.amount ]);
-        });
-        catRows.push(["", "", "", "", "", "", "", "รวมสุทธิ", sumExpBase, sumExpVat, sumExpTotal]);
-
-        const wsCat = XLSX.utils.aoa_to_sheet(catRows);
-        wsCat['!cols'] = [{wch: 8}, {wch: 15}, {wch: 20}, {wch: 25}, {wch: 20}, {wch: 30}, {wch: 20}, {wch: 15}, {wch: 25}, {wch: 15}, {wch: 20}];
-        
-        applyHeaderStyle(wsCat, 3);
-        formatMoneyCols(wsCat, 4, [8, 9, 10]);
-
-        // ป้องกันชื่อชีตซ้ำ และจำกัดความยาว
-        let sheetName = sanitizeSheetName(category);
-        let finalSheetName = `${sheetIndex}. ${sheetName}`;
-        let counter = 1;
-        while(wb.SheetNames.includes(finalSheetName)) {
-            finalSheetName = `${sheetIndex}. ${sheetName}`.substring(0, 28) + `_${counter}`;
-            counter++;
-        }
-
-        XLSX.utils.book_append_sheet(wb, wsCat, finalSheetName);
-        sheetIndex++;
-    });
-
-    window.XLSX.writeFile(wb, `PIT_Audit_Report_${formatDateISO(new Date()).replace(/-/g, '')}.xlsx`);
-    if (showToast) showToast("ส่งออกข้อมูล Audit Trail แบบละเอียดและแยกชีตหมวดหมู่รายจ่ายเรียบร้อย", "success");
-  };
-
-  return (
-    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full pb-10">
-      <div className="bg-white p-6 md:p-8 rounded-[32px] shadow-sm border border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-        <div>
-            <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2"><User className="text-indigo-600"/> คำนวณภาษี ภ.ง.ด. (บุคคลธรรมดา)</h2>
-            <p className="text-sm text-slate-500 mt-1">เครื่องมือแยกประเภทรายได้และคำนวณภาษีบุคคลธรรมดาสิ้นปี / ครึ่งปี</p>
-        </div>
-        
-        <div className="flex flex-wrap items-center gap-3">
-            <div className="flex bg-slate-100 p-1.5 rounded-xl border border-slate-200">
-                <button onClick={() => setAccountingBasis('accrual')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${accountingBasis === 'accrual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>เกณฑ์สิทธิ์ (สั่งซื้อ)</button>
-                <button onClick={() => setAccountingBasis('cash')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${accountingBasis === 'cash' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>เกณฑ์เงินสด (รับเงินจริง)</button>
-            </div>
-            <div className="w-px h-8 bg-slate-200 hidden md:block mx-1"></div>
-            <div className="flex bg-slate-100 p-1.5 rounded-xl border border-slate-200">
-                <button onClick={() => setPeriod('half1')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${period === 'half1' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ครึ่งปีแรก (ภ.ง.ด.94)</button>
-                <button onClick={() => setPeriod('half2')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${period === 'half2' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ครึ่งปีหลัง</button>
-                <button onClick={() => setPeriod('year')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${period === 'year' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>เต็มปี (ภ.ง.ด.90)</button>
-                <button onClick={() => setPeriod('month')} className={`px-4 py-2 text-xs font-bold rounded-lg transition-colors ${period === 'month' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายเดือน</button>
-            </div>
-            {period === 'month' && (
-                <input type="month" value={selectedMonth} onChange={e=>setSelectedMonth(e.target.value)} className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold text-indigo-700 outline-none focus:ring-2 focus:ring-indigo-100 shadow-sm"/>
-            )}
-        </div>
-      </div>
-      
-      {accountingBasis === 'cash' && (
-          <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex items-start gap-3 shadow-sm animate-fadeIn">
-              <Info className="text-emerald-600 shrink-0 mt-0.5" size={20}/>
-              <div className="text-emerald-800 text-sm">
-                  <p className="font-bold mb-1">โหมดเกณฑ์เงินสด (Cash Basis)</p>
-                  <p className="text-xs opacity-90 leading-relaxed">
-                      ตามกฎหมายกรมสรรพากร การยื่นภาษี ภ.ง.ด. (บุคคลธรรมดา) จะต้องยึดตาม <b>"วันที่รับเงินเข้ากระเป๋าจริง"</b> <br/>
-                      ระบบจะทำการดึงเฉพาะยอดบิลที่สถานะ <b>"จ่าย/รับเงินแล้ว"</b> และใช้วันที่รับเงิน (Settlement Date) ในการคัดกรองรอบภาษีให้คุณอัตโนมัติ
-                  </p>
-              </div>
-          </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* ข้อมูลรายได้ */}
-          <div className="lg:col-span-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-indigo-50 border border-indigo-100 p-5 rounded-[24px] shadow-sm flex flex-col justify-center">
-                  <p className="text-[10px] font-black uppercase text-indigo-500 tracking-widest mb-1">รายได้ที่ออกใบกำกับภาษี (VAT)</p>
-                  <p className="text-2xl font-black text-indigo-700">{formatCurrency(auditData.totalVatIncome)}</p>
-                  <p className="text-xs text-indigo-500/80 font-bold mt-1">{auditData.vatSales.length} รายการ</p>
-              </div>
-              <div className="bg-emerald-50 border border-emerald-100 p-5 rounded-[24px] shadow-sm flex flex-col justify-center">
-                  <p className="text-[10px] font-black uppercase text-emerald-600 tracking-widest mb-1">รายได้บิลเงินสด (Non-VAT)</p>
-                  <p className="text-2xl font-black text-emerald-700">{formatCurrency(auditData.totalNonVatIncome)}</p>
-                  <p className="text-xs text-emerald-600/80 font-bold mt-1">{auditData.nonVatSales.length} รายการ</p>
-              </div>
-              <div className="bg-amber-50 border border-amber-100 p-5 rounded-[24px] shadow-sm flex flex-col justify-center">
-                  <p className="text-[10px] font-black uppercase text-amber-600 tracking-widest mb-1">รายได้ยังไม่ออกเอกสาร (Pending)</p>
-                  <p className="text-2xl font-black text-amber-700">{formatCurrency(auditData.totalPendingIncome)}</p>
-                  <p className="text-xs text-amber-600/80 font-bold mt-1">{auditData.pendingSales.length} รายการ</p>
-              </div>
-
-              <div className="sm:col-span-3 bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm flex flex-col h-full min-h-[450px]">
-                  <div className="flex justify-between items-center mb-4">
-                      <h3 className="font-black text-slate-800 flex items-center gap-2"><List size={18} className="text-indigo-600"/> ตรวจสอบที่มารายการ (Audit Trail)</h3>
-                      <button onClick={handleExportAuditExcel} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm border border-emerald-200 flex items-center gap-1.5">
-                          <FileSpreadsheet size={14}/> ส่งออกข้อมูล Excel
-                      </button>
-                  </div>
-                  
-                  <div className="flex bg-slate-100 p-1.5 rounded-xl w-fit mb-4 overflow-x-auto">
-                      <button onClick={() => setActiveAuditTab('vat')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${activeAuditTab === 'vat' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ใบกำกับภาษี ({auditData.vatSales.length})</button>
-                      <button onClick={() => setActiveAuditTab('nonVat')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${activeAuditTab === 'nonVat' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>บิลเงินสด ({auditData.nonVatSales.length})</button>
-                      <button onClick={() => setActiveAuditTab('pending')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${activeAuditTab === 'pending' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>ยังไม่ออกเอกสาร ({auditData.pendingSales.length})</button>
-                      <button onClick={() => setActiveAuditTab('expense')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${activeAuditTab === 'expense' ? 'bg-rose-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>รายจ่ายบริษัท ({auditData.expenses.length})</button>
-                  </div>
-
-                  <div className="overflow-x-auto border border-slate-100 rounded-2xl custom-scrollbar flex-1 h-[300px]">
-                      {activeAuditTab === 'expense' ? (
-                          <table className="w-full text-xs text-left whitespace-nowrap">
-                              <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
-                                  <tr>
-                                      <th className="p-3 pl-4">วันที่{accountingBasis === 'cash' ? '(จ่ายเงิน)' : ''}</th>
-                                      <th className="p-3">เลขระบบ / เลขใบกำกับ</th>
-                                      <th className="p-3">ประเภทเอกสาร / หมวดหมู่</th>
-                                      <th className="p-3">ผู้ขาย/ร้านค้า (Tax ID)</th>
-                                      <th className="p-3 text-right">ยอดก่อน VAT (ฐาน)</th>
-                                      <th className="p-3 text-right text-rose-500">VAT</th>
-                                      <th className="p-3 text-right pr-4">ยอดรวม (฿)</th>
-                                  </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                  {auditData.expenses.map((r, i) => (
-                                      <tr key={i} className="hover:bg-rose-50/30 transition-colors">
-                                          <td className="p-3 pl-4 font-medium text-slate-600">{formatDate(r.date)}</td>
-                                          <td className="p-3">
-                                              <p className="font-mono font-bold text-slate-700">{r.sysDocId}</p>
-                                              <p className="text-[10px] text-indigo-600 font-mono mt-0.5">Tax Inv: {r.taxInvoiceNo}</p>
-                                          </td>
-                                          <td className="p-3">
-                                              <span className={`px-1.5 py-0.5 rounded border text-[9px] font-bold ${
-                                                  r.docTypeLabel.includes('ใบกำกับ') ? 'bg-indigo-50 text-indigo-700 border-indigo-200' :
-                                                  r.docTypeLabel.includes('บิลเงินสด') ? 'bg-teal-50 text-teal-700 border-teal-200' :
-                                                  r.docTypeLabel.includes('ใบลดหนี้') ? 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200' :
-                                                  'bg-slate-100 text-slate-600 border-slate-200'
-                                              }`}>{r.docTypeLabel}</span>
-                                              <p className="text-[10px] text-slate-500 mt-1">{r.category}</p>
-                                          </td>
-                                          <td className="p-3">
-                                              <p className="truncate max-w-[150px] font-bold" title={r.partner}>{r.partner}</p>
-                                              <p className="text-[9px] text-slate-400 font-mono">Tax ID: {r.taxId}</p>
-                                          </td>
-                                          <td className="p-3 text-right font-medium text-slate-600">{formatCurrency(r.base)}</td>
-                                          <td className="p-3 text-right">
-                                              <p className="font-bold text-rose-500">{formatCurrency(r.vat)}</p>
-                                              {r.vatStatus !== 'เครดิตได้' && <p className="text-[9px] text-rose-400 mt-0.5">({r.vatStatus})</p>}
-                                          </td>
-                                          <td className="p-3 text-right pr-4 font-black text-rose-600">{formatCurrency(r.amount)}</td>
-                                      </tr>
-                                  ))}
-                                  {auditData.expenses.length === 0 && (
-                                      <tr><td colSpan="7" className="p-8 text-center text-slate-400 font-bold">ไม่พบข้อมูลรายจ่ายในหมวดหมู่นี้</td></tr>
-                                  )}
-                              </tbody>
-                          </table>
-                      ) : activeAuditTab === 'vat' ? (
-                          <table className="w-full text-xs text-left whitespace-nowrap">
-                              <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
-                                  <tr>
-                                      <th className="p-3 pl-4">วันที่{accountingBasis === 'cash' ? '(รับเงิน)' : ''}</th>
-                                      <th className="p-3">เลขที่ใบกำกับภาษี</th>
-                                      <th className="p-3">ประเภทเอกสาร</th>
-                                      <th className="p-3">ชื่อลูกค้า / รหัสภาษี</th>
-                                      <th className="p-3 text-right">มูลค่าสินค้า</th>
-                                      <th className="p-3 text-right text-indigo-500">VAT</th>
-                                      <th className="p-3 text-right pr-4">ยอดรวม (฿)</th>
-                                  </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                  {auditData.vatSales.map((r, i) => (
-                                      <tr key={i} className="hover:bg-indigo-50/30 transition-colors">
-                                          <td className="p-3 pl-4 font-medium text-slate-600">{formatDate(r.date)}</td>
-                                          <td className="p-3">
-                                              <p className="font-mono font-bold text-indigo-600">{r.refInvNo}</p>
-                                              <p className="text-[9px] text-slate-400 mt-0.5">Ref: {r.sysDocId}</p>
-                                          </td>
-                                          <td className="p-3 font-bold text-slate-700">
-                                              <span className={`px-1.5 py-0.5 rounded border text-[9px] font-bold ${r.docTypeLabel.includes('อย่างย่อ') ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}`}>{r.docTypeLabel}</span>
-                                          </td>
-                                          <td className="p-3">
-                                              <p className="truncate max-w-[150px] font-bold text-slate-700" title={r.customer}>{r.customer}</p>
-                                              <p className="text-[9px] font-mono text-slate-500 mt-0.5">Tax ID: {r.taxId}</p>
-                                          </td>
-                                          <td className="p-3 text-right font-medium text-slate-600">{formatCurrency(r.preVat)}</td>
-                                          <td className="p-3 text-right font-bold text-indigo-500">{formatCurrency(r.vat)}</td>
-                                          <td className="p-3 text-right pr-4 font-black text-slate-800">{formatCurrency(r.total)}</td>
-                                      </tr>
-                                  ))}
-                                  {auditData.vatSales.length === 0 && (
-                                      <tr><td colSpan="7" className="p-8 text-center text-slate-400 font-bold">ไม่พบข้อมูลในหมวดหมู่นี้</td></tr>
-                                  )}
-                              </tbody>
-                          </table>
-                      ) : (
-                          <table className="w-full text-xs text-left whitespace-nowrap">
-                              <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
-                                  <tr>
-                                      <th className="p-3 pl-4">วันที่{accountingBasis === 'cash' ? '(รับเงิน)' : ''}</th>
-                                      <th className="p-3">Order ID / อ้างอิง</th>
-                                      <th className="p-3">เลขใบกำกับ/ใบเสร็จ</th>
-                                      <th className="p-3">ลูกค้า</th>
-                                      <th className="p-3 text-right pr-4">ยอดเงิน (฿)</th>
-                                  </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                  {(activeAuditTab === 'nonVat' ? auditData.nonVatSales : auditData.pendingSales).map((r, i) => (
-                                      <tr key={i} className="hover:bg-slate-50 transition-colors">
-                                          <td className="p-3 pl-4 font-medium text-slate-600">{formatDate(r.date)}</td>
-                                          <td className="p-3 font-mono font-bold text-indigo-600">{r.sysDocId}</td>
-                                          <td className="p-3 font-bold text-slate-700">{r.refInvNo}</td>
-                                          <td className="p-3 truncate max-w-[150px]" title={r.customer}>{r.customer}</td>
-                                          <td className="p-3 text-right pr-4 font-black text-slate-800">{formatCurrency(r.amount)}</td>
-                                      </tr>
-                                  ))}
-                                  {(activeAuditTab === 'nonVat' ? auditData.nonVatSales : auditData.pendingSales).length === 0 && (
-                                      <tr><td colSpan="5" className="p-8 text-center text-slate-400 font-bold">ไม่พบข้อมูลในหมวดหมู่นี้</td></tr>
-                                  )}
-                              </tbody>
-                          </table>
-                      )}
-                  </div>
-              </div>
-          </div>
-
-          {/* การคำนวณภาษี */}
-          <div className="lg:col-span-4 bg-slate-900 rounded-[32px] p-6 md:p-8 text-white shadow-xl relative overflow-hidden flex flex-col justify-between">
-              <Calculator size={160} className="absolute -right-10 -bottom-10 opacity-10 text-indigo-400 pointer-events-none" />
-              <div className="relative z-10 space-y-5">
-                  <h3 className="text-xl font-black mb-4 flex items-center gap-2"><FileText className="text-indigo-400"/> สรุปภาษีที่ต้องชำระ (จำลอง)</h3>
-                  
-                  <div className="flex justify-between items-center text-sm border-b border-white/10 pb-3">
-                      <span className="text-slate-300">เงินได้พึงประเมินรวม</span>
-                      <span className="font-bold text-white text-lg">{formatCurrency(totalAssessableIncome)}</span>
-                  </div>
-
-                  <div className="space-y-2">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">เลือกวิธีหักค่าใช้จ่าย</p>
-                      <div className="flex gap-2">
-                          <button onClick={() => setExpenseMode('standard')} className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-colors ${expenseMode === 'standard' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-transparent border-slate-600 text-slate-400 hover:border-slate-400'}`}>เหมา 60%</button>
-                          <button onClick={() => setExpenseMode('actual')} className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-colors ${expenseMode === 'actual' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-transparent border-slate-600 text-slate-400 hover:border-slate-400'}`}>ตามจริง</button>
-                      </div>
-                  </div>
-
-                  <div className="flex justify-between items-center text-sm border-b border-white/10 pb-3 text-rose-300">
-                      <span>หัก ค่าใช้จ่าย {expenseMode === 'standard' ? '(เหมา 60%)' : '(ตามจริง)'}</span>
-                      <span className="font-bold">-{formatCurrency(usedExpenseDeduction)}</span>
-                  </div>
-                  
-                  <div className="flex justify-between items-center text-sm border-b border-white/10 pb-3 text-emerald-300">
-                      <span>หัก ค่าลดหย่อนพื้นฐาน (ผู้มีเงินได้)</span>
-                      <span className="font-bold">-{formatCurrency(personalDeduction)}</span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-2 font-black text-lg text-white">
-                      <span>เงินได้สุทธิ (Net Income)</span>
-                      <span>{formatCurrency(netIncome)}</span>
-                  </div>
-
-                  <div className="mt-6 pt-6 border-t-2 border-white/20">
-                      <p className="text-xs font-black uppercase text-slate-400 mb-1">ยอดภาษีประมาณการ (Estimated Tax)</p>
-                      <span className="text-4xl font-black text-rose-500">
-                          {formatCurrency(finalTaxPayable)}
-                      </span>
-                  </div>
-              </div>
-          </div>
-      </div>
-    </div>
-  );
-}
-
 function AssetRegister({ appId, user, showToast, assets }) {
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [formData, setFormData] = useState({
-    name: '',
-    category: CONSTANTS.CATEGORIES.ASSET[0].name,
-    purchaseDate: formatDateISO(new Date()),
-    price: '',
-    usefulLife: CONSTANTS.CATEGORIES.ASSET[0].years
+      assetName: '',
+      category: CONSTANTS.CATEGORIES.ASSET[0].name,
+      lifespan: CONSTANTS.CATEGORIES.ASSET[0].years,
+      purchaseDate: formatDateISO(new Date()),
+      cost: '',
+      serialNumber: '',
+      notes: ''
   });
+
+  const handleCategoryChange = (e) => {
+      const selectedCat = CONSTANTS.CATEGORIES.ASSET.find(c => c.name === e.target.value);
+      setFormData(prev => ({
+          ...prev,
+          category: selectedCat.name,
+          lifespan: selectedCat.years
+      }));
+  };
 
   const calculateDepreciation = (asset) => {
-    const purchaseDate = normalizeDate(asset.purchaseDate) || new Date();
-    const now = new Date();
-    
-    // คำนวณเวลาที่ผ่านไปทั้งหมด (วัน) เพื่อหาค่าเสื่อมสะสม
-    const diffTimeTotal = Math.max(0, now - purchaseDate);
-    const diffDaysTotal = diffTimeTotal / (1000 * 60 * 60 * 24);
-    const diffYearsTotal = diffDaysTotal / 365;
-    
-    const price = Number(asset.price) || 0;
-    const usefulLife = Number(asset.usefulLife) || 1;
-    const yearlyDepreciation = price / usefulLife;
-    
-    let accumulated = yearlyDepreciation * diffYearsTotal;
-    if (accumulated > price - 1) accumulated = price - 1; // คงเหลือมูลค่าซาก 1 บาทเสมอ
-    
-    // คำนวณค่าเสื่อมสำหรับปีปัจจุบัน (เริ่มนับจาก 1 ม.ค. ของปีนี้ หรือ วันที่ซื้อหากเพิ่งซื้อปีนี้)
-    const startOfYear = new Date(now.getFullYear(), 0, 1);
-    const startCalcDate = purchaseDate > startOfYear ? purchaseDate : startOfYear;
-    const diffTimeYearly = Math.max(0, now - startCalcDate);
-    const diffDaysYearly = diffTimeYearly / (1000 * 60 * 60 * 24);
-    const diffYearsYearly = diffDaysYearly / 365;
-    
-    let yearly = yearlyDepreciation * diffYearsYearly;
-    
-    // ป้องกันไม่ให้ค่าเสื่อมปีนี้ เกินกว่ามูลค่าที่เหลือให้หักได้
-    const remainingToDepreciate = price - 1 - (accumulated - yearly);
-    if (yearly > remainingToDepreciate) yearly = Math.max(0, remainingToDepreciate);
+      const cost = Number(asset.cost) || 0;
+      const lifespan = Number(asset.lifespan) || 5;
+      const purchaseDate = normalizeDate(asset.purchaseDate);
+      const today = new Date();
 
-    return {
-        accumulated,
-        netValue: price - accumulated,
-        yearly
-    };
+      if (!purchaseDate || cost <= 0) return { accumDep: 0, nbv: cost, currentYearDep: 0 };
+
+      // คำนวณจำนวนวันที่ใช้งานจนถึงปัจจุบัน
+      const daysUsed = Math.max(0, Math.floor((today - purchaseDate) / (1000 * 60 * 60 * 24)));
+      const dailyDep = cost / (lifespan * 365);
+      let accumDep = daysUsed * dailyDep;
+
+      // กฎหมายสรรพากร: มูลค่าซากเหลือ 1 บาท
+      if (accumDep >= cost - 1) accumDep = Math.max(0, cost - 1);
+
+      const nbv = cost - accumDep;
+
+      // คำนวณค่าเสื่อมเฉพาะของปีนี้ (เพื่อลงรายจ่ายหักภาษี)
+      const startOfYear = new Date(today.getFullYear(), 0, 1);
+      const calcStart = purchaseDate > startOfYear ? purchaseDate : startOfYear;
+      const daysInThisYear = Math.max(0, Math.floor((today - calcStart) / (1000 * 60 * 60 * 24)));
+      let currentYearDep = daysInThisYear * dailyDep;
+
+      if (currentYearDep > nbv - 1) currentYearDep = Math.max(0, nbv - 1);
+      if (accumDep === cost - 1) currentYearDep = 0;
+
+      return { accumDep, nbv, currentYearDep };
   };
 
-  const summary = useMemo(() => {
-      let totalCost = 0;
-      let totalAccumulated = 0;
-      let totalNetValue = 0;
-      let totalYearly = 0;
-
-      assets.forEach(asset => {
-          const { accumulated, netValue, yearly } = calculateDepreciation(asset);
-          totalCost += Number(asset.price) || 0;
-          totalAccumulated += accumulated;
-          totalNetValue += netValue;
-          totalYearly += yearly;
-      });
-
-      return { totalCost, totalAccumulated, totalNetValue, totalYearly };
+  const assetList = useMemo(() => {
+      return assets.map(a => ({ ...a, ...calculateDepreciation(a) })).sort(sortNewestFirst);
   }, [assets]);
 
-  const handleAddAsset = async (e) => {
-    e.preventDefault();
-    if (!user) return;
-    setIsProcessing(true);
-    try {
-      // สร้างรหัสทรัพย์สินอัตโนมัติ (AST-YYYYMMDD-XXXXX)
-      const dateStr = formatDateISO(formData.purchaseDate).replace(/-/g, '');
-      const prefix = `AST-${dateStr}-`;
-      const nums = assets.filter(a => a.assetId && a.assetId.startsWith(prefix)).map(a => parseInt(a.assetId.replace(prefix, ''))).filter(n => !isNaN(n));
-      const nextNum = nums.length > 0 ? Math.max(...nums) + 1 : 1;
-      const assetId = `${prefix}${String(nextNum).padStart(5, '0')}`;
+  const stats = useMemo(() => {
+      return assetList.reduce((acc, a) => ({
+          totalCost: acc.totalCost + (Number(a.cost) || 0),
+          totalAccumDep: acc.totalAccumDep + a.accumDep,
+          totalNbv: acc.totalNbv + a.nbv,
+          totalCurrentYearDep: acc.totalCurrentYearDep + a.currentYearDep
+      }), { totalCost: 0, totalAccumDep: 0, totalNbv: 0, totalCurrentYearDep: 0 });
+  }, [assetList]);
 
-      await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'assets'), {
-        ...formData,
-        assetId: assetId,
-        price: Number(formData.price),
-        usefulLife: Number(formData.usefulLife),
-        purchaseDate: normalizeDate(formData.purchaseDate),
-        createdAt: serverTimestamp(),
-        userId: user.uid
-      });
-      showToast("ขึ้นทะเบียนทรัพย์สินใหม่สำเร็จ", "success");
-      setShowAddModal(false);
-      setFormData({ name: '', category: CONSTANTS.CATEGORIES.ASSET[0].name, purchaseDate: formatDateISO(new Date()), price: '', usefulLife: CONSTANTS.CATEGORIES.ASSET[0].years });
-    } catch(err) {
-      showToast("บันทึกไม่สำเร็จ", "error");
-    }
-    setIsProcessing(false);
-  };
-  
-  const handleDelete = async (id) => {
-    if (!window.confirm("ยืนยันการลบทรัพย์สินนี้ออกจากทะเบียน?")) return;
-    try {
-      await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'assets', id));
-      showToast("ลบข้อมูลสำเร็จ", "success");
-    } catch (e) {
-      showToast("ลบข้อมูลไม่สำเร็จ", "error");
-    }
-  };
-
-  return (
-    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full pb-10">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-2">
-        <div>
-          <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><Monitor className="text-indigo-600"/> ทะเบียนทรัพย์สิน (Asset Register)</h2>
-          <p className="text-sm text-slate-500 mt-1">ระบบคำนวณค่าเสื่อมราคาสะสมอัตโนมัติ สำหรับใช้ตัดเป็นรายจ่ายเพื่อลดหย่อนภาษีเงินได้สิ้นปี</p>
-        </div>
-        <button onClick={() => setShowAddModal(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-2xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-indigo-200 transition-all">
-          <PlusCircle size={18}/> ขึ้นทะเบียนทรัพย์สินใหม่
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white p-6 rounded-[24px] border border-slate-100 shadow-sm flex flex-col justify-center">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">มูลค่าทรัพย์สินรวม (Total Cost)</p>
-            <p className="text-3xl font-black text-slate-800">{formatCurrency(summary.totalCost)}</p>
-        </div>
-        <div className="bg-rose-50 p-6 rounded-[24px] border border-rose-100 shadow-sm flex flex-col justify-center">
-            <p className="text-[10px] font-black text-rose-500 uppercase tracking-widest mb-2">ค่าเสื่อมราคาสะสม (Accumulated)</p>
-            <p className="text-3xl font-black text-rose-600">{formatCurrency(summary.totalAccumulated)}</p>
-        </div>
-        <div className="bg-emerald-50 p-6 rounded-[24px] border border-emerald-100 shadow-sm flex flex-col justify-center">
-            <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-2">มูลค่าสุทธิทางบัญชี (Net Book Value)</p>
-            <p className="text-3xl font-black text-emerald-600">{formatCurrency(summary.totalNetValue)}</p>
-        </div>
-        <div className="bg-indigo-900 p-6 rounded-[24px] shadow-xl flex flex-col justify-center relative overflow-hidden text-white">
-            <Calculator size={80} className="absolute -bottom-4 -right-4 opacity-10"/>
-            <div className="relative z-10">
-                <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest mb-2">ค่าเสื่อมสำหรับปีนี้ (Yearly Expense)</p>
-                <p className="text-3xl font-black mb-1">{formatCurrency(summary.totalYearly)}</p>
-                <p className="text-[10px] text-indigo-300 font-medium">นำยอดนี้ไปลงรายจ่าย ภ.ง.ด. ตอนสิ้นปีได้เลย</p>
-            </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden flex flex-col">
-        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-            <h3 className="font-black text-slate-800 text-lg">รายการทรัพย์สิน</h3>
-            <span className="bg-indigo-50 text-indigo-600 px-4 py-1.5 rounded-xl text-xs font-bold">{assets.length} รายการ</span>
-        </div>
-        <div className="overflow-x-auto custom-scrollbar flex-1">
-          <table className="w-full text-sm text-left">
-            <thead className="bg-white text-[11px] font-bold text-slate-500 border-b border-slate-100">
-              <tr>
-                <th className="p-4 pl-6">วันที่ซื้อ / รหัสทรัพย์สิน</th>
-                <th className="p-4">รายการ / หมวดหมู่</th>
-                <th className="p-4 text-center">อายุ (ปี)</th>
-                <th className="p-4 text-center">มูลค่าทุน (COST)</th>
-                <th className="p-4 text-center text-rose-500">ค่าเสื่อมสะสม</th>
-                <th className="p-4 text-center text-indigo-600">มูลค่าคงเหลือ (NBV)</th>
-                <th className="p-4 text-center">จัดการ</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {assets && assets.map((asset, idx) => {
-                const { accumulated, netValue } = calculateDepreciation(asset);
-                return (
-                  <tr key={asset.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="p-4 pl-6">
-                        <p className="font-bold text-slate-800">{formatDate(asset.purchaseDate)}</p>
-                        <p className="text-[10px] font-mono text-slate-400 mt-0.5">{asset.assetId || '-'}</p>
-                    </td>
-                    <td className="p-4">
-                        <p className="font-bold text-slate-800">{asset.name}</p>
-                        <span className="inline-block mt-1 bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded text-[10px] font-bold">{asset.category}</span>
-                    </td>
-                    <td className="p-4 text-center font-bold text-slate-700">{asset.usefulLife}</td>
-                    <td className="p-4 text-center font-black text-slate-700">{formatCurrency(asset.price)}</td>
-                    <td className="p-4 text-center font-black text-rose-500">-{formatCurrency(accumulated)}</td>
-                    <td className="p-4 text-center font-black text-indigo-600">{formatCurrency(netValue)}</td>
-                    <td className="p-4 text-center">
-                      <button onClick={() => handleDelete(asset.id)} className="p-2 border border-rose-100 text-rose-400 hover:bg-rose-50 hover:text-rose-600 rounded-lg transition-colors mx-auto flex items-center justify-center" title="ลบข้อมูล"><Trash2 size={16}/></button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {(!assets || assets.length === 0) && (
-                <tr><td colSpan="8" className="p-10 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลทรัพย์สินในระบบ</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {showAddModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 flex flex-col">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Monitor className="text-indigo-600"/> ลงทะเบียนทรัพย์สิน</h3>
-              <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
-            </div>
-            <form onSubmit={handleAddAsset} className="space-y-4">
-              <div>
-                <label className="text-[10px] font-bold text-slate-500 uppercase">ชื่อทรัพย์สิน</label>
-                <input required value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100" placeholder="เช่น คอมพิวเตอร์ Mac, โต๊ะทำงาน..." />
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-slate-500 uppercase">หมวดหมู่และอายุการใช้งาน</label>
-                <select value={formData.category} onChange={e=>{
-                    const cat = CONSTANTS.CATEGORIES.ASSET.find(c => c.name === e.target.value);
-                    setFormData({...formData, category: cat.name, usefulLife: cat.years});
-                }} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer">
-                  {CONSTANTS.CATEGORIES.ASSET.map(c => <option key={c.name} value={c.name}>{c.name} ({c.years} ปี)</option>)}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">วันที่ซื้อ/ได้มา</label>
-                  <input required type="date" value={formData.purchaseDate} onChange={e=>setFormData({...formData, purchaseDate: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold mt-1 outline-none focus:ring-2 focus:ring-indigo-100 cursor-pointer" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-500 uppercase">ราคาทุน (บาท)</label>
-                  <input required type="number" min="0" step="0.01" value={formData.price} onChange={e=>setFormData({...formData, price: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-black text-indigo-600 mt-1 outline-none focus:ring-2 focus:ring-indigo-100" placeholder="0.00" />
-                </div>
-              </div>
-              <div className="flex gap-3 pt-4 border-t border-slate-100 mt-2">
-                <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 py-3.5 bg-slate-100 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">ยกเลิก</button>
-                <button type="submit" disabled={isProcessing} className="flex-1 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
-                  {isProcessing ? <Loader className="animate-spin" size={16}/> : <Save size={16}/>} บันทึก
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function InternalDocGenerator({ user, transactions, stockBatches, showToast, appId }) {
-  const [activeTab, setActiveTab] = useState('substitute_receipt'); // 'substitute_receipt', 'write_off', 'history'
-  const [internalDocs, setInternalDocs] = useState([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-
-  // --- Form States ---
-  const [subForm, setSubForm] = useState({
-    date: formatDateISO(new Date()),
-    category: CONSTANTS.CATEGORIES.EXPENSE[0],
-    payeeName: '',
-    payeeId: '',
-    payeeAddress: '',
-    items: [{ desc: '', qty: 1, price: '' }],
-    reason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
-    approver: ''
-  });
-
-  const [writeOffForm, setWriteOffForm] = useState({
-    date: formatDateISO(new Date()),
-    reason: 'สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)',
-    approver: '',
-    items: [{ sku: '', desc: '', qty: 1, cost: 0 }]
-  });
-
-  // --- Fetch History ---
-  useEffect(() => {
-    if (!user || !appId) return;
-    const unsub = onSnapshot(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs')), (snap) => {
-      setInternalDocs(snap.docs.map(d => ({id: d.id, ...d.data(), date: normalizeDate(d.data().date)})).sort((a,b) => b.date - a.date));
-    });
-    return () => unsub();
-  }, [user, appId]);
-
-  // --- 🔥 NEW: รวบรวมเอกสารภายในจากทั้ง internal_docs และ transactions_expense เพื่อดึงประวัติมาให้ครบ ---
-  const combinedHistory = useMemo(() => {
-      const docsMap = new Map();
-
-      // 1. ใส่รายการจากคอลเลกชัน internal_docs
-      internalDocs.forEach(doc => {
-          docsMap.set(doc.docNo || doc.id, {
-              ...doc,
-              source: 'internal_docs'
-          });
-      });
-
-      // 2. ดึงรายการจาก transactions_expense ที่เกี่ยวข้องแต่ไม่มีใน internal_docs
-      transactions.filter(t => t.type === 'expense' && !t.isCancelled).forEach(t => {
-          // ถ้ามี linkedOrderNo และมีใน docsMap แล้ว ให้ข้าม
-          if (t.linkedOrderNo && docsMap.has(t.linkedOrderNo)) return;
-
-          // ถ้าเป็นรายการ "สินค้าเสียหาย/หมดอายุ" หรือเลขระบบขึ้นต้นด้วย DMG
-          if (t.category === 'สินค้าเสียหาย/หมดอายุ' || String(t.sysDocId).startsWith('DMG-')) {
-              docsMap.set(t.sysDocId || t.id, {
-                  id: t.id,
-                  docNo: t.sysDocId || '-',
-                  docType: 'write_off',
-                  date: normalizeDate(t.date),
-                  description: t.description,
-                  totalCost: t.total || t.grandTotal,
-                  items: t.items,
-                  source: 'transactions'
-              });
-          }
-          // ใบรับรองแทนใบเสร็จ
-          else if (t.expenseDocType === 'no_bill' || String(t.sysDocId).startsWith('SUB-')) {
-               docsMap.set(t.sysDocId || t.id, {
-                  id: t.id,
-                  docNo: t.sysDocId || '-',
-                  docType: 'substitute_receipt',
-                  date: normalizeDate(t.date),
-                  payee: t.partnerName,
-                  description: t.description,
-                  totalCost: t.total || t.grandTotal,
-                  items: t.items,
-                  source: 'transactions'
-              });
-          }
-      });
-
-      return Array.from(docsMap.values()).sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0));
-  }, [internalDocs, transactions]);
-
-  // --- Substitute Receipt Functions ---
-  const handleAddSubItem = () => {
-      setSubForm(prev => ({ ...prev, items: [...prev.items, { desc: '', qty: 1, price: '' }] }));
-  };
-
-  const handleRemoveSubItem = (index) => {
-      if (subForm.items.length <= 1) return;
-      setSubForm(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
-  };
-
-  const handleUpdateSubItem = (index, field, value) => {
-      setSubForm(prev => {
-          const newItems = [...prev.items];
-          newItems[index][field] = value;
-          return { ...prev, items: newItems };
-      });
-  };
-
-  const handleGenerateSubstituteReceipt = async (e) => {
+  const handleSaveAsset = async (e) => {
       e.preventDefault();
       if (!user) return;
-      if (!subForm.payeeName || subForm.items.some(i => !i.desc || !i.price)) {
-          return showToast("กรุณากรอกข้อมูลและรายการให้ครบถ้วน", "error");
+      if (!formData.assetName || !formData.cost) {
+          showToast('กรุณาระบุชื่อทรัพย์สินและมูลค่าให้ครบถ้วน', 'error');
+          return;
       }
 
       setIsProcessing(true);
       try {
-          const totalCost = subForm.items.reduce((sum, item) => sum + (Number(item.qty) * Number(item.price)), 0);
-          const actionDate = normalizeDate(subForm.date);
-          const dateStr = formatDateISO(actionDate).replace(/-/g, '');
-          
-          // Generate Internal Doc Number
-          const intPrefix = `SUB-${dateStr}-`;
-          const intNums = internalDocs.filter(d => d.docNo?.startsWith(intPrefix)).map(d => parseInt(d.docNo.replace(intPrefix, ''), 10)).filter(n => !isNaN(n));
-          const nextIntNum = intNums.length > 0 ? Math.max(...intNums) + 1 : 1;
-          const docNo = `${intPrefix}${String(nextIntNum).padStart(4, '0')}`;
-
-          // Generate Expense SysDocId
-          const expPrefix = getExpensePrefix(subForm.category);
-          const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), expPrefix, actionDate, 'sysDocId');
-
-          const batchWriter = writeBatch(dbInstance);
-
-          // 1. สร้างเอกสารภายใน
-          const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
-          batchWriter.set(docRef, {
-              docNo,
-              docType: 'substitute_receipt',
-              date: actionDate,
-              payee: subForm.payeeName,
-              payeeId: subForm.payeeId,
-              payeeAddress: subForm.payeeAddress,
-              category: subForm.category,
-              description: `ออกใบรับรองแทนใบเสร็จฯ ให้แก่ ${subForm.payeeName}`,
-              items: subForm.items.map(i => ({ ...i, qty: Number(i.qty), price: Number(i.price) })),
-              reason: subForm.reason,
-              approver: subForm.approver,
-              totalCost,
-              userId: user.uid,
+          const sysDocId = generateDateBasedDocId(assets, 'AST-', formData.purchaseDate, 'sysDocId');
+          const payload = {
+              sysDocId,
+              assetName: formData.assetName,
+              category: formData.category,
+              lifespan: Number(formData.lifespan),
+              purchaseDate: normalizeDate(formData.purchaseDate),
+              cost: Number(formData.cost),
+              serialNumber: formData.serialNumber,
+              notes: formData.notes,
               createdAt: serverTimestamp(),
-              status: 'completed'
-          });
-
-          // 2. สร้างรายการรายจ่ายลงบัญชีหลักอัตโนมัติ
-          const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
-          batchWriter.set(expRef, {
-              sysDocId: expSysDocId,
-              type: 'expense',
-              category: subForm.category,
-              description: `[ใบรับรองแทนใบเสร็จ] ${subForm.items.map(i => i.desc).join(', ')}`,
-              items: subForm.items.map(i => ({
-                  desc: i.desc, qty: Number(i.qty), unit: 'ชิ้น/ครั้ง', buyPrice: Number(i.price), sellPrice: 0, sku: '', category: subForm.category
-              })),
-              total: totalCost,
-              grandTotal: totalCost, // เป็นบิลเงินสด ไม่มี VAT
-              date: actionDate,
               userId: user.uid,
-              createdAt: serverTimestamp(),
-              status: 'paid',
-              partnerName: subForm.payeeName,
-              partnerTaxId: subForm.payeeId,
-              partnerAddress: subForm.payeeAddress,
-              partnerBranch: '00000',
-              isFromReconciliation: false,
-              isCashBill: true, // กำหนดเป็นบิลเงินสด
-              vatType: 'none',
-              channel: 'หน้าร้าน',
-              shopName: CONSTANTS.SHOPS[0],
-              linkedOrderNo: docNo // อ้างอิงกลับมาที่เอกสารภายใน
-          });
+              status: 'active'
+          };
 
-          await batchWriter.commit();
-          showToast("สร้างใบรับรองแทนใบเสร็จ และลงบัญชีรายจ่ายสำเร็จ", "success");
-          
-          // Reset Form
-          setSubForm({
-              date: formatDateISO(new Date()), category: CONSTANTS.CATEGORIES.EXPENSE[0],
-              payeeName: '', payeeId: '', payeeAddress: '',
-              items: [{ desc: '', qty: 1, price: '' }],
-              reason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน', approver: ''
+          await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'assets'), payload);
+          showToast('ขึ้นทะเบียนทรัพย์สินสำเร็จ', 'success');
+          setShowModal(false);
+          setFormData({
+              assetName: '', category: CONSTANTS.CATEGORIES.ASSET[0].name, lifespan: CONSTANTS.CATEGORIES.ASSET[0].years,
+              purchaseDate: formatDateISO(new Date()), cost: '', serialNumber: '', notes: ''
           });
-          setActiveTab('history');
-
       } catch (err) {
           console.error(err);
-          showToast("เกิดข้อผิดพลาดในการสร้างเอกสาร", "error");
+          showToast('เกิดข้อผิดพลาดในการบันทึก', 'error');
       }
       setIsProcessing(false);
   };
 
-  // --- Write-off Functions ---
-  const handleAddWriteOffItem = () => {
-      setWriteOffForm(prev => ({ ...prev, items: [...prev.items, { sku: '', desc: '', qty: 1, cost: 0 }] }));
+  const handleDeleteAsset = async (id) => {
+      if (!window.confirm('ยืนยันการลบทรัพย์สินนี้ออกจากทะเบียน?')) return;
+      try {
+          await deleteDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'assets', id));
+          showToast('ลบทรัพย์สินสำเร็จ', 'success');
+      } catch (err) {
+          showToast('ลบไม่สำเร็จ', 'error');
+      }
   };
 
-  const handleRemoveWriteOffItem = (index) => {
-      if (writeOffForm.items.length <= 1) return;
-      setWriteOffForm(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
-  };
+  return (
+      <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-6 mb-2">
+              <div>
+                  <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><Monitor className="text-indigo-600"/> ทะเบียนทรัพย์สิน (Asset Register)</h2>
+                  <p className="text-sm text-slate-500 mt-1">ระบบคำนวณค่าเสื่อมราคาสะสมอัตโนมัติ สำหรับใช้ตัดเป็นรายจ่ายเพื่อลดหย่อนภาษีเงินได้สิ้นปี</p>
+              </div>
+              <button onClick={() => setShowModal(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-indigo-100 transition-all flex items-center gap-2">
+                  <PlusCircle size={16}/> ขึ้นทะเบียนทรัพย์สินใหม่
+              </button>
+          </div>
 
-  const handleUpdateWriteOffItem = (index, field, value) => {
-      setWriteOffForm(prev => {
-          const newItems = [...prev.items];
-          newItems[index][field] = value;
-          return { ...prev, items: newItems };
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
+              <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">มูลค่าทรัพย์สินรวม (Total Cost)</p>
+                  <p className="text-2xl font-black text-slate-800">{formatCurrency(stats.totalCost)}</p>
+              </div>
+              <div className="bg-rose-50 border border-rose-100 p-5 rounded-2xl shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-rose-500 mb-1">ค่าเสื่อมราคาสะสม (Accumulated)</p>
+                  <p className="text-2xl font-black text-rose-600">{formatCurrency(stats.totalAccumDep)}</p>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-100 p-5 rounded-2xl shadow-sm">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600 mb-1">มูลค่าสุทธิทางบัญชี (Net Book Value)</p>
+                  <p className="text-2xl font-black text-emerald-700">{formatCurrency(stats.totalNbv)}</p>
+              </div>
+              <div className="bg-indigo-900 border border-indigo-800 p-5 rounded-2xl shadow-lg relative overflow-hidden">
+                  <Calculator className="absolute -right-2 -bottom-2 text-indigo-500 opacity-20" size={64}/>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-indigo-300 mb-1 relative z-10">ค่าเสื่อมสำหรับปีนี้ (Yearly Expense)</p>
+                  <p className="text-2xl font-black text-white relative z-10">{formatCurrency(stats.totalCurrentYearDep)}</p>
+                  <p className="text-[9px] text-indigo-200 mt-1 relative z-10">นำยอดนี้ไปลงรายจ่าย ภ.ง.ด. ตอนสิ้นปีได้เลย</p>
+              </div>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col flex-1">
+              <div className="p-5 border-b bg-slate-50 flex justify-between items-center">
+                  <h4 className="font-bold text-slate-700 text-sm uppercase tracking-widest">รายการทรัพย์สิน</h4>
+                  <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full">{assetList.length} รายการ</span>
+              </div>
+              <div className="overflow-x-auto flex-1 custom-scrollbar">
+                  <table className="w-full text-xs text-left whitespace-nowrap">
+                      <thead className="bg-white text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
+                          <tr>
+                              <th className="p-4 pl-6">วันที่ซื้อ / รหัสทรัพย์สิน</th>
+                              <th className="p-4">รายการ / หมวดหมู่</th>
+                              <th className="p-4 text-center">อายุ (ปี)</th>
+                              <th className="p-4 text-right">มูลค่าทุน (Cost)</th>
+                              <th className="p-4 text-right text-rose-500 bg-rose-50/30">ค่าเสื่อมสะสม</th>
+                              <th className="p-4 text-right text-indigo-600 bg-indigo-50/30 pr-6">มูลค่าคงเหลือ (NBV)</th>
+                              <th className="p-4 text-center">จัดการ</th>
+                          </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                          {assetList.map((asset, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                                  <td className="p-4 pl-6">
+                                      <p className="font-bold text-slate-700">{formatDate(asset.purchaseDate)}</p>
+                                      <p className="font-mono text-[10px] text-slate-400 mt-0.5">{asset.sysDocId}</p>
+                                  </td>
+                                  <td className="p-4">
+                                      <p className="font-bold text-slate-800">{asset.assetName}</p>
+                                      <p className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded w-fit mt-1">{asset.category}</p>
+                                  </td>
+                                  <td className="p-4 text-center font-bold text-slate-600">{asset.lifespan}</td>
+                                  <td className="p-4 text-right font-black text-slate-700">{formatCurrency(asset.cost)}</td>
+                                  <td className="p-4 text-right font-black text-rose-500 bg-rose-50/10">-{formatCurrency(asset.accumDep)}</td>
+                                  <td className="p-4 text-right font-black text-indigo-600 bg-indigo-50/10 pr-6">{formatCurrency(asset.nbv)}</td>
+                                  <td className="p-4 text-center">
+                                      <button onClick={() => handleDeleteAsset(asset.id)} className="p-2 bg-white border border-slate-200 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shadow-sm">
+                                          <Trash2 size={14}/>
+                                      </button>
+                                  </td>
+                              </tr>
+                          ))}
+                          {assetList.length === 0 && (
+                              <tr><td colSpan="7" className="p-10 text-center text-slate-400 font-bold">ยังไม่ได้ขึ้นทะเบียนทรัพย์สิน</td></tr>
+                          )}
+                      </tbody>
+                  </table>
+              </div>
+          </div>
+
+          {/* Add Asset Modal */}
+          {showModal && (
+              <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4">
+                  <div className="bg-white rounded-[32px] p-8 max-w-lg w-full shadow-2xl animate-in zoom-in-95">
+                      <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
+                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><PlusCircle className="text-indigo-600"/> ขึ้นทะเบียนทรัพย์สินใหม่</h3>
+                          <button onClick={() => setShowModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={20}/></button>
+                      </div>
+                      
+                      <form onSubmit={handleSaveAsset} className="space-y-4">
+                          <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 mb-4 flex items-start gap-2">
+                              <Info size={16} className="text-amber-500 shrink-0 mt-0.5"/>
+                              <p className="text-[10px] text-amber-700 font-medium">
+                                  ทรัพย์สิน (เช่น คอมพิวเตอร์, อุปกรณ์สำนักงาน) ไม่สามารถนำมาลงเป็นรายจ่ายก้อนเดียวในปีที่ซื้อได้ ระบบจะคำนวณหักค่าเสื่อมราคาให้คุณอัตโนมัติตามกฎหมายสรรพากร
+                              </p>
+                          </div>
+                          
+                          <div>
+                              <label className="text-xs font-bold text-slate-500 uppercase">ชื่อทรัพย์สิน (Asset Name)</label>
+                              <input type="text" required value={formData.assetName} onChange={e=>setFormData({...formData, assetName: e.target.value})} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100" placeholder="เช่น Notebook Dell, แอร์ติดผนัง" />
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-4">
+                              <div className="col-span-2">
+                                  <label className="text-xs font-bold text-slate-500 uppercase">หมวดหมู่และอายุใช้งาน</label>
+                                  <select value={formData.category} onChange={handleCategoryChange} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100">
+                                      {CONSTANTS.CATEGORIES.ASSET.map(c => (
+                                          <option key={c.name} value={c.name}>{c.name} (อายุ {c.years} ปี)</option>
+                                      ))}
+                                  </select>
+                              </div>
+                              <div>
+                                  <label className="text-xs font-bold text-slate-500 uppercase">วันที่ซื้อ/ได้มา</label>
+                                  <input type="date" required value={formData.purchaseDate} onChange={e=>setFormData({...formData, purchaseDate: e.target.value})} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100" />
+                              </div>
+                              <div>
+                                  <label className="text-xs font-bold text-slate-500 uppercase">มูลค่าทุน (ไม่รวม VAT)</label>
+                                  <input type="number" required min="1" step="0.01" value={formData.cost} onChange={e=>setFormData({...formData, cost: e.target.value})} className="w-full mt-1 bg-white border-2 border-indigo-100 rounded-xl p-3 text-base font-black text-indigo-700 outline-none focus:border-indigo-400" placeholder="0.00" />
+                              </div>
+                          </div>
+
+                          <div>
+                              <label className="text-xs font-bold text-slate-500 uppercase">เลขซีเรียล / รหัสอ้างอิง (ถ้ามี)</label>
+                              <input type="text" value={formData.serialNumber} onChange={e=>setFormData({...formData, serialNumber: e.target.value})} className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-100" placeholder="S/N..." />
+                          </div>
+
+                          <div className="pt-4 mt-2 border-t border-slate-100 flex gap-3">
+                              <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">ยกเลิก</button>
+                              <button type="submit" disabled={isProcessing} className="flex-[2] py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
+                                  {isProcessing ? <Loader size={16} className="animate-spin"/> : <Save size={16}/>} บันทึกทะเบียน
+                              </button>
+                          </div>
+                      </form>
+                  </div>
+              </div>
+          )}
+      </div>
+  );
+}
+
+// --- 🔥 สร้าง Placeholder สำหรับคอมโพเนนต์ที่ขาดหายไปเพื่อแก้บั๊ก ReferenceError ---
+function InternalDocGenerator({ user, transactions, stockBatches, showToast, appId }) {
+  const [activeTab, setActiveTab] = useState('cert_receipt'); // 'cert_receipt', 'write_off', 'history'
+  const [internalDocs, setInternalDocs] = useState([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const [showStockSelectModal, setShowStockSelectModal] = useState(false);
+  const [stockSearchTerm, setStockSearchTerm] = useState('');
+  const [viewDoc, setViewDoc] = useState(null);
+
+  const savedSeller = useMemo(() => { 
+      try { return JSON.parse(localStorage.getItem('merchant_seller_info') || '{}'); } 
+      catch (e) { return {}; } 
+  }, []);
+
+  // --- 🔥 THE FIX: ดึงข้อมูล Internal Docs และควบรวมบิล DMG จาก transactions_expense แบบ Real-time ---
+  useEffect(() => {
+      if (!user || !appId) return;
+      
+      const unsubs = [];
+
+      // 1. ดึงจากตาราง internal_docs
+      const qInternal = query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
+      const unsubInternal = onSnapshot(qInternal, (snap) => {
+          const docsArr = snap.docs.map(d => {
+              const data = d.data();
+              return {
+                  id: d.id, 
+                  ...data, 
+                  docType: data.docType || 'write_off',
+                  date: normalizeDate(data.date)
+              };
+          });
+          
+          // 2. ดึงบิลรายจ่ายหมวด 'สินค้าเสียหาย/หมดอายุ' (รวมพวก DMG เก่าทั้งหมด) จาก transactions_expense มารวมร่างกัน
+          const dmgTransactions = transactions
+              .filter(t => t.type === 'expense' && (t.category === 'สินค้าเสียหาย/หมดอายุ' || (t.sysDocId && String(t.sysDocId).toUpperCase().includes('DMG'))))
+              .map(t => ({
+                  id: t.id,
+                  docNo: t.sysDocId || t.orderId || 'DMG-REF',
+                  docType: 'write_off',
+                  date: normalizeDate(t.date),
+                  requestedBy: 'Internal (ระบบอัตโนมัติ)',
+                  approvedBy: 'ผู้บริหาร',
+                  notes: t.description || 'ตัดจำหน่ายสินค้าชำรุด/สูญหาย',
+                  reason: 'สินค้าชำรุด/เสียหาย',
+                  items: t.items || [],
+                  totalCost: t.total || t.grandTotal || 0,
+                  status: 'completed',
+                  isFromExpenseTable: true // ป้ายบอกว่าเป็นข้อมูลจากตาราง Expense
+              }));
+
+          // รวมกันและเรียงลำดับใหม่
+          const combined = [...docsArr, ...dmgTransactions].sort(sortNewestFirst);
+          setInternalDocs(combined);
       });
+
+      return () => unsubInternal();
+  }, [user, appId, transactions]);
+
+  // --- State สำหรับ ใบรับรองแทนใบเสร็จรับเงิน ---
+  const [certForm, setCertForm] = useState({
+      id: null,
+      docNo: '',
+      date: formatDateISO(new Date()),
+      category: CONSTANTS.CATEGORIES.EXPENSE[0],
+      recipientName: '',
+      recipientId: '',
+      recipientAddress: '',
+      items: [{ desc: '', qty: 1, price: '' }],
+      reason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
+      payerName: '',
+      attachmentUrl: ''
+  });
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+
+  // --- State สำหรับ ใบตัดจำหน่ายสินค้า ---
+  const [writeOffForm, setWriteOffForm] = useState({
+      id: null,
+      docNo: '',
+      date: formatDateISO(new Date()),
+      requestedBy: '',
+      approvedBy: '',
+      notes: '',
+      reason: 'สินค้าชำรุด/เสียหาย',
+      items: []
+  });
+
+  const uniqueInventory = useMemo(() => {
+      const map = {};
+      stockBatches.forEach(batch => {
+          const name = batch.productName; if (!name) return;
+          const sku = batch.sku || '-';
+          const remaining = Number(batch.quantity) - Number(batch.sold || 0);
+          const key = sku !== '-' ? sku : name;
+          if (!map[key]) map[key] = { name, sku, qty: 0, cost: batch.costPerUnit || 0, category: batch.category || '' };
+          map[key].qty += Math.max(0, remaining);
+          if (batch.costPerUnit > 0) map[key].cost = batch.costPerUnit;
+      });
+      return Object.values(map).filter(i => i.qty > 0);
+  }, [stockBatches]);
+
+  const filteredStock = useMemo(() => {
+      return uniqueInventory.filter(item =>
+          item.name.toLowerCase().includes(stockSearchTerm.toLowerCase()) ||
+          item.sku.toLowerCase().includes(stockSearchTerm.toLowerCase())
+      );
+  }, [uniqueInventory, stockSearchTerm]);
+
+  const selectStockItem = (item) => {
+      setWriteOffForm(prev => ({
+          ...prev,
+          items: [...prev.items, { desc: item.name, sku: item.sku, qty: 1, costPerUnit: item.cost }]
+      }));
+      setShowStockSelectModal(false);
+      setStockSearchTerm('');
   };
 
-  const handleGenerateWriteOff = async (e) => {
+  const handleAttachFile = async (e) => {
+      const file = e.target.files[0];
+      if (!file || !user) return;
+      
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (!webhookUrl) {
+          showToast('กรุณาตั้งค่าเชื่อมต่อ Google Drive ในเมนูเครื่องมือขั้นสูง (Admin) ก่อน', 'error');
+          return;
+      }
+
+      setIsUploadingFile(true);
+      try {
+          const base64Data = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result.split(',')[1]);
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+          });
+
+          const mimeType = file.type;
+          const fileExt = file.name.split('.').pop();
+          const d = normalizeDate(certForm.date) || new Date();
+          const year = String(d.getFullYear());
+          const monthNames = ["01_Jan", "02_Feb", "03_Mar", "04_Apr", "05_May", "06_Jun", "07_Jul", "08_Aug", "09_Sep", "10_Oct", "11_Nov", "12_Dec"];
+          const month = monthNames[d.getMonth()];
+          const day = String(d.getDate()).padStart(2, '0');
+          const safeCategory = String(certForm.category || 'ทั่วไป').replace(/[\/\\]/g, '_'); 
+          
+          const fileName = `CERT_RECEIPT_${Date.now()}.${fileExt}`;
+
+          const payload = { 
+              base64Data, fileName, mimeType, 
+              rootFolder: 'MerchantTax_DigitalFiling',
+              year: year, type: '2_Expense', month: month, category: safeCategory, day: day
+          };
+
+          showToast(`กำลังส่งไฟล์ไปที่ Google Drive...`, 'success');
+          
+          const res = await fetch(webhookUrl.trim(), {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(payload)
+          });
+          
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          const data = await res.json();
+          
+          if (data.url) {
+              setCertForm(prev => ({ ...prev, attachmentUrl: data.url }));
+              showToast(`อัปโหลดหลักฐานสำเร็จ!`, 'success');
+          } else {
+              throw new Error(data.message || "Upload failed");
+          }
+      } catch (err) {
+          console.error("Drive Upload Error:", err);
+          showToast('อัปโหลดล้มเหลว (เกิดข้อผิดพลาดในการส่งข้อมูล)', 'error');
+      } finally {
+          setIsUploadingFile(false);
+          e.target.value = ''; 
+      }
+  };
+
+  const handleRemoveAttachment = async () => {
+      if(!window.confirm('ยืนยันการลบไฟล์แนบ? (ระบบจะลบไฟล์ออกจาก Google Drive ด้วย)')) return;
+      const webhookUrl = localStorage.getItem('google_drive_webhook_url');
+      if (webhookUrl && certForm.attachmentUrl) {
+          showToast('กำลังลบไฟล์ออกจาก Google Drive...', 'success');
+          try {
+              await fetch(webhookUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                  body: JSON.stringify({ action: 'delete', fileUrl: certForm.attachmentUrl })
+              });
+          } catch(e) { console.warn("Drive Delete Error:", e); }
+      }
+      setCertForm(prev => ({ ...prev, attachmentUrl: '' }));
+  };
+
+  const handleSaveCertReceipt = async (e) => {
       e.preventDefault();
       if (!user) return;
-      if (writeOffForm.items.some(i => !i.desc || !i.qty)) {
-          return showToast("กรุณากรอกข้อมูลรายการให้ครบถ้วน", "error");
-      }
+      
+      const cleanItems = certForm.items.filter(i => i.desc.trim() !== '' && Number(i.price) > 0);
+      if (cleanItems.length === 0) return showToast("กรุณาเพิ่มรายการค่าใช้จ่ายอย่างน้อย 1 รายการ", "error");
+      if (!certForm.recipientName.trim()) return showToast("กรุณาระบุชื่อผู้รับเงิน", "error");
 
       setIsProcessing(true);
       try {
-          const totalCost = writeOffForm.items.reduce((sum, item) => sum + (Number(item.qty) * Number(item.cost)), 0);
-          const actionDate = normalizeDate(writeOffForm.date);
-          const dateStr = formatDateISO(actionDate).replace(/-/g, '');
-          
-          const intPrefix = `DMG-${dateStr}-`;
-          const intNums = internalDocs.filter(d => d.docNo?.startsWith(intPrefix)).map(d => parseInt(d.docNo.replace(intPrefix, ''), 10)).filter(n => !isNaN(n));
-          const nextIntNum = intNums.length > 0 ? Math.max(...intNums) + 1 : 1;
-          const docNo = `${intPrefix}${String(nextIntNum).padStart(4, '0')}`;
-
           const batchWriter = writeBatch(dbInstance);
+          const docDate = normalizeDate(certForm.date);
+          
+          let docNo = certForm.docNo;
+          if (!docNo) {
+             docNo = generateDateBasedDocId(internalDocs, 'CERT-', docDate, 'docNo');
+          }
 
-          // 1. สร้างเอกสารภายใน
-          const docRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
-          batchWriter.set(docRef, {
+          let totalAmount = cleanItems.reduce((sum, item) => sum + (Number(item.qty) * Number(item.price)), 0);
+
+          const certPayload = {
               docNo,
-              docType: 'write_off',
-              date: actionDate,
-              reason: writeOffForm.reason,
-              approver: writeOffForm.approver,
-              description: `ตัดจำหน่ายสินค้า: ${writeOffForm.reason}`,
-              items: writeOffForm.items.map(i => ({ ...i, qty: Number(i.qty), cost: Number(i.cost) })),
-              totalCost,
-              userId: user.uid,
-              createdAt: serverTimestamp(),
-              status: 'completed'
-          });
+              docType: 'cert_receipt',
+              date: docDate,
+              category: certForm.category,
+              recipientName: certForm.recipientName,
+              recipientId: certForm.recipientId,
+              recipientAddress: certForm.recipientAddress,
+              reason: certForm.reason,
+              payerName: certForm.payerName,
+              items: cleanItems,
+              totalAmount,
+              attachmentUrl: certForm.attachmentUrl,
+              status: 'completed',
+              userId: user.uid
+          };
 
-          // 2. สร้างรายการรายจ่ายลงบัญชีหลักอัตโนมัติ
-          const expPrefix = getExpensePrefix('สินค้าเสียหาย/หมดอายุ');
-          const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), expPrefix, actionDate, 'sysDocId');
+          let newDocRef;
+          if (certForm.id) {
+              newDocRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs', certForm.id);
+              certPayload.updatedAt = serverTimestamp();
+              batchWriter.set(newDocRef, certPayload, { merge: true });
+          } else {
+              newDocRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
+              certPayload.createdAt = serverTimestamp();
+              batchWriter.set(newDocRef, certPayload);
+          }
 
-          const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
-          batchWriter.set(expRef, {
-              sysDocId: expSysDocId,
+          const expItems = cleanItems.map(i => ({
+              desc: i.desc, qty: i.qty, unit: 'รายการ', buyPrice: i.price, sellPrice: 0, sku: '', category: certForm.category
+          }));
+
+          const expPayload = {
               type: 'expense',
-              category: 'สินค้าเสียหาย/หมดอายุ',
-              description: `[ใบตัดจำหน่าย] ${writeOffForm.items.map(i => i.desc).join(', ')}`,
-              items: writeOffForm.items.map(i => ({
-                  desc: i.desc, qty: Number(i.qty), unit: 'ชิ้น', buyPrice: Number(i.cost), sellPrice: 0, sku: i.sku || '-', category: 'สินค้าเสียหาย/หมดอายุ'
-              })),
-              total: totalCost,
-              grandTotal: totalCost,
-              date: actionDate,
+              category: certForm.category,
+              description: `ใบรับรองแทนใบเสร็จ: จ่ายให้ ${certForm.recipientName}`,
+              items: expItems,
+              total: totalAmount,
+              grandTotal: totalAmount,
+              platformFee: 0,
+              date: docDate,
               userId: user.uid,
-              createdAt: serverTimestamp(),
               status: 'paid',
-              partnerName: 'Internal (ตัดจำหน่าย)',
+              partnerName: certForm.recipientName,
               partnerBranch: '00000',
-              isFromReconciliation: true,
-              isTaxOnly: false,
+              isFromReconciliation: false,
+              isCashBill: true,
+              vatType: 'none',
+              linkedOrderId: newDocRef.id,
+              linkedOrderNo: docNo,
+              attachmentUrl: certForm.attachmentUrl,
               channel: 'หน้าร้าน',
-              shopName: CONSTANTS.SHOPS[0],
-              linkedOrderNo: docNo
-          });
+              shopName: CONSTANTS.SHOPS[0]
+          };
 
-          // 3. ตัดสต็อก
+          if (certForm.id) {
+               const expQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), where('linkedOrderId', '==', certForm.id)));
+               if (!expQuery.empty) {
+                   const expDoc = expQuery.docs[0];
+                   expPayload.updatedAt = serverTimestamp();
+                   batchWriter.set(expDoc.ref, expPayload, { merge: true });
+               } else {
+                   const expPrefix = getExpensePrefix(certForm.category);
+                   const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), expPrefix, docDate, 'sysDocId');
+                   expPayload.sysDocId = expSysDocId;
+                   expPayload.createdAt = serverTimestamp();
+                   const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                   batchWriter.set(expRef, expPayload);
+               }
+          } else {
+               const expPrefix = getExpensePrefix(certForm.category);
+               const expSysDocId = generateDateBasedDocId(transactions.filter(t => t.type === 'expense'), expPrefix, docDate, 'sysDocId');
+               expPayload.sysDocId = expSysDocId;
+               expPayload.createdAt = serverTimestamp();
+               const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+               batchWriter.set(expRef, expPayload);
+          }
+
+          await batchWriter.commit();
+          showToast(certForm.id ? "อัปเดตใบรับรองแทนใบเสร็จสำเร็จ" : "บันทึกใบรับรองแทนใบเสร็จรับเงินสำเร็จ", "success");
+          
+          setCertForm({
+              id: null, docNo: '', date: formatDateISO(new Date()), category: CONSTANTS.CATEGORIES.EXPENSE[0], recipientName: '', recipientId: '', recipientAddress: '',
+              items: [{ desc: '', qty: 1, price: '' }], reason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน', payerName: '', attachmentUrl: ''
+          });
+          setActiveTab('history');
+      } catch (err) {
+          console.error(err);
+          showToast("เกิดข้อผิดพลาดในการบันทึกข้อมูล", "error");
+      }
+      setIsProcessing(false);
+  };
+
+  const handleSaveWriteOff = async (e) => {
+      e.preventDefault();
+      if (!user) return;
+      if (writeOffForm.items.length === 0) return showToast("กรุณาเพิ่มรายการสินค้าที่ต้องการตัดชำรุด", "error");
+
+      setIsProcessing(true);
+      try {
+          const batchWriter = writeBatch(dbInstance);
+          const docDate = normalizeDate(writeOffForm.date);
+          
+          let docNo = writeOffForm.docNo;
+          if (!docNo) {
+             docNo = generateDateBasedDocId(internalDocs, 'DMG-', docDate, 'docNo');
+          }
+
+          let totalCost = 0;
+          const expenseItems = [];
+          const stockSnap = [...stockBatches];
+
+          if (writeOffForm.id) {
+              const oldDoc = internalDocs.find(d => d.id === writeOffForm.id);
+              if (oldDoc && oldDoc.items && !oldDoc.isFromExpenseTable) {
+                   for (const item of oldDoc.items) {
+                       let toReturn = Number(item.qty);
+                       if (isNaN(toReturn) || toReturn <= 0) continue;
+
+                       const affectedLots = stockBatches.filter(b => (b.sku === item.sku || b.productName === item.desc) && Number(b.sold) > 0).sort(sortNewestFirst);
+                       for (const lot of affectedLots) {
+                           if (toReturn <= 0) break;
+                           const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                           batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                           const snapIdx = stockSnap.findIndex(s => s.id === lot.id);
+                           if (snapIdx !== -1) stockSnap[snapIdx].sold = Math.max(0, (Number(stockSnap[snapIdx].sold) || 0) - canTakeBack);
+                           toReturn -= canTakeBack;
+                       }
+                   }
+              }
+          }
+
           for (const item of writeOffForm.items) {
               let needed = Number(item.qty);
               if (needed <= 0) continue;
-              
-              const cleanName = String(item.desc || '').trim();
-              const targetBatches = stockBatches
-                  .filter(b => matchItemToBatch(item.sku, cleanName, b.sku, b.productName))
-                  .sort(sortClosestToDateThenOldest(actionDate));
 
-              for (let i = 0; i < targetBatches.length; i++) {
+              let itemTotalCost = 0;
+              const lots = stockSnap.filter(b => b.sku === item.sku || b.productName === item.desc).sort(sortClosestToDateThenOldest(docDate));
+
+              for (let i = 0; i < lots.length; i++) {
+                  const lot = lots[i];
                   if (needed <= 0) break;
-                  const b = targetBatches[i];
-                  const remaining = Number(b.quantity) - Number(b.sold || 0);
-                  
+                  const remaining = Number(lot.quantity) - Number(lot.sold || 0);
+
                   let take = 0;
-                  if (i === targetBatches.length - 1) {
-                      take = needed;
-                  } else {
-                      take = Math.min(needed, Math.max(0, remaining));
-                  }
-                  
+                  if (i === lots.length - 1) take = needed;
+                  else take = Math.min(needed, Math.max(0, remaining));
+
                   if (take > 0) {
-                      const batchRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
-                      batchWriter.update(batchRef, { sold: increment(take) });
+                      const lotRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id);
+                      batchWriter.update(lotRef, { sold: increment(take) });
+
+                      const snapIdx = stockSnap.findIndex(s => s.id === lot.id);
+                      if (snapIdx !== -1) stockSnap[snapIdx].sold = (Number(stockSnap[snapIdx].sold) || 0) + take;
+
                       needed -= take;
+                      itemTotalCost += take * (Number(lot.costPerUnit) || 0);
+                      totalCost += take * (Number(lot.costPerUnit) || 0);
                   }
               }
 
               if (needed > 0) {
                   const dummyRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches'));
                   batchWriter.set(dummyRef, {
-                      productName: cleanName,
-                      sku: item.sku || '-',
-                      category: 'อื่นๆ',
-                      quantity: 0,
-                      costPerUnit: 0, 
-                      sellPrice: 0,
-                      date: actionDate,
-                      sold: needed,
-                      userId: user.uid,
-                      createdAt: serverTimestamp(),
-                      paymentStatus: 'paid',
-                      isAdjustment: true,
-                      adjustReason: 'สต็อกติดลบ (ตัดจำหน่าย)'
+                      productName: item.desc, sku: item.sku || '-', category: 'อื่นๆ', quantity: 0, costPerUnit: 0, sellPrice: 0,
+                      date: docDate, sold: needed, userId: user.uid, createdAt: serverTimestamp(), paymentStatus: 'paid', isAdjustment: true, adjustReason: `เอกสารตัดชำรุด: ${docNo}`
                   });
+              }
+
+              expenseItems.push({ desc: item.desc, qty: item.qty, unit: 'ชิ้น', buyPrice: item.qty > 0 ? (itemTotalCost / item.qty) : 0, sellPrice: 0, sku: item.sku });
+          }
+
+          const writeOffPayload = {
+              docNo, docType: 'write_off', date: docDate, requestedBy: writeOffForm.requestedBy, approvedBy: writeOffForm.approvedBy,
+              notes: writeOffForm.notes, reason: writeOffForm.reason, items: writeOffForm.items, totalCost, status: 'completed', userId: user.uid
+          };
+
+          let newDocRef;
+          if (writeOffForm.id && !writeOffForm.isFromExpenseTable) {
+              newDocRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs', writeOffForm.id);
+              writeOffPayload.updatedAt = serverTimestamp();
+              batchWriter.set(newDocRef, writeOffPayload, { merge: true });
+          } else {
+              newDocRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs'));
+              writeOffPayload.createdAt = serverTimestamp();
+              batchWriter.set(newDocRef, writeOffPayload);
+          }
+
+          if (totalCost > 0 || writeOffForm.id) {
+              const expCategory = 'สินค้าเสียหาย/หมดอายุ';
+              const expPayload = {
+                  type: 'expense', category: expCategory, description: `บันทึกตัดจำหน่ายสต็อก (ชำรุด/เสียหาย): ${(writeOffForm.items || []).map(i => i.desc).join(', ')}`,
+                  items: expenseItems, total: totalCost, grandTotal: totalCost, date: docDate, userId: user.uid,
+                  status: 'paid', partnerName: 'Internal (ตัดจำหน่าย/เคลม)', partnerBranch: '00000', isFromReconciliation: true,
+                  linkedOrderId: newDocRef.id, linkedOrderNo: docNo, sysDocId: docNo, isTaxOnly: false
+              };
+
+              if (writeOffForm.id) {
+                  const targetExpId = writeOffForm.isFromExpenseTable ? writeOffForm.id : null;
+                  if (targetExpId) {
+                      const expRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', targetExpId);
+                      batchWriter.set(expRef, expPayload, { merge: true });
+                  } else {
+                      const expQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), where('linkedOrderId', '==', writeOffForm.id)));
+                      if (!expQuery.empty) {
+                          const expDoc = expQuery.docs[0];
+                          batchWriter.set(expDoc.ref, expPayload, { merge: true });
+                      } else {
+                          const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                          batchWriter.set(expRef, expPayload);
+                      }
+                  }
+              } else {
+                  const expRef = doc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'));
+                  batchWriter.set(expRef, expPayload);
               }
           }
 
           await batchWriter.commit();
-          showToast("สร้างใบตัดจำหน่าย ตัดสต็อก และลงบัญชีรายจ่ายสำเร็จ", "success");
-          
-          setWriteOffForm({
-              date: formatDateISO(new Date()), reason: 'สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)',
-              approver: '', items: [{ sku: '', desc: '', qty: 1, cost: 0 }]
-          });
+          showToast(writeOffForm.id ? "อัปเดตเอกสารและสต็อกเรียบร้อยแล้ว" : "บันทึกเอกสารและตัดสต็อกเรียบร้อยแล้ว", "success");
+          setWriteOffForm({ id: null, docNo: '', date: formatDateISO(new Date()), requestedBy: '', approvedBy: '', notes: '', reason: 'สินค้าชำรุด/เสียหาย', items: [] });
           setActiveTab('history');
-
       } catch (err) {
           console.error(err);
-          showToast("เกิดข้อผิดพลาดในการสร้างเอกสาร", "error");
+          showToast("เกิดข้อผิดพลาดในการบันทึกข้อมูล", "error");
       }
       setIsProcessing(false);
   };
 
+  const handleEditDoc = (docItem) => {
+      if (docItem.docType === 'cert_receipt') {
+          setCertForm({
+              id: docItem.id,
+              docNo: docItem.docNo || '',
+              date: formatDateISO(docItem.date),
+              category: docItem.category || CONSTANTS.CATEGORIES.EXPENSE[0],
+              recipientName: docItem.recipientName || '',
+              recipientId: docItem.recipientId || '',
+              recipientAddress: docItem.recipientAddress || '',
+              items: docItem.items || [{ desc: '', qty: 1, price: '' }],
+              reason: docItem.reason || 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน',
+              payerName: docItem.payerName || '',
+              attachmentUrl: docItem.attachmentUrl || ''
+          });
+          setActiveTab('cert_receipt');
+      } else {
+          setWriteOffForm({
+              id: docItem.id,
+              docNo: docItem.docNo || '',
+              date: formatDateISO(docItem.date),
+              requestedBy: docItem.requestedBy || '',
+              approvedBy: docItem.approvedBy || '',
+              notes: docItem.notes || docItem.description || '',
+              reason: docItem.reason || 'สินค้าชำรุด/เสียหาย',
+              items: docItem.items || [],
+              isFromExpenseTable: docItem.isFromExpenseTable || false
+          });
+          setActiveTab('write_off');
+      }
+      window.scrollTo(0,0);
+  };
+
   const handleDeleteDoc = async (docItem) => {
-      if (!window.confirm(`ยืนยันการลบเอกสาร ${docItem.docNo}?\n\n*ระบบจะลบข้อมูลเอกสารและรายจ่ายบัญชีที่เกี่ยวข้องออกจากระบบอย่างถาวร`)) return;
+      if (!window.confirm(`ยืนยันการลบเอกสาร ${docItem.docNo} ออกจากระบบ?`)) return;
       setIsProcessing(true);
       try {
           const batchWriter = writeBatch(dbInstance);
 
-          if (docItem.source === 'internal_docs') {
-              // ลบเอกสารจาก internal_docs
-              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs', docItem.id));
-              
-              // ค้นหารายจ่ายที่เกี่ยวข้อง (linkedOrderNo = docNo)
-              const expTrans = transactions.find(t => t.linkedOrderNo === docItem.docNo);
-              if (expTrans) {
-                  batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', expTrans.id));
-                  
-                  // ถ้ารายจ่ายนั้นมีการตัดสต็อก ให้ลบสต็อกที่ถูกสร้างขึ้น
-                  const relatedLots = stockBatches.filter(b => b.parentExpenseId === expTrans.id);
-                  relatedLots.forEach(lot => {
-                      batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
-                  });
-              }
-          } else if (docItem.source === 'transactions') {
-              // ลบรายจ่ายจาก transactions_expense
+          if (docItem.isFromExpenseTable) {
               batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense', docItem.id));
+              // คืนสต็อก
+              const stockSnap = [...stockBatches];
+              for (const item of (docItem.items || [])) {
+                  let toReturn = Number(item.qty);
+                  if (isNaN(toReturn) || toReturn <= 0) continue;
+                  const affectedLots = stockSnap.filter(b => (b.sku === item.sku || b.productName === item.desc) && Number(b.sold) > 0).sort(sortNewestFirst);
+                  for (const lot of affectedLots) {
+                      if (toReturn <= 0) break;
+                      const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                      batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                      toReturn -= canTakeBack;
+                  }
+              }
+          } else {
+              batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'internal_docs', docItem.id));
+              const expQuery = await getDocs(query(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_expense'), where('linkedOrderId', '==', docItem.id)));
+              expQuery.docs.forEach(d => batchWriter.delete(d.ref));
               
-              // ลบสต็อกที่เกี่ยวข้อง
-              const relatedLots = stockBatches.filter(b => b.parentExpenseId === docItem.id);
-              relatedLots.forEach(lot => {
-                  batchWriter.delete(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id));
-              });
+              if (docItem.docType === 'write_off' || !docItem.docType) {
+                  const stockSnap = [...stockBatches];
+                  for (const item of (docItem.items || [])) {
+                      let toReturn = Number(item.qty);
+                      if (isNaN(toReturn) || toReturn <= 0) continue;
+                      const affectedLots = stockSnap.filter(b => (b.sku === item.sku || b.productName === item.desc) && Number(b.sold) > 0).sort(sortNewestFirst);
+                      for (const lot of affectedLots) {
+                          if (toReturn <= 0) break;
+                          const canTakeBack = Math.min(toReturn, Number(lot.sold));
+                          batchWriter.set(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', lot.id), { sold: increment(-canTakeBack) }, { merge: true });
+                          toReturn -= canTakeBack;
+                      }
+                  }
+              }
           }
 
           await batchWriter.commit();
-          showToast("ลบเอกสารและข้อมูลบัญชีที่เกี่ยวข้องสำเร็จ", "success");
-      } catch (err) {
-          console.error(err);
-          showToast("เกิดข้อผิดพลาดในการลบเอกสาร", "error");
+          showToast("ลบเอกสารเรียบร้อย", "success");
+      } catch (e) {
+          console.error(e);
+          showToast("ลบเอกสารไม่สำเร็จ", "error");
       }
       setIsProcessing(false);
   };
 
-  return (
-    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
-      
-      {/* --- Header Section --- */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-2">
-        <div>
-          <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2"><FileText className="text-indigo-600"/> เอกสารภายใน & ตัดจำหน่ายสินค้า</h2>
-          <p className="text-sm text-slate-500 mt-1">สร้างใบรับรองแทนใบเสร็จรับเงิน และใบตัดจำหน่ายสินค้าชำรุด/สูญหาย ตามมาตรฐานกรมสรรพากร</p>
-        </div>
-        <div className="flex items-center gap-2">
-            <span className="bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-lg text-[10px] font-bold border border-emerald-100 flex items-center gap-1">
-                <Zap size={12}/> Speed Optimized
-            </span>
-            <button onClick={() => window.location.reload()} className="bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-bold hover:bg-slate-50 transition-colors flex items-center gap-1 shadow-sm">
-                <RefreshCw size={12}/> รีเฟรชซิงค์ข้อมูล
-            </button>
-        </div>
-      </div>
-
-      {/* --- Tab Navigation --- */}
-      <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit mb-6 overflow-x-auto max-w-full shadow-inner border border-slate-200/50">
-          <button 
-              onClick={() => setActiveTab('substitute_receipt')} 
-              className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === 'substitute_receipt' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200/50' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-              <FileText size={16}/> ใบรับรองแทนใบเสร็จรับเงิน
-          </button>
-          <button 
-              onClick={() => setActiveTab('write_off')} 
-              className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === 'write_off' ? 'bg-white text-orange-600 shadow-sm ring-1 ring-slate-200/50' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-              <Trash2 size={16}/> ใบตัดจำหน่ายสินค้า (ชำรุด/สูญหาย)
-          </button>
-          <button 
-              onClick={() => setActiveTab('history')} 
-              className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all whitespace-nowrap ${activeTab === 'history' ? 'bg-white text-emerald-600 shadow-sm ring-1 ring-slate-200/50' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-              <History size={16}/> ประวัติเอกสารภายใน
-          </button>
-      </div>
-
-      {/* --- Main Content Area --- */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* Left Form Area */}
-          <div className="lg:col-span-2">
-              
-              {activeTab === 'substitute_receipt' && (
-                  <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm p-6 md:p-8 animate-fadeIn">
-                      <div className="border-b border-slate-100 pb-5 mb-6">
-                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><FileText className="text-indigo-600"/> ออกใบรับรองแทนใบเสร็จรับเงิน</h3>
-                          <p className="text-xs text-slate-500 mt-1">สำหรับบันทึกรายจ่ายที่ผู้ขายไม่ออกบิลให้ (สรรพากรยอมรับเมื่อมีเอกสารนี้พร้อมบัตรประชาชนผู้รับเงิน)</p>
-                      </div>
-
-                      <form onSubmit={handleGenerateSubstituteReceipt} className="space-y-6">
-                          {/* Row 1: Date & Category */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                              <div>
-                                  <label className="text-xs font-bold text-slate-600 mb-1.5 block">วันที่จ่ายเงิน</label>
-                                  <input type="date" required value={subForm.date} onChange={e=>setSubForm({...subForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100 transition-all text-slate-700"/>
-                              </div>
-                              <div>
-                                  <label className="text-xs font-bold text-slate-600 mb-1.5 block">หมวดหมู่รายจ่าย</label>
-                                  <select value={subForm.category} onChange={e=>setSubForm({...subForm, category: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100 transition-all text-slate-700 cursor-pointer">
-                                      {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
-                                  </select>
-                              </div>
-                          </div>
-
-                          {/* Row 2: Recipient Details */}
-                          <div className="bg-indigo-50/30 border border-indigo-100 rounded-2xl p-5 space-y-4">
-                              <h4 className="text-xs font-bold text-indigo-700 flex items-center gap-1.5"><User size={14}/> ข้อมูลผู้รับเงิน (RECIPIENT DETAILS)</h4>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                  <div>
-                                      <label className="text-[10px] font-bold text-slate-500 uppercase">ชื่อ - นามสกุล ผู้รับเงิน *</label>
-                                      <input required type="text" value={subForm.payeeName} onChange={e=>setSubForm({...subForm, payeeName: e.target.value})} placeholder="นาย / นาง / นางสาว..." className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100 mt-1 shadow-sm"/>
-                                  </div>
-                                  <div>
-                                      <label className="text-[10px] font-bold text-slate-500 uppercase">เลขประจำตัวประชาชน (13 หลัก)</label>
-                                      <input type="text" maxLength="13" value={subForm.payeeId} onChange={e=>setSubForm({...subForm, payeeId: e.target.value.replace(/[^0-9]/g, '')})} placeholder="X-XXXX-XXXXX-XX-X" className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-100 mt-1 shadow-sm"/>
-                                  </div>
-                                  <div className="sm:col-span-2">
-                                      <label className="text-[10px] font-bold text-slate-500 uppercase">ที่อยู่ผู้รับเงิน</label>
-                                      <input type="text" value={subForm.payeeAddress} onChange={e=>setSubForm({...subForm, payeeAddress: e.target.value})} placeholder="บ้านเลขที่, ถนน, ตำบล, อำเภอ, จังหวัด..." className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-100 mt-1 shadow-sm"/>
-                                  </div>
-                              </div>
-                          </div>
-
-                          {/* Row 3: Items */}
-                          <div>
-                              <div className="flex justify-between items-center mb-3">
-                                  <h4 className="text-sm font-bold text-slate-700">รายการสินค้า/บริการที่จ่าย</h4>
-                                  <button type="button" onClick={handleAddSubItem} className="text-[10px] bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-indigo-100 transition-colors">
-                                      <PlusCircle size={12}/> เพิ่มรายการ
-                                  </button>
-                              </div>
-                              <div className="space-y-2">
-                                  {subForm.items.map((item, idx) => (
-                                      <div key={idx} className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
-                                          <input required type="text" value={item.desc} onChange={e=>handleUpdateSubItem(idx, 'desc', e.target.value)} placeholder="รายละเอียดการจ่าย..." className="w-full sm:flex-1 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors" />
-                                          <div className="flex gap-2 w-full sm:w-auto">
-                                              <input required type="number" min="1" value={item.qty} onChange={e=>handleUpdateSubItem(idx, 'qty', e.target.value)} placeholder="จำนวน" className="w-20 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold text-center outline-none focus:border-indigo-400 focus:bg-white transition-colors" />
-                                              <input required type="number" min="0" step="0.01" value={item.price} onChange={e=>handleUpdateSubItem(idx, 'price', e.target.value)} placeholder="ราคา/หน่วย" className="w-28 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold text-right outline-none focus:border-indigo-400 focus:bg-white transition-colors" />
-                                              <button type="button" onClick={() => handleRemoveSubItem(idx)} disabled={subForm.items.length === 1} className="p-2.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-xl transition-all disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:border-transparent shrink-0">
-                                                  <Trash2 size={16}/>
-                                              </button>
-                                          </div>
-                                      </div>
-                                  ))}
-                              </div>
-                          </div>
-
-                          {/* Row 4: Reason & Approver */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
-                              <div>
-                                  <label className="text-[10px] font-bold text-slate-500 uppercase">เหตุผลที่ไม่ได้บิล/ใบเสร็จ</label>
-                                  <input type="text" value={subForm.reason} onChange={e=>setSubForm({...subForm, reason: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs outline-none focus:border-indigo-400 mt-1 shadow-sm text-slate-600"/>
-                              </div>
-                              <div>
-                                  <label className="text-[10px] font-bold text-slate-500 uppercase">ชื่อผู้ตรวจรับ / ผู้จ่ายเงิน</label>
-                                  <input type="text" value={subForm.approver} onChange={e=>setSubForm({...subForm, approver: e.target.value})} placeholder="ระบุชื่อผู้เบิก/ผู้จ่ายเงิน..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs outline-none focus:border-indigo-400 mt-1 shadow-sm"/>
-                              </div>
-                          </div>
-
-                          <div className="pt-2">
-                              <button type="submit" disabled={isProcessing} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-4 rounded-xl font-black text-lg shadow-xl shadow-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-                                  {isProcessing ? <Loader className="animate-spin" size={20}/> : <Save size={20}/>}
-                                  บันทึกและสร้างเอกสาร
-                              </button>
-                          </div>
-                      </form>
-                  </div>
-              )}
-
-              {activeTab === 'write_off' && (
-                  <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm p-6 md:p-8 animate-fadeIn">
-                      <div className="border-b border-slate-100 pb-5 mb-6">
-                          <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Trash2 className="text-orange-600"/> ใบตัดจำหน่ายสินค้า</h3>
-                          <p className="text-xs text-slate-500 mt-1">สำหรับบันทึกสินค้าชำรุด สูญหาย หรือหมดอายุ เพื่อนำต้นทุนไปลงเป็นรายจ่ายบริษัท และตัดสต็อกออกอัตโนมัติ</p>
-                      </div>
-
-                      <form onSubmit={handleGenerateWriteOff} className="space-y-6">
-                          {/* Row 1: Date & Reason */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                              <div>
-                                  <label className="text-xs font-bold text-slate-600 mb-1.5 block">วันที่บันทึกตัดจำหน่าย</label>
-                                  <input type="date" required value={writeOffForm.date} onChange={e=>setWriteOffForm({...writeOffForm, date: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 transition-all text-slate-700"/>
-                              </div>
-                              <div>
-                                  <label className="text-xs font-bold text-slate-600 mb-1.5 block">สาเหตุการตัดจำหน่าย</label>
-                                  <select value={writeOffForm.reason} onChange={e=>setWriteOffForm({...writeOffForm, reason: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-orange-100 transition-all text-slate-700 cursor-pointer">
-                                      <option value="สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)">สินค้าชำรุด/สูญหาย (ตัดจำหน่าย)</option>
-                                      <option value="สินค้าหมดอายุ/เสื่อมสภาพ">สินค้าหมดอายุ/เสื่อมสภาพ</option>
-                                      <option value="นำไปใช้ในกิจการ/เป็นตัวอย่างสินค้า">นำไปใช้ในกิจการ/เป็นตัวอย่างสินค้า</option>
-                                      <option value="ยอดตรวจนับจริงต่ำกว่าระบบ (ยอดขาด)">ยอดตรวจนับจริงต่ำกว่าระบบ (ยอดขาด)</option>
-                                      <option value="อื่นๆ">อื่นๆ</option>
-                                  </select>
-                              </div>
-                          </div>
-
-                          {/* Row 3: Items */}
-                          <div>
-                              <div className="flex justify-between items-center mb-3">
-                                  <h4 className="text-sm font-bold text-slate-700">รายการสินค้าที่ต้องการตัดสต็อก</h4>
-                                  <button type="button" onClick={handleAddWriteOffItem} className="text-[10px] bg-orange-50 text-orange-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-orange-100 transition-colors">
-                                      <PlusCircle size={12}/> เพิ่มรายการ
-                                  </button>
-                              </div>
-                              <div className="space-y-2">
-                                  {writeOffForm.items.map((item, idx) => (
-                                      <div key={idx} className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
-                                          <input type="text" value={item.sku} onChange={e=>handleUpdateWriteOffItem(idx, 'sku', e.target.value)} placeholder="SKU" className="w-full sm:w-24 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-mono outline-none focus:border-orange-400 focus:bg-white transition-colors" />
-                                          <input required type="text" value={item.desc} onChange={e=>handleUpdateWriteOffItem(idx, 'desc', e.target.value)} placeholder="ชื่อสินค้า..." className="w-full sm:flex-1 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:border-orange-400 focus:bg-white transition-colors" />
-                                          <div className="flex gap-2 w-full sm:w-auto">
-                                              <input required type="number" min="1" value={item.qty} onChange={e=>handleUpdateWriteOffItem(idx, 'qty', e.target.value)} placeholder="จำนวน" className="w-20 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold text-center outline-none focus:border-orange-400 focus:bg-white transition-colors" />
-                                              <input required type="number" min="0" step="0.01" value={item.cost} onChange={e=>handleUpdateWriteOffItem(idx, 'cost', e.target.value)} placeholder="ราคาทุน/ชิ้น" className="w-28 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-sm font-bold text-right outline-none focus:border-orange-400 focus:bg-white transition-colors" />
-                                              <button type="button" onClick={() => handleRemoveWriteOffItem(idx)} disabled={writeOffForm.items.length === 1} className="p-2.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-xl transition-all disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:border-transparent shrink-0">
-                                                  <Trash2 size={16}/>
-                                              </button>
-                                          </div>
-                                      </div>
-                                  ))}
-                              </div>
-                          </div>
-
-                          {/* Row 4: Approver */}
-                          <div className="pt-4 border-t border-slate-100">
-                              <label className="text-[10px] font-bold text-slate-500 uppercase">ผู้อนุมัติ / ผู้ตรวจนับ</label>
-                              <input type="text" value={writeOffForm.approver} onChange={e=>setWriteOffForm({...writeOffForm, approver: e.target.value})} placeholder="ระบุชื่อผู้มีอำนาจอนุมัติการตัดสต็อก..." className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs outline-none focus:border-orange-400 mt-1 shadow-sm"/>
-                          </div>
-
-                          <div className="pt-2">
-                              <button type="submit" disabled={isProcessing} className="w-full bg-orange-500 hover:bg-orange-600 text-white py-4 rounded-xl font-black text-lg shadow-xl shadow-orange-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-                                  {isProcessing ? <Loader className="animate-spin" size={20}/> : <Save size={20}/>}
-                                  ยืนยันการตัดจำหน่าย (หักสต็อกทันที)
-                              </button>
-                          </div>
-                      </form>
-                  </div>
-              )}
-
-              {activeTab === 'history' && (
-                  <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden flex flex-col animate-fadeIn">
-                      <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                          <h3 className="font-bold text-slate-800 flex items-center gap-2"><History className="text-emerald-600"/> ประวัติเอกสารภายใน</h3>
-                          <span className="text-[10px] font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded-md">{combinedHistory.length} รายการ</span>
-                      </div>
-                      <div className="overflow-x-auto custom-scrollbar">
-                          <table className="w-full text-xs text-left">
-                              <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0">
-                                  <tr>
-                                      <th className="p-4 pl-6 border-b border-slate-200">วันที่ / เลขที่เอกสาร</th>
-                                      <th className="p-4 border-b border-slate-200">ประเภท</th>
-                                      <th className="p-4 border-b border-slate-200">รายละเอียด</th>
-                                      <th className="p-4 text-right border-b border-slate-200">มูลค่า (฿)</th>
-                                      <th className="p-4 text-center border-b border-slate-200">จัดการ</th>
-                                  </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-50">
-                                  {combinedHistory.map((doc, idx) => (
-                                      <tr key={`${doc.source}-${doc.id}`} className="hover:bg-slate-50/80 transition-colors">
-                                          <td className="p-4 pl-6">
-                                              <p className="font-bold text-slate-700">{formatDate(doc.date)}</p>
-                                              <p className="text-[10px] font-mono font-bold text-indigo-600 mt-0.5">{doc.docNo}</p>
-                                          </td>
-                                          <td className="p-4">
-                                              <span className={`px-2 py-1 rounded text-[10px] font-bold shadow-sm ${doc.docType === 'write_off' ? 'bg-orange-100 text-orange-700 border border-orange-200' : 'bg-teal-100 text-teal-700 border border-teal-200'}`}>
-                                                  {doc.docType === 'write_off' ? 'ใบตัดจำหน่าย/ชำรุด' : 'ใบรับรองแทนใบเสร็จฯ'}
-                                              </span>
-                                          </td>
-                                          <td className="p-4">
-                                              {doc.payee && <p className="font-bold text-slate-800 text-sm mb-0.5">{doc.payee}</p>}
-                                              <p className="text-[10px] text-slate-500 truncate max-w-[200px]" title={doc.description || (doc.items && doc.items.map(i => i.desc).join(', '))}>{doc.description || (doc.items && doc.items.map(i => i.desc).join(', ')) || '-'}</p>
-                                          </td>
-                                          <td className="p-4 text-right font-black text-rose-500 text-sm">
-                                              {formatCurrency(doc.totalCost)}
-                                          </td>
-                                          <td className="p-4 text-center">
-                                              <button onClick={() => handleDeleteDoc(doc)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-100" title="ลบเอกสารและรายจ่ายบัญชีที่เกี่ยวข้อง">
-                                                  <Trash2 size={16}/>
-                                              </button>
-                                          </td>
-                                      </tr>
-                                  ))}
-                                  {combinedHistory.length === 0 && (
-                                      <tr><td colSpan="5" className="p-10 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลเอกสารภายใน</td></tr>
-                                  )}
-                              </tbody>
-                          </table>
-                      </div>
-                  </div>
-              )}
-          </div>
-
-          {/* Right Info Panel */}
-          <div className="lg:col-span-1">
-              <div className="bg-[#1e1b4b] rounded-[32px] p-8 text-white shadow-xl relative overflow-hidden sticky top-6">
-                  <FileCheck size={160} className="absolute -right-10 -bottom-10 opacity-5 text-indigo-300 pointer-events-none"/>
-                  
-                  <div className="relative z-10">
-                      <div className="flex items-center gap-2 mb-6 text-indigo-300">
-                          <Info size={20}/>
-                          <h4 className="font-black text-lg">คำแนะนำการใช้งาน</h4>
-                      </div>
-                      
-                      <div className="space-y-6 text-sm leading-relaxed text-indigo-100/90 font-medium">
-                          <p>
-                              <b>ใบรับรองแทนใบเสร็จรับเงิน</b> ใช้ในกรณีที่กิจการมีรายจ่ายที่เกิดขึ้นจริง แต่ผู้รับเงินไม่สามารถออกใบเสร็จรับเงินให้ได้ (เช่น จ่ายค่าแรงบุคคลธรรมดา, ซื้อของจากชาวบ้าน)
-                          </p>
-                          
-                          <div className="bg-indigo-900/50 p-5 rounded-2xl border border-indigo-500/30">
-                              <p className="font-bold text-white mb-3 flex items-center gap-2"><CheckCircle size={16} className="text-emerald-400"/> เงื่อนไขสำคัญที่สรรพากรยอมรับ:</p>
-                              <ol className="list-decimal pl-4 space-y-2 text-xs">
-                                  <li>ต้องระบุชื่อ-นามสกุล และเลขบัตรประชาชนผู้รับเงินให้ชัดเจน</li>
-                                  <li>ควรแนบหลักฐานการจ่ายเงิน เช่น สลิปโอนเงิน หรือสำเนาบัตรประชาชนผู้รับเงินประกอบกับเอกสารชุดนี้เสมอ</li>
-                                  <li>ผู้จ่ายเงิน (พนักงาน/เจ้าของ) ต้องลงนามรับรอง</li>
-                              </ol>
-                          </div>
-
-                          <p className="text-[10px] text-indigo-300/60 mt-4 border-t border-indigo-800 pt-4">
-                              * ระบบจะทำการสร้างรายการรายจ่าย (Expense) ลงในระบบบัญชีให้อัตโนมัติเมื่อกดบันทึก
-                          </p>
-                      </div>
-                  </div>
-              </div>
-          </div>
-
-      </div>
-    </div>
-  );
-}
-
-// --- 🔥 NEW: Smart Hologram Orb (Pet AI) Component ---
-function SmartHologramOrb({ transactions = [], stockBatches = [], invoices = [] }) {
-  const [pos, setPos] = useState({ x: window.innerWidth - 120, y: window.innerHeight - 120 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [isOpen, setIsOpen] = useState(false);
-  const [mousePos, setMousePos] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-  const [selectedAlert, setSelectedAlert] = useState(null); 
-  
-  // --- 🔥 NEW: State สำหรับเก็บ ID รายการที่ผู้ใช้กด "ซ่อน/รับทราบแล้ว" ---
-  const [ignoredAlertIds, setIgnoredAlertIds] = useState(() => {
-      try { return JSON.parse(localStorage.getItem('merchant_ignored_alerts') || '[]'); }
-      catch (e) { return []; }
-  });
-  
-  const orbRef = useRef(null);
-  const dragRef = useRef({ startX: 0, startY: 0, orbX: 0, orbY: 0 });
-
-  // ฟังก์ชันสำหรับกดซ่อนการแจ้งเตือน
-  const handleIgnoreItem = (itemId, e) => {
-      e.stopPropagation();
-      const newIgnored = [...ignoredAlertIds, itemId];
-      setIgnoredAlertIds(newIgnored);
-      localStorage.setItem('merchant_ignored_alerts', JSON.stringify(newIgnored));
-      
-      if (selectedAlert) {
-          const remainingItems = selectedAlert.items.filter(it => it.id !== itemId);
-          if (remainingItems.length === 0) {
-              setSelectedAlert(null); // ปิดหน้าต่างถ้ากดซ่อนจนหมดแล้ว
-          } else {
-              setSelectedAlert(prev => ({ ...prev, items: remainingItems }));
-          }
+  const handleDownloadPDF = async (docObj) => {
+      if (!window.html2pdf) {
+          showToast("กำลังโหลดโปรแกรมช่วยดาวน์โหลด...", "success");
+          const loadScript = (src) => new Promise(res => {
+              const s = document.createElement('script');
+              s.src = src; s.onload = res; document.body.appendChild(s);
+          });
+          await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js");
+      }
+      try {
+          const element = document.getElementById('internal-doc-preview');
+          const opt = {
+              margin: 10,
+              filename: `${docObj.docNo}.pdf`,
+              image: { type: 'jpeg', quality: 0.98 },
+              html2canvas: { scale: 2, useCORS: true },
+              jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+          };
+          showToast("กำลังสร้างไฟล์ PDF...", "success");
+          await window.html2pdf().set(opt).from(element).save();
+          showToast("ดาวน์โหลด PDF สำเร็จ", "success");
+      } catch (e) {
+          showToast("เกิดข้อผิดพลาดในการสร้างไฟล์ PDF", "error");
       }
   };
 
-  // --- Logic การแจ้งเตือนอัจฉริยะ (Smart Alerts) พร้อมข้อมูลเชิงลึก ---
-  const alerts = useMemo(() => {
-    const issues = [];
-    
-    // 1. ตรวจสอบสต็อกติดลบ (กรองตัวที่กดซ่อนออก)
-    const negativeStock = stockBatches.filter(b => (Number(b.quantity) - Number(b.sold || 0)) < 0 && !ignoredAlertIds.includes(b.id));
-    if (negativeStock.length > 0) {
-        issues.push({
-            id: 'negative_stock',
-            title: `พบสินค้าสต็อกติดลบ ${negativeStock.length} รายการ`,
-            items: negativeStock.map(b => ({
-                id: b.id,
-                ref: b.sku && b.sku !== '-' ? b.sku : (b.id?.substring(0,8) || '-'),
-                name: b.productName,
-                desc: `ติดลบ ${Math.abs(Number(b.quantity) - Number(b.sold || 0))} ชิ้น`
-            }))
-        });
-    }
-
-    // 2. ตรวจสอบใบกำกับภาษีข้อมูลไม่ครบถ้วน
-    const badInvoices = invoices.filter(inv => inv.status !== 'cancelled' && inv.docType === 'invoice' && (!inv.taxId || !inv.customerName || !inv.address) && !ignoredAlertIds.includes(inv.id));
-    if (badInvoices.length > 0) {
-        issues.push({
-            id: 'bad_invoices',
-            title: `ใบกำกับภาษีข้อมูลไม่ครบ ${badInvoices.length} ใบ (ขาด ชื่อ/ที่อยู่/Tax ID)`,
-            items: badInvoices.map(inv => ({
-                id: inv.id,
-                ref: inv.invNo,
-                name: inv.customerName || 'ไม่ระบุชื่อลูกค้า',
-                desc: `ขาด: ${[!inv.taxId && 'Tax ID', !inv.customerName && 'ชื่อลูกค้า', !inv.address && 'ที่อยู่'].filter(Boolean).join(', ')}`
-            }))
-        });
-    }
-
-    // 3. ตรวจสอบรายจ่ายที่ขอคืน VAT ได้ แต่ไม่มีเลขใบกำกับ
-    // 🔥 FIX: ยกเว้นหมวด 'สินค้าเสียหาย/หมดอายุ' หรือรายการที่มาจากระบบกระทบยอดอัตโนมัติ (isFromReconciliation) 
-    const badExpenses = transactions.filter(t => 
-        t.type === 'expense' && 
-        !t.isCancelled && 
-        t.category !== 'สินค้าเสียหาย/หมดอายุ' &&
-        !t.isFromReconciliation &&
-        !t.isNonCreditableVat && 
-        !t.isCashBill && 
-        t.vatType !== 'none' && 
-        (!t.taxInvoiceNo || t.taxInvoiceNo === '-') &&
-        !ignoredAlertIds.includes(t.id)
-    );
-    if (badExpenses.length > 0) {
-        issues.push({
-            id: 'bad_expenses',
-            title: `รายจ่ายเคลม VAT ขาดเลขใบกำกับ ${badExpenses.length} รายการ`,
-            items: badExpenses.map(t => {
-                const formatCurrencyLocal = (amount) => new Intl.NumberFormat('th-TH', { style: 'decimal', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(amount) || 0);
-                return {
-                    id: t.id,
-                    ref: t.sysDocId || t.id,
-                    name: t.category,
-                    desc: `ยอดรวม: ${formatCurrencyLocal(t.grandTotal || t.total)} ฿`
-                };
-            })
-        });
-    }
-
-    return issues;
-  }, [transactions, stockBatches, invoices, ignoredAlertIds]);
-
-  const hasAlert = alerts.length > 0;
-
-  // --- Eye Tracking Logic (ดวงตามองตามเมาส์) ---
-  useEffect(() => {
-    const handleGlobalMouseMove = (e) => {
-      setMousePos({ x: e.clientX, y: e.clientY });
-    };
-    window.addEventListener('mousemove', handleGlobalMouseMove);
-    return () => window.removeEventListener('mousemove', handleGlobalMouseMove);
-  }, []);
-
-  // --- Drag & Physics Logic (ระบบอุ้มลูกแก้วโฮโลแกรม) ---
-  const handlePointerDown = (e) => {
-    setIsDragging(true);
-    dragRef.current = {
-      startX: e.clientX || e.touches?.[0]?.clientX,
-      startY: e.clientY || e.touches?.[0]?.clientY,
-      orbX: pos.x,
-      orbY: pos.y
-    };
-    e.preventDefault(); // ป้องกันการลากคลุม Text
-  };
-
-  useEffect(() => {
-    const handlePointerMove = (e) => {
-      if (!isDragging) return;
-      const currentX = e.clientX || e.touches?.[0]?.clientX;
-      const currentY = e.clientY || e.touches?.[0]?.clientY;
-      const dx = currentX - dragRef.current.startX;
-      const dy = currentY - dragRef.current.startY;
-      
-      let newX = dragRef.current.orbX + dx;
-      let newY = dragRef.current.orbY + dy;
-      
-      // ล็อกให้อยู่ในกรอบหน้าจอ
-      newX = Math.max(0, Math.min(newX, window.innerWidth - 80));
-      newY = Math.max(0, Math.min(newY, window.innerHeight - 80));
-      
-      setPos({ x: newX, y: newY });
-    };
-
-    const handlePointerUp = () => {
-      setIsDragging(false);
-    };
-
-    if (isDragging) {
-      window.addEventListener('mousemove', handlePointerMove);
-      window.addEventListener('mouseup', handlePointerUp);
-      window.addEventListener('touchmove', handlePointerMove, { passive: false });
-      window.addEventListener('touchend', handlePointerUp);
-    }
-
-    return () => {
-      window.removeEventListener('mousemove', handlePointerMove);
-      window.removeEventListener('mouseup', handlePointerUp);
-      window.removeEventListener('touchmove', handlePointerMove);
-      window.removeEventListener('touchend', handlePointerUp);
-    };
-  }, [isDragging, pos.x, pos.y]);
-
-  // คำนวณองศาเพื่อขยับดวงตา (Inner Core)
-  let eyeOffsetX = 0;
-  let eyeOffsetY = 0;
-  if (orbRef.current) {
-    const rect = orbRef.current.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    const dx = mousePos.x - centerX;
-    const dy = mousePos.y - centerY;
-    const angle = Math.atan2(dy, dx);
-    const dist = Math.min(12, Math.sqrt(dx * dx + dy * dy) / 10); // ขยับได้สูงสุด 12px
-    eyeOffsetX = Math.cos(angle) * dist;
-    eyeOffsetY = Math.sin(angle) * dist;
-  }
-
-  // กำหนดสีและสไตล์ตามสถานะ
-  const orbColor = hasAlert ? 'from-rose-500 to-red-700 shadow-rose-500/50' : 'from-indigo-500 to-blue-600 shadow-indigo-500/50';
-  const ringColor = hasAlert ? 'border-rose-400' : 'border-indigo-400';
-
   return (
-    <div 
-       className="fixed z-[5000]"
-       style={{ left: pos.x, top: pos.y }}
-    >
-        {/* --- Pop-up แจ้งเตือน AI --- */}
-        <div className={`absolute bottom-full mb-4 right-0 w-80 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-3xl p-5 shadow-2xl text-white transition-all duration-300 origin-bottom-right ${isOpen ? 'scale-100 opacity-100' : 'scale-0 opacity-0 pointer-events-none'}`}>
-            <div className="flex justify-between items-center mb-3 border-b border-slate-700 pb-3">
-                <span className="font-bold text-sm flex items-center gap-2">
-                    <Sparkles size={16} className={hasAlert ? "text-rose-400" : "text-cyan-400"}/> 
-                    AI Health Monitor
-                </span>
-                <button onClick={() => setIsOpen(false)} className="text-slate-400 hover:text-white transition-colors"><X size={16}/></button>
+    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
+        
+        {/* Header */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+                <h2 className="text-xl font-black text-indigo-800 flex items-center gap-2">
+                    <FileText size={24} className="text-indigo-600"/> เอกสารภายใน & ตัดจำหน่ายสินค้า
+                </h2>
+                <p className="text-xs text-slate-500 mt-1 font-medium">สร้างใบรับรองแทนใบเสร็จรับเงิน และใบตัดจำหน่ายสินค้าชำรุด/สูญหาย ตามมาตรฐานกรมสรรพากร</p>
             </div>
-            {hasAlert ? (
-                <ul className="space-y-3 text-xs">
-                    {alerts.map((a, i) => (
-                        <li 
-                            key={i} 
-                            onClick={() => setSelectedAlert(a)}
-                            className="flex items-start gap-2 text-rose-100 bg-rose-500/10 p-2.5 rounded-xl border border-rose-500/30 shadow-sm leading-relaxed cursor-pointer hover:bg-rose-500/20 transition-all group text-left"
-                        >
-                            <AlertTriangle size={16} className="shrink-0 text-rose-500 mt-0.5" />
-                            <div className="flex-1">
-                                <span className="block font-bold">{a.title}</span>
-                                <span className="text-[10px] text-rose-300 opacity-70 group-hover:opacity-100 flex items-center gap-1 mt-1 transition-opacity">
-                                    คลิกดูรายละเอียด <ChevronRight size={10}/>
-                                </span>
-                            </div>
-                        </li>
-                    ))}
-                </ul>
-            ) : (
-                <div className="flex flex-col items-center justify-center py-4 text-emerald-400">
-                    <CheckCircle size={32} className="mb-2 opacity-80" />
-                    <p className="text-xs font-bold text-center leading-relaxed">ระบบปกติดี 100%<br/>ไม่พบเอกสารหรือสต็อกที่มีปัญหา</p>
-                </div>
-            )}
+            <div className="flex items-center gap-2">
+                <span className="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-lg border border-emerald-200 flex items-center gap-1">
+                    <Zap size={12}/> Speed Optimized
+                </span>
+                <span className="px-3 py-1.5 bg-white text-slate-500 text-[10px] font-bold rounded-lg border border-slate-200 flex items-center gap-1 hover:bg-slate-50 cursor-pointer transition-colors" onClick={() => window.location.reload()}>
+                    <RefreshCw size={12}/> รีเฟรชซิงค์ข้อมูล
+                </span>
+            </div>
         </div>
 
-        {/* --- Modal แสดงรายละเอียดปัญหา (Drill-down Details) --- */}
-        {selectedAlert && (
-            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[10000] flex items-center justify-center p-4 text-left">
-                <div className="bg-white rounded-[32px] p-6 md:p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
-                    <div className="flex justify-between items-start mb-4 border-b border-slate-100 pb-4">
-                        <div className="text-left">
-                            <h3 className="text-lg font-black text-rose-600 flex items-center gap-2"><AlertTriangle/> รายละเอียดปัญหาที่พบ</h3>
-                            <p className="text-xs text-slate-500 mt-1">{selectedAlert.title}</p>
+        {/* Tab Selector */}
+        <div className="flex bg-white border border-slate-200 p-1.5 rounded-2xl w-fit shadow-sm overflow-x-auto">
+            <button onClick={() => setActiveTab('cert_receipt')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'cert_receipt' ? 'bg-indigo-50 text-indigo-700 shadow-sm border border-indigo-100' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
+                <FileText size={16}/> ใบรับรองแทนใบเสร็จรับเงิน
+            </button>
+            <button onClick={() => setActiveTab('write_off')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'write_off' ? 'bg-rose-50 text-rose-700 shadow-sm border border-rose-100' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
+                <Trash2 size={16}/> ใบตัดจำหน่ายสินค้า (ชำรุด/สูญหาย)
+            </button>
+            <button onClick={() => setActiveTab('history')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'history' ? 'bg-slate-100 text-slate-800 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
+                <History size={16}/> ประวัติเอกสารภายใน
+            </button>
+        </div>
+
+        {/* TAB 1: CERTIFICATE RECEIPT */}
+        {activeTab === 'cert_receipt' && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div className="xl:col-span-2 bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm text-left">
+                    <div className="mb-6 border-b border-slate-100 pb-4 flex justify-between items-start">
+                        <div>
+                            <h3 className="text-xl font-black text-indigo-800 flex items-center gap-2">
+                                <FileText className="text-indigo-600"/> {certForm.id ? 'แก้ไขใบรับรองแทนใบเสร็จรับเงิน' : 'ออกใบรับรองแทนใบเสร็จรับเงิน'}
+                            </h3>
+                            <p className="text-xs text-slate-500 mt-1">สำหรับบันทึกรายจ่ายที่ผู้ขายไม่ออกบิลให้ (สรรพากรยอมรับเมื่อมีเอกสารนี้พร้อมบัตรประชาชนผู้รับเงิน)</p>
                         </div>
-                        <button onClick={() => setSelectedAlert(null)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={16}/></button>
-                    </div>
-                    
-                    <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 mb-4">
-                        <p className="text-[10px] font-bold text-amber-700 leading-relaxed flex items-start gap-1.5">
-                            <Info size={14} className="shrink-0 mt-0.5"/>
-                            คัดลอก "รหัสอ้างอิง" เพื่อไปค้นหาและแก้ไข หรือกดปุ่ม "ซ่อน" ด้านหลังรหัสเพื่อปิดการแจ้งเตือนรายการนี้ถาวร
-                        </p>
+                        {certForm.id && (
+                            <button onClick={() => setCertForm({ id: null, docNo: '', date: formatDateISO(new Date()), category: CONSTANTS.CATEGORIES.EXPENSE[0], recipientName: '', recipientId: '', recipientAddress: '', items: [{ desc: '', qty: 1, price: '' }], reason: 'ผู้รับเงินเป็นบุคคลธรรมดา ไม่ออกใบกำกับภาษี/ใบเสร็จรับเงิน', payerName: '', attachmentUrl: '' })} className="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-bold hover:bg-slate-200 transition-colors">
+                                ยกเลิกแก้ไข
+                            </button>
+                        )}
                     </div>
 
-                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2 pb-2">
-                        {selectedAlert.items.map((item, idx) => (
-                            <div key={idx} className="bg-rose-50 border border-rose-100 p-4 rounded-2xl flex flex-col text-left shadow-sm hover:border-rose-300 transition-colors">
-                                <div className="flex justify-between items-start mb-2">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="font-mono font-black text-rose-700 text-sm bg-white px-2.5 py-0.5 rounded-lg border border-rose-200 shadow-sm select-all cursor-text">{item.ref}</span>
-                                        <button onClick={(e) => handleIgnoreItem(item.id, e)} className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 hover:bg-slate-100 hover:text-slate-800 px-2 py-1 rounded-md transition-colors flex items-center gap-1 shadow-sm" title="รับทราบและซ่อนการแจ้งเตือนนี้">
-                                            <EyeOff size={12}/> ซ่อน
+                    <form onSubmit={handleSaveCertReceipt} className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="text-xs font-bold text-slate-600 mb-1.5 block">วันที่จ่ายเงิน</label>
+                                <input type="date" required value={certForm.date} onChange={e=>setCertForm({...certForm, date: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-slate-50 transition-all"/>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-600 mb-1.5 block">หมวดหมู่รายจ่าย</label>
+                                <select value={certForm.category} onChange={e=>setCertForm({...certForm, category: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-slate-50 cursor-pointer transition-all">
+                                    {CONSTANTS.CATEGORIES.EXPENSE.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="bg-indigo-50/30 p-5 rounded-2xl border border-indigo-100 space-y-4">
+                            <h4 className="text-xs font-bold text-indigo-600 flex items-center gap-2 mb-2"><User size={16}/> ข้อมูลผู้รับเงิน (RECIPIENT DETAILS)</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">ชื่อ - นามสกุล ผู้รับเงิน *</label>
+                                    <input type="text" required value={certForm.recipientName} onChange={e=>setCertForm({...certForm, recipientName: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-white transition-all shadow-sm" placeholder="นาย / นาง / นางสาว..."/>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">เลขประจำตัวประชาชน (13 หลัก)</label>
+                                    <input type="text" value={certForm.recipientId} onChange={e=>setCertForm({...certForm, recipientId: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-mono outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-white transition-all shadow-sm" placeholder="X-XXXX-XXXXX-XX-X"/>
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="text-[10px] font-bold text-slate-500 mb-1 block">ที่อยู่ผู้รับเงิน</label>
+                                    <input type="text" value={certForm.recipientAddress} onChange={e=>setCertForm({...certForm, recipientAddress: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-white transition-all shadow-sm" placeholder="บ้านเลขที่, ถนน, ตำบล, อำเภอ, จังหวัด..."/>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <div className="flex justify-between items-center mb-3">
+                                <h4 className="text-sm font-bold text-slate-700">รายการสินค้า/บริการที่จ่าย</h4>
+                                <button type="button" onClick={() => setCertForm(p => ({...p, items: [...p.items, {desc: '', qty: 1, price: ''}]}))} className="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-4 py-2 rounded-lg font-bold flex items-center gap-1.5 transition-colors shadow-sm">
+                                    <PlusCircle size={14}/> เพิ่มรายการ
+                                </button>
+                            </div>
+                            <div className="space-y-3">
+                                {certForm.items.map((item, idx) => (
+                                    <div key={idx} className="flex flex-col sm:flex-row gap-2 items-start sm:items-center bg-slate-50 p-3 rounded-xl border border-slate-200 shadow-sm">
+                                        <input type="text" value={item.desc} onChange={e => {
+                                            const newItems = [...certForm.items]; newItems[idx].desc = e.target.value; setCertForm({...certForm, items: newItems});
+                                        }} className="w-full sm:flex-1 p-3 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 transition-colors" placeholder="รายละเอียดรายการจ่าย..."/>
+                                        <div className="flex gap-2 w-full sm:w-auto">
+                                            <input type="number" min="1" value={item.qty} onChange={e => {
+                                                const newItems = [...certForm.items]; newItems[idx].qty = e.target.value; setCertForm({...certForm, items: newItems});
+                                            }} className="w-full sm:w-20 p-3 rounded-lg border border-slate-200 bg-white text-sm text-center font-bold outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 transition-colors" placeholder="จำนวน"/>
+                                            <input type="number" value={item.price} onChange={e => {
+                                                const newItems = [...certForm.items]; newItems[idx].price = e.target.value; setCertForm({...certForm, items: newItems});
+                                            }} className="w-full sm:w-32 p-3 rounded-lg border border-slate-200 bg-white text-sm text-right font-bold text-indigo-600 outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 transition-colors" placeholder="ราคา/หน่วย"/>
+                                        </div>
+                                        <button type="button" onClick={() => {
+                                            if (certForm.items.length > 1) {
+                                                const newItems = certForm.items.filter((_, i) => i !== idx); setCertForm({...certForm, items: newItems});
+                                            }
+                                        }} className="p-3 bg-white border border-slate-200 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-30 w-full sm:w-auto shadow-sm" disabled={certForm.items.length === 1}>
+                                            <Trash2 size={16} className="mx-auto"/>
                                         </button>
                                     </div>
-                                    <span className="text-[10px] font-black bg-rose-600 text-white px-2 py-0.5 rounded shadow-sm">{item.desc}</span>
-                                </div>
-                                <p className="text-xs font-bold text-slate-700 mt-1 line-clamp-2">{item.name}</p>
+                                ))}
                             </div>
-                        ))}
-                    </div>
-                    
-                    <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end">
-                        <button onClick={() => setSelectedAlert(null)} className="px-6 py-3.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition-colors text-sm w-full shadow-lg">รับทราบ และปิดหน้าต่าง</button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">เหตุผลที่ไม่ได้รับใบเสร็จ</label>
+                                <input type="text" value={certForm.reason} onChange={e=>setCertForm({...certForm, reason: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-slate-50 transition-all"/>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">ชื่อผู้ตรวจรับ / ผู้จ่ายเงิน</label>
+                                <input type="text" value={certForm.payerName} onChange={e=>setCertForm({...certForm, payerName: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 bg-slate-50 transition-all" placeholder="ระบุชื่อผู้เบิก/ผู้จ่ายเงิน..."/>
+                            </div>
+                        </div>
+
+                        <div className="pt-4">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1 mb-2"><Camera size={14}/> แนบรูปหลักฐาน/สลิป (DIGITAL FILING)</label>
+                            {certForm.attachmentUrl ? (
+                                <div className="relative group inline-block w-full sm:w-auto">
+                                    <a href={certForm.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block">
+                                        <img src={certForm.attachmentUrl} alt="Evidence" className="h-32 w-auto object-contain rounded-xl border border-slate-200 shadow-sm bg-slate-50" />
+                                    </a>
+                                    <button type="button" onClick={handleRemoveAttachment} className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-rose-600"><X size={12}/></button>
+                                </div>
+                            ) : (
+                                <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors bg-slate-50/50">
+                                    {isUploadingFile ? (
+                                        <div className="flex flex-col items-center gap-1">
+                                            <Loader className="animate-spin text-indigo-500" size={16}/>
+                                            <span className="text-[9px] font-bold text-indigo-500">กำลังอัปโหลด...</span>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <FileUp size={16} className="text-slate-400 mb-1"/>
+                                            <span className="text-[10px] font-bold text-slate-600">อัปโหลดสลิปโอนเงิน บัตรปชช. หรือใบเสนอราคา (JPG, PNG, PDF)</span>
+                                        </>
+                                    )}
+                                    <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleAttachFile} disabled={isUploadingFile} />
+                                </label>
+                            )}
+                        </div>
+
+                        <div className="pt-6 border-t border-slate-100 flex justify-end">
+                            <button type="submit" disabled={isProcessing} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-xl font-black shadow-lg shadow-indigo-200 flex justify-center items-center gap-2 transition-all hover:-translate-y-0.5 active:scale-95 disabled:opacity-50 text-base">
+                                {isProcessing ? <Loader size={20} className="animate-spin"/> : <Save size={20}/>} 
+                                {certForm.id ? 'อัปเดตข้อมูล' : 'บันทึกใบรับรองฯ และลงบัญชี'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div className="xl:col-span-1">
+                    <div className="bg-[#1e1b4b] rounded-[32px] p-8 text-white shadow-xl sticky top-6">
+                        <div className="flex items-center gap-2 mb-6 text-indigo-300"><Info size={24}/><h4 className="font-bold text-base">คำแนะนำการใช้งาน</h4></div>
+                        <div className="text-sm leading-relaxed space-y-6 text-indigo-50/90 font-medium">
+                            <p>ใบรับรองแทนใบเสร็จรับเงิน ใช้ในกรณีที่กิจการมีรายจ่ายที่เกิดขึ้นจริง แต่ผู้รับเงินไม่สามารถออกใบเสร็จรับเงินให้ได้</p>
+                            <div>
+                                <p className="font-bold text-white mb-2">เงื่อนไขสำคัญที่สรรพากรยอมรับ:</p>
+                                <ol className="list-decimal pl-4 space-y-2">
+                                    <li>ต้องระบุชื่อ-นามสกุล และเลขบัตรประชาชนผู้รับเงินให้ชัดเจน</li>
+                                    <li>ควรแนบหลักฐานการจ่ายเงิน เช่น สลิปโอนเงิน หรือสำเนาบัตรประชาชน</li>
+                                </ol>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         )}
 
-        {/* --- ตัวลูกแก้ว (The Orb) --- */}
-        <div 
-           ref={orbRef}
-           onMouseDown={handlePointerDown}
-           onTouchStart={handlePointerDown}
-           onClick={() => !isDragging && setIsOpen(!isOpen)}
-           className={`w-20 h-20 rounded-full cursor-grab active:cursor-grabbing relative transition-transform duration-300 ${isDragging ? 'scale-90' : 'hover:scale-105 animate-orb-float'}`}
-        >
-            {/* Outer Hologram Rings */}
-            <div className={`absolute inset-[-4px] rounded-full border border-dashed ${ringColor} opacity-40 animate-[spin_10s_linear_infinite]`}></div>
-            <div className={`absolute inset-[-8px] rounded-full border-2 ${ringColor} opacity-20 animate-ping`} style={{ animationDuration: hasAlert ? '1.5s' : '3s' }}></div>
-            
-            {/* Core Sphere */}
-            <div className={`w-full h-full rounded-full bg-gradient-to-br ${orbColor} shadow-2xl backdrop-blur-md flex items-center justify-center overflow-hidden border border-white/30`}>
-                
-                {/* Inner Cyber-Eye */}
-                <div 
-                   className="w-10 h-10 rounded-full bg-slate-900/40 shadow-inner flex items-center justify-center transition-transform duration-75 ease-out"
-                   style={{ transform: `translate(${eyeOffsetX}px, ${eyeOffsetY}px)` }}
-                >
-                    <div className={`w-4 h-4 rounded-full ${hasAlert ? 'bg-rose-400 shadow-[0_0_15px_rgba(2fb,113,133,0.8)]' : 'bg-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.8)]'} animate-pulse`}></div>
+        {/* TAB 2: WRITE-OFF (ตัดชำรุด) - ปรับ UI ให้ตรงกับภาพที่ 1 เป๊ะๆ */}
+        {activeTab === 'write_off' && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div className="xl:col-span-2 bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm text-left">
+                    <div className="mb-6 border-b border-slate-100 pb-4 flex justify-between items-start">
+                        <div>
+                            <h3 className="text-xl font-black text-rose-600 flex items-center gap-2"><Trash2/> {writeOffForm.id ? 'แก้ไขใบตัดจำหน่ายสินค้า' : 'ใบตัดจำหน่ายสินค้าชำรุด/สูญหาย'}</h3>
+                            <p className="text-xs text-slate-500 mt-1">ใช้สำหรับตัดสต็อกสินค้าที่เสียหายหรือหมดอายุ และลงเป็นค่าใช้จ่ายของกิจการโดยอัตโนมัติ</p>
+                        </div>
+                        {writeOffForm.id && (
+                            <button onClick={() => setWriteOffForm({ id: null, docNo: '', date: formatDateISO(new Date()), requestedBy: '', approvedBy: '', notes: '', reason: 'สินค้าชำรุด/เสียหาย', items: [] })} className="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-bold hover:bg-slate-200 transition-colors">
+                                ยกเลิกแก้ไข
+                            </button>
+                        )}
+                    </div>
+
+                    <form onSubmit={handleSaveWriteOff} className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="text-xs font-bold text-slate-600 mb-1.5 block">วันที่ดำเนินการ</label>
+                                <input type="date" required value={writeOffForm.date} onChange={e=>setWriteOffForm({...writeOffForm, date: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 transition-all"/>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-600 mb-1.5 block">สาเหตุการตัดจำหน่าย</label>
+                                <select value={writeOffForm.reason} onChange={e=>setWriteOffForm({...writeOffForm, reason: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 cursor-pointer transition-all">
+                                    <option value="สินค้าชำรุด/เสียหาย">สินค้าชำรุด/เสียหาย</option>
+                                    <option value="สินค้าหมดอายุ">สินค้าหมดอายุ</option>
+                                    <option value="สูญหาย/หาไม่พบ">สูญหาย/หาไม่พบ</option>
+                                    <option value="นำไปใช้เป็นตัวอย่าง">นำไปใช้เป็นตัวอย่าง / ถ่ายรูป</option>
+                                    <option value="อื่นๆ">อื่นๆ</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        {/* --- UI ตรงตามภาพที่ 1 เป๊ะๆ --- */}
+                        <div className="space-y-3">
+                            <div className="flex justify-between items-center">
+                                <label className="text-xs font-bold text-slate-700">รายการสินค้าที่ตัดจำหน่าย</label>
+                                <button type="button" onClick={() => setShowStockSelectModal(true)} className="text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 px-4 py-2 rounded-lg font-bold flex items-center gap-1.5 transition-colors shadow-sm border border-rose-200">
+                                    <PlusCircle size={14}/> เพิ่มรายการ
+                                </button>
+                            </div>
+
+                            <div className="space-y-2">
+                                {writeOffForm.items.map((item, idx) => (
+                                    <div key={idx} className="flex flex-col sm:flex-row gap-2 items-start sm:items-center bg-slate-50/50 p-3 rounded-xl border border-slate-200 shadow-sm">
+                                        <div className="relative flex-1">
+                                            <input type="text" readOnly value={item.desc} onClick={() => setShowStockSelectModal(true)} className="w-full p-3 rounded-lg border border-slate-200 bg-white text-sm outline-none cursor-pointer font-bold text-slate-800" placeholder="ชื่อสินค้า..."/>
+                                            <span className="absolute right-3 top-3 text-[10px] bg-indigo-50 text-indigo-600 font-bold px-2 py-0.5 rounded cursor-pointer" onClick={() => setShowStockSelectModal(true)}>เลือกจากคลัง</span>
+                                        </div>
+                                        <input type="number" min="1" required value={item.qty} onChange={e => {
+                                            const newItems = [...writeOffForm.items]; newItems[idx].qty = e.target.value; setWriteOffForm({...writeOffForm, items: newItems});
+                                        }} className="w-full sm:w-24 p-3 rounded-lg border border-slate-200 bg-white text-sm text-center font-black outline-none text-rose-600 shadow-sm" placeholder="1"/>
+                                        <button type="button" onClick={() => {
+                                            const newItems = writeOffForm.items.filter((_, i) => i !== idx); setWriteOffForm({...writeOffForm, items: newItems});
+                                        }} className="p-3 bg-white border border-slate-200 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shadow-sm w-full sm:w-auto text-center"><Trash2 size={16} className="mx-auto"/></button>
+                                    </div>
+                                ))}
+                                {writeOffForm.items.length === 0 && (
+                                    <div onClick={() => setShowStockSelectModal(true)} className="p-8 border-2 border-dashed border-slate-200 rounded-2xl text-center cursor-pointer hover:bg-slate-50 transition-colors text-slate-400 font-bold text-xs">
+                                        + คลิกเพื่อเลือกสินค้าจากคลังสินค้า
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">ชื่อผู้เสนอตัดจำหน่าย</label>
+                                <input type="text" required value={writeOffForm.requestedBy} onChange={e=>setWriteOffForm({...writeOffForm, requestedBy: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 transition-all" placeholder="ระบุชื่อผู้ตรวจรับ..."/>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">ผู้อนุมัติ</label>
+                                <input type="text" required value={writeOffForm.approvedBy} onChange={e=>setWriteOffForm({...writeOffForm, approvedBy: e.target.value})} className="w-full p-3.5 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 transition-all" placeholder="ระบุชื่อผู้อุมัติ..."/>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">หมายเหตุเพิ่มเติม</label>
+                            <textarea value={writeOffForm.notes} onChange={e=>setWriteOffForm({...writeOffForm, notes: e.target.value})} className="w-full p-4 rounded-xl border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 bg-slate-50 min-h-[90px] leading-relaxed custom-scrollbar transition-all" placeholder="รายละเอียดความเสียหายเพิ่มเติม..."></textarea>
+                        </div>
+
+                        <div className="pt-6 border-t border-slate-100 flex justify-end">
+                            <button type="submit" disabled={isProcessing} className="w-full bg-rose-600 hover:bg-rose-700 text-white px-8 py-4 rounded-xl font-black shadow-lg shadow-rose-200 flex justify-center items-center gap-2 transition-transform hover:-translate-y-0.5 active:scale-95 disabled:opacity-50 text-base">
+                                {isProcessing ? <Loader size={20} className="animate-spin"/> : <Save size={20}/>} 
+                                {writeOffForm.id ? 'อัปเดตเอกสารและตัดสต็อก' : 'บันทึกและหักสต็อกออกจากคลัง'}
+                            </button>
+                        </div>
+                    </form>
                 </div>
 
-                {/* Glass Reflection Highlight */}
-                <div className="absolute top-1 left-2 w-8 h-4 bg-white/40 rounded-full rotate-[-40deg] blur-[1px]"></div>
-                <div className="absolute bottom-2 right-2 w-4 h-2 bg-white/20 rounded-full rotate-[-40deg] blur-[1px]"></div>
+                <div className="xl:col-span-1">
+                    <div className="bg-gradient-to-b from-[#2e1025] to-[#1e0a18] rounded-[32px] p-8 text-white shadow-xl sticky top-6">
+                        <div className="flex items-center gap-2 mb-6 text-rose-300"><AlertTriangle size={24}/><h4 className="font-bold text-base">คำแนะนำการตัดจำหน่ายสินค้า</h4></div>
+                        <div className="text-sm leading-relaxed space-y-6 text-rose-50/90 font-medium">
+                            <p>เมื่อสินค้าชำรุด หมดอายุ หรือสูญหาย การตัดออกจากระบบเป็นเรื่องสำคัญ</p>
+                            <div>
+                                <p className="font-bold text-white mb-2">ประโยชน์ที่ได้:</p>
+                                <ol className="list-decimal pl-4 space-y-2">
+                                    <li>ระบบจะหักสต็อกตามจริง (FIFO) ทำให้ยอดคงเหลือแม่นยำ 100%</li>
+                                    <li>มูลค่าต้นทุนจะถูกบันทึกเป็น <b>"รายจ่ายของกิจการ"</b> (หมวดสินค้าเสียหาย) เพื่อนำไปลดหย่อนภาษีสิ้นปี</li>
+                                    <li>มีใบสำคัญตัดจำหน่ายเก็บเป็นหลักฐานยืนยันกับสรรพากร</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* TAB 3: HISTORY (ประวัติเอกสารภายใน - ดึง DMG มาแสดงครบถ้วนตามภาพที่ 2 เป๊ะๆ) */}
+        {activeTab === 'history' && (
+            <div className="bg-white rounded-[32px] border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[700px]">
+                <div className="p-6 border-b bg-slate-50 flex justify-between items-center text-left">
+                    <div className="flex items-center gap-3">
+                        <History size={20} className="text-slate-500"/>
+                        <h4 className="font-black text-slate-800 text-lg">ประวัติเอกสารภายในและใบตัดจำหน่าย</h4>
+                    </div>
+                    <span className="text-xs font-bold text-slate-500">พบลั้งหมด {internalDocs.length} รายการ</span>
+                </div>
+                
+                <div className="overflow-x-auto flex-1 custom-scrollbar">
+                    <table className="w-full text-sm text-left whitespace-nowrap">
+                        <thead className="bg-white text-slate-500 uppercase tracking-widest text-[10px] sticky top-0 border-b border-slate-200 z-10 font-bold">
+                            <tr>
+                                <th className="p-5 pl-6">วันที่ / SYS ID</th>
+                                <th className="p-5">ประเภทเอกสาร</th>
+                                <th className="p-5">รายละเอียด / ผู้รับเงิน</th>
+                                <th className="p-5 text-right">ยอดเงินรวม (฿)</th>
+                                <th className="p-5 text-center">จัดการ</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {internalDocs.map((docItem, idx) => {
+                                const isWriteOff = docItem.docType === 'write_off' || docItem.isFromExpenseTable;
+                                return (
+                                <tr key={idx} className="hover:bg-slate-50/80 transition-colors text-left">
+                                    <td className="p-5 pl-6">
+                                        <p className="font-black text-slate-700">{formatDate(docItem.date)}</p>
+                                        <p className="font-mono text-[10px] font-bold text-rose-600 mt-0.5">{docItem.docNo || docItem.sysDocId || 'DMG-REF'}</p>
+                                    </td>
+                                    <td className="p-5">
+                                        <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black border shadow-sm ${isWriteOff ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}`}>
+                                            {isWriteOff ? 'ใบตัดจำหน่ายสินค้า' : 'ใบรับรองแทนใบเสร็จ'}
+                                        </span>
+                                    </td>
+                                    <td className="p-5">
+                                        <p className="text-xs text-slate-800 font-bold truncate max-w-[350px]">
+                                            {isWriteOff 
+                                                ? (docItem.notes || docItem.description || `บันทึกตัดจำหน่ายสินค้าชำรุด: ${(docItem.items || []).map(i => `${i.desc} (x${i.qty})`).join(', ')}`)
+                                                : `จ่ายให้: ${docItem.recipientName}`}
+                                        </p>
+                                        <p className="text-[10px] text-slate-400 mt-1 truncate max-w-[300px]">
+                                            {isWriteOff ? `ผู้ขอ/ผู้รับผิดชอบ: ${docItem.requestedBy || 'Internal (ตัดชำรุด)'}` : `เหตุผล: ${docItem.reason}`}
+                                        </p>
+                                    </td>
+                                    <td className="p-5 text-right font-black text-slate-800">
+                                        {formatCurrency(docItem.totalCost || docItem.totalAmount || docItem.total || 0)}
+                                    </td>
+                                    <td className="p-5 text-center">
+                                        <div className="flex justify-center gap-2 text-center">
+                                            <button onClick={() => handleEditDoc(docItem)} className="p-2.5 bg-white border border-slate-200 text-amber-500 hover:text-white hover:bg-amber-500 hover:border-amber-500 rounded-xl transition-all shadow-sm flex items-center justify-center" title="แก้ไขเอกสาร">
+                                                <Edit size={16}/>
+                                            </button>
+                                            <button onClick={() => setViewDoc(docItem)} className="p-2.5 bg-white border border-slate-200 text-indigo-500 hover:text-white hover:bg-indigo-600 hover:border-indigo-600 rounded-xl transition-all shadow-sm flex items-center gap-1.5" title="ดู/พิมพ์เอกสาร">
+                                                <Printer size={16}/> พิมพ์
+                                            </button>
+                                            <button onClick={() => handleDeleteDoc(docItem)} className="p-2.5 bg-white border border-slate-200 text-rose-400 hover:text-white hover:bg-rose-500 hover:border-rose-500 rounded-xl transition-all shadow-sm flex items-center justify-center" title="ลบทิ้ง">
+                                                <XCircle size={16}/>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            )})}
+                            {internalDocs.length === 0 && (
+                                <tr><td colSpan="5" className="p-16 text-center text-slate-400">
+                                    <FileCheck size={48} className="mx-auto mb-4 opacity-20"/>
+                                    <p className="font-bold text-sm">ยังไม่มีประวัติเอกสารภายในหรือใบตัดชำรุด</p>
+                                </td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        )}
+
+        {/* Modal เลือกสินค้าจากคลัง */}
+        {showStockSelectModal && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[1000] flex items-center justify-center p-4">
+                <div className="bg-white rounded-[32px] p-6 max-w-lg w-full shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[80vh]">
+                    <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-4">
+                        <h3 className="text-lg font-black text-slate-800 flex items-center gap-2"><Box className="text-rose-600"/> เลือกสินค้าที่จะตัดจำหน่าย</h3>
+                        <button onClick={() => setShowStockSelectModal(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X/></button>
+                    </div>
+                    <div className="mb-4 relative">
+                        <Search className="absolute left-4 top-3.5 text-slate-400" size={18}/>
+                        <input autoFocus value={stockSearchTerm} onChange={e => setStockSearchTerm(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-sm outline-none focus:border-rose-400 focus:ring-1 shadow-sm font-bold" placeholder="ค้นหาชื่อสินค้า หรือ SKU..." />
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">
+                        {filteredStock.map((item, idx) => (
+                            <div key={idx} onClick={() => selectStockItem(item)} className="p-4 border border-slate-100 rounded-2xl hover:border-rose-300 hover:bg-rose-50/50 cursor-pointer transition-colors flex justify-between items-center bg-white shadow-sm group">
+                                <div>
+                                    <p className="font-bold text-sm text-slate-800 group-hover:text-rose-700 transition-colors">{item.name}</p>
+                                    <p className="text-[10px] text-slate-400 font-mono mt-1">SKU: {item.sku}</p>
+                                </div>
+                                <div className="text-right">
+                                    <span className="bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-[10px] font-black shadow-sm">มีของ {item.qty}</span>
+                                </div>
+                            </div>
+                        ))}
+                        {filteredStock.length === 0 && (
+                            <div className="py-10 text-center text-slate-400 font-bold">ไม่พบสินค้าที่ค้นหา</div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* Modal พิมพ์ PDF */}
+        {viewDoc && (
+            <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[1000] flex items-center justify-center p-4">
+                <div className="bg-white rounded-[40px] w-full max-w-5xl h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 text-left">
+                    <div className="p-6 border-b flex justify-between items-center bg-slate-50">
+                        <div className="flex items-center gap-3">
+                            <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><FileText className="text-indigo-600"/> พรีวิวเอกสารภายใน</h3>
+                            <span className="font-mono text-xs font-bold text-indigo-600 bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm">{viewDoc.docNo || viewDoc.sysDocId || 'ไม่มีเลขที่'}</span>
+                        </div>
+                        <button onClick={() => setViewDoc(null)} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><X/></button>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto bg-slate-200 p-8 flex justify-center custom-scrollbar">
+                        <div id="internal-doc-preview" className="bg-white p-[30px] w-[210mm] min-h-[296mm] text-slate-800 text-sm font-sarabun shadow-xl relative box-border">
+                            {viewDoc.docType === 'cert_receipt' ? (
+                                <>
+                                    <div className="text-center mb-8"><h1 className="text-2xl font-black tracking-widest uppercase mb-2">ใบรับรองแทนใบเสร็จรับเงิน</h1><p className="text-xs text-slate-600">ส่วนราชการ/บริษัท/ห้างหุ้นส่วน/นิติบุคคล: {savedSeller.sellerName || '-'}</p></div>
+                                    <div className="flex justify-between items-start mb-6 text-sm"><div><p className="mb-1"><span className="font-bold">วันที่:</span> {formatDate(viewDoc.date)}</p><p><span className="font-bold">เลขที่เอกสาร:</span> {viewDoc.docNo}</p></div></div>
+                                    <div className="mb-6 space-y-2 text-sm leading-relaxed">
+                                        <p>ข้าพเจ้า <span className="font-bold border-b border-dotted border-slate-800 px-2">{viewDoc.recipientName || '...................................................'}</span></p>
+                                        <p>เลขประจำตัวประชาชน <span className="font-mono border-b border-dotted border-slate-800 px-2">{viewDoc.recipientId || '...................................................'}</span></p>
+                                        <p>อยู่บ้านเลขที่ <span className="border-b border-dotted border-slate-800 px-2">{viewDoc.recipientAddress || '...........................................................................................................................'}</span></p>
+                                        <p>ได้รับเงินจาก <span className="font-bold">{savedSeller.sellerName || '-'}</span> ดังรายการต่อไปนี้</p>
+                                    </div>
+                                    <table className="w-full mb-8 border-collapse text-xs border border-slate-800">
+                                        <thead><tr className="bg-slate-100 border-b border-slate-800 font-bold"><th className="py-3 text-center w-12 border-r border-slate-800">ลำดับ</th><th className="py-3 pl-4 text-left border-r border-slate-800">รายการ (Description)</th><th className="py-3 text-center w-24 border-r border-slate-800">จำนวน (Qty)</th><th className="py-3 text-right pr-4 w-32 border-r border-slate-800">ราคา/หน่วย (Price)</th><th className="py-3 text-right pr-4 w-32">จำนวนเงิน (Amount)</th></tr></thead>
+                                        <tbody>
+                                            {(viewDoc.items || []).map((it, i) => (
+                                                <tr key={i} className="border-b border-slate-300"><td className="py-3 text-center border-r border-slate-800">{i+1}</td><td className="py-3 pl-4 text-left border-r border-slate-800">{it.desc}</td><td className="py-3 text-center border-r border-slate-800">{it.qty}</td><td className="py-3 text-right pr-4 border-r border-slate-800">{formatCurrency(it.price || it.buyPrice || 0)}</td><td className="py-3 text-right pr-4 font-bold">{formatCurrency((it.price || it.buyPrice || 0) * it.qty)}</td></tr>
+                                            ))}
+                                        </tbody>
+                                        <tfoot><tr className="border-t-2 border-slate-800"><td colSpan="3" className="py-4 text-center font-bold bg-slate-50 border-r border-slate-800">({THBText(viewDoc.totalAmount || viewDoc.totalCost || 0)})</td><td className="py-4 text-right pr-4 font-black border-r border-slate-800 uppercase tracking-widest text-slate-600">รวมเงินทั้งสิ้น</td><td className="py-4 text-right pr-4 font-black text-lg">{formatCurrency(viewDoc.totalAmount || viewDoc.totalCost || 0)}</td></tr></tfoot>
+                                    </table>
+                                    <div className="text-sm mb-12 bg-slate-50 p-4 border border-slate-200"><p><span className="font-bold text-slate-700">เหตุผลที่ไม่สามารถเรียกเก็บใบเสร็จรับเงินได้:</span> {viewDoc.reason || '-'}</p></div>
+                                    <div className="grid grid-cols-2 gap-10 text-center text-sm absolute bottom-20 w-full pr-[60px]">
+                                        <div><p className="mb-2 text-slate-400">(...............................................................)</p><p className="font-bold text-slate-800">ผู้รับเงิน / Recipient</p><p className="text-xs mt-1 text-slate-600">{viewDoc.recipientName || '-'}</p></div>
+                                        <div><p className="mb-2 text-slate-400">(...............................................................)</p><p className="font-bold text-slate-800">ผู้จ่ายเงิน / Payer</p><p className="text-xs mt-1 text-slate-600">{viewDoc.payerName || '-'}</p></div>
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="flex justify-between items-start mb-10 border-b-2 border-slate-800 pb-6">
+                                        <div className="flex gap-4 items-center">
+                                            {savedSeller.logo && <img src={savedSeller.logo} alt="Logo" className="max-w-[80px] max-h-[80px] w-auto h-auto object-contain"/>}
+                                            <div>
+                                                <h2 className="text-xl font-black text-slate-900">{savedSeller.sellerName || 'บริษัท / ห้างร้าน'}</h2>
+                                                <p className="text-xs text-slate-600 mt-1">{savedSeller.sellerAddress} {fmtAddr.sub(savedSeller.sellerSubDistrict)} {fmtAddr.dist(savedSeller.sellerDistrict)} {fmtAddr.prov(savedSeller.sellerProvince)} {savedSeller.sellerZipCode}</p>
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <h1 className="text-2xl font-black tracking-widest uppercase mb-2">ใบตัดจำหน่ายสินค้า</h1>
+                                            <div className="text-xs font-bold space-y-1">
+                                                <p className="text-slate-500">เลขที่เอกสาร: <span className="font-mono text-slate-800">{viewDoc.docNo || viewDoc.sysDocId || '-'}</span></p>
+                                                <p className="text-slate-500">วันที่: <span className="text-slate-800">{formatDate(viewDoc.date)}</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-6 mb-8 text-sm border border-slate-300 p-5 bg-slate-50">
+                                        <div><span className="font-bold text-slate-500 uppercase text-[10px]">ผู้แจ้ง:</span> <span className="font-bold text-slate-800 block mt-1">{viewDoc.requestedBy || 'Internal'}</span></div>
+                                        <div><span className="font-bold text-slate-500 uppercase text-[10px]">ผู้อนุมัติ:</span> <span className="font-bold text-slate-800 block mt-1">{viewDoc.approvedBy || 'ผู้บริหาร'}</span></div>
+                                        <div className="col-span-2"><span className="font-bold text-slate-500 uppercase text-[10px]">หมายเหตุ/สาเหตุ:</span> <span className="font-bold text-slate-800 block mt-1">{viewDoc.notes || viewDoc.description || '-'}</span></div>
+                                    </div>
+                                    <table className="w-full mb-10 border-collapse text-xs">
+                                        <thead><tr className="bg-slate-200 border-y border-slate-300 font-bold uppercase text-slate-700"><th className="py-3 text-center w-12 border-x border-slate-300">ลำดับ</th><th className="py-3 pl-4 text-left border-x border-slate-300">รหัสสินค้า / รายละเอียด</th><th className="py-3 text-center w-24 border-x border-slate-300">จำนวน</th><th className="py-3 text-right pr-4 w-32 border-x border-slate-300">ต้นทุนต่อหน่วย</th><th className="py-3 text-right pr-4 w-32 border-x border-slate-300">มูลค่าความเสียหาย</th></tr></thead>
+                                        <tbody>
+                                            {(viewDoc.items || []).map((it, i) => (
+                                                <tr key={i} className="border-b border-slate-200">
+                                                    <td className="py-3 text-center border-x border-slate-300">{i+1}</td>
+                                                    <td className="py-3 pl-4 text-left border-x border-slate-300"><p className="font-bold text-slate-800 text-sm">{it.desc}</p><p className="text-[10px] text-slate-500 font-mono mt-0.5">SKU: {it.sku || '-'}</p></td>
+                                                    <td className="py-3 text-center font-bold text-slate-800 border-x border-slate-300">{it.qty}</td>
+                                                    <td className="py-3 text-right pr-4 text-slate-600 border-x border-slate-300">{formatCurrency(it.buyPrice || 0)}</td>
+                                                    <td className="py-3 text-right pr-4 font-bold text-slate-900 border-x border-slate-300">{formatCurrency((it.buyPrice || 0) * it.qty)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                        <tfoot><tr className="border-b-2 border-slate-800 bg-slate-50"><td colSpan="4" className="py-4 text-right pr-4 font-black uppercase text-slate-500 tracking-widest">รวมมูลค่าทั้งสิ้น</td><td className="py-4 text-right pr-4 font-black text-lg text-slate-800">{formatCurrency(viewDoc.totalCost || viewDoc.totalAmount || viewDoc.total || 0)}</td></tr></tfoot>
+                                    </table>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div className="p-6 border-t bg-slate-50 flex gap-4 text-center">
+                        <button onClick={() => setViewDoc(null)} className="flex-1 py-4 bg-white border border-slate-200 rounded-2xl font-bold hover:bg-slate-100 transition-colors text-slate-700">ปิดหน้านี้</button>
+                        <button onClick={() => handleDownloadPDF(viewDoc)} className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"><Download size={20}/> ดาวน์โหลด PDF</button>
+                    </div>
+                </div>
+            </div>
+        )}
+    </div>
+  );
+}
+
+function PricingCalculator({ stockBatches, transactions, showToast, appId, user }) {
+  const [calcMode, setCalcMode] = useState('forward'); // 'forward', 'reverse'
+  const [pricingPlatform, setPricingPlatform] = useState('shopee'); // 'shopee', 'tiktok'
+  
+  // Inputs
+  const [cost, setCost] = useState('');
+  const [sellingPrice, setSellingPrice] = useState('');
+  const [targetProfit, setTargetProfit] = useState('');
+  const [buyerShipping, setBuyerShipping] = useState(0); // ค่าจัดส่งที่ผู้ซื้อจ่าย (เปลี่ยนเป็น 0 ให้ตรงกับเคสส่งฟรีทั่วไป)
+  const [sellerShipping, setSellerShipping] = useState(''); // ค่าส่งส่วนเกินที่ร้านโดนหัก
+  
+  // VAT Setting
+  const [isVatRegistered, setIsVatRegistered] = useState(false);
+  const [claimCostVat, setClaimCostVat] = useState(true);
+  
+  // Platform Fee Rates (แยกชุดกัน)
+  const [shopeeRates, setShopeeRates] = useState({ comm: 16.05, serv: 8.56, trans: 3.21, fixed: 1 }); // อัปเดตเรทมาตรฐาน
+  const [tiktokRates, setTiktokRates] = useState({ comm: 5.35, serv: 0, trans: 3.21, fixed: 0 }); // serv = Affiliate
+  
+  // AI State
+  const [aiAdvice, setAiAdvice] = useState(null);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
+  // Helper สำหรับปัดเศษ 2 ตำแหน่งที่แม่นยำ (ป้องกัน Floating Point Error)
+  const round2 = (num) => Math.round((Number(num) + Number.EPSILON) * 100) / 100;
+
+  // Parse Inputs
+  const c = Number(cost) || 0;
+  const p = Number(sellingPrice) || 0;
+  const tp = Number(targetProfit) || 0;
+  const ship = Number(sellerShipping) || 0;
+  const bShip = Number(buyerShipping) || 0;
+  
+  // Active Rates based on platform
+  const activeRates = pricingPlatform === 'shopee' ? shopeeRates : tiktokRates;
+  const comm = Number(activeRates.comm) || 0;
+  const serv = Number(activeRates.serv) || 0;
+  const trans = Number(activeRates.trans) || 0;
+  const iFee = Number(activeRates.fixed) || 0;
+
+  const updateRate = (field, val) => {
+      if (pricingPlatform === 'shopee') setShopeeRates(prev => ({...prev, [field]: val}));
+      else setTiktokRates(prev => ({...prev, [field]: val}));
+  };
+
+  // --- Reverse Calculation (หาราคาขายจากเป้าหมายกำไร) ---
+  const totalRateSum = (comm + serv + trans) / 100;
+  const r_divisor = 1 - totalRateSum;
+  const r_fixedFees = (bShip * trans / 100) + iFee; 
+
+  let r_requiredPrice = 0;
+  let c_input_vat_reverse = 0;
+
+  if (isVatRegistered) {
+      c_input_vat_reverse = claimCostVat ? round2(c * 7 / 107) : 0;
+      if (r_divisor > 0) {
+          r_requiredPrice = ((tp + ship + c - c_input_vat_reverse) * 107/100 + r_fixedFees) / r_divisor;
+      }
+  } else {
+      if (r_divisor > 0) {
+          r_requiredPrice = (tp + c + ship + r_fixedFees) / r_divisor;
+      }
+  }
+
+  // --- Forward Calculation (หากำไร/คำนวณผลลัพธ์) ---
+  const activePrice = calcMode === 'forward' ? p : round2(r_requiredPrice);
+  
+  // 1. ปัดเศษค่าธรรมเนียมแต่ละรายการก่อนรวม
+  const f_commFee = round2(activePrice * comm / 100);
+  const f_servFee = round2(activePrice * serv / 100);
+  const f_transFee = round2((activePrice + bShip) * trans / 100);
+  
+  // 2. ยอดรวมค่าธรรมเนียม
+  const f_totalFeeAmount = round2(f_commFee + f_servFee + f_transFee + iFee);
+  const f_totalFeePercent = activePrice > 0 ? (f_totalFeeAmount / activePrice) * 100 : 0; 
+  
+  // 3. ยอดรับเงินสุทธิจาก Platform (Payout)
+  const f_netPayout = round2(activePrice - f_totalFeeAmount - ship);
+
+  let f_output_vat = 0;
+  let f_fee_input_vat = 0;
+  let c_input_vat_forward = 0;
+  let f_net_vat_to_pay = 0;
+  let f_netProfit = 0;
+
+  if (isVatRegistered) {
+      // 4. ปัดเศษภาษีแต่ละตัวให้ตรงกับยอดที่เห็นบนหน้าจอก่อนนำไปบวกลบ
+      f_output_vat = round2(activePrice * 7 / 107);
+      f_fee_input_vat = round2(f_totalFeeAmount * 7 / 107);
+      c_input_vat_forward = claimCostVat ? round2(c * 7 / 107) : 0;
+      
+      // 5. คำนวณ Net VAT (ภาษีสุทธิ) จากตัวเลขที่ปัดเศษแล้ว
+      f_net_vat_to_pay = round2(f_output_vat - f_fee_input_vat - c_input_vat_forward);
+      
+      // 6. กำไรสุทธิ
+      f_netProfit = round2(f_netPayout - c - f_net_vat_to_pay);
+  } else {
+      f_netProfit = round2(f_netPayout - c);
+  }
+
+  const f_margin = activePrice > 0 ? (f_netProfit / activePrice) * 100 : 0;
+
+  const handleAskAi = async () => {
+      if (c <= 0 || (calcMode === 'forward' && p <= 0) || (calcMode === 'reverse' && tp <= 0)) {
+          showToast("กรุณากรอกต้นทุนและราคาขาย/กำไร ให้ครบถ้วนก่อนเรียก AI", "error");
+          return;
+      }
+      setIsAiLoading(true);
+      try {
+          const totalFees = f_totalFeeAmount;
+          const totalFeePct = f_totalFeePercent;
+
+          const prompt = `
+          ในฐานะผู้เชี่ยวชาญด้านกลยุทธ์ราคา (Pricing Strategist) สำหรับ E-Commerce ไทย (${pricingPlatform.toUpperCase()})
+          ข้อมูลสินค้าปัจจุบัน:
+          - ต้นทุนสินค้า: ${formatCurrency(c)} บาท
+          - ตั้งราคาขาย: ${formatCurrency(activePrice)} บาท
+          - ถูก ${pricingPlatform.toUpperCase()} หักค่าธรรมเนียมรวม: ${formatCurrency(totalFees)} บาท (คิดเป็น ${totalFeePct.toFixed(1)}% ของราคาขาย)
+          ${isVatRegistered ? `- ภาระภาษีมูลค่าเพิ่ม (Net VAT Payable): ${formatCurrency(f_net_vat_to_pay)} บาท` : ''}
+          - กำไรสุทธิ: ${formatCurrency(f_netProfit)} บาท (Margin: ${f_margin.toFixed(1)}%)
+          
+          วิเคราะห์สั้นๆ:
+          1. กำไรและสัดส่วนค่าธรรมเนียมระดับนี้ ถือว่าปลอดภัยและคุ้มค่าเหนื่อย/ค่าโฆษณา หรือไม่? (ถ้า Margin < 20% ให้เตือนว่าเสี่ยง)
+          2. แนะนำกลยุทธ์ 2 ข้อสั้นๆ เพื่อให้ขายง่ายขึ้น หรือลดภาระค่าธรรมเนียมบน ${pricingPlatform.toUpperCase()}
+          
+          ตอบกลับเป็น JSON Format:
+          { "analysis": "บทวิเคราะห์ความคุ้มค่าสั้นๆ...", "strategies": ["กลยุทธ์ 1", "กลยุทธ์ 2"] }
+          `;
+          
+          const res = await callGeminiAPI(prompt, true);
+          if (res) setAiAdvice(res);
+      } catch (err) {
+          console.error(err);
+          showToast("เกิดข้อผิดพลาดในการเรียก AI (โปรดเช็ค API Key)", "error");
+      }
+      setIsAiLoading(false);
+  };
+
+  return (
+    <div className="space-y-6 animate-fadeIn font-sarabun text-left w-full min-h-full pb-10">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-2 border-b pb-4 gap-4">
+            <div>
+                <h2 className="text-3xl font-black text-slate-800 flex items-center gap-2"><Calculator className="text-indigo-600" size={32}/> Smart Pricing Calculator</h2>
+                <p className="text-sm text-slate-500 font-medium mt-1">เครื่องมือคำนวณราคาขายและกำไรสุทธิ หลังหักค่าธรรมเนียม Platform แม่นยำ 100%</p>
+            </div>
+            
+            <div className="flex flex-col items-end gap-3 w-full md:w-auto">
+                {/* Platform Switcher */}
+                <div className="flex bg-slate-100 p-1.5 rounded-xl w-full sm:w-fit shadow-inner">
+                    <button onClick={() => setPricingPlatform('shopee')} className={`flex-1 sm:flex-none px-6 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${pricingPlatform === 'shopee' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-500 hover:text-orange-600'}`}>
+                        <ShoppingBag size={14}/> Shopee
+                    </button>
+                    <button onClick={() => setPricingPlatform('tiktok')} className={`flex-1 sm:flex-none px-6 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${pricingPlatform === 'tiktok' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                        <ShoppingBag size={14}/> TikTok Shop
+                    </button>
+                </div>
+                
+                {/* Mode Switcher */}
+                <div className="flex bg-slate-100 p-1.5 rounded-xl w-full sm:w-fit shadow-inner">
+                    <button onClick={() => setCalcMode('forward')} className={`flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${calcMode === 'forward' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                        หากำไรสุทธิ
+                    </button>
+                    <button onClick={() => setCalcMode('reverse')} className={`flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${calcMode === 'reverse' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                        ตั้งเป้ากำไร
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            {/* Left Column: Inputs & Fees */}
+            <div className="lg:col-span-7 space-y-6">
+                
+                {/* Product Inputs */}
+                <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
+                    <h3 className="text-lg font-black text-slate-800 flex items-center gap-2 mb-6"><ShoppingBag className={pricingPlatform === 'shopee' ? 'text-orange-500' : 'text-slate-800'}/> ข้อมูลต้นทุนและราคา</h3>
+                    
+                    {/* VAT Toggle Banner */}
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6 p-4 bg-indigo-50 border border-indigo-100 rounded-2xl">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={isVatRegistered} onChange={e=>setIsVatRegistered(e.target.checked)} className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer" />
+                            <span className="font-black text-indigo-800 text-sm">ร้านค้าจด VAT (คำนวณภาษีมูลค่าเพิ่ม 7%)</span>
+                        </label>
+                        {isVatRegistered && (
+                            <label className="flex items-center gap-2 cursor-pointer sm:border-l-2 sm:border-indigo-200 sm:pl-4">
+                                <input type="checkbox" checked={claimCostVat} onChange={e=>setClaimCostVat(e.target.checked)} className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer" />
+                                <span className="font-bold text-slate-600 text-xs">ขอคืนภาษีซื้อจากต้นทุนสินค้าด้วย</span>
+                            </label>
+                        )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5 block">ต้นทุนสินค้า (ทุนซื้อมา)</label>
+                            <div className="relative">
+                                <span className="absolute left-4 top-3.5 font-bold text-slate-400">฿</span>
+                                <input type="number" value={cost} onChange={e=>setCost(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-3.5 pl-10 pr-4 font-black text-slate-800 outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 text-lg transition-all" placeholder="0.00" />
+                            </div>
+                        </div>
+                        {calcMode === 'forward' ? (
+                            <div>
+                                <label className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-1.5 block">ราคาขายที่ตั้งบน Platform</label>
+                                <div className="relative">
+                                    <span className="absolute left-4 top-3.5 font-bold text-indigo-400">฿</span>
+                                    <input type="number" value={sellingPrice} onChange={e=>setSellingPrice(e.target.value)} className="w-full bg-indigo-50/50 border border-indigo-200 rounded-2xl py-3.5 pl-10 pr-4 font-black text-indigo-700 outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-500 text-lg transition-all" placeholder="0.00" />
+                                </div>
+                            </div>
+                        ) : (
+                            <div>
+                                <label className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-1.5 block">กำไรที่อยากได้ (ต่อชิ้น)</label>
+                                <div className="relative">
+                                    <span className="absolute left-4 top-3.5 font-bold text-emerald-400">฿</span>
+                                    <input type="number" value={targetProfit} onChange={e=>setTargetProfit(e.target.value)} className="w-full bg-emerald-50/50 border border-emerald-200 rounded-2xl py-3.5 pl-10 pr-4 font-black text-emerald-700 outline-none focus:ring-2 focus:ring-emerald-100 focus:border-emerald-500 text-lg transition-all" placeholder="0.00" />
+                                </div>
+                            </div>
+                        )}
+                        <div className="sm:col-span-2 bg-blue-50/50 p-4 rounded-xl border border-blue-100">
+                            <label className="text-xs font-bold text-blue-700 uppercase tracking-widest mb-1.5 block">ค่าจัดส่งที่เก็บจากลูกค้า (Buyer Shipping Paid)</label>
+                            <div className="relative">
+                                <span className="absolute left-4 top-3.5 font-bold text-blue-400">฿</span>
+                                <input type="number" value={buyerShipping} onChange={e=>setBuyerShipping(e.target.value)} className="w-full bg-white border border-blue-200 rounded-xl py-3 pl-10 pr-4 font-black text-blue-800 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all shadow-sm" placeholder="เช่น 38" />
+                            </div>
+                            <p className="text-[10px] text-blue-600/80 mt-1.5">* สำคัญ: Platform นำยอดค่าจัดส่งตรงนี้ไปคิดรวมเป็นฐานใน <b className="underline">ค่าธุรกรรมการชำระเงิน (Payment/Transaction Fee)</b> ด้วย</p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Platform Fees Setting */}
+                <div className={`${pricingPlatform === 'shopee' ? 'bg-orange-50/50 border-orange-100' : 'bg-slate-50 border-slate-200'} p-6 rounded-[32px] border shadow-sm transition-colors`}>
+                    <div className={`flex justify-between items-center mb-6 border-b pb-4 ${pricingPlatform === 'shopee' ? 'border-orange-200/50' : 'border-slate-200'}`}>
+                        <h3 className={`text-lg font-black flex items-center gap-2 ${pricingPlatform === 'shopee' ? 'text-orange-800' : 'text-slate-800'}`}>
+                            <Percent className={pricingPlatform === 'shopee' ? 'text-orange-500' : 'text-slate-600'}/> รายละเอียดค่าธรรมเนียม {pricingPlatform === 'shopee' ? 'Shopee' : 'TikTok Shop'}
+                        </h3>
+                        <span className={`text-xs font-bold px-3 py-1 rounded-full border shadow-sm ${pricingPlatform === 'shopee' ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-slate-200 text-slate-700 border-slate-300'}`}>
+                            ปรับเลขเปอร์เซ็นต์ตามจริง
+                        </span>
+                    </div>
+                    
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase flex justify-between mb-1.5">
+                                    <span>{pricingPlatform === 'shopee' ? 'ค่าคอมมิชชั่น (Commission)' : 'ค่าคอมมิชชันแพลตฟอร์ม'}</span>
+                                </label>
+                                <div className="relative">
+                                    <input type="number" step="0.01" value={activeRates.comm} onChange={e=>updateRate('comm', e.target.value)} className={`w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 font-black text-slate-700 outline-none text-right pr-10 focus:ring-2 ${pricingPlatform === 'shopee' ? 'focus:border-orange-400 focus:ring-orange-100' : 'focus:border-slate-800 focus:ring-slate-200'}`} />
+                                    <span className="absolute right-4 top-2.5 font-bold text-slate-400">%</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase flex justify-between mb-1.5">
+                                    <span>{pricingPlatform === 'shopee' ? 'ค่าบริการ (Service Fee / FSS)' : 'ค่าคอมฯ ครีเอเตอร์ (Affiliate)'}</span>
+                                </label>
+                                <div className="relative">
+                                    <input type="number" step="0.01" value={activeRates.serv} onChange={e=>updateRate('serv', e.target.value)} className={`w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 font-black text-slate-700 outline-none text-right pr-10 focus:ring-2 ${pricingPlatform === 'shopee' ? 'focus:border-orange-400 focus:ring-orange-100' : 'focus:border-slate-800 focus:ring-slate-200'}`} />
+                                    <span className="absolute right-4 top-2.5 font-bold text-slate-400">%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t ${pricingPlatform === 'shopee' ? 'border-orange-200/50' : 'border-slate-200'}`}>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase mb-1.5 block">ค่าธุรกรรมชำระเงิน (Transaction/Payment)</label>
+                                <div className="relative">
+                                    <input type="number" step="0.01" value={activeRates.trans} onChange={e=>updateRate('trans', e.target.value)} className={`w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 font-black text-slate-700 outline-none text-right pr-10 focus:ring-2 ${pricingPlatform === 'shopee' ? 'focus:border-orange-400 focus:ring-orange-100' : 'focus:border-slate-800 focus:ring-slate-200'}`} />
+                                    <span className="absolute right-4 top-2.5 font-bold text-slate-400">%</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-500 uppercase mb-1.5 block">
+                                    {pricingPlatform === 'shopee' ? 'ค่าธรรมเนียมโครงสร้างพื้นฐานฯ' : 'ค่าธรรมเนียมออเดอร์ขนาดเล็ก (Fixed)'}
+                                </label>
+                                <div className="relative">
+                                    <input type="number" value={activeRates.fixed} onChange={e=>updateRate('fixed', e.target.value)} className={`w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 font-black text-slate-700 outline-none text-right pr-10 focus:ring-2 ${pricingPlatform === 'shopee' ? 'focus:border-orange-400 focus:ring-orange-100' : 'focus:border-slate-800 focus:ring-slate-200'}`} />
+                                    <span className="absolute right-4 top-2.5 font-bold text-slate-400">฿</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className={`pt-2 border-t ${pricingPlatform === 'shopee' ? 'border-orange-200/50' : 'border-slate-200'}`}>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase mb-1.5 block">ค่าจัดส่งส่วนเกินที่ร้านต้องช่วยจ่าย (฿)</label>
+                            <div className="relative">
+                                <span className="absolute left-4 top-2.5 font-bold text-slate-400">฿</span>
+                                <input type="number" value={sellerShipping} onChange={e=>setSellerShipping(e.target.value)} className={`w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 font-black text-rose-600 outline-none text-right focus:ring-2 ${pricingPlatform === 'shopee' ? 'focus:border-orange-400 focus:ring-orange-100' : 'focus:border-slate-800 focus:ring-slate-200'}`} placeholder="0.00" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
 
-            {/* Alert Badge */}
-            {hasAlert && (
-                <div className="absolute -top-2 -right-2 w-7 h-7 bg-rose-600 text-white text-[11px] font-black rounded-full flex items-center justify-center border-[3px] border-slate-50 shadow-lg shadow-rose-600/50 animate-bounce pointer-events-none">
-                    {alerts.length}
+            {/* Right Column: Results */}
+            <div className="lg:col-span-5 space-y-6">
+                
+                {/* Result Card (Simulated Statement) */}
+                <div className="bg-slate-900 rounded-[40px] shadow-2xl p-6 md:p-8 text-white relative overflow-hidden flex flex-col justify-between">
+                    <Receipt className="absolute -right-10 -bottom-10 text-indigo-500/10" size={180}/>
+                    
+                    <div className="relative z-10">
+                        <div className="flex items-center gap-2 text-indigo-400 border-b border-white/10 pb-3 mb-4">
+                            <FileText size={16}/>
+                            <h4 className="text-sm font-black uppercase tracking-widest">รายละเอียดการชำระเงิน (จำลอง)</h4>
+                        </div>
+
+                        {calcMode === 'reverse' && (
+                            <div className="mb-4 bg-emerald-500/20 border border-emerald-500/30 rounded-xl p-3">
+                                <p className="text-xs text-emerald-200 font-bold mb-1">เป้าหมายกำไร (Target Profit)</p>
+                                <p className="text-xl font-black text-emerald-400">{formatCurrency(tp)} ฿</p>
+                            </div>
+                        )}
+
+                        <div className="space-y-3 text-sm text-slate-300">
+                            <div className="flex justify-between items-center font-bold">
+                                <span>รวมค่าสินค้า (Selling Price)</span>
+                                <span className="text-white text-lg">{formatCurrency(activePrice)}</span>
+                            </div>
+                            <div className="flex justify-between items-center text-xs opacity-70 border-b border-white/5 pb-3">
+                                <span>ค่าจัดส่งที่ชำระโดยผู้ซื้อ (Buyer Paid)</span>
+                                <span>{formatCurrency(bShip)}</span>
+                            </div>
+                            
+                            <div className="flex justify-between items-center font-bold pt-2 text-rose-300">
+                                <div className="flex flex-col">
+                                    <span>ค่าธรรมเนียมรวม (Total Fees)</span>
+                                    <span className="text-[10px] bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded w-fit mt-1 border border-rose-500/30">
+                                        คิดเป็น {f_totalFeePercent.toFixed(2)}% ของราคาขาย
+                                    </span>
+                                </div>
+                                <span className="text-lg">-{formatCurrency(f_totalFeeAmount)}</span>
+                            </div>
+                            <div className="space-y-1 pl-4 text-xs font-mono opacity-80 border-l border-rose-500/30 ml-1">
+                                <div className="flex justify-between">
+                                    <span>{pricingPlatform === 'shopee' ? 'ค่าคอมมิชชั่น' : 'ค่าคอมมิชชันแพลตฟอร์ม'}</span>
+                                    <span>-{formatCurrency(f_commFee)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>{pricingPlatform === 'shopee' ? 'ค่าบริการ' : 'ค่าคอมฯ ครีเอเตอร์ (Affiliate)'}</span>
+                                    <span>-{formatCurrency(f_servFee)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>{pricingPlatform === 'shopee' ? 'ค่าธรรมเนียมโครงสร้างพื้นฐาน' : 'ค่าธรรมเนียมออเดอร์เล็ก'}</span>
+                                    <span>-{formatCurrency(iFee)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>ค่าธุรกรรมการชำระเงิน</span>
+                                    <span>-{formatCurrency(f_transFee)}</span>
+                                </div>
+                            </div>
+                            
+                            {ship > 0 && (
+                                <div className="flex justify-between items-center font-bold text-orange-300 mt-2">
+                                    <span>ค่าส่งส่วนเกินที่ร้านโดนหัก</span>
+                                    <span>-{formatCurrency(ship)}</span>
+                                </div>
+                            )}
+
+                            {isVatRegistered && (
+                                <div className="mt-4 pt-4 border-t border-white/20 space-y-2 text-xs">
+                                    <div className="flex justify-between items-center text-rose-300">
+                                        <span>หัก ภาษีขาย (Output VAT)</span>
+                                        <span>-{formatCurrency(f_output_vat)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-emerald-300">
+                                        <span>บวก ภาษีซื้อจากค่าธรรมเนียม (Fee Input VAT)</span>
+                                        <span>+{formatCurrency(f_fee_input_vat)}</span>
+                                    </div>
+                                    {claimCostVat && (
+                                        <div className="flex justify-between items-center text-emerald-300">
+                                            <span>บวก ภาษีซื้อจากต้นทุนสินค้า (Cost Input VAT)</span>
+                                            <span>+{formatCurrency(c_input_vat_forward)}</span>
+                                        </div>
+                                    )}
+                                    <div className={`flex justify-between items-center font-bold pt-2 mt-2 border-t border-white/10 ${f_net_vat_to_pay > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                        <span>{f_net_vat_to_pay > 0 ? 'ภาษีสุทธิที่ต้องนำส่ง (Net VAT Payable)' : 'ภาษีที่ขอคืนได้ (Net VAT Refund)'}</span>
+                                        <span>{f_net_vat_to_pay > 0 ? '-' : '+'}{formatCurrency(Math.abs(f_net_vat_to_pay))}</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="flex justify-between items-center font-bold pt-4 mt-2 border-t border-white/20">
+                                <span className="text-indigo-200">รายรับจากคำสั่งซื้อ (Payout)</span>
+                                <span className="text-xl text-white">{formatCurrency(f_netPayout)}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="relative z-10 border-t-2 border-slate-700 pt-6 mt-6">
+                        <div className="flex justify-between items-end mb-2">
+                            <p className="text-xs font-black uppercase text-slate-400">
+                                {calcMode === 'forward' ? 'กำไรสุทธิหลังหักทุน (Net Profit)' : 'ต้องตั้งราคาขายที่ (Required Price)'}
+                            </p>
+                            <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black shadow-sm ${f_margin >= 20 ? 'bg-emerald-500 text-white' : f_margin > 0 ? 'bg-amber-500 text-white' : 'bg-rose-500 text-white'}`}>
+                                Margin: {f_margin.toFixed(2)}%
+                            </span>
+                        </div>
+                        <h2 className={`text-5xl font-black tracking-tight ${calcMode === 'forward' ? (f_netProfit >= 0 ? 'text-emerald-400' : 'text-rose-500') : 'text-indigo-400'}`}>
+                            {formatCurrency(calcMode === 'forward' ? f_netProfit : r_requiredPrice)}
+                        </h2>
+                    </div>
                 </div>
-            )}
+
+                <button onClick={handleAskAi} disabled={isAiLoading} className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-5 rounded-[32px] font-black shadow-xl shadow-indigo-200 hover:-translate-y-1 transition-all flex items-center justify-center gap-3 disabled:opacity-50">
+                    {isAiLoading ? <Loader size={20} className="animate-spin"/> : <Sparkles size={20}/>}
+                    {isAiLoading ? 'AI กำลังวิเคราะห์กลยุทธ์...' : 'AI วิเคราะห์ความคุ้มค่าและกลยุทธ์ราคา'}
+                </button>
+
+            </div>
         </div>
+
+        {/* AI Insight Result Panel */}
+        {aiAdvice && (
+            <div className="bg-white border-2 border-indigo-100 rounded-[32px] p-8 shadow-lg relative overflow-hidden animate-fadeIn mt-6">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-bl-[100px] flex items-center justify-center -z-0">
+                    <Activity size={48} className="text-indigo-200 translate-x-4 -translate-y-4"/>
+                </div>
+                <div className="relative z-10">
+                    <h3 className="text-xl font-black text-indigo-800 flex items-center gap-2 mb-4"><Zap className="text-amber-500"/> AI Pricing Strategy Insight</h3>
+                    
+                    <div className="bg-indigo-50/50 border border-indigo-100 p-5 rounded-2xl mb-6">
+                        <p className="text-sm font-bold text-slate-700 leading-relaxed whitespace-pre-line">{aiAdvice.analysis}</p>
+                    </div>
+
+                    <h4 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-3">คำแนะนำกลยุทธ์การขายบน {pricingPlatform.toUpperCase()}</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {aiAdvice.strategies?.map((strategy, idx) => (
+                            <div key={idx} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-start gap-3">
+                                <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-black text-xs shrink-0">{idx + 1}</div>
+                                <p className="text-sm font-medium text-slate-700 leading-relaxed">{strategy}</p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )}
     </div>
   );
 }
@@ -21076,13 +20854,23 @@ export default function App() {
       }
       
       addLog(`➜ พบข้อมูลเก่าต้องลบ ${deleteQueue.length.toLocaleString()} รายการ กำลังดำเนินการ...`, 'info');
-      const DELETE_CHUNK_SIZE = 400;
+      const DELETE_CHUNK_SIZE = 150; // 🔥 FIX: ลดขนาด Batch ลงเหลือ 150 ป้องกัน Transaction too big
+      let deletedCount = 0;
       for (let i = 0; i < deleteQueue.length; i += DELETE_CHUNK_SIZE) {
           const chunk = deleteQueue.slice(i, i + DELETE_CHUNK_SIZE);
           let batch = writeBatch(dbInstance);
           chunk.forEach(ref => batch.delete(ref));
-          await batch.commit();
-          await new Promise(r => setTimeout(r, 50)); 
+          
+          try {
+              await batch.commit();
+              deletedCount += chunk.length;
+              if (deletedCount % 1500 === 0 || deletedCount === deleteQueue.length) {
+                  addLog(`➜ ลบข้อมูลเก่าแล้ว ${deletedCount.toLocaleString()} / ${deleteQueue.length.toLocaleString()} รายการ...`, 'info');
+              }
+          } catch (err) {
+              throw new Error(`ลบข้อมูลชุดที่ ${i} ไม่สำเร็จ: ${err.message}`);
+          }
+          await new Promise(r => setTimeout(r, 150)); // 🔥 FIX: เพิ่มเวลาพักเป็น 150ms ให้ Server หายใจ
       }
       addLog('✅ ล้างข้อมูลเก่าสำเร็จ 100%', 'success');
 
@@ -21091,7 +20879,7 @@ export default function App() {
       setRestoreProgress({ current: 0, total: totalItems, status: 'กำลังเขียนข้อมูลลงคลาวด์...' });
       
       let restoredCount = 0;
-      const UPLOAD_CHUNK_SIZE = 400; 
+      const UPLOAD_CHUNK_SIZE = 150; // 🔥 FIX: ลดขนาด Batch อัปโหลดลงเช่นกัน
       
       for (let i = 0; i < uploadQueue.length; i += UPLOAD_CHUNK_SIZE) {
           const chunk = uploadQueue.slice(i, i + UPLOAD_CHUNK_SIZE);
@@ -21101,14 +20889,15 @@ export default function App() {
           try {
               await batch.commit();
               restoredCount += chunk.length;
-              if (restoredCount % 400 === 0 || restoredCount === totalItems) {
+              if (restoredCount % 1500 === 0 || restoredCount === totalItems) {
                   setRestoreProgress({ current: restoredCount, total: totalItems, status: `กำลังอัปโหลด... (${Math.round((restoredCount/totalItems)*100)}%)` });
                   addLog(`➜ บันทึกสำเร็จรวม ${restoredCount.toLocaleString()} รายการ...`, 'info');
               }
           } catch (err) {
               addLog(`❌ เขียนข้อมูลชุดที่ ${i+1} ไม่สำเร็จ: ${err.message}`, 'error');
+              throw new Error(`อัปโหลดข้อมูลชุดที่ ${i} ไม่สำเร็จ: ${err.message}`);
           }
-          await new Promise(r => setTimeout(r, 50)); 
+          await new Promise(r => setTimeout(r, 150)); // 🔥 FIX: เพิ่มเวลาพักเป็น 150ms
       }
       
       setRestoreProgress({ current: restoredCount, total: totalItems, status: 'เสร็จสมบูรณ์!' });
@@ -21548,7 +21337,6 @@ export default function App() {
       case 'reports': return <TaxReports transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} appId={currentAppId} user={user} />;
       case 'pricing': return <PricingCalculator stockBatches={stockBatches} transactions={transactions} showToast={addToast} appId={currentAppId} user={user} />;
       case 'guide': return <TaxGuide />;
-      case 'pit90': return <PitCalculator transactions={transactions} invoices={invoices} showToast={addToast} />;
       default: return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} />;
     }
   };
@@ -21565,22 +21353,17 @@ export default function App() {
     <div className="flex w-full h-screen bg-slate-50 font-sarabun text-slate-800 overflow-hidden text-left">
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_STYLES }} />
       <ToastContainer toasts={toasts} removeToast={removeToast} />
+      
+      {/* --- M.A.R.G.I.N. Intelligence Core --- */}
+      <MarginAIAssistant transactions={transactions} stockBatches={stockBatches} user={user} />
+
       <aside className="w-72 bg-slate-900 text-white flex flex-col border-r border-slate-800 shadow-2xl h-full shrink-0 text-left">
-        <div className="p-8 border-b border-slate-800 flex items-center gap-3 text-left">
-            <div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-center shrink-0">
-                <Wallet size={20} className="text-white text-center"/>
-            </div>
-            <div className="flex flex-col">
-                <h1 className="text-xl font-bold tracking-tight text-left leading-tight">MerchantTax</h1>
-                <span className="text-[10px] font-mono text-indigo-400 font-bold tracking-widest mt-0.5">v1.6.0 (Stable)</span>
-            </div>
-        </div>
+        <div className="p-8 border-b border-slate-800 flex items-center gap-3 text-left"><div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-center"><Wallet size={20} className="text-white text-center"/></div><h1 className="text-xl font-bold tracking-tight text-left">MerchantTax</h1></div>
         <nav className="p-6 space-y-4 flex-1 overflow-y-auto text-left">
             <NavButton active={activeTab === 'dashboard'} onClick={()=>{setActiveTab('dashboard');}} icon={<PieChart size={18} />} label="แดชบอร์ด" />
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Analytics & Accounting</p>
             <NavButton active={activeTab === 'monthly_report'} onClick={()=>{setActiveTab('monthly_report');}} icon={<BarChart2 size={18} />} label="สรุปยอดรายเดือน (Performance)" />
             <NavButton active={activeTab === 'reports'} onClick={()=>{setActiveTab('reports');}} icon={<ClipboardList size={18} />} label="รายงานภาษี และ บัญชี" />
-            <NavButton active={activeTab === 'pit90'} onClick={()=>{setActiveTab('pit90');}} icon={<User size={18} />} label="คำนวณภาษี ภ.ง.ด." />
             <NavButton active={activeTab === 'assets'} onClick={()=>{setActiveTab('assets');}} icon={<Monitor size={18} />} label="ทะเบียนทรัพย์สิน (Asset)" />
             
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-6 opacity-50 text-left">Operations</p>
@@ -21695,9 +21478,6 @@ export default function App() {
         </header>
         <div className="flex-1 overflow-auto p-6 lg:p-10 relative bg-[#f8fafc] text-left">{renderContent()}</div>
       </main>
-
-      {/* --- วาง Smart Hologram Orb ตรงนี้เพื่อให้ลอยอยู่เหนือทุกสิ่งตลอดเวลา --- */}
-      <SmartHologramOrb transactions={transactions} stockBatches={stockBatches} invoices={invoices} />
 
       {/* API Key Modal */}
       {showApiKeyModal && (
@@ -22274,46 +22054,26 @@ export default function App() {
                       <table className="w-full text-xs text-left">
                           <thead className="bg-slate-100 text-slate-500 uppercase sticky top-0 border-b border-slate-200 z-10">
                               <tr>
-                                  <th className="p-3 pl-4">วันที่ / Order ID</th>
-                                  <th className="p-3">รายการสินค้า</th>
-                                  <th className="p-3 text-right">ค่าธรรมเนียม</th>
-                                  <th className="p-3 text-right pr-4">ยอดสุทธิ (Net)</th>
+                                  <th className="p-3 pl-4">วันที่ / เลขบิล</th>
+                                  <th className="p-3">หมวดหมู่ / อ้างอิง Order</th>
+                                  <th className="p-3 text-right pr-4">ยอดเงิน (฿)</th>
                               </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
-                              {/* แสดดงแค่ 50 รายการแรกเพื่อไม่ให้ Modal หน่วง */}
-                              {importedData.slice(0, 50).map((it, idx) => (
+                              {ghostRecords.slice(0, 50).map((t, idx) => (
                                   <tr key={idx} className="hover:bg-white transition-colors">
                                       <td className="p-3 pl-4">
-                                          <p className="font-bold text-slate-700">{formatDate(it.newSettlementDate || it.date)}</p>
-                                          <p className="text-[10px] font-mono text-indigo-500 mt-0.5 mb-1">{it.orderId}</p>
-                                          {/* --- 🔥 NEW: Badge แยกสถานะอัปเดต vs สร้างใหม่ ในโหมดกระทบยอด --- */}
-                                          {importMode === 'update_settled' && (
-                                              it.isNewFromForceImport ? (
-                                                  <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit" title="รายการนี้ถูกสร้างใหม่จากการกด Force Import">
-                                                      ✨ สร้างใหม่ (Force)
-                                                  </span>
-                                              ) : (
-                                                  <span className="bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-1 w-fit" title="ข้อมูลจะถูกอัปเดตทับรายการเดิมในระบบ">
-                                                      ✏️ อัปเดตทับ
-                                                  </span>
-                                              )
-                                          )}
+                                          <p className="font-bold text-slate-700">{formatDate(t.date)}</p>
+                                          <p className="text-[10px] font-mono text-slate-500 font-bold mt-0.5 bg-slate-200 px-1.5 py-0.5 rounded w-fit">{t.sysDocId || '-'}</p>
                                       </td>
                                       <td className="p-3">
-                                          <div className="max-h-16 overflow-y-auto custom-scrollbar pr-2">
-                                              {(it.items || []).map((item, itemIdx) => (
-                                                  <p key={itemIdx} className="text-[10px] text-slate-600 truncate max-w-[250px]" title={item.desc}>
-                                                      • {item.desc} <span className="font-bold text-slate-400">x{item.qty}</span>
-                                                  </p>
-                                              ))}
-                                          </div>
+                                          <p className="font-bold text-slate-600 bg-amber-100 px-2 py-0.5 rounded border border-amber-200 w-fit mb-1">
+                                              {t.category}
+                                          </p>
+                                          <p className="text-[10px] text-slate-500 truncate max-w-[250px]">Ref: {t.linkedOrderNo || t.orderId || '-'}</p>
                                       </td>
-                                      <td className="p-3 text-right font-bold text-rose-500">
-                                          -{formatCurrency(it.newPlatformFee !== undefined ? it.newPlatformFee : (it.platformFee || 0))}
-                                      </td>
-                                      <td className="p-3 text-right pr-4 font-black text-slate-800">
-                                          {formatCurrency(it.actualSettledAmt !== undefined ? it.actualSettledAmt : (it.grandTotal || it.total))}
+                                      <td className={`p-3 text-right pr-4 font-black ${t.type === 'income' ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                          {t.type === 'income' ? '+' : '-'}{formatCurrency(t.total || t.grandTotal)}
                                       </td>
                                   </tr>
                               ))}
