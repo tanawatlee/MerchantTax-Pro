@@ -2341,6 +2341,29 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
   
   // NEW: เพิ่ม state สำหรับเลือกแท็บพรีวิวระหว่างยอดปกติ กับ ยอดตีคืน/ยกเลิก
   const [previewSubTab, setPreviewSubTab] = useState('normal'); // 'normal', 'cancelled'
+
+  // --- 🔥 NEW: Platform Theme Colors ---
+  const platformTheme = useMemo(() => {
+    if (platform === 'shopee') return {
+        bg: 'bg-orange-50/50', border: 'border-orange-100', text: 'text-orange-800',
+        icon: 'text-orange-600', uploadBorder: 'border-orange-200', uploadHover: 'hover:bg-orange-50',
+        btn: 'bg-orange-500 hover:bg-orange-600 shadow-orange-200', textLight: 'text-orange-500',
+        tableHeader: 'bg-orange-50'
+    };
+    if (platform === 'lazada') return {
+        bg: 'bg-blue-50/50', border: 'border-blue-100', text: 'text-blue-800',
+        icon: 'text-blue-600', uploadBorder: 'border-blue-200', uploadHover: 'hover:bg-blue-50',
+        btn: 'bg-blue-600 hover:bg-blue-700 shadow-blue-200', textLight: 'text-blue-500',
+        tableHeader: 'bg-blue-50'
+    };
+    // tiktok
+    return {
+        bg: 'bg-slate-100/50', border: 'border-slate-200', text: 'text-slate-800',
+        icon: 'text-slate-700', uploadBorder: 'border-slate-300', uploadHover: 'hover:bg-slate-100',
+        btn: 'bg-slate-900 hover:bg-slate-800 shadow-slate-300', textLight: 'text-slate-600',
+        tableHeader: 'bg-slate-100'
+    };
+  }, [platform]);
   
   // NEW: เพิ่ม state `skippedQty` สำหรับนับจำนวนชิ้นที่ระบบช่วยกรองทิ้งให้
   const [stats, setStats] = useState({ 
@@ -2546,59 +2569,70 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       return 0;
   };
 
-  // --- 🔥 FIX: เปลี่ยนมาใช้ getRowValAbs แทน getExactRowValAbs เพื่อความยืดหยุ่นในการหาคอลัมน์ของ TikTok ---
+  // --- 🧩 TIKTOK ADAPTER (แยกตรรกะเฉพาะ TikTok) ---
+  const extractTikTokFees = (row) => {
+      // 1. Transaction Fee (ค่าธรรมเนียมการชำระเงิน)
+      const transFee = getRowValAbs(row, ['ค่าธรรมเนียมคำสั่งซื้อ', 'Transaction fee', 'Transaction Fee', 'ค่าธรรมเนียมธุรกรรม']);
+      
+      // 2. Commission Fee (ค่าคอมแพลตฟอร์ม)
+      const comm = getRowValAbs(row, ['ค่าคอมมิชชั่น TikTok Shop', 'TikTok Shop commission fee', 'Platform Commission']);
+      
+      // 3. Service Fee (การเติบโต)
+      const serv = getRowValAbs(row, ['ค่าธรรมเนียมสนับสนุนการเติบโตของร้านค้า', 'Commerce growth fee']);
+      
+      // 4. Affiliate Fee (นายหน้า)
+      const affiliateRow = getRowValAbs(row, ['ค่าคอมมิชชั่นแอฟฟิลิเอต', 'Affiliate Commission']);
+      
+      // 5. Infrastructure Fee
+      const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
+
+      // 6. Shipping (ค่าขนส่งต่างๆ)
+      const shipBuyerRow = getRowValAbs(row, ['ค่าธรรมเนียมการจัดส่งของลูกค้า', 'Customer Shipping Fee']);
+      
+      // ยอด Subsidy เกิดจาก 2 ส่วนบวกกัน (ส่วนลดแพลตฟอร์ม + เงินสนับสนุน)
+      const subsidy1 = getRowValAbs(row, ['ส่วนลดค่าธรรมเนียมการจัดส่งจากแพลตฟอร์ม', 'Platform shipping fee discount']);
+      const subsidy2 = getRowValAbs(row, ['เงินสนับสนุนการจัดส่ง']);
+      const shipSubsidyRow = subsidy1 + subsidy2;
+      
+      const shipEstRow = getRowValAbs(row, ['ค่าธรรมเนียมการจัดส่งจริง', 'Actual shipping fee']);
+      const shipReturnRow = getRowValAbs(row, ['Return Shipping Fee', 'ค่าจัดส่งสินค้าคืน']);
+
+      return { transFee, comm, serv, affiliateRow, infraRow, shipBuyerRow, shipSubsidyRow, shipEstRow, shipReturnRow };
+  };
+
+  // --- 🧩 MAIN EXTRACTOR (สมองส่วนกลาง สลับ Adapter อัตโนมัติ) ---
   const extractFeesAndShipping = (row, mode, currentSchema) => {
-      let transFee = 0, comm = 0, serv = 0, infraRow = 0, affiliateRow = 0;
-      let shipBuyerRow = 0, shipSubsidyRow = 0, shipEstRow = 0, shipReturnRow = 0;
+      let fees = { transFee: 0, comm: 0, serv: 0, affiliateRow: 0, infraRow: 0, shipBuyerRow: 0, shipSubsidyRow: 0, shipEstRow: 0, shipReturnRow: 0 };
 
       if (platform === 'tiktok') {
-          let totalFeeVal = getRowValAbs(row, ['Total Fees', 'ค่าธรรมเนียมรวม', 'รวมค่าธรรมเนียม', 'ค่าธรรมเนียมแพลตฟอร์มรวม', 'Total Platform Fee']);
-          if (totalFeeVal === 0) {
-              let t1 = getRowValAbs(row, ['Transaction fee', 'Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน']);
-              let t2 = getRowValAbs(row, ['TikTok Shop commission fee', 'ค่าคอมมิชชันของ TikTok Shop', 'Platform Commission', 'ค่าคอมมิชชันแพลตฟอร์ม', 'Commission Fee']);
-              let t3 = getRowValAbs(row, ['Affiliate Commission', 'ค่าคอมมิชชันของพันธมิตร', 'ค่าคอมมิชชั่นพันธมิตร', 'Affiliate fee']);
-              let t4 = getRowValAbs(row, ['Commerce growth fee', 'ค่าธรรมเนียม Commerce growth', 'ค่าธรรมเนียมการเติบโต', 'Growth fee']);
-              totalFeeVal = t1 + t2 + t3 + t4;
-          }
-
-          transFee = totalFeeVal;
-          comm = 0;
-          affiliateRow = 0;
-          infraRow = 0;
-          serv = 0;
-
-          let sellerShip = getRowValAbs(row, ['Seller shipping fee', 'ค่าจัดส่งของผู้ขาย', 'Shipping fee borne by seller', 'ค่าจัดส่งที่ผู้ขายรับภาระ']);
-          let actualShip = getRowValAbs(row, ['Actual shipping fee', 'ค่าจัดส่งตามจริง', 'Actual Shipping', 'ค่าจัดส่งจริง']);
-          
-          shipEstRow = actualShip > 0 ? actualShip : sellerShip;
-          shipSubsidyRow = getRowValAbs(row, ['Platform shipping fee discount', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม', 'Platform Shipping Subsidy', 'เงินอุดหนุนค่าจัดส่ง']);
-          
-          shipBuyerRow = getRowValAbs(row, currentSchema.shippingFeeByBuyer); 
-          shipReturnRow = getRowValAbs(row, currentSchema.returnShippingFee); 
+          // ใช้ Adapter ของ TikTok
+          fees = extractTikTokFees(row);
       } else {
-          transFee = getRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน']);
-          comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee', 'Platform Commission']); 
-          serv = getRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
+          // ของเก่า (Shopee / Lazada) ยังใช้ตรรกะเดิมไปก่อน จนกว่าเราจะทำ Adapter เฟสต่อไป
+          fees.transFee = getRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน']);
+          fees.comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee', 'Platform Commission']); 
+          fees.serv = getRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
           
           const baseInfra = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
           const shippingProg = getRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
-          infraRow = baseInfra + shippingProg;
+          fees.infraRow = baseInfra + shippingProg;
           
-          affiliateRow = getRowValAbs(row, ['ค่าคอมมิชชั่น Affiliate', 'Affiliate Commission']);
+          fees.affiliateRow = getRowValAbs(row, ['ค่าคอมมิชชั่น Affiliate', 'Affiliate Commission']);
           
-          shipBuyerRow = getRowValAbs(row, currentSchema.shippingFeeByBuyer);
-          shipSubsidyRow = getRowValAbs(row, currentSchema.shippingFeeSubsidy);
-          shipEstRow = getRowValAbs(row, currentSchema.estimatedShippingFee);
-          shipReturnRow = getRowValAbs(row, currentSchema.returnShippingFee);
+          fees.shipBuyerRow = getRowValAbs(row, currentSchema.shippingFeeByBuyer);
+          fees.shipSubsidyRow = getRowValAbs(row, currentSchema.shippingFeeSubsidy);
+          fees.shipEstRow = getRowValAbs(row, currentSchema.estimatedShippingFee);
+          fees.shipReturnRow = getRowValAbs(row, currentSchema.returnShippingFee);
       }
 
+      // หากไม่ใช่โหมดรับเงิน ไม่ต้องดึงค่าส่งหักจริง
       if (mode !== 'update_settled' && mode !== 'update_fees_shipping') {
-          shipEstRow = 0;      
-          shipSubsidyRow = 0;  
-          shipReturnRow = 0;   
+          fees.shipEstRow = 0;      
+          fees.shipSubsidyRow = 0;  
+          fees.shipReturnRow = 0;   
       }
 
-      return { transFee, comm, serv, affiliateRow, infraRow, shipBuyerRow, shipSubsidyRow, shipEstRow, shipReturnRow };
+      return fees;
   };
 
   const handleForceImportSkipped = (actionType) => {
@@ -3082,7 +3116,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
         let detailedStats = {
             productPrice: 0, sellerDiscount: 0, refundAmount: 0, 
             shipBuyer: 0, shipShopee: 0, shipActual: 0, shipReturn: 0, 
-            feeComm: 0, feeServ: 0, feeInfra: 0, feeTrans: 0, totalSettled: 0
+            feeComm: 0, feeServ: 0, feeInfra: 0, feeTrans: 0, feeAffiliate: 0, totalSettled: 0
         };
         let seenOrdersForStats = new Set();
         const cleanStrForStats = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
@@ -3116,6 +3150,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
             detailedStats.feeServ += fees.serv;
             detailedStats.feeInfra += fees.infraRow;
             detailedStats.feeTrans += fees.transFee;
+            detailedStats.feeAffiliate += (fees.affiliateRow || 0);
 
             // 2. หมวดรายออเดอร์ (Order Level) - ต้องบวกแค่ครั้งเดียวต่อ 1 Order ID เพื่อป้องกันยอดเบิ้ล
             if (!seenOrdersForStats.has(orderId)) {
@@ -4432,10 +4467,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
       {importerTab === 'import' && (
         <>
-          <div className="bg-indigo-50/50 p-6 rounded-3xl border border-indigo-100 flex flex-col gap-6 text-left">
+          <div className={`p-6 rounded-3xl border flex flex-col gap-6 text-left transition-colors duration-300 ${platformTheme.bg} ${platformTheme.border}`}>
             <div className="flex items-center gap-2 mb-2">
-                <Settings size={20} className="text-indigo-600"/>
-                <h4 className="font-bold text-indigo-800">ตั้งค่าการนำเข้าข้อมูล (Import Mode)</h4>
+                <Settings size={20} className={platformTheme.icon}/>
+                <h4 className={`font-bold ${platformTheme.text}`}>ตั้งค่าการนำเข้าข้อมูล (Import Mode) - {platform.toUpperCase()}</h4>
             </div>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -4501,11 +4536,11 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
             <div className="bg-white p-6 rounded-3xl border shadow-sm flex flex-col gap-4 text-left">
               <div className="space-y-2 text-left">
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider text-left">Step 1: Upload Excel File</p>
+                <p className={`text-xs font-bold uppercase tracking-wider text-left transition-colors ${platformTheme.textLight}`}>Step 1: Upload Excel File</p>
                 <input type="file" ref={fileInputRef} hidden onChange={handleFileUpload} />
-                <button onClick={() => fileInputRef.current.click()} className="w-full py-10 border-2 border-dashed border-indigo-200 rounded-3xl flex flex-col items-center justify-center text-indigo-600 hover:bg-indigo-50 transition-colors text-center">
+                <button onClick={() => fileInputRef.current.click()} className={`w-full py-10 border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-colors text-center ${platformTheme.uploadBorder} ${platformTheme.icon} ${platformTheme.uploadHover}`}>
                   <FileUp size={48} className="mb-2"/>
-                  <p className="font-bold">คลิกเพื่ออัปโหลดไฟล์ Excel</p>
+                  <p className="font-bold">คลิกเพื่ออัปโหลดไฟล์ Excel ของ {platform.toUpperCase()}</p>
                 </button>
               </div>
             </div>
@@ -4527,7 +4562,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       <button 
                         onClick={() => setShowImportPreviewModal(true)} 
                         disabled={loading} 
-                        className={`text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50 text-center ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : importMode === 'update_cancelled' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-100' : importMode === 'update_fees_shipping' ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-100' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100'}`}
+                        className={`text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50 text-center ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : importMode === 'update_cancelled' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-100' : importMode === 'update_fees_shipping' ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-100' : platformTheme.btn}`}
                       >
                         {loading ? <Loader className="animate-spin" size={14}/> : <CheckCircle size={14}/>}
                         {importMode === 'update_settled' ? 'ยืนยันการรับเงิน (Settle)' : importMode === 'update_cancelled' ? 'ยืนยันอัปเดตเป็นยกเลิก (Void)' : importMode === 'update_fees_shipping' ? 'ยืนยันอัปเดตค่าส่ง/ธรรมเนียม' : 'บันทึกและเปิดใช้งาน (Activate)'}
@@ -4597,13 +4632,13 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                       <div className="flex justify-between items-center p-4 bg-slate-50 border-b">
                                           <div>
                                               <h5 className="font-bold text-slate-800 text-sm">การจัดโครงสร้างรายได้/รายจ่าย (Excel Summary)</h5>
-                                              <p className="text-xs text-slate-500 mt-1">ยอดรวมของทุกบรรทัดในไฟล์นี้ (เทียบกับชีท 'สรุป' ของ Shopee ได้เลย)</p>
+                                              <p className="text-xs text-slate-500 mt-1">ยอดรวมของทุกบรรทัดในไฟล์ที่ประมวลผล (ตามรูปแบบ {platform.toUpperCase()})</p>
                                           </div>
                                           {/* Diff Alert Button - Show only in Update Mode */}
                                           {importMode === 'update_settled' && (
                                               (stats.totalDiffShort > 0 || stats.totalDiffSurplus > 0) ? (
                                                   <button onClick={() => setShowDiscrepancyModal(true)} className="flex items-center gap-1 text-rose-600 font-bold bg-rose-50 px-3 py-2 rounded-lg hover:bg-rose-100 transition-colors border border-rose-200 text-xs shadow-sm">
-                                                      <AlertTriangle size={14}/> ตรวจพบส่วนต่างค่าขนส่ง (คลิกดู)
+                                                      <AlertTriangle size={14}/> ตรวจพบส่วนต่างค่าจัดส่ง (คลิกดู)
                                                   </button>
                                               ) : (
                                                   <span className="flex items-center gap-1 text-emerald-600 font-bold bg-emerald-50 px-3 py-2 rounded-lg border border-emerald-200 text-xs shadow-sm">
@@ -4613,48 +4648,125 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                           )}
                                       </div>
 
-                                      {/* 1. รายได้ทั้งหมด */}
-                                      <div className="bg-orange-500 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center">
-                                          <span>1. รายได้ทั้งหมด (Total Income)</span>
-                                          <span className="text-base">{formatCurrency((stats.detailedSummary?.productPrice || 0) - (stats.detailedSummary?.sellerDiscount || 0) - (stats.detailedSummary?.refundAmount || 0))}</span>
-                                      </div>
-                                      <div className="px-4 py-3 space-y-2 text-xs">
-                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">สินค้าราคาปกติ</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.productPrice)}</span></div>
-                                          <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ส่วนลดสินค้าจากผู้ขาย</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.sellerDiscount)}</span></div>
-                                          <div className="flex justify-between"><span className="text-slate-600">จำนวนเงินที่ทำการคืนให้ผู้ซื้อ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.refundAmount)}</span></div>
-                                      </div>
+                                      {/* --- 🔥 NEW: PLATFORM SPECIFIC UI (TIKTOK / SHOPEE / LAZADA) --- */}
+                                      {platform === 'tiktok' ? (
+                                          <div className="bg-white text-slate-800">
+                                              {/* 1. รายได้ทั้งหมด */}
+                                              <div className="bg-slate-100 border-b border-slate-200 font-bold px-4 py-3 text-sm flex justify-between items-center">
+                                                  <span className="flex items-center gap-2"><ChevronDown size={16} className="text-slate-400"/> รายได้ทั้งหมด</span>
+                                                  <span>{formatCurrency((stats.detailedSummary?.productPrice || 0) - (stats.detailedSummary?.sellerDiscount || 0) - (stats.detailedSummary?.refundAmount || 0))}</span>
+                                              </div>
+                                              <div className="px-4 py-3 space-y-2 text-xs bg-white">
+                                                  <div className="flex justify-between pl-6"><span className="text-slate-600 flex items-center gap-1"><ChevronDown size={14} className="text-slate-300"/> ยอดรวมค่าสินค้าหลังหักส่วนลดจากผู้ขาย</span><span className="font-mono font-medium">{formatCurrency((stats.detailedSummary?.productPrice || 0) - (stats.detailedSummary?.sellerDiscount || 0))}</span></div>
+                                              </div>
 
-                                      {/* 2. ค่าใช้จ่ายทั้งหมด */}
-                                      <div className="bg-slate-400 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center border-t border-white/20">
-                                          <span>2. ค่าใช้จ่ายทั้งหมด (Total Expenses)</span>
-                                          <span className="text-base">{formatCurrency(
-                                              (stats.detailedSummary?.shipBuyer || 0) + (stats.detailedSummary?.shipShopee || 0) - (stats.detailedSummary?.shipActual || 0) - (stats.detailedSummary?.shipReturn || 0) -
-                                              (stats.detailedSummary?.feeComm || 0) - (stats.detailedSummary?.feeServ || 0) - (stats.detailedSummary?.feeInfra || 0) - (stats.detailedSummary?.feeTrans || 0)
-                                          )}</span>
-                                      </div>
-                                      <div className="px-4 py-3 text-xs bg-slate-50">
-                                          <p className="font-bold text-slate-700 mb-2">ค่าจัดส่ง (Shipping)</p>
-                                          <div className="space-y-2 pl-4 border-l-2 border-slate-200">
-                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ชำระโดยผู้ซื้อ</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.shipBuyer)}</span></div>
-                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งสินค้าที่ออกโดย Shopee</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.shipShopee)}</span></div>
-                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.shipActual)}</span></div>
-                                              <div className="flex justify-between"><span className="text-slate-600">ค่าจัดส่งสินค้าคืน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.shipReturn)}</span></div>
-                                          </div>
-                                          
-                                          <p className="font-bold text-slate-700 mb-2 mt-4">ค่าธรรมเนียม (Fees)</p>
-                                          <div className="space-y-2 pl-4 border-l-2 border-slate-200">
-                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าคอมมิชชั่นรวม</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeComm)}</span></div>
-                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าบริการ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeServ)}</span></div>
-                                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าธรรมเนียมโครงสร้างพื้นฐานฯ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeInfra)}</span></div>
-                                              <div className="flex justify-between"><span className="text-slate-600">ค่าธุรกรรมการชำระเงิน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeTrans)}</span></div>
-                                          </div>
-                                      </div>
+                                              {/* 2. ค่าธรรมเนียมทั้งหมด */}
+                                              <div className="bg-slate-100 border-b border-slate-200 font-bold px-4 py-3 text-sm flex justify-between items-center">
+                                                  <span className="flex items-center gap-2"><ChevronDown size={16} className="text-slate-400"/> ค่าธรรมเนียมทั้งหมด</span>
+                                                  <span className="text-rose-600">-{formatCurrency((stats.detailedSummary?.feeTrans || 0) + (stats.detailedSummary?.feeComm || 0))}</span>
+                                              </div>
+                                              <div className="px-4 py-3 space-y-2 text-xs bg-white">
+                                                  <div className="flex justify-between pl-6"><span className="text-slate-600">ค่าธรรมเนียมคำสั่งซื้อ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeTrans)}</span></div>
+                                                  <div className="flex justify-between pl-6"><span className="text-slate-600">ค่าคอมมิชชั่น TikTok Shop</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeComm)}</span></div>
+                                              </div>
 
-                                      {/* 3. จำนวนเงินทั้งหมดที่โอนแล้ว */}
-                                      <div className="bg-slate-800 text-white font-bold p-4 text-sm flex justify-between items-center">
-                                          <span>3. จำนวนเงินทั้งหมดที่โอนแล้ว (Net Transferred)</span>
-                                          <span className="text-xl font-black">{formatCurrency(stats.detailedSummary?.totalSettled)}</span>
-                                      </div>
+                                              {/* 3. ยอดรวมค่าจัดส่ง */}
+                                              <div className="bg-slate-100 border-b border-slate-200 font-bold px-4 py-3 text-sm flex justify-between items-center">
+                                                  <span className="flex items-center gap-2"><ChevronDown size={16} className="text-slate-400"/> ยอดรวมค่าจัดส่งที่ร้านค้าจ่ายจริง</span>
+                                                  <span className={((stats.detailedSummary?.shipActual || 0) - (stats.detailedSummary?.shipShopee || 0) - (stats.detailedSummary?.shipBuyer || 0)) > 0 ? 'text-rose-600' : 'text-emerald-600'}>
+                                                      {formatCurrency(-((stats.detailedSummary?.shipActual || 0) - (stats.detailedSummary?.shipShopee || 0) - (stats.detailedSummary?.shipBuyer || 0)))}
+                                                  </span>
+                                              </div>
+                                              <div className="px-4 py-3 space-y-2 text-xs bg-white">
+                                                  <div className="flex justify-between pl-6"><span className="text-slate-600">• ค่าธรรมเนียมการจัดส่งจริง</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.shipActual)}</span></div>
+                                                  <div className="flex justify-between pl-6"><span className="text-slate-600">• ส่วนลดค่าธรรมเนียมการจัดส่งจากแพลตฟอร์ม</span><span className="font-mono font-medium text-emerald-600">{formatCurrency(stats.detailedSummary?.shipShopee)}</span></div>
+                                                  <div className="flex justify-between pl-6 mt-2 font-bold"><span className="text-slate-700 flex items-center gap-1"><ChevronDown size={14} className="text-slate-400"/> ค่าธรรมเนียมการจัดส่งของลูกค้า</span><span className="font-mono">{formatCurrency(stats.detailedSummary?.shipBuyer)}</span></div>
+                                                  <div className="flex justify-between pl-10"><span className="text-slate-500">• เงินสนับสนุนการจัดส่ง</span><span className="font-mono font-medium">{formatCurrency(0)}</span></div>
+                                              </div>
+
+                                              {/* 4. ค่าคอมมิชชั่นแอฟฟิลิเอต และอื่นๆ */}
+                                              <div className="bg-slate-100 border-b border-slate-200 font-bold px-4 py-3 text-sm flex justify-between items-center">
+                                                  <span className="flex items-center gap-2"><ChevronDown size={16} className="text-slate-400"/> ค่าคอมมิชชั่นแอฟฟิลิเอต</span>
+                                                  <span className="text-rose-600">-{formatCurrency(stats.detailedSummary?.feeAffiliate)}</span>
+                                              </div>
+                                              <div className="px-4 py-3 space-y-2 text-xs bg-white">
+                                                  <div className="flex justify-between pl-6"><span className="text-slate-600">ค่าธรรมเนียมสนับสนุนการเติบโตของร้านค้า</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeServ)}</span></div>
+                                                  <div className="flex justify-between pl-6"><span className="text-slate-600">ค่าธรรมเนียมโครงสร้างพื้นฐาน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeInfra)}</span></div>
+                                              </div>
+
+                                              {/* Footer ยอดรวม */}
+                                              <div className="bg-slate-100 text-slate-800 font-black p-4 text-lg flex justify-between items-center border-t border-slate-200">
+                                                  <span>ยอดการชำระเงินทั้งหมด</span>
+                                                  <span className="text-2xl font-black">{formatCurrency(stats.detailedSummary?.totalSettled)}</span>
+                                              </div>
+                                          </div>
+                                      ) : platform === 'lazada' ? (
+                                          <div className="bg-white text-slate-800">
+                                              <div className="bg-blue-600 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center">
+                                                  <span>ยอดรวมสินค้า (Item Price)</span>
+                                                  <span className="text-base">{formatCurrency((stats.detailedSummary?.productPrice || 0))}</span>
+                                              </div>
+                                              <div className="px-4 py-3 space-y-2 text-xs">
+                                                  <div className="flex justify-between"><span className="text-slate-600">ส่วนลดโปรโมชั่นร้านค้า</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.sellerDiscount)}</span></div>
+                                              </div>
+                                              <div className="bg-slate-400 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center border-t border-white/20">
+                                                  <span>ค่าธรรมเนียมลาซาด้า (Lazada Fees)</span>
+                                                  <span className="text-base">-{formatCurrency((stats.detailedSummary?.feeComm || 0) + (stats.detailedSummary?.feeServ || 0) + (stats.detailedSummary?.feeTrans || 0))}</span>
+                                              </div>
+                                              <div className="px-4 py-3 text-xs bg-slate-50 space-y-2">
+                                                  <div className="flex justify-between"><span className="text-slate-600">Payment Fee (ค่าธรรมเนียมชำระเงิน)</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeTrans)}</span></div>
+                                                  <div className="flex justify-between"><span className="text-slate-600">Commission (ค่าคอมมิชชั่น)</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeComm)}</span></div>
+                                                  <div className="flex justify-between"><span className="text-slate-600">Service Fee (ค่าธรรมเนียมโปรแกรม)</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeServ)}</span></div>
+                                              </div>
+                                              <div className="bg-slate-800 text-white font-bold p-4 text-sm flex justify-between items-center">
+                                                  <span>ยอดเงินที่ได้รับ (Payout)</span>
+                                                  <span className="text-xl font-black">{formatCurrency(stats.detailedSummary?.totalSettled)}</span>
+                                              </div>
+                                          </div>
+                                      ) : (
+                                          // --- SHOPEE UI (Original) ---
+                                          <div className="bg-white text-slate-800">
+                                              <div className="bg-orange-500 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center">
+                                                  <span>1. รายได้ทั้งหมด (Total Income)</span>
+                                                  <span className="text-base">{formatCurrency((stats.detailedSummary?.productPrice || 0) - (stats.detailedSummary?.sellerDiscount || 0) - (stats.detailedSummary?.refundAmount || 0))}</span>
+                                              </div>
+                                              <div className="px-4 py-3 space-y-2 text-xs">
+                                                  <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">สินค้าราคาปกติ</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.productPrice)}</span></div>
+                                                  <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ส่วนลดสินค้าจากผู้ขาย</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.sellerDiscount)}</span></div>
+                                                  <div className="flex justify-between"><span className="text-slate-600">จำนวนเงินที่ทำการคืนให้ผู้ซื้อ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.refundAmount)}</span></div>
+                                              </div>
+
+                                              <div className="bg-slate-400 text-white font-bold px-4 py-2.5 text-sm flex justify-between items-center border-t border-white/20">
+                                                  <span>2. ค่าใช้จ่ายทั้งหมด (Total Expenses)</span>
+                                                  <span className="text-base">{formatCurrency(
+                                                      (stats.detailedSummary?.shipBuyer || 0) + (stats.detailedSummary?.shipShopee || 0) - (stats.detailedSummary?.shipActual || 0) - (stats.detailedSummary?.shipReturn || 0) -
+                                                      (stats.detailedSummary?.feeComm || 0) - (stats.detailedSummary?.feeServ || 0) - (stats.detailedSummary?.feeInfra || 0) - (stats.detailedSummary?.feeTrans || 0)
+                                                  )}</span>
+                                              </div>
+                                              <div className="px-4 py-3 text-xs bg-slate-50">
+                                                  <p className="font-bold text-slate-700 mb-2">ค่าจัดส่ง (Shipping)</p>
+                                                  <div className="space-y-2 pl-4 border-l-2 border-slate-200">
+                                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ชำระโดยผู้ซื้อ</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.shipBuyer)}</span></div>
+                                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งสินค้าที่ออกโดย Shopee</span><span className="font-mono font-medium">{formatCurrency(stats.detailedSummary?.shipShopee)}</span></div>
+                                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.shipActual)}</span></div>
+                                                      <div className="flex justify-between"><span className="text-slate-600">ค่าจัดส่งสินค้าคืน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.shipReturn)}</span></div>
+                                                  </div>
+                                                  
+                                                  <p className="font-bold text-slate-700 mb-2 mt-4">ค่าธรรมเนียม (Fees)</p>
+                                                  <div className="space-y-2 pl-4 border-l-2 border-slate-200">
+                                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าคอมมิชชั่นรวม</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeComm)}</span></div>
+                                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าบริการ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeServ)}</span></div>
+                                                      <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5"><span className="text-slate-600">ค่าธรรมเนียมโครงสร้างพื้นฐานฯ</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeInfra)}</span></div>
+                                                      <div className="flex justify-between"><span className="text-slate-600">ค่าธุรกรรมการชำระเงิน</span><span className="font-mono font-medium text-rose-600">-{formatCurrency(stats.detailedSummary?.feeTrans)}</span></div>
+                                                  </div>
+                                              </div>
+
+                                              <div className="bg-slate-800 text-white font-bold p-4 text-sm flex justify-between items-center">
+                                                  <span>3. จำนวนเงินทั้งหมดที่โอนแล้ว (Net Transferred)</span>
+                                                  <span className="text-xl font-black">{formatCurrency(stats.detailedSummary?.totalSettled)}</span>
+                                              </div>
+                                          </div>
+                                      )}
                                       
                                       {/* Extra Mini-Cards for specific discrepancy */}
                                       <div className="grid grid-cols-2 gap-px bg-slate-200">
@@ -14404,24 +14516,37 @@ function RecordManager({ user, transactions, invoices, appId, stockBatches, show
                       )}
                       
                       {viewItem.type === 'income' && (
-                          <>
-                              <div className="flex justify-between text-emerald-500 pt-2 border-t text-left">
-                                  <span className="text-[10px] font-bold uppercase text-left">ค่าจัดส่งที่ผู้ซื้อชำระ</span>
-                                  <span className="font-bold text-right text-right">+{formatCurrency(viewItem.shippingFee || 0)}</span>
-                              </div>
-                              <div className="flex justify-between text-slate-500 text-left">
-                                  <span className="text-[10px] font-bold uppercase text-left">ค่าจัดส่งจ่ายจริง (Actual)</span>
-                                  <span className="font-bold text-right text-right">{formatCurrency(viewItem.estimatedShippingFee || 0)}</span>
-                              </div>
-                              <div className="flex justify-between text-indigo-500 text-left">
-                                  <span className="text-[10px] font-bold uppercase text-left">ค่าจัดส่งที่ Platform ออกให้</span>
-                                  <span className="font-bold text-right text-right">{formatCurrency(viewItem.shippingFeeSubsidy || 0)}</span>
-                              </div>
-                              <div className="flex justify-between text-rose-500 text-left">
-                                  <span className="text-[10px] font-bold uppercase text-left">ค่าจัดส่งสินค้าคืน</span>
-                                  <span className="font-bold text-right text-right">-{formatCurrency(viewItem.returnShippingFee || 0)}</span>
-                              </div>
-                          </>
+                          (() => {
+                              const bShip = Number(viewItem.shippingFee || 0);
+                              const aShip = Number(viewItem.estimatedShippingFee || 0);
+                              const subShip = Number(viewItem.shippingFeeSubsidy || 0);
+                              const retShip = Number(viewItem.returnShippingFee || 0);
+                              const sBalance = (bShip + subShip) - (aShip + retShip);
+                              return (
+                                  <>
+                                      <div className="flex justify-between text-emerald-500 pt-2 border-t text-left">
+                                          <span className="text-[10px] font-bold uppercase text-left">ค่าจัดส่งที่ผู้ซื้อชำระ</span>
+                                          <span className="font-bold text-right text-right">+{formatCurrency(bShip)}</span>
+                                      </div>
+                                      <div className="flex justify-between text-slate-500 text-left">
+                                          <span className="text-[10px] font-bold uppercase text-left">ค่าจัดส่งจ่ายจริง (Actual)</span>
+                                          <span className="font-bold text-right text-right">{formatCurrency(aShip)}</span>
+                                      </div>
+                                      <div className="flex justify-between text-indigo-500 text-left">
+                                          <span className="text-[10px] font-bold uppercase text-left">ค่าจัดส่งที่ Platform ออกให้</span>
+                                          <span className="font-bold text-right text-right">{formatCurrency(subShip)}</span>
+                                      </div>
+                                      <div className="flex justify-between text-rose-500 text-left">
+                                          <span className="text-[10px] font-bold uppercase text-left">ค่าจัดส่งสินค้าคืน</span>
+                                          <span className="font-bold text-right text-right">-{formatCurrency(retShip)}</span>
+                                      </div>
+                                      <div className={`flex justify-between font-black pt-2 mt-2 border-t border-dashed ${sBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'} text-left`}>
+                                          <span className="text-[10px] uppercase text-left">ส่วนต่างค่าจัดส่ง {sBalance >= 0 ? '(ได้กำไร)' : '(เข้าเนื้อ/ขาดทุน)'}</span>
+                                          <span className="text-right text-right">{sBalance > 0 ? '+' : ''}{formatCurrency(sBalance)}</span>
+                                      </div>
+                                  </>
+                              );
+                          })()
                       )}
                     </div>
                     {viewItem.isNonCreditableVat && (
