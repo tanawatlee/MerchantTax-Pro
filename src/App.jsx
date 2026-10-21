@@ -2336,7 +2336,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
 function DataImporter({ appId, showToast, user, stockBatches, transactions, importLogs }) {
   const [importerTab, setImporterTab] = useState('import'); // 'import', 'logs'
   const [platform, setPlatform] = useState('shopee');
-  const [importMode, setImportMode] = useState('new_pending'); // 'new_pending', 'new_settled', 'update_settled', 'update_cancelled'
+  const [importMode, setImportMode] = useState('new_pending'); // 'new_pending', 'new_settled', 'update_settled', 'update_cancelled', 'update_fees_shipping'
   const [importedData, setImportedData] = useState([]);
   
   // NEW: เพิ่ม state สำหรับเลือกแท็บพรีวิวระหว่างยอดปกติ กับ ยอดตีคืน/ยกเลิก
@@ -2546,17 +2546,18 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       return 0;
   };
 
+  // --- 🔥 FIX: เปลี่ยนมาใช้ getRowValAbs แทน getExactRowValAbs เพื่อความยืดหยุ่นในการหาคอลัมน์ของ TikTok ---
   const extractFeesAndShipping = (row, mode, currentSchema) => {
       let transFee = 0, comm = 0, serv = 0, infraRow = 0, affiliateRow = 0;
       let shipBuyerRow = 0, shipSubsidyRow = 0, shipEstRow = 0, shipReturnRow = 0;
 
       if (platform === 'tiktok') {
-          let totalFeeVal = getExactRowValAbs(row, ['Total Fees', 'ค่าธรรมเนียมรวม', 'รวมค่าธรรมเนียม', 'ค่าธรรมเนียมแพลตฟอร์มรวม', 'Total Platform Fee']);
+          let totalFeeVal = getRowValAbs(row, ['Total Fees', 'ค่าธรรมเนียมรวม', 'รวมค่าธรรมเนียม', 'ค่าธรรมเนียมแพลตฟอร์มรวม', 'Total Platform Fee']);
           if (totalFeeVal === 0) {
-              let t1 = getExactRowValAbs(row, ['Transaction fee', 'Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน']);
-              let t2 = getExactRowValAbs(row, ['TikTok Shop commission fee', 'ค่าคอมมิชชันของ TikTok Shop', 'Platform Commission', 'ค่าคอมมิชชันแพลตฟอร์ม', 'Commission Fee']);
-              let t3 = getExactRowValAbs(row, ['Affiliate Commission', 'ค่าคอมมิชชันของพันธมิตร', 'ค่าคอมมิชชั่นพันธมิตร', 'Affiliate fee']);
-              let t4 = getExactRowValAbs(row, ['Commerce growth fee', 'ค่าธรรมเนียม Commerce growth', 'ค่าธรรมเนียมการเติบโต', 'Growth fee']);
+              let t1 = getRowValAbs(row, ['Transaction fee', 'Transaction Fee', 'ค่าธรรมเนียมธุรกรรม', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน']);
+              let t2 = getRowValAbs(row, ['TikTok Shop commission fee', 'ค่าคอมมิชชันของ TikTok Shop', 'Platform Commission', 'ค่าคอมมิชชันแพลตฟอร์ม', 'Commission Fee']);
+              let t3 = getRowValAbs(row, ['Affiliate Commission', 'ค่าคอมมิชชันของพันธมิตร', 'ค่าคอมมิชชั่นพันธมิตร', 'Affiliate fee']);
+              let t4 = getRowValAbs(row, ['Commerce growth fee', 'ค่าธรรมเนียม Commerce growth', 'ค่าธรรมเนียมการเติบโต', 'Growth fee']);
               totalFeeVal = t1 + t2 + t3 + t4;
           }
 
@@ -2566,24 +2567,24 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           infraRow = 0;
           serv = 0;
 
-          let sellerShip = getExactRowValAbs(row, ['Seller shipping fee', 'ค่าจัดส่งของผู้ขาย', 'Shipping fee borne by seller', 'ค่าจัดส่งที่ผู้ขายรับภาระ']);
-          let actualShip = getExactRowValAbs(row, ['Actual shipping fee', 'ค่าจัดส่งตามจริง', 'Actual Shipping', 'ค่าจัดส่งจริง']);
+          let sellerShip = getRowValAbs(row, ['Seller shipping fee', 'ค่าจัดส่งของผู้ขาย', 'Shipping fee borne by seller', 'ค่าจัดส่งที่ผู้ขายรับภาระ']);
+          let actualShip = getRowValAbs(row, ['Actual shipping fee', 'ค่าจัดส่งตามจริง', 'Actual Shipping', 'ค่าจัดส่งจริง']);
           
           shipEstRow = actualShip > 0 ? actualShip : sellerShip;
-          shipSubsidyRow = getExactRowValAbs(row, ['Platform shipping fee discount', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม', 'Platform Shipping Subsidy', 'เงินอุดหนุนค่าจัดส่ง']);
+          shipSubsidyRow = getRowValAbs(row, ['Platform shipping fee discount', 'ส่วนลดค่าจัดส่งจากแพลตฟอร์ม', 'Platform Shipping Subsidy', 'เงินอุดหนุนค่าจัดส่ง']);
           
-          shipBuyerRow = 0; 
-          shipReturnRow = 0; 
+          shipBuyerRow = getRowValAbs(row, currentSchema.shippingFeeByBuyer); 
+          shipReturnRow = getRowValAbs(row, currentSchema.returnShippingFee); 
       } else {
-          transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee']);
-          comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee']); 
-          serv = getExactRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
+          transFee = getRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน']);
+          comm = getRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee', 'Platform Commission']); 
+          serv = getRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
           
-          const baseInfra = getExactRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
-          const shippingProg = getExactRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
+          const baseInfra = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
+          const shippingProg = getRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
           infraRow = baseInfra + shippingProg;
           
-          affiliateRow = getExactRowValAbs(row, ['ค่าคอมมิชชั่น Affiliate', 'Affiliate Commission']);
+          affiliateRow = getRowValAbs(row, ['ค่าคอมมิชชั่น Affiliate', 'Affiliate Commission']);
           
           shipBuyerRow = getRowValAbs(row, currentSchema.shippingFeeByBuyer);
           shipSubsidyRow = getRowValAbs(row, currentSchema.shippingFeeSubsidy);
@@ -2591,7 +2592,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           shipReturnRow = getRowValAbs(row, currentSchema.returnShippingFee);
       }
 
-      if (mode !== 'update_settled') {
+      if (mode !== 'update_settled' && mode !== 'update_fees_shipping') {
           shipEstRow = 0;      
           shipSubsidyRow = 0;  
           shipReturnRow = 0;   
@@ -2600,7 +2601,6 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       return { transFee, comm, serv, affiliateRow, infraRow, shipBuyerRow, shipSubsidyRow, shipEstRow, shipReturnRow };
   };
 
-  // --- 🔥 NEW: ฟังก์ชันบังคับนำเข้ารายการที่ถูกข้าม (Force Import) พร้อม Action ---
   const handleForceImportSkipped = (actionType) => {
       if (selectedSkippedForImport.length === 0) return;
       setLoading(true);
@@ -3102,31 +3102,28 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 isCancelledOrUnpaid = false;
             }
 
-            const transFee = getExactRowValAbs(row, ['ค่าธุรกรรมการชำระเงิน', 'Transaction Fee', 'Payment Fee', 'ค่าธรรมเนียมการชำระเงิน']);
-            const comm = getExactRowValAbs(row, ['ค่าคอมมิชชั่น', 'Commission Fee', 'Platform Commission']);
-            const serv = getExactRowValAbs(row, ['ค่าบริการ', 'Service Fee']);
-            const baseInfra = getExactRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐานแพลตฟอร์ม']);
-            const shippingProgFee = getExactRowValAbs(row, ['ค่าธรรมเนียมของโปรแกรมประหยัดค่าจัดส่ง', 'Shipping Fee Program']);
-            const rowTotalFees = transFee + comm + serv + baseInfra + shippingProgFee;
+            // --- 🔥 FIX: ดึงข้อมูลผ่าน extractFeesAndShipping เพื่อให้ได้ค่าธรรมเนียมเป๊ะๆ ของทุกแพลตฟอร์ม ---
+            const fees = extractFeesAndShipping(row, importMode, schema);
+            const rowTotalFees = fees.transFee + fees.comm + fees.serv + fees.affiliateRow + fees.infraRow;
 
             // ข้ามรายการที่ยกเลิกและไม่มีการหักค่าธรรมเนียม (เหมือนที่ Shopee ทำ)
             if (isCancelledOrUnpaid && Math.abs(rowTotalFees) < 0.01) return;
 
             // 1. หมวดรายชิ้น (Item Level)
-            detailedStats.productPrice += getRowValAbs(row, ['สินค้าราคาปกติ', 'Original Price', 'Product Price', 'ราคาเสนอ', 'Unit Price']);
-            detailedStats.sellerDiscount += getRowValAbs(row, ['ส่วนลดสินค้าจากผู้ขาย', 'Seller Promotion', 'Seller Discount', 'Voucher (Seller)']);
-            detailedStats.feeComm += comm;
-            detailedStats.feeServ += serv;
-            detailedStats.feeInfra += (baseInfra + shippingProgFee);
-            detailedStats.feeTrans += transFee;
+            detailedStats.productPrice += getRowValAbs(row, schema.price);
+            detailedStats.sellerDiscount += getRowValAbs(row, schema.sellerDiscount);
+            detailedStats.feeComm += fees.comm;
+            detailedStats.feeServ += fees.serv;
+            detailedStats.feeInfra += fees.infraRow;
+            detailedStats.feeTrans += fees.transFee;
 
             // 2. หมวดรายออเดอร์ (Order Level) - ต้องบวกแค่ครั้งเดียวต่อ 1 Order ID เพื่อป้องกันยอดเบิ้ล
             if (!seenOrdersForStats.has(orderId)) {
-                detailedStats.refundAmount += getRowValAbs(row, ['จำนวนเงินที่ทำการคืนให้ผู้ซื้อ', 'Refund Amount', 'จำนวนเงินคืน', 'Customer Refund']);
-                detailedStats.shipBuyer += getRowValAbs(row, ['ค่าจัดส่งที่ชำระโดยผู้ซื้อ', 'Shipping Fee Paid by Buyer', 'Customer Shipping Fee']);
-                detailedStats.shipShopee += getRowValAbs(row, ['ค่าจัดส่งสินค้าที่ออกโดย Shopee', 'Estimated Shopee Shipping Rebate', 'เงินสนับสนุนค่าจัดส่ง', 'Platform Shipping Subsidy']);
-                detailedStats.shipActual += getRowValAbs(row, ['ค่าจัดส่งที่ Shopee ชำระโดยชื่อของคุณ', 'ค่าจัดส่งตามที่เกิดขึ้นจริง', 'Actual Shipping Fee', 'ค่าจัดส่งที่ผู้ขายชำระ', 'Seller shipping fee']);
-                detailedStats.shipReturn += getRowValAbs(row, ['ค่าจัดส่งสินค้าคืน', 'Return Shipping Fee']);
+                detailedStats.refundAmount += refundAmtRow;
+                detailedStats.shipBuyer += fees.shipBuyerRow;
+                detailedStats.shipShopee += fees.shipSubsidyRow;
+                detailedStats.shipActual += fees.shipEstRow;
+                detailedStats.shipReturn += fees.shipReturnRow;
 
                 const actualSettledAmtRaw = findVal(row, ['จำนวนเงินทั้งหมดที่โอนแล้ว', 'จำนวนเงินที่โอนแล้ว', 'Payout Amount', 'Settlement Amount', 'Total settlement amount']);
                 if (actualSettledAmtRaw !== undefined) {
@@ -3214,6 +3211,103 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 showToast(`พบออเดอร์ที่ถูกยกเลิก/ตีกลับ ${matched.length} รายการ (รอการอัปเดต)`, 'success');
             } else {
                 showToast(`ไม่พบออเดอร์ยกเลิก (ไม่มีในระบบ ${notFoundCount}, ยกเลิกไปแล้ว ${alreadyCancelledCount})`, 'error');
+            }
+            return;
+        }
+
+        if (importMode === 'update_fees_shipping') {
+            const matchedMap = {}; 
+            let skippedCount = 0;
+            let notFoundCount = 0;
+
+            const cleanStrForMatch = (str) => String(str || '').replace(/^['"]|['"]$/g, '').trim();
+
+            raw.forEach(row => {
+                const rawOrderId = findVal(row, schema.orderId);
+                const orderId = cleanStrForMatch(rawOrderId);
+                if (!orderId) { 
+                    skippedCount++; 
+                    currentSkippedDetails.push({ orderId: '-', product: '-', qty: 0, reason: 'ไม่มี Order ID' });
+                    return; 
+                }
+                
+                const existingTrans = transactions.find(t => cleanStrForMatch(t.orderId) === orderId && t.type === 'income');
+                
+                if (existingTrans) {
+                    const fees = extractFeesAndShipping(row, importMode, schema);
+                    const transFee = fees.transFee;
+                    const comm = fees.comm;
+                    const serv = fees.serv;
+                    const affiliateRow = fees.affiliateRow;
+                    const infraRow = fees.infraRow;
+                    const infra = infraRow > 0 ? infraRow : 0;
+                    const rowTotalPlatformFee = transFee + comm + serv + affiliateRow + infra;
+
+                    const shipBuyerRow = fees.shipBuyerRow;
+                    const shipSubsidyRow = fees.shipSubsidyRow;
+                    const shipEstRow = fees.shipEstRow;
+                    const shipReturnRow = fees.shipReturnRow;
+                    const sellerDiscount = getRowValAbs(row, schema.sellerDiscount);
+
+                    if (!matchedMap[existingTrans.id]) {
+                        matchedMap[existingTrans.id] = {
+                            ...existingTrans,
+                            isUpdateMode: true,
+                            isUpdateFeesShipping: true,
+                            newPlatformFee: rowTotalPlatformFee,
+                            newTransactionFee: transFee,
+                            newCommissionFee: comm,
+                            newServiceFee: serv,
+                            newInfrastructureFee: infra,
+                            newShippingFee: shipBuyerRow,
+                            newShippingFeeSubsidy: shipSubsidyRow,
+                            newEstimatedShippingFee: shipEstRow,
+                            newReturnShippingFee: shipReturnRow,
+                            newCouponDiscount: sellerDiscount,
+                        };
+                    } else {
+                        matchedMap[existingTrans.id].newPlatformFee += rowTotalPlatformFee;
+                        matchedMap[existingTrans.id].newTransactionFee += transFee;
+                        matchedMap[existingTrans.id].newCommissionFee += comm;
+                        matchedMap[existingTrans.id].newServiceFee += serv;
+                        matchedMap[existingTrans.id].newInfrastructureFee += infra;
+                        matchedMap[existingTrans.id].newShippingFee = Math.max(matchedMap[existingTrans.id].newShippingFee || 0, shipBuyerRow);
+                        matchedMap[existingTrans.id].newShippingFeeSubsidy = Math.max(matchedMap[existingTrans.id].newShippingFeeSubsidy || 0, shipSubsidyRow);
+                        matchedMap[existingTrans.id].newEstimatedShippingFee = Math.max(matchedMap[existingTrans.id].newEstimatedShippingFee || 0, shipEstRow);
+                        matchedMap[existingTrans.id].newReturnShippingFee = Math.max(matchedMap[existingTrans.id].newReturnShippingFee || 0, shipReturnRow);
+                        matchedMap[existingTrans.id].newCouponDiscount = Math.max(matchedMap[existingTrans.id].newCouponDiscount || 0, sellerDiscount);
+                    }
+                } else {
+                    notFoundCount++;
+                    currentSkippedDetails.push({ 
+                        orderId: orderId, 
+                        product: '-', 
+                        qty: 0, 
+                        statusFromFile: String(findVal(row, schema.status) || ''),
+                        reason: 'ไม่พบออเดอร์ในระบบ',
+                        rawData: row
+                    });
+                }
+            });
+            
+            const matched = Object.values(matchedMap);
+            setImportedData(matched);
+            setStats({ 
+                totalRows: raw.length, processed: matched.length, skipped: skippedCount + notFoundCount, 
+                totalAmount: matched.reduce((sum, m) => sum + (m.grandTotal || m.total || 0), 0), 
+                totalActualSettled: 0, totalDiffShort: 0, totalDiffSurplus: 0, 
+                totalFees: matched.reduce((sum, m) => sum + (m.newPlatformFee || 0), 0), 
+                duplicates: 0, deliveryFailed: 0, cancelled: 0, skippedQty: 0,
+                detailedSummary: detailedStats 
+            });
+            setSkippedDetailsData(currentSkippedDetails);
+            setDeliveryFailedDetailsData([]);
+            setDiscrepancyDetailsData([]);
+
+            if (matched.length > 0) { 
+                showToast(`พบออเดอร์เพื่ออัปเดตค่าธรรมเนียม/ค่าส่ง ${matched.length} รายการ`, 'success'); 
+            } else { 
+                showToast(`ไม่พบออเดอร์ในระบบ (${notFoundCount} รายการ)`, 'error'); 
             }
             return;
         }
@@ -3817,7 +3911,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           return `${fullPrefix}${String(nextNum).padStart(5, '0')}`;
       };
 
-      if (importMode === 'update_settled' || importMode === 'update_cancelled') {
+      if (importMode === 'update_settled' || importMode === 'update_cancelled' || importMode === 'update_fees_shipping') {
           let count = 0;
           let reconcileOpsCount = 0;
 
@@ -4032,6 +4126,23 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       reconcileOpsCount++;
                   }
                   
+              } else if (item.isUpdateFeesShipping) {
+                  const ref = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'transactions_income', item.id);
+                  count++;
+                  const updateData = { updatedAt: serverTimestamp() };
+                  if (item.newPlatformFee !== undefined) updateData.platformFee = item.newPlatformFee;
+                  if (item.newTransactionFee !== undefined) updateData.transactionFee = item.newTransactionFee;
+                  if (item.newCommissionFee !== undefined) updateData.commissionFee = item.newCommissionFee;
+                  if (item.newServiceFee !== undefined) updateData.serviceFee = item.newServiceFee;
+                  if (item.newInfrastructureFee !== undefined) updateData.infrastructureFee = item.newInfrastructureFee;
+                  if (item.newShippingFee !== undefined) updateData.shippingFee = item.newShippingFee;
+                  if (item.newShippingFeeSubsidy !== undefined) updateData.shippingFeeSubsidy = item.newShippingFeeSubsidy;
+                  if (item.newEstimatedShippingFee !== undefined) updateData.estimatedShippingFee = item.newEstimatedShippingFee;
+                  if (item.newReturnShippingFee !== undefined) updateData.returnShippingFee = item.newReturnShippingFee;
+                  if (item.newCouponDiscount !== undefined) updateData.couponDiscount = item.newCouponDiscount;
+
+                  batch.update(ref, updateData);
+                  reconcileOpsCount++;
               } else {
                   // --- ของที่มีในระบบแล้ว ทำกระบวนการกระทบยอดปกติ ---
                   // 🚨 ตามหลักบัญชีที่ถูกต้อง จะไม่ออกเอกสารรายจ่ายซ้ำซ้อน ให้อัปเดตแค่รายรับพอ
@@ -4090,7 +4201,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           }
 
           setShowImportPreviewModal(false); // ปิดหน้า Preview
-          showToast(importMode === 'update_cancelled' ? `อัปเดตยกเลิก/ตีกลับสำเร็จ ${count} รายการ (คืนสต็อกแล้ว)` : `กระทบยอดรับเงินสำเร็จ ${count} รายการ (บันทึกทับยอดรับเงินเดิม)`, "success");
+          showToast(importMode === 'update_cancelled' ? `อัปเดตยกเลิก/ตีกลับสำเร็จ ${count} รายการ (คืนสต็อกแล้ว)` : importMode === 'update_fees_shipping' ? `อัปเดตข้อมูลค่าธรรมเนียมและค่าส่งสำเร็จ ${count} รายการ` : `กระทบยอดรับเงินสำเร็จ ${count} รายการ (บันทึกทับยอดรับเงินเดิม)`, "success");
           setImportedData([]);
           setLoading(false);
           return;
@@ -4327,7 +4438,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 <h4 className="font-bold text-indigo-800">ตั้งค่าการนำเข้าข้อมูล (Import Mode)</h4>
             </div>
             
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <button onClick={()=>handleModeChange('new_pending')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'new_pending' ? 'border-indigo-600 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
                     <p className="font-black text-indigo-700 text-sm mb-1">1. นำเข้าใหม่ (รอเงิน)</p>
                     <p className="text-xs text-slate-500 leading-relaxed">สร้างรายการขายใหม่ สถานะ <span className="text-orange-600 font-bold">รอเงินโอน</span></p>
@@ -4343,6 +4454,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 <button onClick={()=>handleModeChange('update_cancelled')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'update_cancelled' ? 'border-rose-500 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
                     <p className="font-black text-rose-700 text-sm mb-1">4. อัปเดตยกเลิก/ตีกลับ</p>
                     <p className="text-xs text-slate-500 leading-relaxed">อัปเดตให้เป็น <span className="text-rose-600 font-bold">ยกเลิก</span> (คืนสต็อก/ออกใบลดหนี้ให้อัตโนมัติ)</p>
+                </button>
+                <button onClick={()=>handleModeChange('update_fees_shipping')} className={`p-5 rounded-2xl border-2 text-left transition-all ${importMode === 'update_fees_shipping' ? 'border-purple-500 bg-white shadow-md' : 'border-transparent bg-white/50 hover:bg-white'}`}>
+                    <p className="font-black text-purple-700 text-sm mb-1">5. อัปเดตค่าส่ง/ธรรมเนียม</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">อัปเดตเฉพาะค่าใช้จ่ายแพลตฟอร์ม <span className="text-purple-600 font-bold">(ไม่เปลี่ยนสถานะรับเงิน)</span></p>
                 </button>
             </div>
 
@@ -4412,10 +4527,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       <button 
                         onClick={() => setShowImportPreviewModal(true)} 
                         disabled={loading} 
-                        className={`text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50 text-center ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : importMode === 'update_cancelled' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-100' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100'}`}
+                        className={`text-white px-6 py-2 rounded-xl text-xs font-bold shadow-lg flex items-center gap-2 transition-all disabled:opacity-50 text-center ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : importMode === 'update_cancelled' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-100' : importMode === 'update_fees_shipping' ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-100' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100'}`}
                       >
                         {loading ? <Loader className="animate-spin" size={14}/> : <CheckCircle size={14}/>}
-                        {importMode === 'update_settled' ? 'ยืนยันการรับเงิน (Settle)' : importMode === 'update_cancelled' ? 'ยืนยันอัปเดตเป็นยกเลิก (Void)' : 'บันทึกและเปิดใช้งาน (Activate)'}
+                        {importMode === 'update_settled' ? 'ยืนยันการรับเงิน (Settle)' : importMode === 'update_cancelled' ? 'ยืนยันอัปเดตเป็นยกเลิก (Void)' : importMode === 'update_fees_shipping' ? 'ยืนยันอัปเดตค่าส่ง/ธรรมเนียม' : 'บันทึกและเปิดใช้งาน (Activate)'}
                       </button>
                   </div>
                 )}
@@ -4476,7 +4591,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                   {importMode === 'update_settled' ? 'สรุปภาพรวมจากไฟล์ Excel (อ้างอิงตรงตามไฟล์ต้นฉบับ 100%)' : 'สรุปข้อมูลที่จะนำเข้าระบบ (Filtered Data)'}
                               </h4>
                               
-                              {importMode === 'update_settled' ? (
+                              {importMode === 'update_settled' || importMode === 'update_fees_shipping' ? (
                                   <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm font-sarabun">
                                       {/* Header / Info */}
                                       <div className="flex justify-between items-center p-4 bg-slate-50 border-b">
@@ -5568,7 +5683,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 shrink-0">
                     <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl">
                         <p className="text-[10px] font-bold text-indigo-600 uppercase mb-1">โหมดการนำเข้า</p>
-                        <p className="text-sm font-black text-indigo-800">{importMode === 'update_settled' ? 'กระทบยอดรับเงิน' : importMode === 'new_settled' ? 'รับเงินแล้ว' : 'รอเงินเข้า'}</p>
+                        <p className="text-sm font-black text-indigo-800">{importMode === 'update_settled' ? 'กระทบยอดรับเงิน' : importMode === 'update_fees_shipping' ? 'อัปเดตเฉพาะค่าธรรมเนียม' : importMode === 'new_settled' ? 'รับเงินแล้ว' : 'รอเงินเข้า'}</p>
                     </div>
                     <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl">
                         <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">จำนวนรายการที่จะบันทึก</p>
@@ -5635,10 +5750,10 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                     <button 
                         onClick={saveToFirebase} 
                         disabled={loading} 
-                        className={`flex-[2] py-4 text-white rounded-2xl font-black text-sm shadow-xl flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:hover:scale-100 ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200' : importMode === 'update_cancelled' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
+                        className={`flex-[2] py-4 text-white rounded-2xl font-black text-sm shadow-xl flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:hover:scale-100 ${importMode === 'update_settled' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200' : importMode === 'update_cancelled' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200' : importMode === 'update_fees_shipping' ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-200' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'}`}
                     >
                         {loading ? <Loader className="animate-spin" size={18}/> : <Save size={18}/>} 
-                        {loading ? 'กำลังบันทึกข้อมูล...' : (importMode === 'update_settled' ? 'ยืนยันบันทึกการกระทบยอด' : importMode === 'update_cancelled' ? 'ยืนยันอัปเดตสถานะและคืนคลัง' : 'ยืนยันบันทึกข้อมูลเข้าระบบ')}
+                        {loading ? 'กำลังบันทึกข้อมูล...' : (importMode === 'update_settled' ? 'ยืนยันบันทึกการกระทบยอด' : importMode === 'update_cancelled' ? 'ยืนยันอัปเดตสถานะและคืนคลัง' : importMode === 'update_fees_shipping' ? 'ยืนยันบันทึกค่าธรรมเนียม/ค่าส่ง' : 'ยืนยันบันทึกข้อมูลเข้าระบบ')}
                     </button>
                 </div>
             </div>
