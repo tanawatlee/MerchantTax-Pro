@@ -2499,7 +2499,7 @@ function Dashboard({ transactions, invoices, stockBatches, showToast }) {
   );
 }
 
-function DataImporter({ appId, showToast, user, stockBatches, transactions, importLogs }) {
+function DataImporter({ appId, showToast, user, stockBatches, transactions, importLogs, invoices }) {
   const [importerTab, setImporterTab] = useState('import'); // 'import', 'logs'
   const [platform, setPlatform] = useState('shopee');
   const [importMode, setImportMode] = useState('new_pending'); // 'new_pending', 'new_settled', 'update_settled', 'update_cancelled', 'update_fees_shipping'
@@ -21735,7 +21735,7 @@ export default function App() {
       case 'dashboard': return <Dashboard transactions={transactions} invoices={invoices} stockBatches={stockBatches} showToast={addToast} />;
       case 'monthly_report': return <MonthlyReport transactions={transactions} stockBatches={stockBatches} showToast={addToast} />;
       case 'records': return <RecordManager user={user} transactions={transactions} invoices={invoices} appId={currentAppId} stockBatches={stockBatches} showToast={addToast} onIssueInvoice={(t)=>{setPreFillInvoice(t); setActiveTab('invoice');}} promotions={promotions} />;
-      case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} importLogs={importLogs} />;
+      case 'import': return <DataImporter appId={currentAppId} showToast={addToast} user={user} stockBatches={stockBatches} transactions={transactions} importLogs={importLogs} invoices={invoices} />;
       case 'stock': return <StockManager appId={currentAppId} stockBatches={stockBatches} showToast={addToast} user={user} transactions={transactions} />;
       case 'assets': return <AssetRegister appId={currentAppId} user={user} showToast={addToast} assets={assets} />;
       case 'invoice': return <InvoiceGenerator user={user} invoices={invoices} transactions={transactions} appId={currentAppId} showToast={addToast} preFillData={preFillInvoice} promotions={promotions} />;
