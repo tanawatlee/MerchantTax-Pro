@@ -654,13 +654,14 @@ function StatCard({ title, value, color, icon, subtitle, trend }) {
 }
 
 // --- M.A.R.G.I.N. Intelligence Core (J.A.R.V.I.S. Style AI Assistant) ---
-function MarginAIAssistant({ transactions, stockBatches, user }) {
+function MarginAIAssistant({ transactions, invoices, stockBatches, user, showToast }) {
     const [isOpen, setIsOpen] = useState(false);
     const [messages, setMessages] = useState([
-        { id: 1, role: 'ai', text: 'สวัสดีครับบอส ผม **M.A.R.G.I.N. AI** ผู้ช่วยจัดการภาษีและวิเคราะห์ข้อมูลธุรกิจของคุณ\n\nระบบเชื่อมต่อฐานข้อมูลเรียบร้อยแล้ว มีอะไรให้ผมช่วยวิเคราะห์วันนี้ไหมครับ?' }
+        { id: 1, role: 'ai', text: 'สวัสดีครับบอส ผม **M.A.R.G.I.N. AI (J.A.R.V.I.S.)** ผู้ช่วยจัดการภาษีและวิเคราะห์ข้อมูลธุรกิจของคุณ\n\nระบบเชื่อมต่อฐานข้อมูลเรียบร้อยแล้ว วันนี้ต้องการให้ผมช่วยวิเคราะห์ข้อมูล หรือ **สรุปยอดจ่ายภาษีออกมาเป็นไฟล์ Excel** ดีครับ?' }
     ]);
     const [inputText, setInputText] = useState('');
     const [isTyping, setIsTyping] = useState(false);
+    const [isExportingTax, setIsExportingTax] = useState(false);
     const messagesEndRef = useRef(null);
 
     const scrollToBottom = () => {
@@ -670,6 +671,151 @@ function MarginAIAssistant({ transactions, stockBatches, user }) {
     useEffect(() => {
         if (isOpen) scrollToBottom();
     }, [messages, isOpen]);
+
+    // คำนวณสรุปข้อมูลภาษีสำหรับ AI และสำหรับ Export ไฟล์
+    const calculateCurrentTaxSummary = () => {
+        const today = new Date();
+        const currentYear = today.getFullYear();
+        const currentMonth = today.getMonth();
+        const monthName = today.toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
+
+        let outputVatBase = 0, outputVat = 0;
+        let inputVatBase = 0, inputVat = 0;
+        let ytdCashIncome = 0, ytdActualExpense = 0;
+
+        const expenseInvNos = new Set((transactions || []).filter(t => t.type === 'expense' && t.invoiceNo).map(t => t.invoiceNo));
+        const incomeInvNos = new Set((transactions || []).filter(t => t.type === 'income' && t.invoiceNo).map(t => t.invoiceNo));
+
+        // 1. คำนวณภาษีขาย (Output VAT) ของเดือนปัจจุบัน (เกณฑ์สิทธิ์)
+        (invoices || []).forEach(inv => {
+            if (inv.status === 'cancelled' || ['quotation', 'receipt', 'payment_voucher'].includes(inv.docType)) return;
+            if (expenseInvNos.has(inv.invNo) && !incomeInvNos.has(inv.invNo)) return;
+
+            const d = normalizeDate(inv.date);
+            if (d && d.getFullYear() === currentYear && d.getMonth() === currentMonth) {
+                const mult = inv.docType === 'credit_note' ? -1 : 1;
+                outputVatBase += (Number(inv.preVat) || 0) * mult;
+                outputVat += (Number(inv.vat) || 0) * mult;
+            }
+        });
+
+        // 2. คำนวณภาษีซื้อ (Input VAT) ของเดือนปัจจุบัน และยอดสะสมทั้งปี (ภ.ง.ด.)
+        (transactions || []).forEach(t => {
+            if (t.isCancelled) return;
+            const d = normalizeDate(t.date);
+
+            // สะสมรายรับตามเกณฑ์เงินสด (สำหรับ ภ.ง.ด. และเพดาน 1.8 ล้าน)
+            if (t.type === 'income' && (t.paymentStatus === 'settled' || t.status === 'paid') && !t.isFromReconciliation) {
+                const settleD = normalizeDate(t.settlementDate || t.date);
+                if (settleD && settleD.getFullYear() === currentYear) {
+                    ytdCashIncome += (t.actualSettledAmt !== undefined ? Number(t.actualSettledAmt) : Number(t.grandTotal || t.total || 0));
+                }
+            }
+
+            // สะสมรายจ่ายจริงทั้งปี
+            if (t.type === 'expense' && t.category !== 'ถอนใช้ส่วนตัว / รายจ่ายนอกกิจการ') {
+                if (d && d.getFullYear() === currentYear) {
+                    ytdActualExpense += Number(t.total || 0);
+                }
+            }
+
+            // ภาษีซื้อเดือนปัจจุบัน (เฉพาะที่มีใบกำกับภาษีและเคลมได้)
+            if (t.type === 'expense' && !t.isNonCreditableVat && !t.isCashBill && t.vatType !== 'none') {
+                if (t.isFromReconciliation && (!t.taxInvoiceNo || String(t.taxInvoiceNo).trim() === '')) return;
+                if (d && d.getFullYear() === currentYear && d.getMonth() === currentMonth) {
+                    const sub = Number(t.total) || 0;
+                    const disc = Number(t.couponDiscount) || 0;
+                    const isNegative = sub < 0 || t.isPurchaseCreditNote === true;
+                    const baseAmt = Math.max(0, Math.abs(sub) - Math.abs(disc)) * (isNegative ? -1 : 1);
+                    const manualVat = t.manualVatAmount !== undefined && t.manualVatAmount !== '' ? Number(t.manualVatAmount) : null;
+                    const finalManualVat = manualVat !== null ? (isNegative && manualVat > 0 ? -manualVat : manualVat) : null;
+
+                    let v = 0, b = 0;
+                    if (t.vatType === 'excluded') {
+                        v = finalManualVat !== null ? finalManualVat : baseAmt * 0.07;
+                        b = baseAmt;
+                    } else if (t.vatType === 'included') {
+                        v = finalManualVat !== null ? finalManualVat : baseAmt * 7 / 107;
+                        b = baseAmt - v;
+                    }
+                    inputVatBase += b;
+                    inputVat += v;
+                }
+            }
+        });
+
+        const netVat = outputVat - inputVat;
+        return {
+            monthName, currentYear,
+            outputVatBase: round2Dec(outputVatBase),
+            outputVat: round2Dec(outputVat),
+            inputVatBase: round2Dec(inputVatBase),
+            inputVat: round2Dec(inputVat),
+            netVat: round2Dec(netVat),
+            ytdCashIncome: round2Dec(ytdCashIncome),
+            ytdActualExpense: round2Dec(ytdActualExpense),
+            ytdStandardExpense: round2Dec(ytdCashIncome * 0.6)
+        };
+    };
+
+    // ฟังก์ชันสร้างไฟล์ Excel สรุปภาษีโดย J.A.R.V.I.S.
+    const handleExportTaxSummaryFile = async () => {
+        setIsExportingTax(true);
+        try {
+            if (!window.XLSX) {
+                const script = document.createElement('script');
+                script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+                await new Promise((resolve) => { script.onload = resolve; document.body.appendChild(script); });
+            }
+
+            const taxData = calculateCurrentTaxSummary();
+
+            const wsData = [
+                ["รายงานสรุปยอดภาษีอัตโนมัติ โดย M.A.R.G.I.N. AI (J.A.R.V.I.S.)"],
+                [`วันที่ประมวลผล: ${formatDate(new Date())}`],
+                [],
+                ["1. สรุปภาษีมูลค่าเพิ่ม (ภ.พ.30) - คำนวณตามเกณฑ์สิทธิ์ (Accrual Basis)"],
+                [`ประจำเดือนภาษี: ${taxData.monthName}`],
+                ["รายการ", "มูลค่าฐานภาษี (บาท)", "จำนวนภาษี VAT 7% (บาท)", "สถานะ / คำแนะนำ"],
+                ["ยอดขายที่ต้องเสียภาษี (Output Tax)", taxData.outputVatBase, taxData.outputVat, "อ้างอิงจากใบกำกับภาษีขาย/ABB หักใบลดหนี้"],
+                ["ยอดซื้อที่มีสิทธิ์เครดิตภาษี (Input Tax)", taxData.inputVatBase, taxData.inputVat, "อ้างอิงจากบิลรายจ่ายที่มีใบกำกับภาษีถูกต้อง"],
+                [
+                    "ส่วนต่างภาษีมูลค่าเพิ่มสุทธิ (Net VAT)",
+                    taxData.outputVatBase - taxData.inputVatBase,
+                    Math.abs(taxData.netVat),
+                    taxData.netVat >= 0 ? "ต้องชำระเพิ่ม (Payable)" : "ชำระเกิน / เครดิตยกไป (Refundable)"
+                ],
+                [],
+                ["2. สรุปภาษีเงินได้สะสมประจำปี (ภ.ง.ด.90/94) - คำนวณตามเกณฑ์เงินสด (Cash Basis)"],
+                [`ประจำปีภาษี: ${taxData.currentYear}`],
+                ["รายการ", "จำนวนเงิน (บาท)", "หมายเหตุ"],
+                ["รายรับเงินสดสะสมที่โอนเข้าบัญชีแล้ว (YTD Settled Income)", taxData.ytdCashIncome, `คิดเป็น ${((taxData.ytdCashIncome / 1800000) * 100).toFixed(1)}% ของเพดานจด VAT 1.8 ล้านบาท`],
+                ["ทางเลือกที่ 1: หักค่าใช้จ่ายแบบเหมา (60%)", taxData.ytdStandardExpense, "ไม่ต้องใช้บิลรายจ่ายในการยื่นสรรพากร"],
+                ["ทางเลือกที่ 2: หักค่าใช้จ่ายตามจริงที่บันทึกในระบบ", taxData.ytdActualExpense, "ต้องมีบิลใบเสร็จและหลักฐานการโอนเงินครบถ้วน"],
+                ["คำแนะนำจาก AI:", taxData.ytdActualExpense > taxData.ytdStandardExpense ? "ควรเลือกหักตามจริง เพราะมีค่าใช้จ่ายสูงกว่า 60%" : "ควรเลือกหักเหมา 60% จะช่วยประหยัดภาษีได้มากกว่า", ""]
+            ];
+
+            const wb = window.XLSX.utils.book_new();
+            const ws = window.XLSX.utils.aoa_to_sheet(wsData);
+            ws['!cols'] = [{ wch: 45 }, { wch: 22 }, { wch: 22 }, { wch: 40 }];
+            window.XLSX.utils.book_append_sheet(wb, ws, "AI_Tax_Summary");
+
+            const fileName = `JARVIS_Tax_Summary_${formatDateISO(new Date())}.xlsx`;
+            window.XLSX.writeFile(wb, fileName);
+
+            setMessages(prev => [...prev, {
+                id: Date.now(),
+                role: 'ai',
+                text: `จัดให้เรียบร้อยครับบอส! ผมได้สร้างและดาวน์โหลดไฟล์ **${fileName}** ลงเครื่องของคุณแล้วครับ\n\n**สรุปตัวเลขสำคัญในไฟล์:**\n- **ภ.พ.30 (${taxData.monthName}):** ${taxData.netVat >= 0 ? `ต้องชำระเพิ่ม **${formatCurrency(taxData.netVat)} บาท**` : `เครดิตภาษีคืน **${formatCurrency(Math.abs(taxData.netVat))} บาท**`}\n- **รายรับเงินสดสะสมปี ${taxData.currentYear}:** **${formatCurrency(taxData.ytdCashIncome)} บาท**`
+            }]);
+
+            if (showToast) showToast("J.A.R.V.I.S. ส่งออกไฟล์สรุปภาษีสำเร็จ!", "success");
+        } catch (err) {
+            console.error(err);
+            if (showToast) showToast("เกิดข้อผิดพลาดในการสร้างไฟล์สรุปภาษี", "error");
+        }
+        setIsExportingTax(false);
+    };
 
     const getBusinessContext = () => {
         const today = new Date();
@@ -694,6 +840,7 @@ function MarginAIAssistant({ transactions, stockBatches, user }) {
         const lowStockItems = (stockBatches || []).filter(b => (b.quantity - (b.sold || 0)) < 5 && (b.quantity - (b.sold || 0)) > 0);
         const lowStockCount = lowStockItems.length;
         const lowStockNames = lowStockItems.slice(0, 3).map(i => i.productName).join(', ');
+        const taxData = calculateCurrentTaxSummary();
 
         return `[INTERNAL DATA STREAM]
 - วันที่ปัจจุบัน: ${formatDate(today)}
@@ -701,23 +848,33 @@ function MarginAIAssistant({ transactions, stockBatches, user }) {
 - รายจ่ายวันนี้: ${formatCurrency(todayExpense)} บาท
 - ยอดขายสะสมเดือนนี้: ${formatCurrency(monthSales)} บาท
 - รายจ่ายสะสมเดือนนี้: ${formatCurrency(monthExpense)} บาท
+- ประเมิน ภ.พ.30 เดือนนี้ (เกณฑ์สิทธิ์): ภาษีขาย ${formatCurrency(taxData.outputVat)} บาท | ภาษีซื้อ ${formatCurrency(taxData.inputVat)} บาท | สุทธิ ${taxData.netVat >= 0 ? 'จ่ายเพิ่ม' : 'ขอคืน'} ${formatCurrency(Math.abs(taxData.netVat))} บาท
+- รายรับสะสมทั้งปี (เกณฑ์เงินสด ภ.ง.ด.): ${formatCurrency(taxData.ytdCashIncome)} บาท
 - สินค้าใกล้หมดสต็อก (<5 ชิ้น): ${lowStockCount} รายการ ${lowStockCount > 0 ? `(เช่น ${lowStockNames})` : ''}
 - ผู้สั่งการ: ${user ? 'Admin/CFO' : 'Guest'}
-[INSTRUCTION] คุณคือ M.A.R.G.I.N. (Merchant Analytics & Revenue Growth Intelligence Network) AI อัจฉริยะแบบ J.A.R.V.I.S. แต่สื่อสารในโทนสุภาพ มืออาชีพ กระชับ เป็นที่ปรึกษาการเงิน เน้นตัวเลข และใช้การจัดรูปแบบข้อความแบบเน้นคำ (ใช้ **bold** สำหรับตัวเลขหรือคีย์เวิร์ด)`;
+[INSTRUCTION] คุณคือ M.A.R.G.I.N. (J.A.R.V.I.S.) AI อัจฉริยะ สื่อสารในโทนสุภาพ มืออาชีพ กระชับ เป็นที่ปรึกษาการเงิน เน้นตัวเลข และใช้การจัดรูปแบบข้อความแบบเน้นคำ (ใช้ **bold** สำหรับตัวเลขหรือคีย์เวิร์ด) หากบอสขอไฟล์สรุปภาษี ให้แจ้งว่าสามารถกดปุ่ม "📄 ดึงไฟล์สรุปภาษี (Excel)" ด้านล่างแชทได้เลย`;
     };
 
     const handleSend = async (textToSend = inputText) => {
         if (!textToSend.trim() || isTyping) return;
         
-        const userMsg = { id: Date.now(), role: 'user', text: textToSend.trim() };
+        const cleanCmd = textToSend.trim();
+        const userMsg = { id: Date.now(), role: 'user', text: cleanCmd };
         setMessages(prev => [...prev, userMsg]);
         setInputText('');
+
+        // ดักจับคำสั่งให้ส่งออกไฟล์ภาษีอัตโนมัติ
+        if (cleanCmd.includes('ดึงไฟล์ภาษี') || cleanCmd.includes('ไฟล์สรุปภาษี') || cleanCmd.includes('export ภาษี')) {
+            await handleExportTaxSummaryFile();
+            return;
+        }
+
         setIsTyping(true);
 
         try {
             const context = getBusinessContext();
             const chatHistory = messages.slice(-5).map(m => `${m.role === 'ai' ? 'M.A.R.G.I.N:' : 'USER:'} ${m.text}`).join('\n');
-            const prompt = `${context}\n\n[CHAT HISTORY]\n${chatHistory}\n\nUSER: ${textToSend.trim()}\nM.A.R.G.I.N:`;
+            const prompt = `${context}\n\n[CHAT HISTORY]\n${chatHistory}\n\nUSER: ${cleanCmd}\nM.A.R.G.I.N:`;
             
             const responseText = await callGeminiAPI(prompt, false);
             
@@ -727,7 +884,7 @@ function MarginAIAssistant({ transactions, stockBatches, user }) {
             setMessages(prev => [...prev, { 
                 id: Date.now() + 1, 
                 role: 'ai', 
-                text: `[System Error] ขออภัยครับบอส ไม่สามารถเชื่อมต่อแกนสมองหลักได้: ${error.message || 'โปรดตรวจสอบ API Key'}` 
+                text: `[System Error] ขออภัยครับบอส ไม่สามารถเชื่อมต่อแกนสมองหลักได้: ${error.message || 'โปรดตรวจสอบ API Key'}\n\nแต่หากบอสต้องการดึงไฟล์สรุปภาษี สามารถกดปุ่ม **"📄 ดึงไฟล์สรุปภาษี (Excel)"** ด้านล่างได้ทันทีโดยไม่ต้องใช้ API Key ครับ!` 
             }]);
         }
         setIsTyping(false);
@@ -752,7 +909,7 @@ function MarginAIAssistant({ transactions, stockBatches, user }) {
     };
 
     const quickPrompts = [
-        "สรุปยอดขายวันนี้", "เช็คสินค้าใกล้หมด", "วิเคราะห์กำไรเดือนนี้", "แนะนำวิธีประหยัดภาษี"
+        "สรุปยอดจ่ายภาษีเดือนนี้", "สรุปยอดขายวันนี้", "เช็คสินค้าใกล้หมด", "แนะนำวิธีประหยัดภาษี"
     ];
 
     return (
@@ -769,7 +926,7 @@ function MarginAIAssistant({ transactions, stockBatches, user }) {
                             <div>
                                 <h3 className="font-black text-indigo-900 text-sm tracking-wide">M.A.R.G.I.N. AI</h3>
                                 <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest flex items-center gap-1.5 mt-0.5">
-                                    <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span> Data Connected
+                                    <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span> Tax & Data Core
                                 </p>
                             </div>
                         </div>
@@ -802,8 +959,17 @@ function MarginAIAssistant({ transactions, stockBatches, user }) {
                         <div ref={messagesEndRef} />
                     </div>
 
-                    {/* Quick Prompts */}
-                    <div className="flex gap-2 p-3 overflow-x-auto custom-scrollbar bg-white border-t border-slate-100 shrink-0">
+                    {/* Quick Prompts & Direct Export Button */}
+                    <div className="flex gap-2 p-3 overflow-x-auto custom-scrollbar bg-white border-t border-slate-100 shrink-0 items-center">
+                        <button 
+                            type="button"
+                            onClick={handleExportTaxSummaryFile} 
+                            disabled={isExportingTax || isTyping} 
+                            className="text-[10px] font-black whitespace-nowrap bg-emerald-600 text-white px-3 py-2 rounded-xl hover:bg-emerald-700 transition-all disabled:opacity-50 shadow-sm flex items-center gap-1.5 shrink-0"
+                        >
+                            {isExportingTax ? <Loader size={12} className="animate-spin"/> : <FileSpreadsheet size={12}/>}
+                            ดึงไฟล์สรุปภาษี (Excel)
+                        </button>
                         {quickPrompts.map((pt, i) => (
                             <button key={i} onClick={() => handleSend(pt)} disabled={isTyping} className="text-[10px] font-bold whitespace-nowrap bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-xl hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-all disabled:opacity-50 shadow-sm">
                                 {pt}
@@ -817,7 +983,7 @@ function MarginAIAssistant({ transactions, stockBatches, user }) {
                             type="text" 
                             value={inputText}
                             onChange={(e) => setInputText(e.target.value)}
-                            placeholder="พิมพ์ถาม AI ที่นี่..."
+                            placeholder="พิมพ์ถาม AI หรือสั่ง 'ดึงไฟล์ภาษี'..."
                             className="bg-slate-50 text-slate-700 border border-slate-200 rounded-2xl p-3 w-full text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all shadow-inner"
                             disabled={isTyping}
                         />
@@ -21595,7 +21761,7 @@ export default function App() {
       <ToastContainer toasts={toasts} removeToast={removeToast} />
       
       {/* --- M.A.R.G.I.N. Intelligence Core --- */}
-      <MarginAIAssistant transactions={transactions} stockBatches={stockBatches} user={user} />
+      <MarginAIAssistant transactions={transactions} invoices={invoices} stockBatches={stockBatches} user={user} showToast={addToast} />
 
       <aside className="w-72 bg-slate-900 text-white flex flex-col border-r border-slate-800 shadow-2xl h-full shrink-0 text-left">
         <div className="p-8 border-b border-slate-800 flex items-center gap-3 text-left"><div className="w-10 h-10 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-center"><Wallet size={20} className="text-white text-center"/></div><h1 className="text-xl font-bold tracking-tight text-left">MerchantTax</h1></div>
