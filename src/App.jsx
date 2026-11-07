@@ -2753,7 +2753,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
       const infraRow = getRowValAbs(row, ['ค่าธรรมเนียมโครงสร้างพื้นฐาน']);
 
       // 6. Shipping (ค่าขนส่งต่างๆ)
-      const shipBuyerRow = getRowValAbs(row, ['ค่าธรรมเนียมการจัดส่งของลูกค้า', 'Customer Shipping Fee']);
+      const shipBuyerRow = getRowValAbs(row, ['ค่าธรรมเนียมการจัดส่งของลูกค้า', 'Customer Shipping Fee', 'Shipping Fee After Discount', 'ค่าจัดส่งหลังหักส่วนลด']);
       
       // ยอด Subsidy เกิดจาก 2 ส่วนบวกกัน (ส่วนลดแพลตฟอร์ม + เงินสนับสนุน)
       const subsidy1 = getRowValAbs(row, ['ส่วนลดค่าธรรมเนียมการจัดส่งจากแพลตฟอร์ม', 'Platform shipping fee discount']);
@@ -5265,8 +5265,8 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                       <th className="p-4 text-left">{importMode === 'update_settled' ? 'Settlement Date' : 'Order Date'}</th>
                       <th className="p-4 text-left">Order ID / Description</th>
                       <th className="p-4 text-left">Status / SKU</th>
+                      <th className="p-4 text-right">Shipping (฿)</th>
                       <th className="p-4 text-right">Fees (฿)</th>
-                      {/* --- FIX: เปลี่ยนชื่อคอลัมน์ให้ถูกต้องตามหลักการบัญชีแยกตามโหมด --- */}
                       <th className="p-4 text-right">
                           {importMode === 'new_pending' ? 'Net Expected (฿)' : 'Net Settled (฿)'}
                       </th>
@@ -5376,6 +5376,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                     })}
                                 </div>
                             )}
+                        </td>
+                        <td className="p-4 text-right text-emerald-600 font-bold">
+                            +{formatCurrency(it.newShippingFee !== undefined ? it.newShippingFee : (it.shippingFee || 0))}
                         </td>
                         <td className="p-4 text-right text-rose-500 font-bold">
                             -{formatCurrency(it.newPlatformFee !== undefined ? it.newPlatformFee : (it.platformFee || 0))}
@@ -5983,6 +5986,7 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                             <tr>
                                 <th className="p-3 pl-4">วันที่ / Order ID</th>
                                 <th className="p-3">รายการสินค้า</th>
+                                <th className="p-3 text-right">ค่าส่งลูกค้าจ่าย</th>
                                 <th className="p-3 text-right">ค่าธรรมเนียม</th>
                                 <th className="p-3 text-right pr-4">ยอดสุทธิ (Net)</th>
                             </tr>
@@ -6003,6 +6007,9 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
                                                 </p>
                                             ))}
                                         </div>
+                                    </td>
+                                    <td className="p-3 text-right font-bold text-emerald-600">
+                                        +{formatCurrency(it.newShippingFee !== undefined ? it.newShippingFee : (it.shippingFee || 0))}
                                     </td>
                                     <td className="p-3 text-right font-bold text-rose-500">
                                         -{formatCurrency(it.newPlatformFee !== undefined ? it.newPlatformFee : (it.platformFee || 0))}
