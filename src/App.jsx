@@ -6086,6 +6086,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
   const [targetProductEdit, setTargetProductEdit] = useState(null);
   const [tempProductName, setTempProductName] = useState(''); // NEW: State สำหรับเก็บชื่อสินค้าที่ต้องการแก้
+  const [tempSku, setTempSku] = useState(''); // NEW: State สำหรับเก็บ SKU ที่ต้องการแก้
   const [tempCategory, setTempCategory] = useState('');
   const [tempIsGiveaway, setTempIsGiveaway] = useState(false); 
 
@@ -6301,6 +6302,7 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
   const openEditCategory = (item) => {
     setTargetProductEdit(item);
     setTempProductName(item.name); // NEW: ดึงชื่อเดิมมาแสดง
+    setTempSku(item.sku !== '-' ? item.sku : ''); // NEW: ดึง SKU เดิมมาแสดง
     setTempCategory(item.category || CONSTANTS.CATEGORIES.STOCK[0]);
     setTempIsGiveaway(item.isGiveaway || false); 
     setShowEditCategoryModal(true);
@@ -6312,24 +6314,85 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
     
     setIsProcessing(true);
     try {
-      const batchWriter = writeBatch(dbInstance);
+      let batchWriter = writeBatch(dbInstance);
+      let opsCount = 0;
+
+      const commitBatch = async () => {
+          if (opsCount > 0) {
+              await batchWriter.commit();
+              batchWriter = writeBatch(dbInstance);
+              opsCount = 0;
+              await new Promise(r => setTimeout(r, 50)); // พักให้ Firebase หายใจ
+          }
+      };
+
+      const oldSku = targetProductEdit.sku;
+      const oldName = targetProductEdit.name;
+      const newSku = tempSku.trim() ? tempSku.trim() : '-';
+      const newName = tempProductName.trim();
+
+      // 1. อัปเดตข้อมูลในคลังสินค้า (Inventory Batches)
       targetProductEdit.batches.forEach(b => {
             const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', 'inventory_batches', b.id);
             const updates = { 
-                productName: tempProductName.trim(), // NEW: อัปเดตชื่อสินค้าใหม่ลงไปด้วย
+                productName: newName, 
+                sku: newSku, 
                 category: tempCategory, 
                 isGiveaway: tempIsGiveaway 
             };
             if (tempIsGiveaway) updates.sellPrice = 0; 
             batchWriter.update(docRef, updates);
+            opsCount++;
       });
+      await commitBatch();
 
-      await batchWriter.commit();
-      showToast(`อัปเดตข้อมูล "${tempProductName}" เรียบร้อย`, "success");
+      // 2. 🔥 DEEP UPDATE: วิ่งไปอัปเดตบิลเก่าและประวัติการขายย้อนหลังทั้งหมด (ป้องกันประวัติขาดตอนและสต็อกรวน)
+      if (oldSku !== newSku || oldName !== newName) {
+          showToast("กำลังประมวลผลอัปเดตประวัติการขายย้อนหลัง... (Deep Update)", "info");
+          
+          for (const t of transactions) {
+              let hasChanges = false;
+              const newItems = (t.items || []).map(item => {
+                  // ใช้ตรรกะจับคู่เดิมเพื่อหาว่า item นี้คือสินค้าตัวที่เรากำลังแก้ไขหรือไม่
+                  const isMatch = matchItemToBatch(item.sku, item.desc, oldSku, oldName);
+                  if (isMatch) {
+                      hasChanges = true;
+                      
+                      // รักษาสถานะ prefix เดิมไว้ (แถมฟรี, ของแจก, จัดส่งไม่สำเร็จ)
+                      const isFreeInc = String(item.desc).startsWith('[แถมฟรี]');
+                      const isFreeExp = String(item.desc).startsWith('[ของแจก/โปรโมท]');
+                      const isDeliveryFailed = String(item.desc).startsWith('[จัดส่งไม่สำเร็จ]');
+                      const isDamaged = String(item.desc).startsWith('[ชำรุดตีกลับ]');
+                      
+                      let prefix = '';
+                      if (isFreeInc) prefix = '[แถมฟรี] ';
+                      else if (isFreeExp) prefix = '[ของแจก/โปรโมท] ';
+                      else if (isDeliveryFailed) prefix = '[จัดส่งไม่สำเร็จ] ';
+                      else if (isDamaged) prefix = '[ชำรุดตีกลับ] ';
+
+                      return { ...item, sku: newSku, desc: `${prefix}${newName}` };
+                  }
+                  return item;
+              });
+
+              if (hasChanges) {
+                  const coll = t.type === 'income' ? 'transactions_income' : 'transactions_expense';
+                  const docRef = doc(dbInstance, 'artifacts', appId, 'public', 'data', coll, t.id);
+                  batchWriter.update(docRef, { items: newItems });
+                  opsCount++;
+                  
+                  if (opsCount >= 300) await commitBatch(); // ทยอยเซฟทีละ 300 บิล
+              }
+          }
+      }
+
+      await commitBatch();
+      showToast(`อัปเดตข้อมูลและประวัติย้อนหลังของ "${newName}" เรียบร้อย!`, "success");
       setShowEditCategoryModal(false);
       setTargetProductEdit(null);
     } catch (e) {
-      showToast("เกิดข้อผิดพลาดในการอัปเดต", "error");
+      console.error(e);
+      showToast("เกิดข้อผิดพลาดในการอัปเดตข้อมูล", "error");
     }
     setIsProcessing(false);
   };
@@ -8293,8 +8356,26 @@ function StockManager({ appId, stockBatches, showToast, user, transactions }) {
                   )}
               </div>
 
+              {/* NEW: ช่องแก้ไข SKU */}
               <div>
-                  <label className="text-[10px] font-bold uppercase text-slate-400 mb-1 block">หมวดหมู่สินค้า</label>
+                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">รหัสสินค้า (SKU)</label>
+                  <input 
+                    type="text"
+                    value={tempSku} 
+                    onChange={e=>setTempSku(e.target.value)}
+                    className="w-full bg-slate-50 p-3.5 rounded-2xl border border-slate-200 font-mono font-bold outline-none text-indigo-600 text-left focus:ring-2 focus:ring-indigo-100 transition-all"
+                    placeholder="ระบุรหัส SKU..."
+                  />
+                  {(targetProductEdit?.sku && targetProductEdit?.sku !== '-' && tempSku !== targetProductEdit?.sku) && (
+                      <p className="text-[10px] text-amber-600 mt-1.5 font-bold flex items-start gap-1">
+                          <AlertTriangle size={12} className="shrink-0 mt-0.5"/> 
+                          ระวัง: การเปลี่ยน SKU อาจทำให้ประวัติการขายเดิมที่ผูกกับ SKU เก่าหลุดการเชื่อมโยง
+                      </p>
+                  )}
+              </div>
+
+              <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">หมวดหมู่สินค้า</label>
                   <select 
                     value={tempCategory} 
                     onChange={e=>setTempCategory(e.target.value)}
@@ -9079,34 +9160,57 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
     return { base, vat, total };
   };
 
-  // --- 🔥 FIX: แก้ไขบั๊กทศนิยม 6 สตางค์ โดยบังคับปัดเศษ 2 ตำแหน่ง "รายบิล" ก่อนนำมาบวกสะสม ---
+  // --- 🔥 FIX: แยกระบบคำนวณยอดขายรวม และ ยอดใบลดหนี้ เพื่อนำไปโชว์ Breakdown ใน ภ.พ.30 ---
   const vatAnalysis = useMemo(() => {
     const toFixedNum = (num) => Number(Number(num).toFixed(2));
 
-    const outputVat = filteredInvoices.reduce((s, inv) => {
-        if (inv.status === 'cancelled') return s;
-        const mult = inv.docType === 'credit_note' ? -1 : 1;
-        return s + (toFixedNum(Number(inv.vat) || 0) * mult);
-    }, 0);
+    let grossOutputBase = 0;
+    let cnOutputBase = 0;
+    let grossOutputVat = 0;
+    let cnOutputVat = 0;
 
-    const outputBase = filteredInvoices.reduce((s, inv) => {
-        if (inv.status === 'cancelled') return s;
-        const mult = inv.docType === 'credit_note' ? -1 : 1;
-        return s + (toFixedNum(Number(inv.preVat) || 0) * mult);
-    }, 0);
+    filteredInvoices.forEach(inv => {
+        if (inv.status === 'cancelled') return;
+        if (inv.docType === 'credit_note') {
+            cnOutputBase += toFixedNum(Number(inv.preVat) || 0);
+            cnOutputVat += toFixedNum(Number(inv.vat) || 0);
+        } else {
+            grossOutputBase += toFixedNum(Number(inv.preVat) || 0);
+            grossOutputVat += toFixedNum(Number(inv.vat) || 0);
+        }
+    });
+
+    const outputBase = toFixedNum(grossOutputBase - cnOutputBase);
+    const outputVat = toFixedNum(grossOutputVat - cnOutputVat);
     
-    const inputVat = filteredExpenses.reduce((s, t) => {
-        if (t.isNonCreditableVat) return s;
-        return s + toFixedNum(getExpenseTaxDetails(t).vat);
-    }, 0);
+    let inputVat = 0;
+    let inputBase = 0;
 
-    const inputBase = filteredExpenses.reduce((s, t) => {
-        if (t.isNonCreditableVat) return s;
-        return s + toFixedNum(getExpenseTaxDetails(t).base);
-    }, 0);
+    filteredExpenses.forEach(t => {
+        if (t.isNonCreditableVat) return;
+        const taxDetails = getExpenseTaxDetails(t);
+        inputVat += toFixedNum(taxDetails.vat);
+        inputBase += toFixedNum(taxDetails.base);
+    });
 
-    return { outputVat, outputBase, inputVat, inputBase, net: outputVat - inputVat };
+    return { 
+        outputVat, outputBase, 
+        grossOutputBase, cnOutputBase, grossOutputVat, cnOutputVat,
+        inputVat, inputBase, net: outputVat - inputVat 
+    };
   }, [filteredInvoices, filteredExpenses]);
+
+  // --- 🔥 NEW: คำนวณยอดบิลยกเลิก/Void สำหรับแสดงในหน้า ภ.พ.30 ---
+  const voidAnalysis = useMemo(() => {
+    const toFixedNum = (num) => Number(Number(num).toFixed(2));
+    let voidBase = 0;
+    let voidVat = 0;
+    voidInvoices.forEach(inv => {
+        voidBase += toFixedNum(Number(inv.preVat) || 0);
+        voidVat += toFixedNum(Number(inv.vat) || 0);
+    });
+    return { voidBase, voidVat };
+  }, [voidInvoices]);
 
   // --- 🔥 FIX: บังคับปัดเศษ 2 ตำแหน่งให้ยอดรวมท้ายตารางตรงกับยอดจริง (Round then Sum) ---
   const salesFooter = useMemo(() => {
@@ -10151,9 +10255,26 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
                 </div>
                 
                 <div className="space-y-1">
+                    {/* --- 🔥 NEW: กล่องรายละเอียดการกระทบยอดขาย --- */}
+                    <div className="bg-slate-50 p-5 rounded-2xl mb-6 border border-slate-200 shadow-inner">
+                        <p className="text-[10px] font-black text-indigo-500 mb-3 uppercase tracking-widest flex items-center gap-2"><FileMinus size={14}/> รายละเอียดการกระทบยอดขาย (Sales Reconciliation)</p>
+                        <div className="flex justify-between items-center py-2">
+                            <span className="text-sm font-bold text-slate-700">ยอดขายรวมก่อนหักลบ (Gross Sales)</span>
+                            <span className="font-mono text-base font-black text-slate-800">{formatCurrency(vatAnalysis.grossOutputBase)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-2 text-rose-600">
+                            <span className="text-sm font-bold flex items-center gap-1"><ArrowRightLeft size={14}/> หัก สินค้ารับคืน/ใบลดหนี้ (Credit Notes)</span>
+                            <span className="font-mono text-base font-black">-{formatCurrency(vatAnalysis.cnOutputBase)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-2 text-slate-400 border-t border-slate-200 mt-2 pt-3">
+                            <span className="text-xs font-medium flex items-center gap-1"><XCircle size={12}/> มูลค่าเอกสารยกเลิก/Void (ไม่นำมาคำนวณฐานภาษี)</span>
+                            <span className="font-mono text-xs font-bold">{formatCurrency(voidAnalysis.voidBase)}</span>
+                        </div>
+                    </div>
+
                     <div className="flex justify-between items-center py-3 border-b border-slate-100">
-                        <span className="font-bold text-slate-600">1. ยอดขายเดือนนี้ (Sales Amount)</span>
-                        <span className="font-mono text-base">{formatCurrency(vatAnalysis.outputBase)}</span>
+                        <span className="font-bold text-slate-800 text-base">1. ยอดขายเดือนนี้ (Sales Amount)</span>
+                        <span className="font-mono font-black text-xl text-indigo-700">{formatCurrency(vatAnalysis.outputBase)}</span>
                     </div>
                     <div className="flex justify-between items-center py-3 border-b border-slate-100">
                         <span className="font-bold text-slate-600 ml-4 text-xs">2. หัก ยอดขายที่เสียภาษีอัตราร้อยละ 0</span>
@@ -10164,12 +10285,30 @@ function TaxReports({ transactions, invoices, stockBatches, showToast, appId, us
                         <span className="font-mono text-base">0.00</span>
                     </div>
                     <div className="flex justify-between items-center py-4 border-b border-slate-200 bg-indigo-50/50 px-4 rounded-xl mt-2">
-                        <span className="font-black text-indigo-700">4. ยอดขายที่ต้องเสียภาษี (1 - 2 - 3)</span>
-                        <span className="font-black font-mono text-lg text-indigo-700">{formatCurrency(vatAnalysis.outputBase)}</span>
+                        <span className="font-black text-indigo-800 text-base">4. ยอดขายที่ต้องเสียภาษี (1 - 2 - 3)</span>
+                        <span className="font-black font-mono text-xl text-indigo-700">{formatCurrency(vatAnalysis.outputBase)}</span>
                     </div>
-                    <div className="flex justify-between items-center py-4 border-b border-slate-200 bg-emerald-50 px-4 rounded-xl mt-2">
-                        <span className="font-black text-emerald-700">5. ภาษีขายเดือนนี้ (Output Tax)</span>
-                        <span className="font-black font-mono text-lg text-emerald-700">{formatCurrency(vatAnalysis.outputVat)}</span>
+                    
+                    {/* --- 🔥 NEW: กล่องรายละเอียดการกระทบยอดภาษีขาย --- */}
+                    <div className="bg-emerald-50/50 p-5 rounded-2xl my-6 border border-emerald-100 shadow-inner">
+                        <p className="text-[10px] font-black text-emerald-600 mb-3 uppercase tracking-widest flex items-center gap-2"><Calculator size={14}/> รายละเอียดการกระทบยอดภาษีขาย</p>
+                        <div className="flex justify-between items-center py-2">
+                            <span className="text-sm font-bold text-slate-700">ภาษีขายรวม (Gross Output Tax)</span>
+                            <span className="font-mono text-base font-black text-slate-800">{formatCurrency(vatAnalysis.grossOutputVat)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-2 text-rose-600">
+                            <span className="text-sm font-bold flex items-center gap-1"><ArrowRightLeft size={14}/> หัก ภาษีขายจากใบลดหนี้ (CN Output Tax)</span>
+                            <span className="font-mono text-base font-black">-{formatCurrency(vatAnalysis.cnOutputVat)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-2 text-slate-400 border-t border-emerald-100/60 mt-2 pt-3">
+                            <span className="text-xs font-medium flex items-center gap-1"><XCircle size={12}/> ภาษีเอกสารยกเลิก/Void (ไม่นำมาคำนวณฐานภาษี)</span>
+                            <span className="font-mono text-xs font-bold">{formatCurrency(voidAnalysis.voidVat)}</span>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-between items-center py-4 border-b border-slate-200 bg-emerald-100/50 px-4 rounded-xl mt-2">
+                        <span className="font-black text-emerald-800 text-base">5. ภาษีขายเดือนนี้ (Output Tax)</span>
+                        <span className="font-black font-mono text-xl text-emerald-700">{formatCurrency(vatAnalysis.outputVat)}</span>
                     </div>
                     
                     <div className="flex justify-between items-center py-3 border-b border-slate-100 mt-6">
