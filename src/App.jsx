@@ -44,7 +44,7 @@ const CONSTANTS = {
       { name: 'อาคารถาวร', years: 20 }
     ]
   },
-  CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน'],
+  CHANNELS: ['Shopee', 'Lazada', 'TikTok', 'Line Shopping', 'Facebook', 'หน้าร้าน', 'Thaimart'],
   VAT_RATES: { INCLUDED: 'included', EXCLUDED: 'excluded', NONE: 'none' }
 };
 
