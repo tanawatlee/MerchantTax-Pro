@@ -3354,14 +3354,24 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
 
                 const statusStr = String(findVal(row, schema.status) || '').toLowerCase();
                 const cancelReason = String(findVal(row, schema.cancelReason) || '');
-                const returnStatusStr = String(findVal(row, schema.returnStatus) || '');
+                const returnStatusStr = String(findVal(row, schema.returnStatus) || '').toLowerCase();
                 const refundAmtRow = getRowValAbs(row, schema.refundAmount);
 
-                const isCancelledRow = statusStr.includes('ยกเลิก') || statusStr.includes('cancel') ||
+                // --- 🔥 FIX: ตรวจสอบทั้งคอลัมน์ 'สถานะสั่งซื้อ' และ 'สถานะคืนเงิน' ให้ครอบคลุมคำศัพท์ของ Shopee มากขึ้น ---
+                let isCancelledRow = statusStr.includes('ยกเลิก') || statusStr.includes('cancel') ||
                                        statusStr.includes('ไม่สำเร็จ') || statusStr.includes('ตีกลับ') ||
                                        statusStr.includes('คืน') || statusStr.includes('refund') || statusStr.includes('return') ||
                                        refundAmtRow > 0 ||
-                                       returnStatusStr.includes('คำขอได้รับการยอมรับแล้ว');
+                                       returnStatusStr.includes('ยอมรับ') || returnStatusStr.includes('สำเร็จ') || returnStatusStr.includes('คืนเงิน') || returnStatusStr.includes('refund');
+
+                // ดักจับสถานะ Shopee ที่บอกว่าลูกค้าได้รับของแล้วแต่ยังมีเวลาคืน (คำว่า 'คืน' ทำให้ระบบสับสน)
+                if (statusStr.includes('ได้รับสินค้าแล้ว') || statusStr.includes('สามารถยื่นคำขอคืนเงิน') || statusStr.includes('ผู้ซื้อได้รับสินค้าแล้ว')) {
+                    isCancelledRow = false;
+                    // แต่ถ้ายอดเงินคืน > 0 หรือสถานะการคืนสำเร็จไปแล้ว ให้ถือว่ายกเลิก/คืนจริงๆ
+                    if (refundAmtRow > 0 || returnStatusStr.includes('ยอมรับ') || returnStatusStr.includes('สำเร็จ') || returnStatusStr.includes('คืนเงิน') || returnStatusStr.includes('refund')) {
+                        isCancelledRow = true;
+                    }
+                }
 
                 if (!isCancelledRow) { skippedCount++; return; } // ข้ามถ้าไม่ใช่รายการยกเลิก
 
@@ -3799,10 +3809,17 @@ function DataImporter({ appId, showToast, user, stockBatches, transactions, impo
           const rowTotalFees = transFee + comm + serv + affiliateRow + infra;
 
           const refundAmtRow = getRowValAbs(row, schema.refundAmount); 
-          let isReturnedRow = status.includes('คืน') || status.includes('refund') || status.includes('return') || returnStatusStr.includes('คำขอได้รับการยอมรับแล้ว');
+          const returnStatusLower = returnStatusStr.toLowerCase();
+          // --- 🔥 FIX: อัปเดตตรรกะการดักจับสถานะคืนสินค้าให้สอดคล้องกับโหมด 4 ---
+          let isReturnedRow = status.includes('คืน') || status.includes('refund') || status.includes('return') || 
+                              returnStatusLower.includes('ยอมรับ') || returnStatusLower.includes('สำเร็จ') || returnStatusLower.includes('คืนเงิน') || returnStatusLower.includes('refund') ||
+                              refundAmtRow > 0;
           
-          if (status.includes('สามารถยื่น') || status.includes('ได้รับสินค้าแล้ว')) {
+          if (status.includes('สามารถยื่น') || status.includes('ได้รับสินค้าแล้ว') || status.includes('ผู้ซื้อได้รับสินค้าแล้ว')) {
               isReturnedRow = false; 
+              if (refundAmtRow > 0 || returnStatusLower.includes('ยอมรับ') || returnStatusLower.includes('สำเร็จ') || returnStatusLower.includes('คืนเงิน') || returnStatusLower.includes('refund')) {
+                  isReturnedRow = true;
+              }
           }
 
           let isCancelledOrUnpaid = status.includes('ยกเลิก') || status.includes('cancel') || 
