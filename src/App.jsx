@@ -239,20 +239,15 @@ const generateNextDocId = (items, prefix, field) => {
 const generateDateBasedDocId = (items, prefix, dateInput, field) => {
   const dateStr = formatDateISO(dateInput).replace(/-/g, '');
   const fullPrefix = `${prefix}${dateStr}-`;
-  const nums = items.reduce((acc, item) => {
+  // เปลี่ยนตรรกะการรันเลขเป็น Max + 1 เสมอ เพื่อไม่ให้ย้อนกลับไปเสียบเลขช่องว่างที่เคยถูกลบหรือยกเลิก
+  let maxNum = 0;
+  items.forEach((item) => {
     if (item[field] && String(item[field]).startsWith(fullPrefix)) {
       const num = parseInt(String(item[field]).replace(fullPrefix, ''), 10);
-      if (!isNaN(num)) acc.push(num);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
     }
-    return acc;
-  }, []).sort((a, b) => a - b);
-
-  let nextNum = 1;
-  for (const n of nums) {
-    if (n === nextNum) nextNum++;
-    else if (n > nextNum) break;
-  }
-  return `${fullPrefix}${String(nextNum).padStart(5, '0')}`;
+  });
+  return `${fullPrefix}${String(maxNum + 1).padStart(5, '0')}`;
 };
 
 const THBText = (amount) => {
@@ -15337,6 +15332,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
   const [invData, setInvData] = useState(initialInvData);
   const [editingDocId, setEditingDocId] = useState(null);
+  const [isSavingInvoice, setIsSavingInvoice] = useState(false); // ล็อกปุ่มบันทึกป้องกันการกดเบิ้ล
   const [showSellerEditModal, setShowSellerEditModal] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [sellerProfiles, setSellerProfiles] = useState([]);
@@ -15846,25 +15842,53 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
       const isSalesDoc = ['invoice', 'abb', 'receipt'].includes(bulkSettings.docType);
       const isExpenseDoc = bulkSettings.docType === 'payment_voucher';
       
-      const docsToIssue = combinedDocs.filter(d => {
+      const candidateDocs = combinedDocs.filter(d => {
           if (!selectedDocIds.includes(d.id) || d.source !== 'transaction') return false;
           if (isSalesDoc && d.type !== 'income') return false;
           if (isExpenseDoc && d.type !== 'expense') return false;
           return true;
       });
 
-      if (docsToIssue.length === 0) {
+      if (candidateDocs.length === 0) {
           showToast("ไม่พบรายการที่สอดคล้อง (ใบกำกับภาษีต้องมาจากรายรับ / ใบสำคัญจ่ายต้องมาจากรายจ่าย)", "error");
           return;
       }
 
       setIsBulkProcessing(true);
       try {
-          const allInvs = invoices.filter(i => i.docType === bulkSettings.docType || (!i.docType && bulkSettings.docType === 'invoice'));
+          setBulkStatus({ current: 0, total: candidateDocs.length, message: 'กำลังตรวจสอบเลขที่เอกสารล่าสุดจากฐานข้อมูล...' });
+
+          // 1. ดึงข้อมูลเอกสารล่าสุดสดจาก Firebase เพื่อป้องกันเลขซ้ำและป้องกันการออกซ้อนทับออเดอร์เดิม
+          const liveInvSnap = await getDocs(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'));
+          const liveInvoices = liveInvSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          const activeIssuedOrderIds = new Set();
+          liveInvoices.forEach(inv => {
+              if (inv.status !== 'cancelled' && inv.docType !== 'credit_note' && inv.docType !== 'quotation' && inv.orderId) {
+                  activeIssuedOrderIds.add(String(inv.orderId).trim());
+              }
+          });
+
+          // กรองออกเฉพาะออเดอร์ที่ยังไม่มีบิลจริงในฐานข้อมูล
+          const docsToIssue = candidateDocs.filter(trans => {
+              const ref1 = String(trans.orderId || '').trim();
+              const ref2 = String(trans.sysDocId || '').trim();
+              if (ref1 && activeIssuedOrderIds.has(ref1)) return false;
+              if (ref2 && activeIssuedOrderIds.has(ref2)) return false;
+              return true;
+          });
+
+          if (docsToIssue.length === 0) {
+              showToast("ออเดอร์ที่เลือกทั้งหมดถูกออกเอกสารไปแล้วในฐานข้อมูล", "error");
+              setIsBulkProcessing(false);
+              return;
+          }
+
           const prefixMapBulk = { abb: 'ABB-', receipt: 'REC-', invoice: 'INV-', payment_voucher: 'PV-' };
           const prefix = prefixMapBulk[bulkSettings.docType] || 'INV-';
           
-          let counters = {}; 
+          // 2. ใช้ตรรกะ Max + 1 จากฐานข้อมูลสด (รวมถึงเลขที่ถูกยกเลิกไปแล้ว เพื่อไม่ให้รันชนกัน)
+          let maxCounters = {}; 
           
           // --- NEW: เตรียมข้อมูลล่วงหน้าให้เสร็จก่อน แล้วค่อยยิงแบบ Batch เพื่อความเร็วและเสถียร ---
           const uploadQueue = [];
@@ -15875,23 +15899,19 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
               const dateStr = formatDateISO(transDate).replace(/-/g, '');
               const fullPrefix = `${prefix}${dateStr}-`;
 
-              if (counters[fullPrefix] === undefined) {
-                  const usedNums = new Set();
-                  allInvs.forEach(item => {
+              if (maxCounters[fullPrefix] === undefined) {
+                  let maxNum = 0;
+                  liveInvoices.forEach(item => {
                       if (item.invNo && String(item.invNo).startsWith(fullPrefix)) {
                           const num = parseInt(String(item.invNo).replace(fullPrefix, ''), 10);
-                          if (!isNaN(num)) usedNums.add(num);
+                          if (!isNaN(num) && num > maxNum) maxNum = num;
                       }
                   });
-                  counters[fullPrefix] = usedNums;
+                  maxCounters[fullPrefix] = maxNum;
               }
 
-              let nextNum = 1;
-              while (counters[fullPrefix].has(nextNum)) {
-                  nextNum++;
-              }
-              counters[fullPrefix].add(nextNum);
-              const newInvNo = `${fullPrefix}${String(nextNum).padStart(5, '0')}`;
+              maxCounters[fullPrefix] += 1;
+              const newInvNo = `${fullPrefix}${String(maxCounters[fullPrefix]).padStart(5, '0')}`;
 
               const calc = calculateTransactionTotals(trans, bulkSettings.vatType);
               
@@ -16326,10 +16346,57 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
   };
 
   const handleSaveInvoice = async () => {
-    if (!user) return;
+    if (!user || isSavingInvoice) return;
+    setIsSavingInvoice(true);
     try {
+      const docType = invData.docType || 'invoice';
+      const docDate = normalizeDate(invData.date) || new Date();
+      const targetId = editingDocId;
+
+      // 1. เช็คข้อมูลสดจาก Firebase ก่อนบันทึกทุกครั้ง เพื่อป้องกันปัญหา SYNCING ไม่เสร็จหรือเปิดหลายแท็บ
+      const liveInvSnap = await getDocs(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'));
+      const liveInvoices = liveInvSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      let finalInvNo = String(invData.invNo || '').trim();
+
+      if (!targetId) {
+        // 2. ตรวจสอบการออกบิลซ้ำจาก Order ID เดิม (ยกเว้นใบลดหนี้และใบเสนอราคาที่อ้างอิงออเดอร์เดิมได้)
+        const cleanOrderId = String(invData.orderId || '').trim();
+        if (cleanOrderId && docType !== 'credit_note' && docType !== 'quotation') {
+          const dupOrder = liveInvoices.find(inv =>
+            inv.status !== 'cancelled' &&
+            inv.docType !== 'credit_note' &&
+            inv.docType !== 'quotation' &&
+            String(inv.orderId || '').trim() === cleanOrderId
+          );
+          if (dupOrder) {
+            showToast(`ไม่สามารถออกซ้ำได้: ออเดอร์ ${cleanOrderId} ถูกออกเอกสารแล้ว (เลขที่ ${dupOrder.invNo})`, "error");
+            setIsSavingInvoice(false);
+            return;
+          }
+        }
+
+        // 3. ตรวจสอบเลขที่เอกสารซ้ำ (ถ้าชนกับเลขที่มีในฐานข้อมูลแล้ว ให้ขยับเป็น Max + 1 อัตโนมัติ)
+        const isDuplicateNo = !finalInvNo || liveInvoices.some(inv => String(inv.invNo || '').trim() === finalInvNo);
+        if (isDuplicateNo) {
+          const prefixMap = { credit_note: 'CN-', abb: 'ABB-', quotation: 'QUO-', receipt: 'REC-', invoice: 'INV-', payment_voucher: 'PV-' };
+          const prefix = prefixMap[docType] || 'INV-';
+          finalInvNo = generateDateBasedDocId(liveInvoices, prefix, docDate, 'invNo');
+          setInvData(prev => ({ ...prev, invNo: finalInvNo }));
+          showToast(`ปรับเลขที่เอกสารอัตโนมัติเป็น ${finalInvNo} เพื่อป้องกันเลขซ้ำ`, "success");
+        }
+      } else {
+        // กรณีแก้ไขเอกสารเดิม: เช็คว่าเลขที่เอกสารไม่ไปชนกับใบอื่น
+        const dupOther = liveInvoices.find(inv => inv.id !== targetId && String(inv.invNo || '').trim() === finalInvNo);
+        if (dupOther) {
+          showToast(`เลขที่เอกสาร ${finalInvNo} ซ้ำกับเอกสารอื่นในระบบ`, "error");
+          setIsSavingInvoice(false);
+          return;
+        }
+      }
+
       const payload = {
-        docType: invData.docType || 'invoice',
+        docType,
         refInvNo: invData.refInvNo || '',
         creditNoteReason: invData.creditNoteReason || '',
         customerName: invData.customerName || '',
@@ -16339,8 +16406,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         orderId: invData.orderId || '',
         orderDate: invData.orderDate ? normalizeDate(invData.orderDate) : null,
         items: (invData.items || []).map(it => ({ desc: it.desc || '', qty: Number(it.qty) || 0, unit: it.unit || 'ชิ้น', price: Number(it.price) || 0 })),
-        date: normalizeDate(invData.date) || new Date(),
-        invNo: invData.invNo || '',
+        date: docDate,
+        invNo: finalInvNo,
         sellerName: invData.sellerName || '',
         sellerAddress: invData.sellerAddress || '',
         sellerTaxId: invData.sellerTaxId || '',
@@ -16368,9 +16435,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
         userId: user.uid
       };
 
-      const targetId = editingDocId;
       if (targetId) { await setDoc(doc(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices', targetId), { ...payload, updatedAt: serverTimestamp() }, {merge: true}); showToast("อัปเดตสำเร็จ", "success"); } 
-      else { await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'), { ...payload, createdAt: serverTimestamp() }); showToast("บันทึกสำเร็จ", "success"); }
+      else { await addDoc(collection(dbInstance, 'artifacts', appId, 'public', 'data', 'invoices'), { ...payload, createdAt: serverTimestamp() }); showToast(`บันทึกเอกสาร ${finalInvNo} สำเร็จ`, "success"); }
       
       if (payload.orderId) {
           const isExpenseType = payload.docType === 'payment_voucher';
@@ -16385,6 +16451,7 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
 
       setMode('history'); setEditingDocId(null);
     } catch(e) { console.error(e); showToast("บันทึกไม่สำเร็จ", "error"); }
+    finally { setIsSavingInvoice(false); }
   };
 
   const handleSaveAsNewProfile = async () => {
@@ -17966,8 +18033,8 @@ function InvoiceGenerator({ user, transactions, invoices = [], appId = "merchant
                           ยกเลิกแก้ไข
                       </button>
                   )}
-                  <button onClick={handleSaveInvoice} className={`flex-[2] text-white px-6 py-3 rounded-xl font-bold shadow-lg transition-all text-center ${editingDocId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-emerald-600 hover:bg-emerald-700'} flex items-center justify-center gap-2 text-center min-w-[150px]`}>
-                      <Save size={18}/> {editingDocId ? 'อัปเดตข้อมูล' : 'บันทึกเอกสาร'}
+                  <button onClick={handleSaveInvoice} disabled={isSavingInvoice} className={`flex-[2] text-white px-6 py-3 rounded-xl font-bold shadow-lg transition-all text-center ${editingDocId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-emerald-600 hover:bg-emerald-700'} flex items-center justify-center gap-2 text-center min-w-[150px] disabled:opacity-50 disabled:cursor-not-allowed`}>
+                      {isSavingInvoice ? <Loader size={18} className="animate-spin"/> : <Save size={18}/>} {isSavingInvoice ? 'กำลังตรวจสอบและบันทึก...' : (editingDocId ? 'อัปเดตข้อมูล' : 'บันทึกเอกสาร')}
                   </button>
                   <button onClick={handleDownloadPDF} className="flex-1 bg-slate-700 hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg transition-all text-center min-w-[150px]">
                       <Download size={18}/> Download ZIP
@@ -20708,6 +20775,7 @@ export default function App() {
 
   // --- 🔥 NEW: Dynamic Data Sync Horizon State (ลดเวลาโหลดแอป) ---
   const [syncHorizon, setSyncHorizon] = useState(12); // ปรับค่าเริ่มต้นเป็น 1 ปี (12 เดือน) ตามการอัปเกรด Performance Engine ใหม่
+  const [dbError, setDbError] = useState(null); // แจ้งเตือนสาเหตุเมื่อดึงข้อมูลไม่ขึ้น
 
   const handlePreviewBulkUpdate = () => {
       const ids = bulkUpdateInput.split(/[\n,]+/).map(id => id.trim()).filter(id => id);
@@ -20810,6 +20878,7 @@ export default function App() {
     if (isRestoring || isMigrating || isBackingUp) return; 
 
     setLoading(true);
+    setDbError(null);
     
     // --- 🛡️ NEW: ระบบป้องกันหน้าจอค้างตลอดกาล (Timeout Fallback) ---
     const loadingFallback = setTimeout(() => {
@@ -20819,19 +20888,26 @@ export default function App() {
 
     const path = (coll) => collection(dbInstance, 'artifacts', currentAppId, 'public', 'data', coll);
     
-    // --- 🛡️ NEW: ป้องกันกรณีฐานข้อมูล Error แล้วหน้าจอค้าง ---
+    // --- 🛡️ NEW: ป้องกันกรณีฐานข้อมูล Error แล้วหน้าจอค้าง พร้อมระบุสาเหตุชัดเจน ---
     const errorFn = (e) => { 
         console.error("Firestore error:", e); 
-        addToast("เกิดข้อผิดพลาดในการดึงข้อมูล (กรุณาเช็คอินเทอร์เน็ตหรือ Index)", "error"); 
+        let friendlyMsg = e.message || "เกิดข้อผิดพลาดในการดึงข้อมูล";
+        if (e.code === 'permission-denied') {
+            friendlyMsg = "ไม่มีสิทธิ์เข้าถึงฐานข้อมูล (Firestore Security Rules อาจหมดอายุ หรือยังไม่ได้เปิดสิทธิ์ให้บัญชีนี้)";
+        } else if (e.code === 'resource-exhausted') {
+            friendlyMsg = "โควต้าการอ่านข้อมูลฟรีประจำวันเต็มแล้ว (50,000 ครั้ง/วัน) กรุณารอรีเซ็ตหรือตรวจสอบแผนการใช้งานใน Firebase Console";
+        } else if (e.code === 'unavailable') {
+            friendlyMsg = "ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ฐานข้อมูลได้ กรุณาตรวจสอบสัญญาณอินเทอร์เน็ต";
+        }
+        setDbError({ code: e.code || 'unknown', message: friendlyMsg, raw: e.message });
+        addToast(`ดึงข้อมูลไม่สำเร็จ (${e.code || 'Error'}): ${friendlyMsg}`, "error"); 
         setLoading(false);
         clearTimeout(loadingFallback);
     };
     
     // 1. กำหนดขอบเขตข้อมูล (Data Horizon) แบบไดนามิกตามที่ผู้ใช้เลือก
     let dataHorizonDate = new Date();
-    if (syncHorizon === 'all') {
-        dataHorizonDate = new Date(2000, 0, 1);
-    } else {
+    if (syncHorizon !== 'all') {
         // ถอยหลังไป X เดือน และตั้งเป็นวันที่ 1 ของเดือนนั้น
         dataHorizonDate.setMonth(dataHorizonDate.getMonth() - syncHorizon);
         dataHorizonDate.setDate(1);
@@ -20850,13 +20926,17 @@ export default function App() {
         setTransactions([...incomeCache, ...expenseCache]);
     };
 
-    // ดึง Transaction ฝั่งรับ และ จ่าย เฉพาะในช่วง Horizon
-    const unsubInc = onSnapshot(query(path('transactions_income'), where('date', '>=', dataHorizonDate)), (s) => {
+    // ดึง Transaction ฝั่งรับ และ จ่าย (หากเลือก 'all' ให้ดึงทั้งหมดโดยไม่ใส่ where เพื่อป้องกันปัญหาฟิลด์วันที่เป็น String)
+    const incQuery = syncHorizon === 'all' ? query(path('transactions_income')) : query(path('transactions_income'), where('date', '>=', dataHorizonDate));
+    const expQuery = syncHorizon === 'all' ? query(path('transactions_expense')) : query(path('transactions_expense'), where('date', '>=', dataHorizonDate));
+    const logsQuery = syncHorizon === 'all' ? query(path('import_logs')) : query(path('import_logs'), where('date', '>=', logCutoffDate));
+
+    const unsubInc = onSnapshot(incQuery, (s) => {
         incomeCache = s.docs.map(d=>({id:d.id, ...d.data(), type:'income', date: normalizeDate(d.data().date)}));
         updateTransactions();
     }, errorFn);
     
-    const unsubExp = onSnapshot(query(path('transactions_expense'), where('date', '>=', dataHorizonDate)), (s) => {
+    const unsubExp = onSnapshot(expQuery, (s) => {
         expenseCache = s.docs.map(d=>({id:d.id, ...d.data(), type:'expense', date: normalizeDate(d.data().date)}));
         updateTransactions();
     }, errorFn);
@@ -20878,7 +20958,7 @@ export default function App() {
     const unsubPromo = onSnapshot(query(path('promotions')), (s) => setPromotions(s.docs.map(d=>({id:d.id, ...d.data()}))), errorFn);
     
     // Import Logs ดึงแค่ 6 เดือนล่าสุด หรือตามระยะเวลา Sync
-    const unsubLogs = onSnapshot(query(path('import_logs'), where('date', '>=', logCutoffDate)), (s) => setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)}))), errorFn);
+    const unsubLogs = onSnapshot(logsQuery, (s) => setImportLogs(s.docs.map(d=>({id:d.id, ...d.data(), date: normalizeDate(d.data().createdAt)}))), errorFn);
     
     return () => { 
         clearTimeout(loadingFallback); // เคลียร์เวลาเมื่อเปลี่ยนหน้า
@@ -22045,7 +22125,21 @@ export default function App() {
                 </button>
             </div>
         </header>
-        <div className="flex-1 overflow-auto p-6 lg:p-10 relative bg-[#f8fafc] text-left">{renderContent()}</div>
+        <div className="flex-1 overflow-auto p-6 lg:p-10 relative bg-[#f8fafc] text-left">
+          {dbError && (
+            <div className="mb-6 bg-rose-50 border-2 border-rose-200 rounded-2xl p-4 flex items-start justify-between gap-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="text-rose-600 shrink-0 mt-0.5" size={20} />
+                <div>
+                  <p className="text-sm font-black text-rose-800">ไม่สามารถดึงข้อมูลจากฐานข้อมูลได้ ({dbError.code})</p>
+                  <p className="text-xs font-bold text-rose-600 mt-1">{dbError.message}</p>
+                </div>
+              </div>
+              <button onClick={() => setDbError(null)} className="text-rose-400 hover:text-rose-600 p-1"><X size={16} /></button>
+            </div>
+          )}
+          {renderContent()}
+        </div>
       </main>
 
       {/* API Key Modal */}
